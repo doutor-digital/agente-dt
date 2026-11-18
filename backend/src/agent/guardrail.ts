@@ -11,7 +11,7 @@ import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 import { posicoesDeValorDoPaciente } from './valor-do-paciente.js';
-import { corrigirRestoDoSinal, ehTotalComSinal } from './total-com-sinal.js';
+import { corrigirRestoDoSinal, ehTotalComSinal, fmtValor } from './total-com-sinal.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -154,11 +154,11 @@ function corrigirValores(
     const v = Number(num.replace(/\./g, ''));
     if (!alvo.has(v)) return match;
 
-    if (totalComSinal && ehTotalComSinal(text.slice(posicao + match.length))) {
+    if (totalComSinal && ehTotalComSinal(text.slice(Math.max(0, posicao - 30), posicao), text.slice(posicao + match.length))) {
       trocouOTotal = true;
       jaNoTexto.add(totalComSinal.antecipado);
-      trocas.push(`${v}→${totalComSinal.antecipado}`);
-      return `R$ ${totalComSinal.antecipado}`;
+      trocas.push(`${v}→${fmtValor(totalComSinal.antecipado)}`);
+      return `R$ ${fmtValor(totalComSinal.antecipado)}`;
     }
 
     const certo = [...substitutos]
@@ -175,7 +175,7 @@ function corrigirValores(
 
   // Trocou o total pelo antecipado: o "resto no dia" da mesma mensagem fecha a conta com a ficha (R$ 50 + R$ 150 = R$ 200).
   if (trocouOTotal && totalComSinal) {
-    const resto = corrigirRestoDoSinal(texto, totalComSinal.restoNoDia);
+    const resto = corrigirRestoDoSinal(texto, totalComSinal.restoNoDia, totalComSinal.antecipado);
     texto = resto.texto;
     trocas.push(...resto.trocas);
   }

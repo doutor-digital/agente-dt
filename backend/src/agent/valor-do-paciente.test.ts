@@ -13,7 +13,10 @@ test('valor do paciente: o que o comprovante / o paciente pagou, mandou ou fez',
   assert.deepEqual(doPaciente('Recebi seu comprovante, mas o valor mostrado foi de R$ 50,00 — e o valor antecipado é de R$ 250.'), ['R$ 50,00']);
   assert.deepEqual(doPaciente('Reparei que o valor foi de R$ 750,00 — aqui a consulta antecipada é R$ 200,00.'), ['R$ 750,00']);
   assert.deepEqual(doPaciente('Você pagou R$ 50 de Pix, mas a consulta antecipada é R$ 200.'), ['R$ 50']);
-  assert.deepEqual(doPaciente('O Pix de R$ 50 que você fez não cobre o antecipado de R$ 200.'), ['R$ 50']);
+  assert.deepEqual(doPaciente('O Pix de R$ 50 que você pagou não cobre o antecipado de R$ 200.'), ['R$ 50']);
+  assert.deepEqual(doPaciente('O comprovante é da unidade certa, mas o valor de R$ 200 ficou abaixo do antecipado, que é R$ 250.'), ['R$ 200']);
+  assert.deepEqual(doPaciente('O comprovante é da nossa clínica, mas o valor de R$ 50 não bate com o antecipado (que é R$ 200).'), ['R$ 50']);
+  assert.deepEqual(doPaciente('O comprovante tem R$ 100,00 e o valor ficou abaixo do antecipado de R$ 250,00.'), ['R$ 100,00']);
   assert.deepEqual(doPaciente('Esse valor de R$ 50 ainda não bate com o antecipado, que é R$ 200.'), ['R$ 50']);
   assert.deepEqual(doPaciente('O valor que caiu foi R$ 200, e o nosso Pix antecipado é de R$ 250.'), ['R$ 200']);
 });
@@ -24,6 +27,13 @@ test('valor do paciente: preço da unidade, pedido e sinal NÃO entram', () => {
   // pedido: o R$ aqui é o preço que ELA quer receber
   assert.deepEqual(doPaciente('Pode me enviar o comprovante certinho, com o valor de R$ 200,00?'), []);
   assert.deepEqual(doPaciente('Preciso do comprovante, o antecipado é R$ 200.'), []);
+  // a palavra "comprovante" sozinha não basta: sem verbo de relato colado ao valor, o R$ é preço e segue conferido
+  assert.deepEqual(doPaciente('Falta só o comprovante do Pix de R$ 250 pra gente confirmar.'), []);
+  assert.deepEqual(doPaciente('Com o comprovante em mãos, o valor completo é R$ 250.'), []);
+  assert.deepEqual(doPaciente('Se você pagou o sinal de R$ 80, me manda o comprovante.'), []);
+  assert.deepEqual(doPaciente('Se você fez o Pix de R$ 80, me manda o comprovante.'), []);
+  assert.deepEqual(doPaciente('O valor da campanha foi de R$ 150 em outubro.'), []);
+  assert.deepEqual(doPaciente('A consulta é R$ 250 — então não bate com o outro valor.'), []);
   assert.deepEqual(doPaciente('Me manda o comprovante de R$ 200 pra eu confirmar.'), []);
   // "comprovante" na frase de antes não vale para a frase de depois
   assert.deepEqual(doPaciente('Recebi o comprovante, obrigada! A consulta antecipada é R$ 250.'), []);

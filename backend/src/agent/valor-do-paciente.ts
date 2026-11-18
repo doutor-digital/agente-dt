@@ -16,26 +16,40 @@
  * esconde o valor da oferta da campanha. O preço da unidade na MESMA mensagem segue conferido, porque a decisão é por valor, não por frase.
  *
  * ── O QUE CONTA COMO "DO PACIENTE" — e o cuidado é não esconder preço da unidade ─────────────────────────────────────────────
- * Esconder valor da trava é abrir mão de conferi-lo; então só entra o que o texto diz claramente ser do paciente:
- *   ANTES do valor (no mesmo trecho, sem outro R$ no meio):  "comprovante … R$", "você pagou/enviou/mandou/transferiu … R$",
- *                                                           "o valor que veio/caiu/mostrado … R$", "o valor/pagamento foi de R$"
- *   DEPOIS do valor:  "R$ 50 não bate", "R$ 50 que você pagou", "R$ 50 que recebi/caiu"
+ * Esconder valor da trava é abrir mão de conferi-lo; então só entra o que o texto diz CLARAMENTE ser do paciente, com um verbo de relato
+ * colado ao valor — a palavra "comprovante" sozinha não basta ("Falta só o comprovante do Pix de R$ 250" é o preço, um pedido):
+ *   ANTES do valor (mesma frase, sem outro R$ no meio):  "comprovante é de / mostra / mostrou / foi R$", "o valor do comprovante (R$",
+ *       "comprovante …, mas o valor de R$", "você pagou/enviou/mandou/transferiu … R$", "o valor que veio/caiu/mostrado … R$", "o valor/pagamento foi de R$"
+ *   DEPOIS do valor:  "R$ 50 não bate", "R$ 50 que você pagou", "R$ 50 que recebi/caiu"; com "comprovante" antes na frase, também
+ *       "R$ 200 ficou abaixo / é menor / é diferente"
  * NÃO entra: pedido ("me enviar o comprovante certinho, com o valor de R$ 200" — aí o R$ 200 É o preço), nem trecho que já fala do preço
- * da unidade (antecipado, sinal, garantir, consulta) entre a palavra do comprovante e o valor. Na dúvida, não esconde (= o comportamento de antes).
+ * da unidade (antecipado, sinal, garantir, consulta) entre o verbo e o valor. Na dúvida, não esconde (= o comportamento de antes).
  */
 
 const VALOR = /R\$\s*(?:\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
 
 /** Fim de frase: ponto/!/? seguido de espaço, ou quebra de linha. O ponto de "R$ 1.500" não conta (vem colado ao dígito). */
+const FIM_DE_FRASE_G = /[.!?](?=\s)|\n/g;
 const FIM_DE_FRASE = /[.!?](?=\s)|\n/;
 
+/** Atalho: texto sem NENHUM destes sinais não tem valor do paciente (e a saída de toda resposta passa por aqui). */
+const ALGUM_SINAL_DO_PACIENTE =
+  /comprovante|pagou|enviou|mandou|transferiu|depositou|recebi|caiu|veio|chegou|apareceu|mostrad|consta|aparece|identificad|\bleu\b|n[aã]o\s+(?:bate|confere|corresponde|fecha)|\b(?:valor|pagamento|pix|dep[oó]sito|transfer[eê]ncia)\s+foi\b/i;
+
 /** Verbos que o paciente fez com o dinheiro. */
-const FEZ = '(?:pagou|enviou|mandou|transferiu|depositou|fez)';
+const FEZ = '(?:pagou|enviou|mandou|transferiu|depositou)';
+/** Verbos com que a Sofia relata o que o comprovante traz. */
+const RELATA = '(?:é|foi|era|mostra|mostrou|aponta|apontou|indica|indicou|consta|diz|tem|veio)';
 
 /** Trecho, antes do valor, que relata o que o paciente mandou. Termina no valor (`$`). */
 const ANTES_DO_PACIENTE: RegExp[] = [
-  // "o comprovante é de", "o comprovante mostra", "o valor desse comprovante é", "o comprovante que recebi mostra" …
-  /comprovante[^]{0,60}$/i,
+  // "o comprovante é de", "o comprovante mostra", "o valor do comprovante é", "o comprovante que recebi mostra" — verbo de relato colado ao valor
+  new RegExp(String.raw`comprovante\b[^,;—–-]{0,18}?(?<=\s)${RELATA}\s+(?:de\s+)?$`, 'i'),
+  // "Esse comprovante de R$ 1.500", "o valor do comprovante (R$ 200)"
+  /comprovante\s+de\s+$/i,
+  /comprovante\s*\(\s*$/i,
+  // "O comprovante é da nossa clínica, mas o valor de R$ 50 não bate" / "…, mas o valor de R$ 200 ficou abaixo"
+  /comprovante\b[^]{0,60}?\bmas\b[^,;—–-]{0,20}?\bvalor\s+(?:de\s+)?$/i,
   // "você pagou", "você já enviou o Pix de"
   new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b[^]{0,25}$`, 'i'),
   // "o valor que veio/caiu/chegou/consta/aparece/mostrado …", "o valor mostrado foi de"
@@ -50,8 +64,10 @@ const DEPOIS_DO_PACIENTE: RegExp[] = [
   /^\s*,?\s*(?:que\s+)?(?:recebi|caiu|chegou|veio|apareceu)\b/i, // "R$ 50 que recebi"
   /^\s*(?:ainda\s+)?n[aã]o\s+(?:bate|confere|corresponde|fecha)\b/i, // "R$ 50 não bate", "R$ 50 ainda não bate" (e NÃO "R$ 200 — então não bate": ali é o preço)
 ];
+/** Só vale com "comprovante" antes, na mesma frase: o comprovante é o assunto, e o valor dele ficou abaixo/acima do esperado. */
+const DEPOIS_COM_COMPROVANTE = /^\s*(?:ainda\s+)?(?:ficou|est[aá]|é)\s+(?:bem\s+|um\s+pouco\s+)?(?:abaixo|acima|menor|maior|diferente|inferior|superior)\b/i;
 
-/** O trecho entre o "comprovante" e o valor já fala do preço da unidade ou PEDE alguma coisa: então o valor não é o que ele mandou. */
+/** O trecho entre o verbo e o valor já fala do preço da unidade ou PEDE alguma coisa: então o valor não é o que o paciente mandou. */
 const FALA_DO_PRECO_OU_PEDE =
   /\b(?:antecipad\w*|sinal|garant\w*|consulta|reserva\w*|pagando\s+antes|pagar\s+antes|precis\w+|deve\w*|tem\s+que|tem\s+de|necess\w+|valor\s+(?:certo|correto)|seja|ser[áa]?)\b/i;
 
@@ -61,9 +77,9 @@ const PEDE_ENVIO = /\b(?:enviar|envie|envia|mandar|mande|manda|reenviar|reenvie|
 function trechoDaFraseAntes(texto: string, ini: number): string {
   const antes = texto.slice(0, ini);
   let corte = 0;
-  const re = new RegExp(FIM_DE_FRASE.source, 'g');
+  FIM_DE_FRASE_G.lastIndex = 0;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(antes)) !== null) corte = m.index + m[0].length;
+  while ((m = FIM_DE_FRASE_G.exec(antes)) !== null) corte = m.index + m[0].length;
   return antes.slice(corte);
 }
 
@@ -76,7 +92,7 @@ function trechoDaFraseDepois(texto: string, fim: number): string {
 /** Posição (índice do "R$") de cada valor que o texto atribui ao PACIENTE. */
 export function posicoesDeValorDoPaciente(texto: string): Set<number> {
   const posicoes = new Set<number>();
-  if (!texto || !/R\$/i.test(texto)) return posicoes;
+  if (!texto || !/R\$/i.test(texto) || !ALGUM_SINAL_DO_PACIENTE.test(texto)) return posicoes;
 
   for (const m of texto.matchAll(VALOR)) {
     const ini = m.index ?? 0;
@@ -86,20 +102,21 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
     const frase = trechoDaFraseAntes(texto, ini);
     const ultimoReal = frase.lastIndexOf('R$');
     const antes = ultimoReal === -1 ? frase : frase.slice(ultimoReal + 2);
+    const pedeEnvio = PEDE_ENVIO.test(frase);
 
     let doPaciente = false;
     for (const re of ANTES_DO_PACIENTE) {
       const achou = re.exec(antes);
       if (!achou) continue;
-      const entre = achou[0];
-      // "comprovante certinho, com o valor de R$ 200" / "me enviar o comprovante": é pedido, o R$ é o preço.
-      if (re === ANTES_DO_PACIENTE[0] && (FALA_DO_PRECO_OU_PEDE.test(entre) || PEDE_ENVIO.test(frase))) continue;
+      // "me enviar o comprovante certinho, com o valor de R$ 200" / "se você pagou o sinal de R$ 80": pedido ou preço, não relato.
+      if (pedeEnvio || FALA_DO_PRECO_OU_PEDE.test(achou[0])) continue;
       doPaciente = true;
       break;
     }
     if (!doPaciente) {
       const depois = trechoDaFraseDepois(texto, fim);
-      doPaciente = DEPOIS_DO_PACIENTE.some((re) => re.test(depois));
+      doPaciente =
+        DEPOIS_DO_PACIENTE.some((re) => re.test(depois)) || (/comprovante/i.test(antes) && !pedeEnvio && DEPOIS_COM_COMPROVANTE.test(depois));
     }
     if (doPaciente) posicoes.add(ini);
   }
