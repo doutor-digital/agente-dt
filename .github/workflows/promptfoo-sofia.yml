@@ -1,0 +1,123 @@
+name: promptfoo-sofia
+
+# Promptfoo da Sofia em produção: roda o banco de conversas douradas (backend/src/eval/banco.ts) contra a
+# Sofia que ESTÁ NO AR — a mesma imagem do serviço, num contêiner à parte (não toca no que atende paciente) —
+# e manda o resultado para o Telegram do João. Relatório HTML fica como artefato da execução.
+#
+# Roda no runner da própria VPS (o mesmo do deploy): o banco e as chaves já estão lá, nenhum segredo novo no GitHub.
+# O banco só existe na rede do Swarm, que não aceita contêiner avulso; o contêiner do eval usa a rede do host e
+# fala com o banco pelo IP dele na docker_gwbridge (resolvido a cada execução).
+
+on:
+  schedule:
+    - cron: '0 9 * * *' # 06:00 em Brasília, antes do movimento
+  workflow_dispatch:
+    inputs:
+      caso:
+        description: 'Só este caso (id do banco.ts). Vazio = todos.'
+        required: false
+        default: ''
+      unidade:
+        description: 'Só os casos desta unidade (slug). Vazio = todas.'
+        required: false
+        default: ''
+      repeticoes:
+        description: 'Quantas voltas (3 pega caso instável).'
+        required: false
+        default: '1'
+
+concurrency:
+  group: promptfoo-sofia
+  cancel-in-progress: false
+
+jobs:
+  eval:
+    runs-on: [self-hosted, linux, vps]
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    env:
+      REMOTE_DIR: /opt/doutordigital/agente-dt
+      PF_CASO: ${{ inputs.caso }}
+      PF_UNIDADE: ${{ inputs.unidade }}
+      REPETICOES: ${{ inputs.repeticoes || '1' }}
+      LINK: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rodar o banco dourado contra a Sofia no ar
+        id: eval
+        run: |
+          set -eu
+          # a pasta de saída vem primeiro: se algo abaixo falhar, o passo do Telegram ainda avisa
+          OUT="$RUNNER_TEMP/promptfoo"
+          mkdir -p "$OUT"
+          echo "out=$OUT" >> "$GITHUB_OUTPUT"
+          case "$REPETICOES" in ''|*[!0-9]*) echo "repeticoes inválido"; exit 1 ;; esac
+          set -a; . "$REMOTE_DIR/.env"; set +a
+          AG=$(docker ps -qf name=ddagent_agent | head -1)
+          [ -n "$AG" ] || { echo "contêiner da Sofia não encontrado"; exit 1; }
+          IMG=$(docker inspect -f '{{.Config.Image}}' "$AG")
+          DB=$(docker ps -qf name=ddagentdb_db | head -1)
+          IP=$(docker network inspect docker_gwbridge -f '{{range $k,$v := .Containers}}{{$k}} {{$v.IPv4Address}}{{println}}{{end}}' \
+            | awk -v c="$DB" 'index($1,c)==1 {split($2,a,"/"); print a[1]}')
+          [ -n "$IP" ] || { echo "IP do banco na docker_gwbridge não encontrado"; exit 1; }
+          URL=$(printf '%s' "$DATABASE_URL" | sed "s#@ddagentdb_db:5432/#@${IP}:5432/#")
+          echo "::add-mask::$URL"
+          echo "imagem=$IMG" >> "$GITHUB_OUTPUT"
+          set +e
+          docker run --rm --network host \
+            -v "$OUT":/out -v promptfoo-npm:/root/.npm -v promptfoo-historico:/root/.promptfoo \
+            -w /repo/backend \
+            -e DATABASE_URL="$URL" -e KOMMO_SUBDOMAIN -e KOMMO_ACCESS_TOKEN -e OPENAI_API_KEY -e SESSION_JWT_SECRET \
+            -e PF_CASO -e PF_UNIDADE -e REPETICOES -e LOG_LEVEL=warn \
+            -e PROMPTFOO_DISABLE_TELEMETRY=1 -e PROMPTFOO_DISABLE_SHARING=1 -e PROMPTFOO_DISABLE_UPDATE=1 \
+            -e PROMPTFOO_DISABLE_REMOTE_GENERATION=1 -e PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1 \
+            "$IMG" sh -c 'npx -y promptfoo@0.125.1 eval -c promptfoo/promptfooconfig.yaml --no-cache --repeat "$REPETICOES" -o /out/resultado.json /out/relatorio.html' \
+            </dev/null > "$OUT/log.txt" 2>&1
+          CODIGO=$?
+          set -e
+          echo "codigo=$CODIGO" >> "$GITHUB_OUTPUT"
+          tail -20 "$OUT/log.txt"
+
+      - name: Resumo e aviso no Telegram
+        if: always() && steps.eval.outputs.out != ''
+        run: |
+          set -eu
+          set -a; . "$REMOTE_DIR/.env"; set +a
+          echo "::add-mask::$TELEGRAM_BOT_TOKEN"
+          OUT="${{ steps.eval.outputs.out }}"
+          IMG="${{ steps.eval.outputs.imagem }}"
+          CODIGO="${{ steps.eval.outputs.codigo }}"
+          RESUMO="$GITHUB_WORKSPACE/backend/promptfoo/resumo.mjs"
+          if [ -n "$IMG" ] && [ -s "$OUT/resultado.json" ]; then
+            docker run --rm -v "$OUT":/out -v "$RESUMO":/resumo.mjs:ro "$IMG" node /resumo.mjs /out/resultado.json markdown >> "$GITHUB_STEP_SUMMARY"
+            docker run --rm -v "$OUT":/out -v "$RESUMO":/resumo.mjs:ro "$IMG" node /resumo.mjs /out/resultado.json telegram "$LINK" > "$OUT/telegram.txt"
+          else
+            printf '🧪 Sofia — Promptfoo diário: ❌ a rodada NÃO aconteceu (código %s). Log: %s\n' "$CODIGO" "$LINK" > "$OUT/telegram.txt"
+            echo "A rodada não gerou resultado (código $CODIGO)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          curl -sS -o /dev/null -w 'telegram: %{http_code}\n' "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            --data-urlencode "chat_id=${TELEGRAM_CHAT_JOAO}" --data-urlencode "text@$OUT/telegram.txt" \
+            --data-urlencode "disable_web_page_preview=true"
+
+      - name: Guardar o relatório
+        if: always() && steps.eval.outputs.out != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: promptfoo-sofia-${{ github.run_id }}
+          path: |
+            ${{ steps.eval.outputs.out }}/relatorio.html
+            ${{ steps.eval.outputs.out }}/resultado.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Limpar e sair com o resultado
+        if: always() && steps.eval.outputs.out != ''
+        run: |
+          # os arquivos foram criados como root dentro do contêiner: quem apaga é um contêiner
+          if [ -n "${{ steps.eval.outputs.imagem }}" ]; then
+            docker run --rm -v "${{ steps.eval.outputs.out }}":/out "${{ steps.eval.outputs.imagem }}" sh -c 'rm -rf /out/*' || true
+          fi
+          # 100 = algum caso reprovou (o Promptfoo rodou): a execução fica vermelha e o GitHub avisa por e-mail
+          [ "${{ steps.eval.outputs.codigo }}" = "0" ]
