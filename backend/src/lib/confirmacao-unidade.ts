@@ -35,8 +35,23 @@ const TEXTO_PETROPOLIS =
   '*Por favor, confirme sua presença em até 12 horas para garantir o horário. Caso contrário, ele será liberado para a lista de espera.*\n\n' +
   'Equipe Doutor Hérnia';
 
+/**
+ * Caxias (18/11/2026, pedido do João): o texto que a equipe de Caxias manda à mão hoje (lead 2778872, 18/11 08:53), só com "sessão"
+ * trocado por "consulta", como em Petrópolis. Sem {saudacao}: o texto abre com o nome da clínica. {data} sai "19/11" (o original
+ * escrevia "19/11/26"; aceito, sem formato novo). Caxias também está no WhatsApp Lite (QR): `semJanela`.
+ * ATENÇÃO: se a unidade passar para a API oficial, tire o `semJanela`.
+ */
+const TEXTO_CAXIAS =
+  '*CLÍNICA DOUTOR HÉRNIA DUQUE DE CAXIAS:*\nOlá, aqui é da Clínica Doutor Hérnia! 😀\n\n' +
+  'Estou entrando em contato para confirmar sua consulta agendada para:\n*Dia {data} às {hora}*\n' +
+  'Endereço: Rua Mariano Sendra dos Santos 44 sala 206, Galeria Alvarenga.\n\n' +
+  'Favor vir com roupa confortável\n*Traga apenas um acompanhante, para maior conforto e organização de todos os pacientes*\n\n' +
+  '*Não podemos tolerar atrasos superiores a 5 minutos.* Isso evita impactos na agenda e garante que todos sejam atendidos no horário previsto.\n\n' +
+  'Equipe Doutor Hérnia';
+
 const POR_UNIDADE: Readonly<Record<string, { texto?: string; semJanela?: boolean }>> = {
   'doutor-hernia-petropolis': { texto: TEXTO_PETROPOLIS, semJanela: true },
+  'doutor-hernia-caxias': { texto: TEXTO_CAXIAS, semJanela: true },
 };
 
 /**
