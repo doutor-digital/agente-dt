@@ -1,3 +1,4 @@
+import { semTravessao } from '../lib/sem-travessao.js';
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
 import type { Unit } from '@prisma/client';
@@ -252,7 +253,8 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     // O turno deu certo: os comprovantes que ele carregava já estão na conversa e não precisam ser entregues de novo.
     await marcarEntregues(prisma, leiturasParaEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
 
-    const decisao = (result.decision ?? '').trim();
+    // Sem travessão na origem (#397): o mesmo texto vai ao paciente, à trava e ao registro de entrega.
+    const decisao = semTravessao((result.decision ?? '').trim());
     // Mesma barreira do webhook: bastidor que a reescrita do grafo não limpou não sai — resposta vazia,
     // como no lead pausado.
     const vazou = decisao ? detectarVazamento(decisao) : null;
