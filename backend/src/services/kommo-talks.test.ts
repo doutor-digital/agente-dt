@@ -201,7 +201,32 @@ test('decidirCobranca: equipe falou por último ou paciente respondeu depois →
 
 test('classificarAutor: o app WhatsApp Business é a EQUIPE, mesmo marcado como robô pelo Kommo', () => {
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Business' } }), 'equipe');
+  // Caxias, lead 3526512, 18/11/2026: a Jéssica pelo celular com o Lite saía como 'sofia' e a Sofia falava por cima dela
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'WhatsApp Lite' } }), 'equipe');
+  assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: ' whatsapp lite ' } }), 'equipe');
   assert.equal(classificarAutor({ type: 'outgoing', author: { type: 'bot', name: 'Salesbot' } }), 'sofia');
+});
+
+test('Lite: a ausência automática e o aviso «messageContextInfo» não viram «Equipe» no prompt nem «equipe falou por último» na régua', () => {
+  const lite = { type: 'bot', name: 'WhatsApp Lite' };
+  const msgs = normalizar([
+    raw({ id: '1', created_at: t0, type: 'outgoing', author: { type: 'bot', name: 'Salesbot' }, text: 'Oi! Aqui é a Sofia', delivery_status: 'seen' }),
+    raw({ id: '2', created_at: t0 + 30, text: 'qual o valor?' }),
+    raw({ id: '3', created_at: t0 + 34, type: 'outgoing', author: lite, text: 'Agradecemos o seu contato! Nosso atendimento é de segunda a sexta de 07:30 às 19:30.' }),
+    raw({ id: '4', created_at: t0 + 40, type: 'outgoing', author: lite, text: "'messageContextInfo' is not yet supported. Use your device to view this message." }),
+  ]);
+  // prompt: a Sofia não é avisada de que «a equipe humana já falou»
+  assert.deepEqual(selecionarItens(msgs, 'qual o valor?', (t0 + 400) * 1000).map((m) => m.id), []);
+  // régua: a última saída continua sendo a da Sofia e a equipe não falou
+  const estado = estadoDeLeitura(msgs);
+  assert.equal(estado.equipeFalouPorUltimo, false);
+  assert.equal(estado.ultimaSaida?.autor, 'sofia');
+  // já a fala humana pelo Lite entra no prompt e vale como «equipe falou por último»
+  const humana = normalizar([
+    raw({ id: '1', created_at: t0, type: 'outgoing', author: lite, text: 'Poderia por gentileza me enviar seu nome completo ?' }),
+  ]);
+  assert.deepEqual(selecionarItens(humana, 'x', (t0 + 400) * 1000).map((m) => m.id), ['1']);
+  assert.equal(estadoDeLeitura(humana).equipeFalouPorUltimo, true);
 });
 
 test('normalizar marca a sessão "Doutor Digital" (pode ser a Sofia em voz ou a equipe); robô não', () => {

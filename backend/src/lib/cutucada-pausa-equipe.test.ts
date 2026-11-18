@@ -117,7 +117,8 @@ test('NEUTRO para quem não tem cutucada: mesmas datas de `enviosDaSofia`, mesma
 
   // deps antigas, sem `ultimaCutucada`, funcionam como sempre
   linhas = [];
-  const antigas = deps({ mensagens: async () => msgs });
+  // (a fala é do app "WhatsApp Lite", que pausa só por 60 min: por isso aqui a conversa é de 45 min atrás; a de 5 h é «antiga» só para o Lite)
+  const antigas = deps({ mensagens: async () => conversa(0.75, 0.1) });
   delete antigas.ultimaCutucada;
   assert.equal((await conferirEquipe(unidade, 1, antigas)).motivo, null);
 });

@@ -1,0 +1,63 @@
+/**
+ * QUEM É O APP DO CELULAR DA CLÍNICA, E O QUE ELE (ou o Kommo) FALA SOZINHO. Parte pura, sem import de ambiente.
+ *
+ * O celular da clínica entra no Kommo como autor `bot`: "WhatsApp Business" (coexistência, API oficial) ou "WhatsApp Lite" (QR
+ * code). Quem escreve ali é gente. Mas o app também fala sozinho (saudação, ausência) e o Kommo despeja avisos de sistema como
+ * se fossem saída — esses NÃO são fala da equipe.
+ *
+ * Medido em 18/11/2026 (leitura da rota /talks): em Caxias e Petrópolis nenhum envio do agente sai como "WhatsApp Lite" (94 de 94
+ * e 134 de 134 saem como "Salesbot"); o que sai como Lite é gente, mais a ausência do app ("Agradecemos o seu contato!…", 35 em
+ * Petrópolis em 72 h), o aviso «messageContextInfo» e o robô de Retomada ("Passando novamente porque vi…", Caxias).
+ */
+
+export type AppDoCelular = 'business' | 'lite';
+
+const APPS = new Map<string, AppDoCelular>([
+  ['whatsapp business', 'business'],
+  ['whatsapp lite', 'lite'],
+]);
+
+/** Nomes (minúsculos) com que o Kommo assina a fala vinda do celular da clínica. */
+export const NOMES_DOS_APPS_DO_CELULAR: readonly string[] = [...APPS.keys()];
+
+/** Qual app do celular é este autor? null = não é app do celular. */
+export function appDoCelular(autorNome: string | null | undefined): AppDoCelular | null {
+  return APPS.get((autorNome ?? '').trim().toLowerCase()) ?? null;
+}
+
+/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). Igual ao que a `pausa-equipe` sempre usou. */
+export const AVISO_DO_SISTEMA_BASE = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
+
+/** O mesmo aviso mais o «messageContextInfo» que o Lite mostra. É o que a cutucada usa (de qualquer autor). */
+export const AVISO_DO_SISTEMA = new RegExp(`${AVISO_DO_SISTEMA_BASE.source}|^'?messagecontextinfo'? is not yet supported`, 'i');
+
+/** Saudação/ausência que o app manda sozinho (Lite: "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…"). */
+export const RESPOSTA_AUTOMATICA_TEXTO = /agradecemos o seu contato|nosso atendimento (é|e) de |fora do (nosso )?hor[aá]rio|hor[aá]rio de atendimento (é|e) /i;
+
+/**
+ * Textos de robô do Kommo (etapa ▶ Retomada) que saem sem marca de robô: pelo celular (Caxias, "WhatsApp Lite") ou como o USUÁRIO
+ * `internal` (Petrópolis; este caso é da cutucada). Na dúvida é robô: o erro custa uma cutucada a menos, nunca uma a mais.
+ */
+export const TEXTOS_DE_ROBO: readonly RegExp[] = [
+  /passando novamente porque vi que voc[eê] procurou ajuda/i,
+  /vi que voc[eê] demonstrou interesse no nosso tratamento, tentei contato/i,
+];
+
+/**
+ * Mensagem de ROBÔ do Kommo (▶ Retomada) que saiu assinada pelo WhatsApp LITE? É robô, não equipe: a conversa a trata como a Sofia/Salesbot
+ * (`normalizar` a marca 'sofia'), como sempre fez para os robôs. Só saída do Lite, sem anexo.
+ */
+export function ehRoboConhecidoDoLite(m: { texto: string; autorNome: string; anexo?: unknown }): boolean {
+  return appDoCelular(m.autorNome) === 'lite' && !m.anexo && TEXTOS_DE_ROBO.some((r) => r.test(m.texto.trim()));
+}
+
+/**
+ * A saída é fala automática do WhatsApp LITE pelo texto (sem olhar a hora): aviso do sistema (inclui o «messageContextInfo») ou, sem
+ * anexo, texto de ausência/saudação. Não conta como «a equipe falou» em lugar nenhum: nem na pausa, nem no bloco <conversa_oficial> do
+ * prompt, nem na leitura da régua. Vale SÓ para o Lite: o WhatsApp Business segue com a regra de tempo de sempre (`pausa-equipe.ts`).
+ */
+export function ehFalaAutomaticaDoLite(m: { texto: string; autorNome: string; anexo?: unknown }): boolean {
+  if (appDoCelular(m.autorNome) !== 'lite') return false;
+  const t = m.texto.trim();
+  return AVISO_DO_SISTEMA.test(t) || (!m.anexo && RESPOSTA_AUTOMATICA_TEXTO.test(t));
+}

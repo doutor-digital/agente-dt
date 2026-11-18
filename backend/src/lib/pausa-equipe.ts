@@ -22,7 +22,8 @@
  *  - uma fala HUMANA da equipe (não robô: Salesbot, régua, transmissão já saem como 'sofia'; e não a
  *    resposta automática do próprio WhatsApp Business — saudação e ausência, ver `ehRespostaAutomatica`);
  *  - DEPOIS da última mensagem que o agente mandou (se a Sofia falou depois, a conversa voltou para ela);
- *  - nas últimas 24 h;
+ *  - nas últimas 24 h — exceto quando a última fala é do app "WhatsApp Lite": aí só nos últimos `PAUSA_EQUIPE_VOLTA_MIN` (60 min),
+ *    a mesma janela da volta (ver `equipeComAPalavra`). Business, usuário do Kommo e app do Kommo seguem com as 24 h;
  *  - e sem ninguém ter DESMARCADO "Pausar IA" depois dela (desmarcar = devolver à Sofia; a fala antiga
  *    não pausa de novo, uma fala nova pausa). Vale quem desmarca: a SDR, a reativação, o fim da pausa com data.
  *
@@ -47,10 +48,18 @@ import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
+import { AVISO_DO_SISTEMA_BASE, appDoCelular, ehFalaAutomaticaDoLite } from './fala-automatica.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
-/** Fala da equipe mais velha que isto não pausa (e não faz a ligação da chave varrer conversas antigas). */
+/** Fala da equipe mais velha que isto não pausa (e não faz a ligação da chave varrer conversas antigas). Só o Lite tem janela menor (abaixo). */
 export const JANELA_DA_EQUIPE_MS = 24 * 3600_000;
+/** Padrão de `PAUSA_EQUIPE_VOLTA_MIN`: minutos sem fala da equipe para a Sofia voltar (ver pausa-equipe-volta.ts). */
+export const VOLTA_PADRAO_MIN = 60;
+/** `PAUSA_EQUIPE_VOLTA_MIN`: minutos sem fala da equipe para a Sofia voltar. Inválido ou ≤ 0 = 60. A porta usa o mesmo número para fala do Lite. */
+export function minutosDaVolta(env: NodeJS.ProcessEnv = process.env): number {
+  const n = Number(env.PAUSA_EQUIPE_VOLTA_MIN);
+  return Number.isFinite(n) && n > 0 ? n : VOLTA_PADRAO_MIN;
+}
 /**
  * Saudação e ausência do WhatsApp Business saem sozinhas, no mesmo instante da mensagem do paciente. Folga
  * para o eco chegar ao Kommo; para trás, tolerância de relógio entre a entrada e o eco.
@@ -61,10 +70,6 @@ export const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
 const MENSAGENS_LIDAS = 40;
 
-const APP_DO_CELULAR = 'whatsapp business';
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-export const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
-
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
 
 export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = process.env): Estado {
@@ -74,17 +79,23 @@ export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = p
 // ── parte pura ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * PURA: a mensagem é a resposta automática do WhatsApp Business (saudação, ausência) ou aviso do sistema?
+ * PURA: a mensagem é a resposta automática do app do celular (saudação, ausência) ou aviso do sistema?
  * Visto em produção: Rio Verde, "⏰Nosso horário de atendimento é de segundas à sexta…" às 23:59, no mesmo
  * minuto da mensagem do paciente; Balsas, "Olá, tudo bem? 😄 Clínica Doutor Hérnia é especializada…".
  * Áudio e texto curto pelo celular são gente.
+ *
+ * WhatsApp BUSINESS: a regra de sempre — aviso do sistema, ou texto longo até 20 s depois de uma entrada.
+ * WhatsApp LITE (Caxias 3526512 e Petrópolis, 18/11/2026): só pelo TEXTO, sem hora — aviso do sistema (inclui «messageContextInfo») e
+ * ausência/saudação ("Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…", 35 em 72 h em Petrópolis). A regra de tempo
+ * NÃO vale no Lite: escondia fala humana rápida ("Há quanto tempo ela vem sentindo essas dores ?", "Obrigada pela confirmação…" — 27 em 72 h
+ * nas duas contas) e a Sofia seguia falando por cima da secretária.
  */
 export function ehRespostaAutomatica(m: MensagemOficial, msgs: readonly MensagemOficial[]): boolean {
   if (m.direcao !== 'saida') return false;
   const texto = m.texto.trim();
-  if (AVISO_DO_SISTEMA.test(texto)) return true;
-  if (m.autorNome.trim().toLowerCase() !== APP_DO_CELULAR) return false;
-  if (m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
+  if (AVISO_DO_SISTEMA_BASE.test(texto)) return true;
+  if (ehFalaAutomaticaDoLite(m)) return true;
+  if (appDoCelular(m.autorNome) !== 'business' || m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();
   return msgs.some((p) => {
     if (p.direcao !== 'entrada') return false;
@@ -109,8 +120,16 @@ export type SemPausa = 'sem_equipe' | 'antiga' | 'ia_falou_depois';
 export type DecisaoDaEquipe = { fala: MensagemOficial; motivo: null } | { fala: null; motivo: SemPausa };
 
 /**
- * PURA: a equipe tem a palavra? A última fala humana dela, se veio depois da última mensagem do agente e
- * nas últimas 24 h. (A checagem "desmarcaram a caixinha depois" pede o Kommo e fica em `conferirEquipe`.)
+ * PURA: a equipe tem a palavra? A última fala humana dela, se veio depois da última mensagem do agente e nas últimas 24 h.
+ * (A checagem "desmarcaram a caixinha depois" pede o Kommo e fica em `conferirEquipe`.)
+ *
+ * WhatsApp LITE (Caxias 3526512 e Petrópolis, 18/11/2026): se a última fala é do app "WhatsApp Lite", ela só pausa por `janelaDoLiteMs`
+ * (quem chama passa a janela da volta, `PAUSA_EQUIPE_VOLTA_MIN`, 60 min). A volta solta a conversa 1 h depois da última fala da equipe e NÃO
+ * responde a mensagem que ficou; pausar por fala de 2–14 h atrás deixaria o paciente sem ninguém (Petrópolis, 72 h: 8 respostas reais da
+ * Sofia à noite). Business, usuário do Kommo e app do Kommo mantêm as 24 h de sempre — por isso o padrão de `janelaDoLiteMs` é a janela
+ * de 24 h (função pura, não lê o ambiente).
+ * Cutucada: se ela falou DEPOIS da equipe, o paciente que responde a ela continua na conversa da equipe e a janela de 24 h conta a
+ * partir da cutucada, para qualquer app (igual a antes).
  */
 export function equipeComAPalavra(
   msgs: readonly MensagemOficial[],
@@ -118,12 +137,16 @@ export function equipeComAPalavra(
   agora: Date,
   /** A cutucada depois da equipe (não é fala da IA): se veio DEPOIS da fala da equipe, a janela de 24 h conta a partir dela. */
   ultimaCutucada: Date | null = null,
+  /** Quanto tempo a fala do app "WhatsApp Lite" ainda pausa (sem cutucada). Padrão: as mesmas 24 h dos demais. */
+  janelaDoLiteMs: number = JANELA_DA_EQUIPE_MS,
 ): DecisaoDaEquipe {
   const falas = falasHumanasDaEquipe(msgs);
   const fala = falas[falas.length - 1];
   if (!fala) return { fala: null, motivo: 'sem_equipe' };
-  const retomadaEm = ultimaCutucada && ultimaCutucada.getTime() >= fala.em.getTime() ? ultimaCutucada.getTime() : fala.em.getTime();
-  if (agora.getTime() - retomadaEm > JANELA_DA_EQUIPE_MS) return { fala: null, motivo: 'antiga' };
+  const cutucadaDepois = !!ultimaCutucada && ultimaCutucada.getTime() >= fala.em.getTime();
+  const retomadaEm = cutucadaDepois ? ultimaCutucada!.getTime() : fala.em.getTime();
+  const janela = !cutucadaDepois && appDoCelular(fala.autorNome) === 'lite' ? janelaDoLiteMs : JANELA_DA_EQUIPE_MS;
+  if (agora.getTime() - retomadaEm > janela) return { fala: null, motivo: 'antiga' };
   if (ultimaFalaDaIa && ultimaFalaDaIa.getTime() >= fala.em.getTime()) return { fala: null, motivo: 'ia_falou_depois' };
   return { fala, motivo: null };
 }
@@ -131,7 +154,8 @@ export function equipeComAPalavra(
 /** PURA: como a nota chama quem falou ("Melissa", "o celular da clínica (WhatsApp Business)", "a equipe"). */
 export function nomeDoAutor(autorNome: string): string {
   const nome = autorNome.trim();
-  return !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+  const app = appDoCelular(nome);
+  return !nome ? 'a equipe' : app === 'business' ? 'o celular da clínica (WhatsApp Business)' : app === 'lite' ? 'o celular da clínica (WhatsApp Lite)' : nome;
 }
 
 /** PURA: "Melissa em 20/10 10:25" / "o celular da clínica (WhatsApp Business) em 20/10 10:25". */
@@ -237,7 +261,7 @@ export async function conferirEquipe(
   const agora = deps.agora();
   const ultimaIa = await deps.ultimaFalaDaIa(unit, leadId, new Date(agora.getTime() - JANELA_DA_EQUIPE_MS - 3600_000));
   const ultimaCutucada = deps.ultimaCutucada ? await deps.ultimaCutucada(unit, leadId, new Date(agora.getTime() - JANELA_DA_EQUIPE_MS - 3600_000)).catch(() => null) : null;
-  const d = equipeComAPalavra(msgs, ultimaIa, agora, ultimaCutucada);
+  const d = equipeComAPalavra(msgs, ultimaIa, agora, ultimaCutucada, minutosDaVolta() * 60_000);
   if (!d.fala) return { msgs, fala: null, motivo: d.motivo };
   // DEVOLVIDA À SOFIA: "Pausar IA" mudou depois da fala E está desmarcada agora — então houve um desmarcar
   // depois dela (a SDR, a reativação, o fim da pausa com data). Mudou mas está marcada (a própria pausa da
