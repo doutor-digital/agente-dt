@@ -7,6 +7,7 @@ import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
 import { cadastrarLeadDoTurno, estadoCadastroTodoLead, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
 import { agendarCapturaSilenciosa } from '../lib/captura-silenciosa.js';
+import { aplicarOrigemPorTexto } from '../lib/origem-texto-pronto.js';
 import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
 import { logger } from '../lib/logger.js';
 import { buildAgentGraph, buildThreadId } from '../agent/graph.js';
@@ -1272,6 +1273,10 @@ const TURNO_PULADO = 'pulado' as const;
  * ao cadastro. Com a IA pulada o paciente continua sendo lead, e o cadastro roda aqui com as mesmas travas (ver `cadastrarLeadDoTurno`).
  */
 export async function processAgent(args: ArgsDoTurno): Promise<void> {
+  // ⚑ Origem pelo texto pronto da 1ª mensagem (chave `origem-texto-pronto`, lib/origem-texto-pronto.ts): o WhatsApp Lite não traz o anúncio.
+  // Começa JUNTO com o turno e roda tanto quando a Sofia fala quanto quando a IA é pulada. Nunca lança e ninguém espera por ela aqui: o cadastro
+  // na franquia (`cadastrarLeadDoTurno`, nos dois caminhos) é quem espera, até 8 s, se a origem deste lead ainda estiver sendo gravada.
+  void aplicarOrigemPorTexto({ unit: args.unit, leadId: args.leadId, isChatMessage: args.isChatMessage });
   try {
     const r = await processarTurno(args);
     // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.

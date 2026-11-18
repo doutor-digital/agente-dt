@@ -41,6 +41,7 @@ import { unidadeDona } from '../agent/rede-doutor-hernia.js';
 import { resumoDaOrigem, veioDeAnuncio, type AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { avaliarPelaIa, type DecisaoDaIa, type UnidadeDaIa } from './cadastro-triagem-ia.js';
+import { anuncioPelaFrase, esperarOrigem } from './origem-texto-pronto.js';
 import type { Unit } from '@prisma/client';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
@@ -157,6 +158,11 @@ export interface DepsDoCadastro {
   unidadesDoTelefone(chave8: string): Promise<string[]>;
   /** O anúncio que trouxe o lead, lido do cartão do Kommo. `null` = cartão sem rastreio (ou não deu para ler: na dúvida é orgânico). */
   anuncioDoLead(unit: UnidadeMinima, leadId: number): Promise<AnuncioDeOrigem | null>;
+  /**
+   * A conversa abre com o TEXTO PRONTO de um anúncio (lista `origem_por_texto` da unidade, `anuncio: true`)? Só com a chave `origem-texto-pronto`
+   * LIGADA; não olha o cartão (o WhatsApp Lite não grava o rastreio). Devolve a frase casada e a origem combinada. Nunca lança. Opcional: sem ela, nada muda.
+   */
+  anuncioPelaFrase?(unit: UnidadeMinima, leadId: number): Promise<{ texto: string; origem: string } | null>;
   /** As últimas falas DO PACIENTE (nunca as da IA), da mais antiga para a mais nova. Lança se o banco falhar. */
   falasDoPaciente(unit: UnidadeMinima, leadId: number): Promise<string[]>;
   /** A IA lê as falas e decide. Nunca lança: a falha vem como `duvida`. */
@@ -228,6 +234,7 @@ export const depsPadrao: DepsDoCadastro = {
     return linhas.map((l) => l.content).reverse();
   },
   avaliarPelaIa: (unit, falas) => avaliarPelaIa(unit as UnidadeDaIa, falas),
+  anuncioPelaFrase: (unit, leadId) => anuncioPelaFrase(unit, leadId),
 };
 
 // ── quem passou nas travas e não agendou: anúncio é lead; o resto, a IA lê ─────────────────────
@@ -308,6 +315,14 @@ async function triarOrigem(unit: UnidadeMinima, leadId: number, deps: DepsDoCada
     });
     if (veioDeAnuncio(anuncio)) {
       return { acao: 'cadastrar', origem: 'anuncio', motivo: `lead novo — veio de anúncio (${resumoDaOrigem(anuncio!)})` };
+    }
+    // WhatsApp Lite: o Kommo não recebe o anúncio, mas a 1ª mensagem é o texto pronto dele (chave `origem-texto-pronto`, só LIGADA).
+    const pelaFrase = await deps.anuncioPelaFrase?.(unit, leadId).catch((err) => {
+      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'cadastro-todo-lead: não consegui conferir o texto pronto do anúncio — trato como orgânico');
+      return null;
+    });
+    if (pelaFrase) {
+      return { acao: 'cadastrar', origem: 'anuncio', motivo: `lead novo — veio de anúncio (a conversa abre com o texto pronto «${pelaFrase.texto.slice(0, 80)}» → ${pelaFrase.origem})` };
     }
     const chave = `${unit.id}|${leadId}`;
     const emCurso = leiturasEmCurso.get(chave);
@@ -528,6 +543,8 @@ export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
   deps: DepsDoCadastro = depsPadrao,
 ): Promise<{ decisao: DecisaoDoLead; execucao: Promise<unknown> | null }> {
   const { unit, leadId } = entrada;
+  // Se a ⚑ Origem deste lead está sendo gravada agora (chave `origem-texto-pronto`), espera: o espelho de leads lê a origem do cartão ao criar o lead na franquia.
+  await esperarOrigem(unit.id, leadId);
   const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);
   if (!decisao.criar) return { decisao, execucao: null };
   const execucao = umCadastroPorVez(unit.id, leadId, () => sincronizar(unit, leadId, { soLead: decisao.soLead })).catch((err) => {

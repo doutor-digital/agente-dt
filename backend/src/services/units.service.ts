@@ -142,7 +142,8 @@ export interface UnitInput {
   handoffEnabled?: boolean;
   handoffKeywords?: string[];
 
-  pipelineIntents?: Record<string, number> | null;
+  /** chave → id de etapa/campo (inteiro); `origem_por_texto` é a exceção: lista [{texto, origem, anuncio}] (lib/origem-texto-pronto.ts). */
+  pipelineIntents?: Record<string, number | Array<{ texto: string; origem: string; anuncio?: boolean; contem?: boolean }>> | null;
 
   contactCollectionEnabled?: boolean;
   contactCollectionAfterTurns?: number;

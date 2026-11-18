@@ -9,6 +9,7 @@ import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { painelDaUnidade } from '../services/painel-unidade.service.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import { funilDaIA } from '../services/funil-da-ia.service.js';
+import { pipelineIntentsSchema } from '../lib/pipeline-intents-schema.js';
 import {
   colunasEditaveisDaUnit,
   createUnit,
@@ -170,7 +171,8 @@ const unitInputBase = {
   qualificationColdTag: z.string().max(50).optional(),
   handoffEnabled: z.boolean().optional(),
   handoffKeywords: z.array(z.string().min(1).max(50)).max(50).optional(),
-  pipelineIntents: z.record(z.string(), z.coerce.number().int().positive()).nullable().optional(),
+  // chave → id (inteiro positivo); só `origem_por_texto` aceita lista (ver lib/pipeline-intents-schema.ts)
+  pipelineIntents: pipelineIntentsSchema.nullable().optional(),
   contactCollectionEnabled: z.boolean().optional(),
   contactCollectionAfterTurns: z.coerce.number().int().min(1).max(20).optional(),
   welcomeCouponEnabled: z.boolean().optional(),
