@@ -1,0 +1,22 @@
+# Promptfoo da Sofia — roda o banco de conversas douradas (src/eval/banco.ts) contra a IA de verdade.
+# Como rodar: ver promptfoo/LEIAME.md (resumo: túnel do banco + `npm run eval:pf`, painel em `npm run eval:pf:ver`).
+description: Sofia — banco de conversas douradas
+
+# O prompt é só o id do caso: quem monta o prompt real é o compositor da produção, dentro do provedor.
+prompts:
+  - '{{caso}}'
+
+providers:
+  - id: file://sofia.mjs
+    label: sofia
+
+tests: file://casos.mjs
+
+defaultTest:
+  options:
+    # A juíza das asserções llm-rubric (ver juiza.mjs).
+    provider: file://juiza.mjs
+
+evaluateOptions:
+  # Um caso por vez, de propósito (mesmo motivo do runner.ts): em paralelo o provedor devolve 429.
+  maxConcurrency: 1

@@ -21,7 +21,9 @@
     "promote-admin": "tsx src/scripts/promote-admin.ts",
     "seed-global-actions": "tsx src/scripts/seed-global-actions.ts",
     "sync-whatsapp-costs": "tsx src/scripts/sync-whatsapp-costs.ts",
-    "eval": "tsx src/eval/cli.ts"
+    "eval": "tsx src/eval/cli.ts",
+    "eval:pf": "node -e \"if(+process.versions.node.split('.')[0]<22){console.error('Promptfoo precisa de Node 22+ (nvm use 24)');process.exit(1)}\" && PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_SHARING=1 PROMPTFOO_DISABLE_UPDATE=1 PROMPTFOO_DISABLE_REMOTE_GENERATION=1 PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1 npx -y promptfoo@0.125.1 eval -c promptfoo/promptfooconfig.yaml --no-cache",
+    "eval:pf:ver": "node -e \"if(+process.versions.node.split('.')[0]<22){console.error('Promptfoo precisa de Node 22+ (nvm use 24)');process.exit(1)}\" && PROMPTFOO_DISABLE_TELEMETRY=1 PROMPTFOO_DISABLE_SHARING=1 PROMPTFOO_DISABLE_UPDATE=1 PROMPTFOO_DISABLE_REMOTE_GENERATION=1 PROMPTFOO_DISABLE_REDTEAM_REMOTE_GENERATION=1 npx -y promptfoo@0.125.1 view"
   },
   "dependencies": {
     "@langchain/anthropic": "^1.3.29",
