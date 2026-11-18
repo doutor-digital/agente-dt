@@ -17,6 +17,7 @@ import { prisma } from '../lib/prisma.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { buildTools } from './tools.js';
+import { handoffDaSofiaDesde, pausouSozinhaDesde } from '../lib/pausa-propria.js';
 
 delete process.env.TELEGRAM_BOT_TOKEN;
 
@@ -169,6 +170,27 @@ test('transferência comum não cria tarefa urgente e não promete prazo', async
   assert.deepEqual(pausas, [8]);
   assert.match(r, /NÃO prometa prazo/);
   assert.doesNotMatch(r, /prioridade/);
+});
+
+test('handoff-calado (#393): pausar_ia grava a origem — sinal de alerta = "alerta" (nunca calado), comum = "handoff"', async () => {
+  const inicio = Date.now() - 1;
+  const u = unidade();
+  await ferramenta('pausar_ia', u).invoke({ leadId: 51, motivo: 'perda de força na perna há 2 dias', sinalDeAlerta: true });
+  assert.equal(pausouSozinhaDesde(u, 51, inicio), true);
+  assert.equal(handoffDaSofiaDesde(u, 51, inicio), false, 'o alerta não é handoff comum');
+  await ferramenta('pausar_ia', u).invoke({ leadId: 52, motivo: 'paciente pediu para falar com um atendente' });
+  assert.equal(handoffDaSofiaDesde(u, 52, inicio), true);
+  // o modelo esqueceu a flag, mas o motivo tem cara de sinal: origem 'alerta' (nunca calado)
+  for (const [lead, motivo] of [
+    [53, 'paciente confirmou que a perna falha às vezes'],
+    [54, 'paciente perguntou se deve ir ao pronto-socorro'],
+    [55, 'paciente disse que vai para a UPA'],
+    [56, 'paciente quer ir ao hospital agora'],
+  ] as const) {
+    await ferramenta('pausar_ia', u).invoke({ leadId: lead, motivo });
+    assert.equal(handoffDaSofiaDesde(u, lead, inicio), false, motivo);
+    assert.equal(pausouSozinhaDesde(u, lead, inicio), true, motivo);
+  }
 });
 
 test('a regra da unidade já criou a tarefa urgente no turno: não duplica', async () => {

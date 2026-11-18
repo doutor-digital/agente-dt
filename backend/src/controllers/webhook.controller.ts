@@ -14,7 +14,7 @@ import { rodarTurnoDoBurst } from '../lib/turno-do-burst.js';
 import { TraceRecorder, syncRecorderSequence } from '../agent/trace-recorder.js';
 import { createKommoClient, isLeadPaused, temPalavra } from '../services/kommo.service.js';
 import { leadPausadoPorJanela } from '../lib/pausa-lead.js';
-import { portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
+import { MOTIVO_HANDOFF_CALADO, portaDaEquipe, travaAntesDeEnviar } from '../lib/pausa-equipe.js';
 import { segurarRespostaAtropelada } from '../lib/pausa-propria.js';
 import { devoAvisar, esquecerAviso } from '../lib/paciente-insiste.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
@@ -65,7 +65,7 @@ import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
-import { consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
+import { agendaMexidaNoTurno, consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
@@ -1950,6 +1950,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           inicioDoTurno,
           resposta: reply,
           marcouConsulta: marcouConsultaNoTurno,
+          mexeuNaAgenda: agendaMexidaNoTurno(traceId),
           recorder,
         }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'trava antes de enviar falhou (segue enviando)');
@@ -2090,7 +2091,9 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
 
     const intents = unit.pipelineIntents as Record<string, number> | null;
     const handoffStage = intents?.handoff_scheduling;
-    if (handoffStage && leadId > 0 && !travaDoEnvio && detectedSchedulingIntent(result.messages ?? [])) {
+    // Handoff calado (chave da unidade): o aviso não saiu de propósito, mas a etapa do handoff move igual.
+    const avisoCalado = travaDoEnvio === MOTIVO_HANDOFF_CALADO;
+    if (handoffStage && leadId > 0 && (!travaDoEnvio || avisoCalado) && detectedSchedulingIntent(result.messages ?? [])) {
       try {
         const kommo = createKommoClient(unit);
         // 16/10: a Sofia não tira o cartão do funil TRATAMENTO — nem pelo handoff automático (chave casamento-jornada)

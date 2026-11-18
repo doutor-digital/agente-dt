@@ -812,6 +812,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sofia-calada.ts',
   },
   {
+    id: 'handoff-calado',
+    chave: 'HANDOFF_CALADO_SLUGS',
+    nome: 'Passar para a equipe sem avisar o paciente',
+    oQueFaz:
+      'Quando a própria IA passa o atendimento para a equipe num handoff COMUM (pausar_ia: pediu Pix, mandou comprovante, pediu pessoa, remarcar…), a frase de aviso ao paciente ("já passei pra equipe") NÃO sai: vira nota no cartão com o texto que não foi enviado. A pausa, a etiqueta, a tarefa, o aviso à equipe e a etapa de handoff seguem iguais.',
+    pegadinha:
+      'Pedido de Salto (17/11/2026): "sem avisar o paciente — ele deve achar que fala direto com a secretária". NUNCA cala: sinal de alerta (a regra de 26/10 vale mais que a unidade), teto de gasto, candidato a vaga e o turno em que a IA MARCOU consulta (a confirmação, o Pix e o cartão de chegada saem). Não mexe quando é a equipe ou a recepção que pausa. Só vale nos caminhos do Kommo (webhook e Salesbot); o caminho direto da Meta não passa por esta trava.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/pausa-equipe.ts',
+  },
+  {
     id: 'calar-paciente-em-tratamento',
     chave: 'CALAR_PACIENTE_EM_TRATAMENTO_SLUGS',
     nome: 'Sofia calada para paciente em tratamento e número interno',

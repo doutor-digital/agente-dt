@@ -566,3 +566,26 @@ test('4. motivo: "sem controle da urina", "não tem controle do xixi", "sem for�
     assert.equal(ehHandoffPorSinalDeAlerta(m), false, m);
   }
 });
+
+// ── Salto, lead 4015148 (17/11): o AVC antigo é tratado no PROMPT; a rede de segurança do código não muda ────
+// (revisão do sênior, #393: três rodadas de regex para "pular sequela" abriram buracos no sinal (a). A rede fica
+// igual à do main — sequela descrita em palavras continua parando, falso positivo do lado seguro.)
+
+test('4015148: sinais de agora (e sequela em palavras) continuam parando pela rede do código', () => {
+  const casos: string[][] = [
+    ['minha boca ficou torta agora'],
+    ['a fala está enrolada desde ontem'],
+    ['minha perna está perdendo força'],
+    ['Minha mãe teve AVC ano passado.', 'Estou com a perna fraca'],
+    ['tive AVC ano passado.', 'minha perna está perdendo força'],
+    ['dor nas costas há 2 anos e tive um AVC há 3 dias, a perna ficou fraca'],
+    ['tive AVC há 2 anos. A boca entortou essa manhã'],
+    ['derrame no joelho há 2 anos. minha perna está perdendo força'],
+    ['o AVC da minha mãe foi ano passado e minha perna ficou fraca'],
+    ['o derrame do meu pai foi em 2019 e eu fiquei com a perna fraca'],
+    ['tive AVC há 2 anos, sem sequela, e há uma semana a perna ficou fraca'],
+    ['tive AVC há 2 anos e me recuperei, mas há 3 dias a perna ficou fraca'],
+    ['tive AVC há 2 anos e a boca entortou há uma hora'],
+  ];
+  for (const falas of casos) assert.notEqual(sinalNaFala(falas), null, falas.join(' | '));
+});

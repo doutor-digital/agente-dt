@@ -31,6 +31,7 @@ import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   CHAVE_DO_AVISO,
   comLigarAgora,
+  CONDICAO_SINAL_DE_ALERTA,
   ehHandoffPorSinalDeAlerta,
   ETIQUETA_PRIORIDADE,
   ETIQUETA_PRIORIDADE_SEM_EMOJI,
@@ -43,6 +44,9 @@ import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { TIPOS_NAO_PACIENTE, marcarNaoPaciente, textoParaOModelo } from '../lib/nao-paciente.js';
 
 /** No Kommo, 142 e 143 existem em TODO funil: ganho e perdido. */
+/** Motivo de pausa com cara de sinal de alerta, além de CONDICAO_SINAL_DE_ALERTA — só para a origem da pausa (#393). */
+const MOTIVO_COM_CARA_DE_ALERTA = /\bperna\b[^.]{0,30}\b(?:falh\w*|frac\w*|bamb\w*)|\bfor[cç]a\b|pronto[\s-]?socorro|\bupa\b|\bhospital\b|\bsamu\b|\bavc\b|\bderrame\b/i;
+
 const STATUS_GANHO = 142;
 const STATUS_PERDIDO = 143;
 
@@ -653,7 +657,11 @@ export function buildTools({
 
       try {
         // A trava de antes de enviar não pode jogar fora o aviso deste handoff ("Responda em UMA frase").
-        registrarPausaPropria(unit, leadId);
+        // A origem decide se a chave `handoff-calado` pode calar o aviso: sinal de alerta nunca é calado. Do lado
+        // seguro, motivo com CARA de sinal conta como alerta mesmo sem a flag (o modelo esquece): "a perna falha",
+        // pronto-socorro, UPA, hospital, SAMU — só a origem; tarefa e etiqueta seguem a regra de sempre.
+        const pareceAlerta = urgente || CONDICAO_SINAL_DE_ALERTA.test(motivo) || MOTIVO_COM_CARA_DE_ALERTA.test(motivo);
+        registrarPausaPropria(unit, leadId, Date.now(), pareceAlerta ? 'alerta' : 'handoff');
         await kommo.setLeadFieldFlag(leadId, pausedFieldId, true);
         const latency = Math.round(performance.now() - t0);
         await recorder.step({
