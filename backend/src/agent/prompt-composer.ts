@@ -152,15 +152,25 @@ function sobraDaNoiteAnterior(hour: number, start: number, end: number): boolean
   return end <= start && hour < end;
 }
 
+/**
+ * A janela vira a noite (início > fim, ex.: 18h→06h)? Só esse formato é a janela
+ * INVERTIDA: a IA responde com a clínica FECHADA. `end === start` não conta —
+ * continua como antes, e o feriado fecha.
+ */
+function atravessaMeiaNoite(j: { start: number; end: number }): boolean {
+  return j.end < j.start;
+}
+
 export function checkBusinessHours(unit: Unit, now: Date = new Date()): BusinessHoursStatus {
   if (!unit.businessHoursEnabled) {
     return { enabled: false, isOpen: true, outOfHoursMessage: unit.outOfHoursMessage };
   }
   const tz = fusoSeguro(unit.businessHoursTimezone);
-  // Feriado nacional: a clínica não abre, seja qual for o dia da semana.
-  if (ehFeriadoNacional(dataLocalISO(now, tz))) {
-    return { enabled: true, isOpen: false, outOfHoursMessage: unit.outOfHoursMessage };
-  }
+  // Feriado nacional: a clínica não abre, seja qual for o dia da semana. Mas isso só
+  // fecha a janela NORMAL (a IA cobre o horário da clínica). Na janela invertida
+  // (18h→06h: a IA responde com a clínica fechada) o feriado não muda nada — era
+  // exatamente quando a clínica já estava fechada que a Sofia ficava calada.
+  const feriadoHoje = ehFeriadoNacional(dataLocalISO(now, tz));
   const parts = new Intl.DateTimeFormat('en-US', {
     timeZone: tz,
     weekday: 'short',
@@ -176,12 +186,20 @@ export function checkBusinessHours(unit: Unit, now: Date = new Date()): Business
   //   1. a janela de HOJE já começou? (20h→08h de segunda começa na segunda)
   //   2. estamos na madrugada que sobrou de ONTEM? (03h de terça é a noite de segunda)
   const hoje = janelaDoDia(unit, weekday);
-  const abertoHoje = allowedDays.has(weekday) && dentroDaJanela(hour, hoje.start, hoje.end);
+  const abertoHoje =
+    allowedDays.has(weekday) &&
+    dentroDaJanela(hour, hoje.start, hoje.end) &&
+    (!feriadoHoje || atravessaMeiaNoite(hoje));
 
+  // A sobra da madrugada só existe quando a janela de ontem atravessa a meia-noite —
+  // então vale em feriado também (03h de 20/11 é a noite de quinta; 03h de 21/11, a de 20/11).
   const idxOntem = (DIAS_SEMANA.indexOf(weekday) + 6) % 7;
   const ontem = DIAS_SEMANA[idxOntem];
   const jOntem = janelaDoDia(unit, ontem);
-  const abertoDeOntem = allowedDays.has(ontem) && sobraDaNoiteAnterior(hour, jOntem.start, jOntem.end);
+  const abertoDeOntem =
+    allowedDays.has(ontem) &&
+    sobraDaNoiteAnterior(hour, jOntem.start, jOntem.end) &&
+    (!feriadoHoje || atravessaMeiaNoite(jOntem));
 
   return {
     enabled: true,

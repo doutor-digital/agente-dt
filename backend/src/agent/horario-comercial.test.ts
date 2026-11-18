@@ -195,3 +195,67 @@ test('Taubaté não tem mensagem de fora-horário — e mesmo assim fica calada'
   assert.equal(checkBusinessHours(u, ter(10)).isOpen, false);
   assert.equal(checkBusinessHours(u, ter(10)).outOfHoursMessage, null);
 });
+
+// ── Feriado × janela invertida (Caxias e Petrópolis, 18h→06h) ───────────────
+// A Sofia só responde com a clínica FECHADA. O feriado nacional fechava o dia
+// inteiro e a deixava calada justamente quando a clínica já estava fechada.
+// 20/11/2026 (Consciência Negra) é sexta-feira e feriado; 19/11 é quinta, 21/11 é sábado.
+const INVERTIDA: Partial<Unit> = {
+  businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+  businessHoursStart: 18,
+  businessHoursEnd: 6,
+  businessHoursByDay: {} as never,
+};
+const em = (dia: string, h: number) => new Date(`2026-11-${dia}T${String(h).padStart(2, '0')}:00:00-03:00`);
+
+test('18→6 em 20/11 (feriado): 03h é a sobra da noite de quinta — ABERTO', () => {
+  assert.equal(checkBusinessHours(unidade(INVERTIDA), em('20', 3)).isOpen, true);
+});
+
+test('18→6 em 20/11 (feriado): 10h, clínica aberta — FECHADO', () => {
+  assert.equal(checkBusinessHours(unidade(INVERTIDA), em('20', 10)).isOpen, false);
+});
+
+test('18→6 em 20/11 (feriado): 19h — ABERTO', () => {
+  assert.equal(checkBusinessHours(unidade(INVERTIDA), em('20', 19)).isOpen, true);
+});
+
+test('18→6 em 21/11 (sábado, dia seguinte ao feriado): 03h é a noite do feriado — ABERTO', () => {
+  assert.equal(checkBusinessHours(unidade(INVERTIDA), em('21', 3)).isOpen, true);
+});
+
+test('18→6 em 20/11: bordas — 05h aberto, 06h fechado, 17h fechado, 18h aberto', () => {
+  const u = unidade(INVERTIDA);
+  assert.equal(checkBusinessHours(u, em('20', 5)).isOpen, true);
+  assert.equal(checkBusinessHours(u, em('20', 6)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('20', 17)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('20', 18)).isOpen, true);
+});
+
+test('18→6 em dia comum (19/11, quinta) não mudou: 10h fechado, 19h aberto, 03h aberto', () => {
+  const u = unidade(INVERTIDA);
+  assert.equal(checkBusinessHours(u, em('19', 10)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('19', 19)).isOpen, true);
+  assert.equal(checkBusinessHours(u, em('19', 3)).isOpen, true);
+});
+
+test('janela normal 9→18 continua fechada no feriado às 10h (e aberta no dia comum)', () => {
+  const u = unidade({ businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri'] });
+  assert.equal(checkBusinessHours(u, em('20', 10)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('19', 10)).isOpen, true);
+});
+
+test('janela normal 9→18 em 7 dias também fecha no feriado (20/11 10h)', () => {
+  const u = unidade({ businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] });
+  assert.equal(checkBusinessHours(u, em('20', 10)).isOpen, false);
+});
+
+test('início igual ao fim (não é janela invertida): feriado continua fechando', () => {
+  const u = unidade({
+    businessHoursDays: ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'],
+    businessHoursStart: 6,
+    businessHoursEnd: 6,
+  });
+  assert.equal(checkBusinessHours(u, em('20', 10)).isOpen, false);
+  assert.equal(checkBusinessHours(u, em('20', 3)).isOpen, false);
+});
