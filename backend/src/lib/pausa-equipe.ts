@@ -21,7 +21,9 @@
  * O QUE CONTA COMO "A EQUIPE TEM A PALAVRA" (`equipeComAPalavra`):
  *  - uma fala HUMANA da equipe (não robô: Salesbot, régua, transmissão já saem como 'sofia'; e não a
  *    resposta automática do próprio WhatsApp Business — saudação e ausência, ver `ehRespostaAutomatica`);
- *  - DEPOIS da última mensagem que o agente mandou (se a Sofia falou depois, a conversa voltou para ela);
+ *  - DEPOIS da última mensagem que o agente mandou (se a Sofia falou depois, a conversa voltou para ela) — exceto a Sofia que saiu
+ *    até `CORRIDA_DA_IA_MS` (3 min) depois da fala: é corrida (o eco do celular ainda não estava na conversa oficial quando ela
+ *    conferiu), não devolução — a fala da equipe continua valendo (Salto, lead 3185496, 17/11);
  *  - nas últimas 24 h — exceto quando a última fala é do app "WhatsApp Lite": aí só nos últimos `PAUSA_EQUIPE_VOLTA_MIN` (60 min),
  *    a mesma janela da volta (ver `equipeComAPalavra`). Business, usuário do Kommo e app do Kommo seguem com as 24 h;
  *  - e sem ninguém ter DESMARCADO "Pausar IA" depois dela (desmarcar = devolver à Sofia; a fala antiga
@@ -48,6 +50,7 @@ import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
+import { JANELA_DO_ENVIO_MS } from '../services/kommo-talks-normalizar.js';
 import { AVISO_DO_SISTEMA_BASE, appDoCelular, ehFalaAutomaticaDoLite } from './fala-automatica.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
@@ -68,6 +71,14 @@ export const RESPOSTA_AUTOMATICA_MS = 20_000;
 export const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 /** Resposta automática é texto pronto e longo; "Tenho sim." em 6 s é gente. */
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
+/**
+ * A fala da equipe pelo celular (WhatsApp Business/Lite) só aparece na conversa oficial do Kommo alguns segundos depois de sair, e o turno
+ * da Sofia dura ~20 s: a porta e a trava de antes de enviar podem não ver a fala, e a Sofia responde logo DEPOIS dela. Sem esta folga,
+ * essa resposta contava como "a Sofia falou depois, a conversa voltou para ela" e liberava as seguintes (Salto, lead 3185496, 17/11:
+ * áudio da secretária 16:17, Sofia 16:17:50, 16:18:31 e 16:19:39, nenhuma linha em pausas_da_equipe). Mesma folga do envio da Sofia
+ * que aparece no Kommo (`JANELA_DO_ENVIO_MS`). Devolver de verdade (caixinha desmarcada) continua sendo `devolvida`, em `conferirEquipe`.
+ */
+export const CORRIDA_DA_IA_MS = JANELA_DO_ENVIO_MS;
 const MENSAGENS_LIDAS = 40;
 
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
@@ -147,7 +158,8 @@ export function equipeComAPalavra(
   const retomadaEm = cutucadaDepois ? ultimaCutucada!.getTime() : fala.em.getTime();
   const janela = !cutucadaDepois && appDoCelular(fala.autorNome) === 'lite' ? janelaDoLiteMs : JANELA_DA_EQUIPE_MS;
   if (agora.getTime() - retomadaEm > janela) return { fala: null, motivo: 'antiga' };
-  if (ultimaFalaDaIa && ultimaFalaDaIa.getTime() >= fala.em.getTime()) return { fala: null, motivo: 'ia_falou_depois' };
+  // A Sofia falou DEPOIS da equipe: a conversa voltou para ela — salvo a corrida (resposta que saiu até 3 min depois da fala).
+  if (ultimaFalaDaIa && ultimaFalaDaIa.getTime() - fala.em.getTime() > CORRIDA_DA_IA_MS) return { fala: null, motivo: 'ia_falou_depois' };
   return { fala, motivo: null };
 }
 
@@ -203,7 +215,7 @@ async function unidadesDaConta(unit: Pick<Unit, 'id' | 'kommoSubdomain'>): Promi
 }
 
 /** Gente assumiu: o handoff que a Sofia fez não deve mais ser reaberto pela reativação de 30 min. */
-async function cancelarReativacao(unit: Unit, leadId: number): Promise<void> {
+export async function cancelarReativacao(unit: Unit, leadId: number): Promise<void> {
   try {
     await prisma.conversation.updateMany({
       where: { unitId: { in: await unidadesDaConta(unit) }, leadId: String(leadId), handoffAt: { not: null } },
