@@ -1,4 +1,5 @@
 import axios, { AxiosError, type AxiosAdapter, type AxiosInstance, type AxiosRequestConfig } from 'axios';
+import { semTravessao } from '../lib/sem-travessao.js';
 import { ehDaConsultoria, responsavelDaTarefa, type UsuarioKommo } from '../lib/responsavel-da-tarefa.js';
 import type { Unit } from '@prisma/client';
 import { env } from '../lib/env.js';
@@ -2933,7 +2934,8 @@ export class KommoClient {
 
     const t0Patch = performance.now();
     try {
-      const safeText = downgradeEmoji(text, this.creds.slug);
+      // fala ao paciente: sem travessão (João 18/11: "fica parecendo IA")
+      const safeText = downgradeEmoji(semTravessao(text), this.creds.slug);
       const wasDowngraded = safeText !== text;
       const sentBytes = Buffer.byteLength(safeText, 'utf8');
       const hasEmoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(safeText);
@@ -3154,7 +3156,7 @@ export class KommoClient {
     if (this.creds.bypassSalesbot && this.creds.replyFieldId) {
       const t0 = performance.now();
       try {
-        const chunks = splitIntoChunks(downgradeEmoji(text, this.creds.slug), 240);
+        const chunks = splitIntoChunks(downgradeEmoji(semTravessao(text), this.creds.slug), 240);
         for (let i = 0; i < chunks.length; i++) {
           await this.http.patch(
             `/leads/${leadId}`,
@@ -3219,7 +3221,7 @@ export class KommoClient {
     if (chatId) {
       const t0 = performance.now();
       // sem o slug de propósito (o caminho nunca aplicou sem-carinha); só o ☺️ da confirmação, onde a unidade o liga, é protegido
-      const safeText = preservandoSorrisoColorido(this.creds.slug, text, (t) => downgradeEmoji(t));
+      const safeText = preservandoSorrisoColorido(this.creds.slug, semTravessao(text), (t) => downgradeEmoji(t));
       const wasDowngraded = safeText !== text;
       try {
         const { data } = await this.http.post(`/chats/${chatId}/messages`, {
