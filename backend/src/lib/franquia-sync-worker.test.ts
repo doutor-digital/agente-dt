@@ -391,3 +391,28 @@ test('cartão apagado no Kommo (GET 204 → corpo vazio) é pulado; cartão de v
   assert.equal(cartaoApagado({}), true);
   assert.equal(cartaoApagado({ id: 4843998, name: 'Paciente' }), false);
 });
+
+// ── ALTA sem régua: a etiqueta NO_FOLLOW_UP entra ANTES de mudar a etapa (Petrópolis, 5951463, 18/11/2026) ──
+test('aplicarMovimento: semRegua → a etiqueta NO_FOLLOW_UP entra ANTES do moveStage (os robôs da ALTA leem a etiqueta no evento)', async () => {
+  const chamadas: string[] = [];
+  const kommo = {
+    addTag: async ({ tags }: { tags: string[] }) => { chamadas.push(`addTag:${tags.join(',')}`); },
+    moveStage: async () => { chamadas.push('moveStage'); },
+    addLeadNote: async () => ({ id: 1 }),
+  } as never;
+  const funis = { idDe: () => ({ pipelineId: 1, statusId: 2 }) } as never;
+  const unit = { slug: 'doutor-hernia-petropolis' } as never;
+  const resumo: ResumoSync = { unit: 'x', em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  _semearParaTeste([{ slug: 'doutor-hernia-petropolis', automacao: 'franquia-move', estado: 'ligado' }]);
+  try {
+    await aplicarMovimento(unit, kommo, funis, 5951463, { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: 'tratamento finalizado na franquia (ex-paciente, sem atividade há 180 d)', semRegua: true, dias: 180 }, resumo, ETAPA.EM_TRATAMENTO);
+    // com régua (finalizado recente): sem etiqueta
+    await aplicarMovimento(unit, kommo, funis, 2, { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: 'tratamento finalizado na franquia' }, resumo, ETAPA.EM_TRATAMENTO);
+  } finally {
+    _semearParaTeste([]);
+  }
+  assert.equal(chamadas[0]?.startsWith('addTag:'), true, `primeiro a etiqueta: ${chamadas.join(' → ')}`);
+  assert.equal(chamadas[1], 'moveStage');
+  assert.equal(chamadas[2], 'moveStage', 'o recente só move, sem etiqueta');
+  assert.equal(chamadas.filter((c) => c.startsWith('addTag')).length, 1);
+});

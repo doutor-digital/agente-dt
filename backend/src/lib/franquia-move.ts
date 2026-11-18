@@ -291,6 +291,9 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const temCancelado = e.tratamentos.some(cancelado);
   const temPendente = e.tratamentos.some(pendente);
   const passou = (s: SpineSchedule) => (epoch(s) ?? Infinity) <= e.agoraEpoch;
+  // última atividade conhecida na franquia (qualquer agendamento/sessão) e há quantos dias: a idade do fato, para as saídas por ALTA
+  const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
+  const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
   const futura = (s: SpineSchedule) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
 
   // ── regras de 16/10: o ex-paciente e a VOLTA ──
@@ -344,6 +347,16 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   }
 
   // ── funil TRATAMENTO ──
+  // ALTA por «tratamento finalizado» pelo cartão em EM TRATAMENTO: se o fim é VELHO (última atividade há mais de EX_PACIENTE_DIAS), o
+  // cartão está lá por engano (telefone compartilhado, GANHO posto à mão: Petrópolis, lead 5951463, 18/11/2026 — o pai em tratamento
+  // levou "Parabéns pela conclusão" 6 meses depois do fim do filho). Vai para ALTA SEM a régua (etiqueta NO_FOLLOW_UP, como o ex-paciente do
+  // COMERCIAL). Finalizado RECENTE segue com a régua. Sem nenhuma atividade conhecida não há idade do fato: segue como antes (com régua).
+  const altaPorFim = (): Movimento | null => {
+    const mov = ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+    if (!mov || ultimaAtividade === 0 || diasParado <= JORNADA.EX_PACIENTE_DIAS) return mov;
+    const dias = Math.floor(diasParado);
+    return { ...mov, motivo: `${mov.motivo} (ex-paciente, sem atividade há ${dias} d)`, semRegua: true, dias };
+  };
   if (atual.funil === 'TRATAMENTO') {
     if (eh(status, ETAPA.ALTA)) {
       if (v2) {
@@ -371,11 +384,11 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
       if (cicloAnterior) {
         // o FINALIZADO do ciclo velho é esperado aqui; o que decide é o tratamento novo
         if (temCancelado && !temEmAndamento && !temPendente) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
-        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+        if (temFinalizado && !temEmAndamento && !temPendente && !temCancelado) return altaPorFim();
         return null;
       }
       // um tratamento pendente não segura a alta; um em andamento segura
-      if (temFinalizado && !temEmAndamento) return ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
+      if (temFinalizado && !temEmAndamento) return altaPorFim();
       // cancelado na franquia, sem outro aberto (pendente ou em andamento) e sem finalizado: a clínica encerrou
       if (temCancelado && !temAberto && !temFinalizado) return ir('TRATAMENTO', ETAPA.CANCELADO, 'tratamento cancelado na franquia');
     }
@@ -390,8 +403,6 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   if (exPaciente && atual.funil === 'COMERCIAL' && !eh(status, ETAPA.GANHO)) {
     if (voltaMarcada && !voltaAtendida) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
     if (decididasDaVolta.length === 0) {
-      const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
-      const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
       const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
       if (!cartaoParado) return null;
       const dias = Number.isFinite(diasParado) ? Math.floor(diasParado) : 365;
@@ -407,8 +418,6 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   // Finalizado RECENTE segue o caminho normal (GANHO → EM TRATAMENTO → ALTA): ciclo rápido que a varredura perdeu.
   if (!v2 && atual.funil === 'COMERCIAL' && temFinalizado && !temAberto && !cicloAnterior) {
     const temFutura = e.agendamentos.some((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && (epoch(s) ?? 0) > e.agoraEpoch);
-    const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
-    const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
     const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
     if (!temFutura && diasParado > JORNADA.EX_PACIENTE_DIAS && cartaoParado) {
       return { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `ex-paciente: tratamento finalizado na franquia, sem atividade há ${Number.isFinite(diasParado) ? Math.floor(diasParado) : '+365'} d`, semRegua: true, dias: Number.isFinite(diasParado) ? Math.floor(diasParado) : 365 };

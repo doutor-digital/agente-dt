@@ -274,3 +274,57 @@ test('ex-paciente: finalizado, nada aberto e parado há mais de 30 d vai pra ALT
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 })], [{ idStatus: 46 }, { idStatus: 45 }]))?.para, ETAPA.GANHO, 'tratamento aberto vale mais');
   assert.equal(planejarMovimento(entrada(ETAPA.AGENDADO, [ag({ h: -400 * D, idStatus: 42 }), ag({ h: 3 * D, idStatus: 37 })], [{ idStatus: 46 }]))?.para, ETAPA.GANHO, 'consulta futura marcada: não é ex-paciente parado');
 });
+
+// ── ALTA por «tratamento finalizado» com o fim VELHO (Petrópolis, lead 5951463, 18/11/2026) ──
+// O telefone era do filho (tratamento 97775 finalizado, última sessão 21/05); o pai, em tratamento, usa o celular. O GANHO posto à
+// mão levou o cartão a EM TRATAMENTO e o franquia-move mandou ALTA COM régua: "Parabéns pela conclusão" a quem estava em tratamento.
+
+test('caso real: EM TRATAMENTO, tratamento FINALIZADO com a última sessão há 180 d → ALTA SEM régua (nas regras antigas e nas de 16/10)', () => {
+  const sessoes = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -200 * 24, idStatus: 42, categoria: 'SESSÃO' })];
+  for (const regras1610 of [false, true]) {
+    const m = planejarMovimento({ ...entrada(ETAPA.EM_TRATAMENTO, sessoes, [{ idStatus: 46 }], 'TRATAMENTO'), regras1610 });
+    assert.equal(m?.para, ETAPA.ALTA, `regras1610=${regras1610}`);
+    assert.equal(m?.funil, 'TRATAMENTO');
+    assert.equal(m?.semRegua, true, `regras1610=${regras1610}`);
+    assert.equal(m?.dias, 180);
+    assert.match(m?.motivo ?? '', /tratamento finalizado na franquia.*sem atividade há 180 d/);
+  }
+});
+
+test('o ciclo anterior (retorno pós-tratamento) também: finalizado velho vai SEM régua; sem atividade conhecida, segue com régua como antes', () => {
+  const velho = [ag({ h: -300 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -150 * 24, idStatus: 42, categoria: 'RETORNO' })];
+  const m = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, velho, [{ idStatus: 46 }, { idStatus: 46 }], 'TRATAMENTO'));
+  assert.equal(m?.para, ETAPA.ALTA);
+  assert.equal(m?.semRegua, true);
+  // sem nenhum agendamento conhecido não há idade do fato: o comportamento de antes (com régua)
+  const sem = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [], [{ idStatus: 46 }], 'TRATAMENTO'));
+  assert.equal(sem?.para, ETAPA.ALTA);
+  assert.equal(sem?.semRegua, undefined);
+});
+
+test('finalizado há 5 d (e no limite de 30 d) → ALTA COM régua, como hoje', () => {
+  for (const dias of [5, 30]) {
+    const m = planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [ag({ h: -dias * 24, idStatus: 42, categoria: 'SESSÃO' })], [{ idStatus: 46 }], 'TRATAMENTO'));
+    assert.equal(m?.para, ETAPA.ALTA, `${dias} d`);
+    assert.equal(m?.semRegua, undefined, `${dias} d`);
+    assert.equal(m?.motivo, 'tratamento finalizado na franquia');
+  }
+  // 31 d já é ex-paciente
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, [ag({ h: -31 * 24, idStatus: 42, categoria: 'SESSÃO' })], [{ idStatus: 46 }], 'TRATAMENTO'))?.semRegua, true);
+});
+
+test('outro tratamento em andamento segura a ALTA mesmo com sessões velhas (o pai em tratamento não vai para ALTA)', () => {
+  const velho = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' })];
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, velho, [{ idStatus: 46 }, { idStatus: 45 }], 'TRATAMENTO')), null);
+});
+
+test('as regras do COMERCIAL seguem iguais: ex-paciente parado vai para ALTA sem régua (antiga e 16/10); finalizado recente segue o caminho normal', () => {
+  const velho = [ag({ h: -90 * 24, idStatus: 42, categoria: 'SESSÃO' })];
+  const antiga = planejarMovimento(entrada(ETAPA.COMPARECEU, velho, [{ idStatus: 46 }]));
+  assert.deepEqual([antiga?.funil, antiga?.para, antiga?.semRegua], ['TRATAMENTO', ETAPA.ALTA, true]);
+  const nova = planejarMovimento({ ...entrada(ETAPA.COMPARECEU, velho, [{ idStatus: 46 }]), regras1610: true });
+  assert.deepEqual([nova?.funil, nova?.para, nova?.semRegua], ['TRATAMENTO', ETAPA.ALTA, true]);
+  assert.match(nova?.motivo ?? '', /ex-paciente, sem atividade há 90 d/);
+  // finalizado há 5 d, nas regras antigas: não é ex-paciente (segue GANHO)
+  assert.equal(planejarMovimento(entrada(ETAPA.COMPARECEU, [ag({ h: -5 * 24, idStatus: 42, categoria: 'SESSÃO' })], [{ idStatus: 46 }]))?.para, ETAPA.GANHO);
+});
