@@ -105,3 +105,45 @@ test('confirmacaoDaUnidade: desligada = padrão da rede; ligada fora da lista = 
       'Equipe Doutor Hérnia',
   );
 });
+
+test('Caxias: o texto que a equipe mandava à mão (lead 2778872), com "consulta" no lugar de "sessão"; consulta na segunda → mensagem na sexta', () => {
+  const c = confirmacaoDaUnidade('doutor-hernia-caxias', true);
+  assert.equal(c?.semJanela, true); // WhatsApp Lite (QR): sem janela de 24 h
+  assert.equal(c?.diaUtil, true);
+  assert.equal(c?.pularConfirmada, true);
+  assert.equal(confirmacaoDaUnidade('doutor-hernia-caxias', false), null);
+  // consulta na segunda 30/11 → mensagem na sexta 27/11; a de segunda 23/11 vai na quinta 19/11 (sexta 20/11 é feriado nacional)
+  assert.equal(diaUtilAnterior('2026-11-23'), '2026-11-19');
+  assert.equal(diaUtilAnterior('2026-11-30'), '2026-11-27');
+  assert.deepEqual(diasQueConfirmamHoje('2026-11-27'), ['2026-11-28', '2026-11-29', '2026-11-30']);
+  // sem {saudacao} no modelo: o preenchimento não deixa chave solta nem quebra (qualquer hora do envio)
+  for (const horaDoEnvio of [0, 9, 17]) {
+    const t = textoDaUnidade(c?.texto ?? '', { quando: '2026-11-30T17:30', horaDoEnvio });
+    assert.doesNotMatch(t, /\{\w+\}/);
+    assert.equal(
+      t,
+      '*CLÍNICA DOUTOR HÉRNIA DUQUE DE CAXIAS:*\nOlá, aqui é da Clínica Doutor Hérnia! 😀\n\n' +
+        'Estou entrando em contato para confirmar sua consulta agendada para:\n*Dia 30/11 às 17:30*\n' +
+        'Endereço: Rua Mariano Sendra dos Santos 44 sala 206, Galeria Alvarenga.\n\n' +
+        'Favor vir com roupa confortável\n*Traga apenas um acompanhante, para maior conforto e organização de todos os pacientes*\n\n' +
+        '*Não podemos tolerar atrasos superiores a 5 minutos.* Isso evita impactos na agenda e garante que todos sejam atendidos no horário previsto.\n\n' +
+        'Equipe Doutor Hérnia',
+    );
+  }
+  assert.doesNotMatch(c?.texto ?? '', /sess[aã]o/i); // só consulta
+});
+
+test('unidade fora do mapa continua com o texto da rede (Caxias não vaza para as outras)', () => {
+  for (const slug of ['doutor-hernia-serra', 'doutor-hernia-salto']) {
+    assert.deepEqual(confirmacaoDaUnidade(slug, true), { diaUtil: true, texto: null, semJanela: false, pularConfirmada: true });
+  }
+  assert.notEqual(confirmacaoDaUnidade('doutor-hernia-caxias', true)?.texto, confirmacaoDaUnidade('doutor-hernia-petropolis', true)?.texto);
+});
+
+test('Caxias: a Sofia manda "✅ Agendamento confirmado, X!" à noite e a regra das 12 h segura a pergunta da manhã seguinte', () => {
+  const sofia = (em: string) => ({ direcao: 'saida' as const, em: new Date(em), texto: '✅ Agendamento confirmado, Ubiratã!\n\n⭐ Data: segunda-feira, 23/11\n⏰ Horário: 17:00' });
+  // 23:14 BRT (02:14Z) → varredura às 09:00 BRT do dia seguinte = 9 h 46 min depois
+  assert.match(jaConfirmou({ oficiais: [sofia('2026-11-18T02:14:54Z')], agora: new Date('2026-11-18T12:00:00Z') }) ?? '', /Agendamento confirmado/);
+  // agendado à tarde (17:00 BRT) e perguntado às 09:00 do dia seguinte: 16 h depois, passou das 12 h — a pergunta sai (limite conhecido)
+  assert.equal(jaConfirmou({ oficiais: [sofia('2026-11-17T20:00:00Z')], agora: new Date('2026-11-18T12:00:00Z') }), null);
+});
