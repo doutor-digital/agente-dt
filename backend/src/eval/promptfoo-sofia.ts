@@ -20,7 +20,11 @@ let marcadores: Promise<OutraUnidade[]> | null = null;
 
 /** Os marcadores de "dado de outra unidade" saem de todas as unidades — uma leitura por rodada. */
 function outrasUnidades(): Promise<OutraUnidade[]> {
-  marcadores ??= prisma.unit.findMany().then(marcadoresPorUnidade);
+  // Leitura que falhou (túnel caiu) não fica guardada: o próximo caso tenta de novo em vez de herdar o erro.
+  marcadores ??= prisma.unit.findMany().then(marcadoresPorUnidade).catch((err: unknown) => {
+    marcadores = null;
+    throw err;
+  });
   return marcadores;
 }
 
@@ -57,7 +61,12 @@ export async function respostaDaSofia(
 /** Unidade cuja chave e modelo a juíza usa. Padrão: a `default` (da própria Doutor Digital, não de clínica). */
 export const UNIDADE_DA_JUIZA_PADRAO = 'default';
 
-/** Chama a juíza (modelo da unidade escolhida, temperatura 0) e devolve o texto cru — o Promptfoo lê o JSON. */
+/**
+ * Chama a juíza (modelo da unidade escolhida) e devolve o texto cru — o Promptfoo lê o JSON. A temperatura 0 só vale no
+ * caminho OpenAI/Google: no Anthropic o `createChatModel` não repassa temperatura (raciocínio ligado), então a juíza varia
+ * um pouco entre rodadas — por isso caso duvidoso se mede com `--repeat 3`. Se a juíza falhar (429, chave), o Promptfoo
+ * conta o caso como REPROVADO, com o erro na razão.
+ */
 export async function julgar(prompt: string, slug = UNIDADE_DA_JUIZA_PADRAO): Promise<{ output: string } | { error: string }> {
   const unit = await prisma.unit.findUnique({ where: { slug } });
   if (!unit) return { error: `juíza: unidade "${slug}" não existe` };
