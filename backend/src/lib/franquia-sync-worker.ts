@@ -50,6 +50,7 @@ import {
 import { PARA_SEMPRE_MS, avisarCadastroDuplicado, cartoesComConflito, escolhaDaSdr, gravarEscolhaDaSdr, guardarCandidatos } from './conflito-paciente.js';
 import { JANELA_24H_MS, avisoRecente, marcadoEm, marcarAviso } from './aviso-dedupe.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { semearFilaDeAlta } from './semear-fila-de-alta.js';
 import { contaDoKommo, grupoDaUnidade, irmasSemKommoProprio, podeMexer, pularCartao, valorDaUnidadeNoCartao, veredictoDoCartao, type GrupoDoCrm } from './crm-compartilhado.js';
 
 const SWEEP_MS = 15 * 60_000;
@@ -619,6 +620,23 @@ async function perdaTravada(unit: Unit, cartao: KommoLead, para: string, deEtapa
  * (o seco não toca o Kommo, nem pra ler — o teste de `aplicarMovimento` em seco vigia isso).
  */
 export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Funis, leadId: number, mov: Movimento, resumo: ResumoSync, deEtapa = '', cartao?: KommoLead): Promise<void> {
+  // ALTA de fim VELHO: o cartão NÃO é movido (o gatilho da ALTA manda "Parabéns" sem condição, nem NO_FOLLOW_UP o segura — Açailândia,
+  // 10820048, 02/10). Vai para a fila da página /alta e a recepção decide. Em seco, só registra; nada é escrito.
+  if (mov.filaDeAlta) {
+    if (estadoDoMove(unit.slug) === 'seco') {
+      registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'alertaria', alvo: 'fila da página /alta', valor: 'ALTA', deEtapa, motivo: mov.motivo });
+      logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo }, 'franquia-move [seco]: poria na fila da /alta (não move)');
+      return;
+    }
+    try {
+      await semearFilaDeAlta(unit.id, [{ leadId, nome: cartao?.name ?? null, classe: 'ALTA', realizadas: mov.filaDeAlta.realizadas, previstas: 0, ultimaSessao: mov.filaDeAlta.ultimaSessao }]);
+      logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo }, 'franquia-move: fim velho — entrou na fila da /alta (cartão não movido)');
+    } catch (err) {
+      resumo.erros++;
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: falha ao pôr na fila da /alta');
+    }
+    return;
+  }
   const alvo = funis.idDe(mov.funil, mov.para);
   if (!alvo) {
     logger.warn({ unit: unit.slug, leadId, para: mov.para, funil: mov.funil }, 'franquia-move: etapa não existe nesta conta — não movi');
@@ -662,7 +680,8 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
     return;
   }
   try {
-    // sem régua (ex-paciente → ALTA): a etiqueta NO_FOLLOW_UP entra ANTES da mudança, é ela que os gatilhos da etapa leem
+    // sem régua (PERDIDO velho): a etiqueta NO_FOLLOW_UP entra ANTES da mudança, é ela que os gatilhos da etapa leem. Na ALTA ela NÃO
+    // segura nada (o gatilho não tem condição): por isso a ALTA de fim velho nem chega aqui (`filaDeAlta`, acima).
     if (mov.semRegua) await kommo.addTag({ leadId, tags: [TAG_SEM_REGUA] }).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: não consegui etiquetar NO_FOLLOW_UP'));
     await kommo.moveStage({ leadId, statusId: alvo.statusId, pipelineId: alvo.pipelineId });
     resumo.movimentos++;

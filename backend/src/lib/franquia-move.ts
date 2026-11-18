@@ -111,6 +111,13 @@ export interface Movimento {
   /** só pra PERDIDO: idade do fato em dias (vai pra nota do cartão) */
   dias?: number;
   /**
+   * ALTA de fim VELHO (última atividade há mais de `JORNADA.EX_PACIENTE_DIAS`): o cartão NÃO é movido. Vai para a fila da página
+   * /alta e a recepção decide. O gatilho da ALTA no Kommo dispara um bot SEM condição nenhuma ("Parabéns pela conclusão"), então
+   * nem a etiqueta NO_FOLLOW_UP o segura (Açailândia, lead 10820048, 02/10: NO_FOLLOW_UP e ALTA às 15:49:40, "Parabéns" às 15:49:41).
+   * `para` fica ALTA só para dizer onde o fato levaria o cartão; quem aplica (`aplicarMovimento`) não mexe na etapa.
+   */
+  filaDeAlta?: { realizadas: number; ultimaSessao: string };
+  /**
    * 16/10 ("a franquia manda"): o cartão sai de PERDIDO ou ALTA por causa deste fato da franquia (`consulta:<idSchedule>`,
    * ou `sessao:trat:<idTreatment>` / `sessao:<idSchedule>` na ALTA). O sincronizador só tira o cartão de lá UMA vez por
    * fato: se a equipe puser de volta, fica e vira tarefa.
@@ -294,6 +301,20 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   // última atividade conhecida na franquia (qualquer agendamento/sessão) e há quantos dias: a idade do fato, para as saídas por ALTA
   const ultimaAtividade = Math.max(0, ...e.agendamentos.map((s) => epoch(s) ?? 0));
   const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
+  const fimVelho = ultimaAtividade > 0 && diasParado > JORNADA.EX_PACIENTE_DIAS;
+  /** O mesmo movimento, mas sem mover: o fato vai para a fila da /alta (ver `Movimento.filaDeAlta`). */
+  const paraAFilaDeAlta = (mov: Movimento): Movimento => {
+    const dias = Math.floor(diasParado);
+    return {
+      ...mov,
+      motivo: `${mov.motivo} (sem atividade há ${dias} d: fim velho — vai para a fila da /alta, o cartão não é movido)`,
+      dias,
+      filaDeAlta: {
+        realizadas: sessoes.filter((s) => s.idStatus === SPINE_STATUS.ATENDIDO && passou(s)).length,
+        ultimaSessao: new Date(ultimaAtividade * 1000).toISOString(),
+      },
+    };
+  };
   const futura = (s: SpineSchedule) => (epoch(s) ?? 0) > e.agoraEpoch && (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO);
 
   // ── regras de 16/10: o ex-paciente e a VOLTA ──
@@ -347,15 +368,17 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   }
 
   // ── funil TRATAMENTO ──
-  // ALTA por «tratamento finalizado» pelo cartão em EM TRATAMENTO: se o fim é VELHO (última atividade há mais de EX_PACIENTE_DIAS), o
-  // cartão está lá por engano (telefone compartilhado, GANHO posto à mão: Petrópolis, lead 5951463, 18/11/2026 — o pai em tratamento
-  // levou "Parabéns pela conclusão" 6 meses depois do fim do filho). Vai para ALTA SEM a régua (etiqueta NO_FOLLOW_UP, como o ex-paciente do
-  // COMERCIAL). Finalizado RECENTE segue com a régua. Sem nenhuma atividade conhecida não há idade do fato: segue como antes (com régua).
+  // ALTA por «tratamento finalizado» (EM TRATAMENTO → ALTA). O gatilho da ALTA no Kommo manda "Parabéns pela conclusão" SEM condição
+  // (nem a etiqueta NO_FOLLOW_UP o segura), então só vai para ALTA quando o fim é RECENTE:
+  //  - sem nenhuma atividade conhecida na franquia: a ALTA nunca é automática (como em «EM TRATAMENTO sem dado da franquia»);
+  //  - fim VELHO (última atividade há mais de EX_PACIENTE_DIAS): cartão em EM TRATAMENTO por engano — telefone compartilhado, GANHO posto à
+  //    mão (Petrópolis, lead 5951463, 18/11/2026: o pai, em tratamento, recebeu "Parabéns" 6 meses depois do fim do filho). Não move: vai para
+  //    a fila da /alta (`filaDeAlta`) e a recepção decide;
+  //  - fim recente (até EX_PACIENTE_DIAS): ALTA com a mensagem, como sempre.
   const altaPorFim = (): Movimento | null => {
+    if (ultimaAtividade === 0) return null;
     const mov = ir('TRATAMENTO', ETAPA.ALTA, 'tratamento finalizado na franquia');
-    if (!mov || ultimaAtividade === 0 || diasParado <= JORNADA.EX_PACIENTE_DIAS) return mov;
-    const dias = Math.floor(diasParado);
-    return { ...mov, motivo: `${mov.motivo} (ex-paciente, sem atividade há ${dias} d)`, semRegua: true, dias };
+    return mov && fimVelho ? paraAFilaDeAlta(mov) : mov;
   };
   if (atual.funil === 'TRATAMENTO') {
     if (eh(status, ETAPA.ALTA)) {
@@ -397,30 +420,34 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
 
   // ── 16/10: ex-paciente em etapa comercial. Nunca GANHO (não é venda nova, não gera Purchase) ──
   // Voltou com consulta marcada → RETORNO PÓS-TRATAMENTO. Voltou e a consulta já aconteceu → a jornada segue pelas
-  // consultas da VOLTA (abaixo), mesmo com outra marcada pra frente. Não voltou → cartão parado de quem terminou: ALTA,
-  // sem a régua se o fato é velho.
+  // consultas da VOLTA (abaixo), mesmo com outra marcada pra frente. Não voltou → cartão parado de quem terminou: ALTA se o fim é
+  // recente; fim velho vai para a fila da /alta (a ALTA manda "Parabéns" sem condição).
   let jornadaDaVolta = false;
   if (exPaciente && atual.funil === 'COMERCIAL' && !eh(status, ETAPA.GANHO)) {
     if (voltaMarcada && !voltaAtendida) return ir('COMERCIAL', ETAPA.RETORNO, 'ex-paciente voltou: consulta marcada na franquia');
     if (decididasDaVolta.length === 0) {
       const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
-      if (!cartaoParado) return null;
-      const dias = Number.isFinite(diasParado) ? Math.floor(diasParado) : 365;
-      return { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `tratamento finalizado na franquia (ex-paciente, sem atividade há ${Number.isFinite(diasParado) ? dias : '+365'} d)`, semRegua: diasParado > JORNADA.EX_PACIENTE_DIAS, dias };
+      // sem nenhuma atividade conhecida a ALTA nunca é automática; fim velho vai para a fila da /alta (o "Parabéns" da ALTA não tem condição)
+      if (!cartaoParado || ultimaAtividade === 0) return null;
+      const dias = Math.floor(diasParado);
+      const mov: Movimento = { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `tratamento finalizado na franquia (ex-paciente, sem atividade há ${dias} d)`, dias };
+      return fimVelho ? paraAFilaDeAlta({ ...mov, motivo: 'tratamento finalizado na franquia (ex-paciente)' }) : mov;
     }
     consultas = consultasDaVolta;
     jornadaDaVolta = true;
   }
 
   // ── (regras antigas) ex-paciente (decisão do João, 23/09/2026): tratamento FINALIZADO, nada aberto, nada marcado e sem
-  // atividade há mais de EX_PACIENTE_DIAS, com o cartão perdido numa etapa comercial parada → ALTA sem mensagem
-  // (etiqueta NO_FOLLOW_UP segura os gatilhos de ALTA). Não passa por GANHO: não é venda nova, não gera Purchase.
+  // atividade há mais de EX_PACIENTE_DIAS, com o cartão perdido numa etapa comercial parada. Não passa por GANHO (não é venda nova, não
+  // gera Purchase) e NÃO vai para a ALTA: o gatilho da ALTA manda "Parabéns" sem condição, nem a etiqueta NO_FOLLOW_UP o segura. Vai para
+  // a fila da /alta, e a recepção decide. Sem nenhuma atividade conhecida, não move.
   // Finalizado RECENTE segue o caminho normal (GANHO → EM TRATAMENTO → ALTA): ciclo rápido que a varredura perdeu.
   if (!v2 && atual.funil === 'COMERCIAL' && temFinalizado && !temAberto && !cicloAnterior) {
     const temFutura = e.agendamentos.some((s) => (s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && (epoch(s) ?? 0) > e.agoraEpoch);
     const cartaoParado = emAlgum(status, [ETAPA.AGENDADO, ETAPA.NAO_COMPARECEU, ETAPA.COMPARECEU, ETAPA.NEGOCIACAO, ETAPA.CONFERIR]);
-    if (!temFutura && diasParado > JORNADA.EX_PACIENTE_DIAS && cartaoParado) {
-      return { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: `ex-paciente: tratamento finalizado na franquia, sem atividade há ${Number.isFinite(diasParado) ? Math.floor(diasParado) : '+365'} d`, semRegua: true, dias: Number.isFinite(diasParado) ? Math.floor(diasParado) : 365 };
+    if (!temFutura && cartaoParado && (ultimaAtividade === 0 || fimVelho)) {
+      if (ultimaAtividade === 0) return null;
+      return paraAFilaDeAlta({ funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: 'ex-paciente: tratamento finalizado na franquia' });
     }
   }
 

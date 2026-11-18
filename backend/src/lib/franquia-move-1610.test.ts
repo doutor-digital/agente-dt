@@ -69,16 +69,17 @@ test('decisão 2: ex-paciente com cartão novo no comercial e consulta marcada v
   assert.equal(novo?.para, ETAPA.RETORNO);
 });
 
-test('decisão 2: finalizado nunca LEVA a GANHO — cartão parado de quem terminou vai pra ALTA (sem régua se velho)', () => {
+test('decisão 2: finalizado nunca LEVA a GANHO — cartão parado de quem terminou vai pra ALTA (fim recente) ou pra fila da /alta (fim velho)', () => {
   const recente = [ag({ h: -40 * DIA, idStatus: 42 }), ag({ h: -10 * DIA, idStatus: 42, categoria: 'SESSÃO' })];
   const m = planejarMovimento(e(ETAPA.COMPARECEU, recente, FINALIZADO));
   assert.equal(m?.para, ETAPA.ALTA);
   assert.equal(m?.funil, 'TRATAMENTO');
-  assert.equal(m?.semRegua, false, 'terminou há 10 d: a régua de alta ainda cabe');
+  assert.equal(m?.filaDeAlta, undefined, 'terminou há 10 d: ALTA com a mensagem, como sempre');
   assert.equal(planejarMovimento(e(ETAPA.COMPARECEU, recente, FINALIZADO, 'COMERCIAL', false))?.para, ETAPA.GANHO, 'regra antiga: GANHO');
   const velho = planejarMovimento(e(ETAPA.NEGOCIACAO, cicloVelho(), FINALIZADO));
   assert.equal(velho?.para, ETAPA.ALTA);
-  assert.equal(velho?.semRegua, true, '60 d sem nada: ALTA sem mensagem');
+  assert.ok(velho?.filaDeAlta, '60 d sem nada: não move para ALTA (o gatilho manda "Parabéns" sem condição), vai para a fila da /alta');
+  assert.equal(velho?.semRegua, undefined);
   // quem a Sofia está atendendo agora (entrada/qualificação/espera) e não marcou nada: fica
   assert.equal(planejarMovimento(e(ETAPA.QUALIFICACAO, cicloVelho(), FINALIZADO)), null);
 });
