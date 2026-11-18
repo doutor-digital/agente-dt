@@ -623,6 +623,9 @@ const PIPELINE_INTENT_CONFIG_KEYS = new Set([
   'reforco_salesbot_id',
   // lista de teste das etiquetas ▶ (ids de CARTÃO) — sem isto virava "mover para a etapa 28088906" no prompt
   'etiquetas_teste_leads',
+  // etapa de PASSAGEM da automação nao-paciente-manual (Petrópolis, 17/11/2026) — sem isto a Sofia lia
+  // "Cliente nao_paciente_reentrada_status_id → mover_etapa(111915771)" e podia mover o cartão para lá
+  'nao_paciente_reentrada_status_id',
 ]);
 
 function renderPipelineIntents(unit: Unit): string {
