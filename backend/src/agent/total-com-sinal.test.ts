@@ -45,6 +45,9 @@ test('corrigirRestoDoSinal: só o valor claramente no lugar do "resto no dia", e
   assert.equal(r('R$ 350 no dia, ou R$ 200 antecipado').texto, 'R$ 350 no dia, ou R$ 200 antecipado');
   assert.equal(r('o restante em 2x de R$ 75 no dia').texto, 'o restante em 2x de R$ 75 no dia');
   assert.equal(r('(R$ 50 agora + R$ 200 pelo tratamento)').texto, '(R$ 50 agora + R$ 200 pelo tratamento)');
+  // taxa / item extra menor que o resto: não é o resto do sinal
+  assert.equal(r('R$ 200 com sinal de R$ 50, e o restante de R$ 20 na clínica').texto, 'R$ 200 com sinal de R$ 50, e o restante de R$ 20 na clínica');
+  assert.equal(r('(R$ 50 agora + R$ 30 de taxa na clínica)').texto, '(R$ 50 agora + R$ 30 de taxa na clínica)');
   // valor maior que o antecipado é o preço no dia, não o resto do sinal
   assert.equal(r('(R$ 50 agora + R$ 150 no dia). Pagando tudo fica + R$ 350 no dia').texto, '(R$ 50 agora + R$ 150 no dia). Pagando tudo fica + R$ 350 no dia');
   assert.equal(corrigirRestoDoSinal('(R$ 50 + R$ 200 no dia)', 0, 200).texto, '(R$ 50 + R$ 200 no dia)');

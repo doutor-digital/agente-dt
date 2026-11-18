@@ -13,6 +13,8 @@
  * é o número velho. SÓ nas mensagens em que o total foi trocado — fora disso nada é tocado, e "R$ 50 agora + R$ 200 no dia" certo fica como está.
  */
 
+import { fmtBRL } from './prompt-composer.js';
+
 /** Entre o valor e o "com sinal": nada que diga que o valor é o do DIA ("R$ 380 na hora, ou garantindo com sinal" — o R$ 380 é o preço no dia). */
 const NAO_E_DO_DIA = String.raw`(?!R\$|no\s+dia|na\s+cl[ií]nica|no\s+local|presencial|na\s+hora|no\s+ato|[àa]\s+vista|ao\s+chegar)`;
 /** O R$ que vem logo antes de "com (um) sinal" ("R$ 250 garantindo com sinal de R$ 50"): candidato a total. Só "com sinal" — "pra garantir", "reservar" NÃO bastam. */
@@ -45,7 +47,7 @@ export function ehTotalComSinal(antes: string, depois: string, v: number, precos
 }
 
 const VALOR = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
-export const fmtValor = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
+const fmtValor = fmtBRL;
 
 /** "+ R$ X", "(e R$ X", "e mais R$ X", "faltam R$ X", "os outros R$ X", "o restante, R$ X", "o resto de R$ X" — logo antes do valor. */
 const ANTES_DO_RESTO = /(?:\+|\(\s*e|\b(?:mais|falt\w*|restante|resto|outros?|demais)\b)[\s,:(]*(?:de\s+|os\s+|o\s+)*$/i;
@@ -61,7 +63,8 @@ export function corrigirRestoDoSinal(texto: string, restoNoDia: number, antecipa
   if (!texto || !Number.isFinite(restoNoDia) || restoNoDia <= 0 || !Number.isFinite(antecipado)) return { texto, trocas };
   const saida = texto.replace(VALOR, (todo, num: string, posicao: number) => {
     const v = Number(num.replace(/\./g, ''));
-    if (!Number.isFinite(v) || v === restoNoDia || v > antecipado) return todo;
+    // O resto velho é MAIOR que o certo (o total velho era maior) e nunca passa do antecipado: "restante de R$ 20" / "+ R$ 30 de taxa" ficam.
+    if (!Number.isFinite(v) || v <= restoNoDia || v > antecipado) return todo;
     const antes = texto.slice(Math.max(0, posicao - 30), posicao);
     if (!ANTES_DO_RESTO.test(antes) || /\d\s*x\s*(?:de\s*)?$/i.test(antes)) return todo;
     if (!DEPOIS_DO_RESTO.test(texto.slice(posicao + todo.length))) return todo;

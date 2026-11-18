@@ -4,14 +4,14 @@ import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js'
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
-import { precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
+import { fmtBRL, precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 import { posicoesDeValorDoPaciente } from './valor-do-paciente.js';
-import { corrigirRestoDoSinal, ehTotalComSinal, fmtValor, type PrecosComSinal } from './total-com-sinal.js';
+import { corrigirRestoDoSinal, ehTotalComSinal, type PrecosComSinal } from './total-com-sinal.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -154,14 +154,18 @@ function corrigirValores(
   // outro item) para a mensagem seguir o caminho de sempre: nada de acertar um e inventar preço para o outro.
   const ehTotal = (parte: string, posicao: number, achado: string, v: number): boolean =>
     !!totalComSinal && ehTotalComSinal(parte.slice(Math.max(0, posicao - 30), posicao), parte.slice(posicao + achado.length), v, totalComSinal);
+  // Frases (o separador fica) só para o total com sinal; sem ele é a mensagem inteira, como sempre foi. Divide UMA vez e decide sobre as mesmas partes em que troca.
+  const partes = totalComSinal ? text.split(/((?<=[.!?])\s+|\n+)/) : [text];
   const todosSaoTotal = (() => {
     if (!totalComSinal) return false;
     let algum = false;
-    for (const m of text.matchAll(re())) {
-      const v = Number(m[1]!.replace(/\./g, ''));
-      if (!alvo.has(v)) continue;
-      if (!ehTotal(text, m.index ?? 0, m[0], v)) return false;
-      algum = true;
+    for (const parte of partes) {
+      for (const m of parte.matchAll(re())) {
+        const v = Number(m[1]!.replace(/\./g, ''));
+        if (!alvo.has(v)) continue;
+        if (!ehTotal(parte, m.index ?? 0, m[0], v)) return false;
+        algum = true;
+      }
     }
     return algum;
   })();
@@ -175,8 +179,8 @@ function corrigirValores(
       if (todosSaoTotal && totalComSinal && ehTotal(parte, posicao, match, v)) {
         trocouOTotal = true;
         jaNoTexto.add(totalComSinal.antecipado);
-        trocas.push(`${v}→${fmtValor(totalComSinal.antecipado)}`);
-        return `R$ ${fmtValor(totalComSinal.antecipado)}`;
+        trocas.push(`${v}→${fmtBRL(totalComSinal.antecipado)}`);
+        return `R$ ${fmtBRL(totalComSinal.antecipado)}`;
       }
 
       const certo = [...substitutos]
@@ -199,8 +203,7 @@ function corrigirValores(
     return saida;
   };
 
-  // Em frases (o separador fica) só para o total com sinal; sem ele é a mensagem inteira, como sempre foi.
-  const texto = todosSaoTotal ? text.split(/((?<=[.!?])\s+|\n+)/).map(trocarEm).join('') : trocarEm(text);
+  const texto = todosSaoTotal ? partes.map(trocarEm).join('') : trocarEm(text);
 
   if (semSubstituto || trocas.length === 0) return null;
   return { texto, trocas };

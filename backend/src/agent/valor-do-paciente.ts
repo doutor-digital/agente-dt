@@ -44,7 +44,8 @@ const RELATA = '(?:é|foi|era|mostra|mostrou|aponta|apontou|indica|indicou|const
 /** Trecho, antes do valor, que relata o que o paciente mandou. Termina no valor (`$`). */
 const ANTES_DO_PACIENTE: RegExp[] = [
   // "o comprovante é de", "o comprovante mostra", "o valor do comprovante é", "o comprovante que recebi mostra" — verbo de relato colado ao valor
-  new RegExp(String.raw`comprovante\b[^,;—–-]{0,18}?(?<=\s)${RELATA}\s+(?:de\s+)?$`, 'i'),
+  // (o trecho entre "comprovante" e o verbo não pode falar de valor/preço/Pix: "Com o comprovante o valor é R$ 300" é o preço)
+  new RegExp(String.raw`comprovante\b(?:(?!\bvalor\b|\bpre[çc]o\b|\bpix\b)[^,;:—–-]){0,18}?(?<=\s)${RELATA}\s+(?:de\s+)?$`, 'i'),
   // "Esse comprovante de R$ 1.500", "o valor do comprovante (R$ 200)"
   /comprovante\s+de\s+$/i,
   /comprovante\s*\(\s*$/i,
@@ -53,7 +54,8 @@ const ANTES_DO_PACIENTE: RegExp[] = [
   // "você pagou", "você já enviou o Pix de"
   new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b[^]{0,25}$`, 'i'),
   // "o valor que veio/caiu/chegou/consta/aparece/mostrado …", "o valor mostrado foi de"
-  /\bvalor\s+(?:que\s+)?(?:veio|caiu|chegou|consta|aparece|mostrad[oa]|identificad[oa]|leu)\b[^]{0,25}$/i,
+  // (só o verbo e, no máximo, "foi/é/era [de]": "o valor mostrado no site é R$ 250" não relata o que o paciente mandou)
+  /\bvalor\s+(?:que\s+)?(?:veio|caiu|chegou|consta|aparece|mostrad[oa]|identificad[oa]|leu)\s+(?:(?:foi|é|era)\s+)?(?:de\s+)?$/i,
   // "o valor foi de", "o pagamento foi", "o Pix foi de" — passado: o preço da unidade se diz no presente ("é")
   /\b(?:valor|pagamento|pix|dep[oó]sito|transfer[eê]ncia)\s+foi\s+(?:de\s+)?$/i,
 ];
@@ -79,7 +81,8 @@ const PEDE_ENVIO = /\b(?:enviar|envie|envia|mandar|mande|manda|reenviar|reenvie|
  * paciente mandou, é o que a Sofia está dizendo que custa — e segue conferido. Até duas palavras no meio; vírgula, travessão ou ponto cortam
  * ("R$ 50,00, mas o valor antecipado…" continua sendo o valor do comprovante).
  */
-const PRECO_COLADO_DEPOIS = /^\s*(?:\p{L}+\s+){0,2}?(?:antecipad\w*|no\s+dia|na\s+cl[ií]nica|na\s+hora|[àa]\s+vista|no\s+ato|consulta|sinal)/iu;
+const PRECO_COLADO_DEPOIS =
+  /^\s*(?:(?:a|o|de|da|do|no|na|pelo|via|por)\s+)?(?:(?:consulta|pix)\s+)?(?:antecipad\w*|no\s+dia|na\s+cl[ií]nica|na\s+hora|[àa]\s+vista|no\s+ato|sinal)/iu;
 
 /** Condicional ("se você já pagou os R$ 250", "caso tenha mandado") e espera ("fico no aguardo do comprovante de R$ 250"): não relata nada, o R$ é preço ou pedido. */
 const CONDICIONAL_OU_ESPERA =
@@ -114,22 +117,19 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
     const ultimoReal = frase.lastIndexOf('R$');
     const antes = ultimoReal === -1 ? frase : frase.slice(ultimoReal + 2);
     // Pedido de comprovante, condicional ou espera na frase: o R$ não é relato. Preço colado depois do valor: idem.
-    const pedeEnvio = PEDE_ENVIO.test(frase) || CONDICIONAL_OU_ESPERA.test(frase);
-    if (pedeEnvio || PRECO_COLADO_DEPOIS.test(texto.slice(fim))) continue;
+    if (PEDE_ENVIO.test(frase) || CONDICIONAL_OU_ESPERA.test(frase) || PRECO_COLADO_DEPOIS.test(texto.slice(fim))) continue;
 
     let doPaciente = false;
     for (const re of ANTES_DO_PACIENTE) {
       const achou = re.exec(antes);
-      if (!achou) continue;
-      // "me enviar o comprovante certinho, com o valor de R$ 200" / "se você pagou o sinal de R$ 80": pedido ou preço, não relato.
-      if (pedeEnvio || FALA_DO_PRECO_OU_PEDE.test(achou[0])) continue;
+      // "comprovante certinho, com o valor de R$ 200" / "você pagou o sinal de R$ 80": o trecho já fala do preço, não é relato.
+      if (!achou || FALA_DO_PRECO_OU_PEDE.test(achou[0])) continue;
       doPaciente = true;
       break;
     }
     if (!doPaciente) {
       const depois = trechoDaFraseDepois(texto, fim);
-      doPaciente =
-        DEPOIS_DO_PACIENTE.some((re) => re.test(depois)) || (/comprovante/i.test(antes) && !pedeEnvio && DEPOIS_COM_COMPROVANTE.test(depois));
+      doPaciente = DEPOIS_DO_PACIENTE.some((re) => re.test(depois)) || (/comprovante/i.test(antes) && DEPOIS_COM_COMPROVANTE.test(depois));
     }
     if (doPaciente) posicoes.add(ini);
   }

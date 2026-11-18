@@ -146,6 +146,11 @@ test('comprovante — o preço da UNIDADE na mesma mensagem continua conferido (
   assert.deepEqual(r.triggered, ['antecipado_corrigido:250->200']);
 });
 
+test('comprovante — o R$ do paciente igual ao preço ERRADO da unidade não "legitima" o preço errado (R$ 200 do paciente, antecipado dito R$ 200 numa unidade de R$ 250)', () => {
+  const r = aplicarGuardrail('O comprovante mostra R$ 200, mas o valor antecipado da nossa consulta é R$ 200.', ARAGUAINA);
+  assert.equal(r.text, 'O comprovante mostra R$ 200, mas o valor antecipado da nossa consulta é R$ 250.');
+});
+
 test('comprovante — "R$ 200,00 — então não bate" é o preço da unidade, não do paciente: o errado continua corrigido', () => {
   const r = aplicarGuardrail('O comprovante é de R$ 150,00, mas o Pix antecipado é R$ 250,00 — então não bate.', CANAA);
   assert.equal(r.text, 'O comprovante é de R$ 150,00, mas o Pix antecipado é R$ 200 — então não bate.');
