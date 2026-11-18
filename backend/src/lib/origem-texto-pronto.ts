@@ -171,6 +171,16 @@ export interface DepsDaOrigem {
 const CACHE_DOS_CAMPOS_MS = 10 * 60_000;
 const cacheCampos = new Map<string, { em: number; defs: DefinicaoDeCampo[] }>();
 
+/** A conversa cuja 1ª fala é mais velha que isto não ganha origem de palpite: paciente antigo (em TRATAMENTO, por exemplo) não é lead novo. */
+export const DIAS_DA_PRIMEIRA_FALA = 30;
+
+/** As falas (da mais antiga) se a PRIMEIRA é dos últimos 30 dias; senão nenhuma. Puro. */
+export function falasSeRecente(linhas: ReadonlyArray<{ content: string; createdAt: Date }>, agora: Date = new Date()): string[] {
+  if (linhas.length === 0) return [];
+  if (agora.getTime() - linhas[0].createdAt.getTime() > DIAS_DA_PRIMEIRA_FALA * 86_400_000) return [];
+  return linhas.map((l) => l.content);
+}
+
 export const depsReais: DepsDaOrigem = {
   estado: (slug) => estadoDaOrigemPorTexto(slug),
   async primeirasFalas(unitId, leadId, n) {
@@ -178,9 +188,9 @@ export const depsReais: DepsDaOrigem = {
       where: { role: 'user', conversation: { unitId, leadId: String(leadId) } },
       orderBy: { createdAt: 'asc' },
       take: n,
-      select: { content: true },
+      select: { content: true, createdAt: true },
     });
-    return linhas.map((l) => l.content);
+    return falasSeRecente(linhas);
   },
   kommo: (unit) => createKommoClient(unit as Unit),
   async campos(unit, kommo) {
@@ -243,6 +253,8 @@ const UM_DIA_MS = 24 * 3600_000;
 const feitos = new Map<string, number>();
 /** `unidade|lead` → a tarefa de origem em andamento. O cadastro na franquia espera por ela (`esperarOrigem`): o espelho de leads lê o ⚑ Origem do cartão ao criar o lead lá. */
 const emCurso = new Map<string, Promise<unknown>>();
+/** `unidade|lead` → uma tarefa de origem rodando (qualquer estado): duas mensagens em rajada não leem nem gravam duas vezes. */
+const rodando = new Set<string>();
 /** Quanto o cadastro espera, no máximo, a origem terminar (um `getLead` + um PATCH + uma nota; o Kommo pendurado não prende o cadastro). */
 export const ESPERA_MAXIMA_DA_ORIGEM_MS = 8_000;
 
@@ -270,6 +282,7 @@ const lembrar = (chave: string, ms: number) => {
 export function _limparOrigemParaTeste(): void {
   feitos.clear();
   emCurso.clear();
+  rodando.clear();
   cacheCampos.clear();
 }
 
@@ -290,13 +303,16 @@ export async function aplicarOrigemPorTexto(
     const chave = `${estado}|${unit.id}|${leadId}`;
     if ((feitos.get(chave) ?? 0) > Date.now()) return { tipo: 'ja-feito' };
     const dono = `${unit.id}|${leadId}`;
-    if (emCurso.has(dono)) return { tipo: 'em-curso' };
+    if (rodando.has(dono)) return { tipo: 'em-curso' };
+    rodando.add(dono);
     // registrado de forma SÍNCRONA (antes de qualquer await): quem chama em seguida já enxerga a tarefa em `esperarOrigem`
     const p = processar(estado, chave, unit, leadId, deps);
-    emCurso.set(dono, p);
+    // Só a LIGADA entra onde o cadastro espera: em seco nada é gravado no cartão, e esperar 8 s à toa atrasaria o cadastro sem ganho.
+    if (estado === 'ligado') emCurso.set(dono, p);
     try {
       return await p;
     } finally {
+      rodando.delete(dono);
       emCurso.delete(dono);
     }
   } catch (err) {

@@ -10,6 +10,7 @@ import { _semearParaTeste } from './automacoes-estado.js';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { deveCriarNaFranquia } from './cadastro-na-franquia.js';
 import { _limparCacheParaTeste, cadastrarLeadDoTurno, decidirCadastroDoLead, type DepsDoCadastro } from './cadastro-todo-lead.js';
+import { pipelineIntentsSchema } from './pipeline-intents-schema.js';
 import type { DefinicaoDeCampo } from './ponte-ligacao.js';
 import type { Simulacao } from './so-no-papel.js';
 import {
@@ -19,6 +20,7 @@ import {
   _limparOrigemParaTeste,
   anuncioPelaFrase,
   esperarOrigem,
+  falasSeRecente,
   aplicarOrigemPorTexto,
   casarFala,
   casarPrimeirasFalas,
@@ -588,4 +590,51 @@ test('cadastrarLeadDoTurno espera a origem do lead antes de sincronizar (a franq
   await execucao;
   await origem;
   assert.deepEqual(ordem, ['origem-gravada', 'lead-criado-na-franquia']);
+});
+
+test('SECO não faz o cadastro esperar: só a LIGADA entra onde esperarOrigem espera (nada é gravado em seco)', async () => {
+  let liberar!: () => void;
+  const trava = new Promise<void>((r) => (liberar = r));
+  const { deps } = montar({ estado: 'seco' });
+  const lento = {
+    ...(deps.kommo(PET) as object),
+    async getLead() {
+      await trava;
+      return cartao();
+    },
+  } as unknown as KommoDaOrigem;
+  const tarefa = aplicarOrigemPorTexto(turno(), { ...deps, kommo: () => lento });
+  const t0 = Date.now();
+  await esperarOrigem(PET.id, 777, 2_000);
+  assert.ok(Date.now() - t0 < 100, `em seco o cadastro não espera (${Date.now() - t0} ms)`);
+  // a rajada continua protegida em seco: a 2ª mensagem não relê o Kommo enquanto a 1ª roda
+  assert.equal((await aplicarOrigemPorTexto(turno(), { ...deps, kommo: () => lento })).tipo, 'em-curso');
+  liberar();
+  assert.equal((await tarefa).tipo, 'seco');
+});
+
+test('falasSeRecente: conversa cuja 1ª fala é de mais de 30 dias não ganha origem de palpite (paciente antigo)', () => {
+  const agora = new Date('2026-11-18T12:00:00Z');
+  const dia = (n: number) => new Date(agora.getTime() - n * 86_400_000);
+  assert.deepEqual(falasSeRecente([{ content: 'a', createdAt: dia(2) }, { content: 'b', createdAt: dia(1) }], agora), ['a', 'b']);
+  assert.deepEqual(falasSeRecente([{ content: 'a', createdAt: dia(29) }], agora), ['a']);
+  assert.deepEqual(falasSeRecente([{ content: 'a', createdAt: dia(45) }, { content: 'b', createdAt: dia(1) }], agora), []);
+  assert.deepEqual(falasSeRecente([], agora), []);
+});
+
+test('schema da unidade: lista SÓ em origem_por_texto; nas outras chaves continua inteiro positivo (400 para lista)', () => {
+  const lista = [{ texto: 'Vim pelo formulário', origem: 'Formulário', anuncio: true, contem: true }];
+  const ok = pipelineIntentsSchema.safeParse({ scheduled_meeting: 123, sla_alert_minutes: '15', [CHAVE_DA_LISTA]: lista });
+  assert.equal(ok.success, true);
+  assert.deepEqual(ok.success && (ok.data[CHAVE_DA_LISTA] as unknown[])[0], lista[0], '`contem` sobrevive ao salvar pela tela');
+  // lista em outra chave: iria para o moveStage / a leitura de número
+  assert.equal(pipelineIntentsSchema.safeParse({ handoff_scheduling: lista }).success, false);
+  assert.equal(pipelineIntentsSchema.safeParse({ scheduled_meeting: [{ texto: 'x'.repeat(20), origem: 'A' }] }).success, false);
+  // a chave da lista tem de ser lista; número negativo e texto continuam recusados
+  assert.equal(pipelineIntentsSchema.safeParse({ [CHAVE_DA_LISTA]: 5 }).success, false);
+  assert.equal(pipelineIntentsSchema.safeParse({ scheduled_meeting: -1 }).success, false);
+  assert.equal(pipelineIntentsSchema.safeParse({ scheduled_meeting: 'abc' }).success, false);
+  // frase curta demais ou lista enorme
+  assert.equal(pipelineIntentsSchema.safeParse({ [CHAVE_DA_LISTA]: [{ texto: 'oi', origem: 'X' }] }).success, false);
+  assert.equal(pipelineIntentsSchema.safeParse({ [CHAVE_DA_LISTA]: Array.from({ length: 51 }, () => lista[0]) }).success, false);
 });

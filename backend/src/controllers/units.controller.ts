@@ -9,6 +9,7 @@ import { getWidgetConnection } from '../lib/widget-connection-monitor.js';
 import { painelDaUnidade } from '../services/painel-unidade.service.js';
 import { createKommoClient, KommoApiError } from '../services/kommo.service.js';
 import { funilDaIA } from '../services/funil-da-ia.service.js';
+import { pipelineIntentsSchema } from '../lib/pipeline-intents-schema.js';
 import {
   colunasEditaveisDaUnit,
   createUnit,
@@ -170,19 +171,8 @@ const unitInputBase = {
   qualificationColdTag: z.string().max(50).optional(),
   handoffEnabled: z.boolean().optional(),
   handoffKeywords: z.array(z.string().min(1).max(50)).max(50).optional(),
-  // chave → id (inteiro positivo), EXCETO `origem_por_texto` (automação origem-texto-pronto), que é uma lista de {texto, origem, anuncio}:
-  // sem isto, salvar a unidade pela tela devolveria o JSON inteiro e a lista derrubaria a validação.
-  pipelineIntents: z
-    .record(
-      z.string(),
-      z.union([
-        z.coerce.number().int().positive(),
-        // `contem` precisa estar aqui: o z.object descarta chave desconhecida, e salvar pela tela apagaria a regra do formulário
-        z.array(z.object({ texto: z.string().min(15).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional(), contem: z.boolean().optional() })).max(50),
-      ]),
-    )
-    .nullable()
-    .optional(),
+  // chave → id (inteiro positivo); só `origem_por_texto` aceita lista (ver lib/pipeline-intents-schema.ts)
+  pipelineIntents: pipelineIntentsSchema.nullable().optional(),
   contactCollectionEnabled: z.boolean().optional(),
   contactCollectionAfterTurns: z.coerce.number().int().min(1).max(20).optional(),
   welcomeCouponEnabled: z.boolean().optional(),
