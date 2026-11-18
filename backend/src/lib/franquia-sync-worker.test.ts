@@ -403,6 +403,7 @@ test('aplicarMovimento: ALTA de fim velho (filaDeAlta) entra na fila da /alta e 
   const unit = { id: 'u-pet', slug: 'doutor-hernia-petropolis' } as never;
   const resumo: ResumoSync = { unit: 'x', em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
   const criados: Array<Record<string, unknown>> = [];
+  const original = Object.getOwnPropertyDescriptor(prisma, 'altaCandidato');
   Object.defineProperty(prisma, 'altaCandidato', {
     value: { findUnique: async () => null, create: async (a: { data: Record<string, unknown> }) => { criados.push(a.data); return a.data; }, update: async () => ({}) },
     configurable: true,
@@ -423,6 +424,9 @@ test('aplicarMovimento: ALTA de fim velho (filaDeAlta) entra na fila da /alta e 
     assert.deepEqual(chamadas, []);
   } finally {
     _semearParaTeste([]);
+    // devolve o original (a troca não pode vazar para os outros testes do arquivo)
+    if (original) Object.defineProperty(prisma, 'altaCandidato', original);
+    else delete (prisma as unknown as Record<string, unknown>).altaCandidato;
   }
 });
 

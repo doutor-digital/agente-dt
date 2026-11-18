@@ -220,7 +220,9 @@ test('recortarHistorico: só o ciclo atual e só tratamento aberto (review 23/09
   const m = planejarMovimento(entrada(ETAPA.AGENDADO, r.schedules.filter((s) => s.idStatus !== 37), r.treatments.filter((t) => t.statusName !== 'EM ANDAMENTO')));
   assert.equal(m?.para, ETAPA.ESPERA);
   const semRecorte = planejarMovimento(entrada(ETAPA.AGENDADO, hist.schedules.filter((s) => s.idStatus !== 37), [{ idStatus: 46 }]));
-  assert.equal(semRecorte?.para, ETAPA.GANHO, 'sem o recorte o FINALIZADO velho levaria a GANHO — é o bug que o recorte evita');
+  // antes: GANHO (a avaliação desmarcada há 10 d rejuvenescia o fim). Agora só sessão/consulta ATENDIDA conta: o fim de 400 d vai para a fila da /alta.
+  // Em qualquer dos dois o FINALIZADO velho não pode decidir o ciclo atual — é o que o recorte evita (e com o recorte vai para EM ESPERA, acima).
+  assert.ok(semRecorte?.filaDeAlta, 'sem o recorte o FINALIZADO velho do ciclo antigo mandaria o cartão para a ALTA: agora, para a fila da /alta');
 });
 
 // ── jornada pela idade do fato (23/09/2026) ──
@@ -352,4 +354,21 @@ test('Codex: a data da fila é a da última SESSÃO atendida, não a de uma cons
   ], [{ idStatus: 46 }], 'TRATAMENTO'));
   assert.equal(m?.filaDeAlta?.ultimaSessao, iso(-150 * 24));
   assert.equal(m?.filaDeAlta?.realizadas, 2);
+});
+
+test('só sessão/consulta ATENDIDA rejuvenesce o fim: finalizado há 180 d + avaliação DESMARCADA há 10 d (ou falta, ou remarcada) no mesmo cadastro → fila, não ALTA', () => {
+  for (const idStatus of [57, 40, 41]) {
+    const ags = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -10 * 24, idStatus: idStatus, categoria: 'AVALIAÇÃO' })];
+    for (const regras1610 of [false, true]) {
+      const m = planejarMovimento({ ...entrada(ETAPA.EM_TRATAMENTO, ags, [{ idStatus: 46 }], 'TRATAMENTO'), regras1610 });
+      assert.ok(m?.filaDeAlta, `status ${idStatus}, regras1610=${regras1610}`);
+      assert.equal(m?.dias, 180);
+    }
+  }
+  // e o ex-paciente do COMERCIAL com a mesma avaliação desmarcada também vai para a fila
+  const ags = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -10 * 24, idStatus: 57, categoria: 'AVALIAÇÃO' })];
+  assert.ok(planejarMovimento(entrada(ETAPA.COMPARECEU, ags, [{ idStatus: 46 }]))?.filaDeAlta);
+  // já uma avaliação ATENDIDA há 10 d é atividade de verdade: ALTA com a mensagem (regras 16/10) / fim recente
+  const atendida = [ag({ h: -180 * 24, idStatus: 42, categoria: 'SESSÃO' }), ag({ h: -10 * 24, idStatus: 42, categoria: 'AVALIAÇÃO' })];
+  assert.equal(planejarMovimento(entrada(ETAPA.EM_TRATAMENTO, atendida, [{ idStatus: 46 }], 'TRATAMENTO'))?.filaDeAlta, undefined);
 });

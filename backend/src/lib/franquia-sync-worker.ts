@@ -606,6 +606,14 @@ function contarSimulado(resumo: ResumoSync, de: string, para: string): void {
   resumo.simulados = { ...resumo.simulados, [chave]: (resumo.simulados?.[chave] ?? 0) + 1 };
 }
 
+/**
+ * O que a tela do «só no papel» mostra para um movimento. ALTA de fim velho NÃO move (vai para a fila da /alta): dizer "moveria ALTA"
+ * faria o João aprovar o que o ligado não faz — e o ligado faria outra coisa que o papel não mostrava.
+ */
+function simulacaoDoMovimento(mov: Movimento): { acao: 'moveria' | 'alertaria'; alvo: string; valor: string | undefined } {
+  return mov.filaDeAlta ? { acao: 'alertaria', alvo: 'fila da página /alta', valor: 'ALTA' } : { acao: 'moveria', alvo: mov.para, valor: mov.motivoPerda };
+}
+
 /** PERDIDO segurado pela trava: não relê o cartão no Kommo de novo antes disto (a varredura passa de 15 em 15 min). */
 const TRAVA_REVE_A_CADA_MS = 60 * 60_000;
 const travadoAte = new Map<string, number>();
@@ -624,13 +632,15 @@ export async function aplicarMovimento(unit: Unit, kommo: KommoClient, funis: Fu
   // 10820048, 02/10). Vai para a fila da página /alta e a recepção decide. Em seco, só registra; nada é escrito.
   if (mov.filaDeAlta) {
     if (estadoDoMove(unit.slug) === 'seco') {
-      registrarSimulacao(unit, 'franquia-move', { leadId, acao: 'alertaria', alvo: 'fila da página /alta', valor: 'ALTA', deEtapa, motivo: mov.motivo });
+      contarSimulado(resumo, deEtapa, 'fila da /alta');
+      registrarSimulacao(unit, 'franquia-move', { leadId, ...simulacaoDoMovimento(mov), deEtapa, motivo: mov.motivo });
       logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo }, 'franquia-move [seco]: poria na fila da /alta (não move)');
       return;
     }
     try {
-      await semearFilaDeAlta(unit.id, [{ leadId, nome: cartao?.name ?? null, classe: 'ALTA', realizadas: mov.filaDeAlta.realizadas, previstas: 0, ultimaSessao: mov.filaDeAlta.ultimaSessao }]);
-      logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo }, 'franquia-move: fim velho — entrou na fila da /alta (cartão não movido)');
+      const r = await semearFilaDeAlta(unit.id, [{ leadId, nome: cartao?.name ?? null, classe: 'ALTA', realizadas: mov.filaDeAlta.realizadas, previstas: 0, ultimaSessao: mov.filaDeAlta.ultimaSessao }]);
+      // só a 1ª vez (ou quando a recepção já decidiu e o quadro mudou): a varredura passa de 15 em 15 min e o cartão continua pendente na fila
+      if (r.novos > 0 || r.reabertos > 0) logger.info({ unit: unit.slug, leadId, de: deEtapa, motivo: mov.motivo }, 'franquia-move: fim velho — entrou na fila da /alta (cartão não movido)');
     } catch (err) {
       resumo.erros++;
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'franquia-move: falha ao pôr na fila da /alta');
@@ -2181,8 +2191,8 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   // 16/10 em "só no papel": o robô move pela regra antiga e a tela mostra onde a regra nova levaria o cartão
   if (ctx.jornada === 'seco') {
     const novo = planejarMovimento({ ...entrada1610, regras1610: true });
-    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null)) && !(novo && (await perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch, funis)))) {
-      registrarSimulacao(unit, AUTOMACAO_1610, { leadId, acao: 'moveria', alvo: novo ? novo.para : '(fica onde está)', deEtapa: atual.status, valor: novo?.semRegua ? 'sem régua' : undefined, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
+    if (((novo?.para ?? null) !== (mov?.para ?? null) || (novo?.funil ?? null) !== (mov?.funil ?? null) || !!novo?.filaDeAlta !== !!mov?.filaDeAlta) && !(novo && (await perdaTravada(unit, lead, novo.para, atual.status, AUTOMACAO_1610, agoraEpoch, funis)))) {
+      registrarSimulacao(unit, AUTOMACAO_1610, { leadId, ...(novo ? { ...simulacaoDoMovimento(novo), valor: novo.filaDeAlta ? 'ALTA' : novo.semRegua ? 'sem régua' : undefined } : { acao: 'moveria' as const, alvo: '(fica onde está)' }), deEtapa: atual.status, motivo: novo?.motivo ?? `regras de 16/10: não move (a regra antiga leva pra ${mov?.para})` });
     }
   }
   // 16/10 (decisão 4): falta em retorno/sessão vira nota + tarefa, sem mexer na etapa
@@ -2197,9 +2207,9 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
   if (franquiaRespeitaEspera(unit, lead, atual, mov.para, agoraEpoch)) return; // EM ESPERA com ◷ Retomar em (auditoria 16/10, item 10)
   if (seco) {
     if (await perdaTravada(unit, lead, mov.para, atual.status, ctx.automacaoDoSeco ?? 'franquia-revisao', agoraEpoch, funis)) return;
-    contarSimulado(resumo, atual.status, mov.para);
-    logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, 'franquia-move [seco]: moveria');
-    registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'moveria', alvo: mov.para, deEtapa: atual.status, valor: mov.motivoPerda, motivo: mov.motivo });
+    contarSimulado(resumo, atual.status, mov.filaDeAlta ? 'fila da /alta' : mov.para);
+    logger.info({ unit: unit.slug, leadId, nome: lead.name, de: atual.status, para: mov.filaDeAlta ? 'fila da /alta' : mov.para, funil: mov.funil, motivo: mov.motivo, motivoPerda: mov.motivoPerda, semRegua: mov.semRegua }, mov.filaDeAlta ? 'franquia-move [seco]: poria na fila da /alta (não move)' : 'franquia-move [seco]: moveria');
+    registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, ...simulacaoDoMovimento(mov), deEtapa: atual.status, motivo: mov.motivo });
     return;
   }
   // 16/10: saída de PERDIDO/ALTA porque a franquia manda — uma vez por fato
@@ -2743,4 +2753,4 @@ export function stopFranquiaSyncWorker(): void {
   proximaEm.clear();
 }
 
-export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, espelharValorDaConsulta, sincronizarUnidade, revisarPeloHistorico, gravarIdClientNoCartao, fecharSessoesDoTratamento };
+export const _interno = { mapearCampos, valoresDoLead, procurarPaciente, espelharPaciente, recusarOutroPaciente, resolverPaciente, marcarConflitoDeTelefone, avisarFaltas, processarCartao, espelharValorDaConsulta, sincronizarUnidade, revisarPeloHistorico, gravarIdClientNoCartao, fecharSessoesDoTratamento, simulacaoDoMovimento };

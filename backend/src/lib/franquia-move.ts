@@ -111,7 +111,7 @@ export interface Movimento {
   /** só pra PERDIDO: idade do fato em dias (vai pra nota do cartão) */
   dias?: number;
   /**
-   * ALTA de fim VELHO (última atividade há mais de `JORNADA.EX_PACIENTE_DIAS`): o cartão NÃO é movido. Vai para a fila da página
+   * ALTA de fim VELHO (última sessão/consulta atendida há mais de `JORNADA.EX_PACIENTE_DIAS`): o cartão NÃO é movido. Vai para a fila da página
    * /alta e a recepção decide. O gatilho da ALTA no Kommo dispara um bot SEM condição nenhuma ("Parabéns pela conclusão"), então
    * nem a etiqueta NO_FOLLOW_UP o segura (Açailândia, lead 10820048, 02/10: NO_FOLLOW_UP e ALTA às 15:49:40, "Parabéns" às 15:49:41).
    * `para` fica ALTA só para dizer onde o fato levaria o cartão; quem aplica (`aplicarMovimento`) não mexe na etapa.
@@ -298,9 +298,10 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   const temCancelado = e.tratamentos.some(cancelado);
   const temPendente = e.tratamentos.some(pendente);
   const passou = (s: SpineSchedule) => (epoch(s) ?? Infinity) <= e.agoraEpoch;
-  // última atividade conhecida na franquia (qualquer agendamento/sessão) e há quantos dias: a idade do fato, para as saídas por ALTA
-  // só o que JÁ aconteceu: um agendamento futuro não faz um fim velho parecer recente (Codex, 18/11)
-  const ultimaAtividade = Math.max(0, ...e.agendamentos.filter(passou).map((s) => epoch(s) ?? 0));
+  // última sessão/consulta ATENDIDA na franquia e há quantos dias: a idade do fato, para as saídas por ALTA
+  // só o que JÁ ACONTECEU de verdade (ATENDIDO): agendamento futuro, avaliação desmarcada, falta e remarcação não rejuvenescem um fim velho
+  // (Petrópolis 5951463: finalizado há 180 d + avaliação desmarcada há 10 d no mesmo cadastro continua fim velho)
+  const ultimaAtividade = Math.max(0, ...e.agendamentos.filter((s) => passou(s) && s.idStatus === SPINE_STATUS.ATENDIDO).map((s) => epoch(s) ?? 0));
   const diasParado = ultimaAtividade > 0 ? (e.agoraEpoch - ultimaAtividade) / 86_400 : Infinity;
   const fimVelho = ultimaAtividade > 0 && diasParado > JORNADA.EX_PACIENTE_DIAS;
   /** O mesmo movimento, mas sem mover: o fato vai para a fila da /alta (ver `Movimento.filaDeAlta`). */
@@ -371,8 +372,8 @@ export function planejarMovimento(e: EntradaMovimento): Movimento | null {
   // ── funil TRATAMENTO ──
   // ALTA por «tratamento finalizado» (EM TRATAMENTO → ALTA). O gatilho da ALTA no Kommo manda "Parabéns pela conclusão" SEM condição
   // (nem a etiqueta NO_FOLLOW_UP o segura), então só vai para ALTA quando o fim é RECENTE:
-  //  - sem nenhuma atividade conhecida na franquia: a ALTA nunca é automática (como em «EM TRATAMENTO sem dado da franquia»);
-  //  - fim VELHO (última atividade há mais de EX_PACIENTE_DIAS): cartão em EM TRATAMENTO por engano — telefone compartilhado, GANHO posto à
+  //  - sem nenhuma sessão/consulta atendida conhecida na franquia: a ALTA nunca é automática (como em «EM TRATAMENTO sem dado da franquia»);
+  //  - fim VELHO (última atendida há mais de EX_PACIENTE_DIAS): cartão em EM TRATAMENTO por engano — telefone compartilhado, GANHO posto à
   //    mão (Petrópolis, lead 5951463, 18/11/2026: o pai, em tratamento, recebeu "Parabéns" 6 meses depois do fim do filho). Não move: vai para
   //    a fila da /alta (`filaDeAlta`) e a recepção decide;
   //  - fim recente (até EX_PACIENTE_DIAS): ALTA com a mensagem, como sempre.

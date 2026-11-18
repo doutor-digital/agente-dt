@@ -73,7 +73,7 @@ export interface PreviaDaCarga {
   pacientesNaFranquia: number;
   criaria: number;
   porEtapa: Record<string, number>;
-  fora: { jaTemCartao: number; semTelefone: number; semFato: number };
+  fora: { jaTemCartao: number; semTelefone: number; semFato: number; fimVelho: number };
   /** alguns nomes, para a prévia não ser só número */
   exemplos: Array<{ nome: string; etapa: string; porque: string }>;
   /** janelas da agenda que a franquia não respondeu: com qualquer uma, a lista está incompleta */
@@ -212,6 +212,7 @@ export async function previaDaCarga(unit: Unit, opts: OpcoesCarga = {}): Promise
       jaTemCartao: contar(plano, 'ja-tem-cartao'),
       semTelefone: contar(plano, 'sem-telefone'),
       semFato: contar(plano, 'sem-fato'),
+      fimVelho: contar(plano, 'fim-velho'),
     },
     janelasComFalha,
     exemplos: plano.criar.slice(0, 8).map((c) => ({ nome: c.nome, etapa: c.status, porque: c.caminho[c.caminho.length - 1] ?? 'tem consulta na franquia' })),

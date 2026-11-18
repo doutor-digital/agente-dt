@@ -58,6 +58,11 @@ export interface DestinoDoCartao {
   status: string;
   /** o caminho que a máquina percorreu, para o log e para a prévia explicar a decisão */
   caminho: string[];
+  /**
+   * A máquina parou porque o próximo passo seria a ALTA de um fim VELHO (`Movimento.filaDeAlta`): o cartão não nasce em ALTA. O gatilho
+   * da ALTA no Kommo manda "Parabéns pela conclusão" sem condição, e numa carga em massa seria uma mensagem por ex-paciente antigo.
+   */
+  fimVelho?: boolean;
 }
 
 export interface EntradaDestino {
@@ -86,6 +91,9 @@ export function destinoDoCartao(e: EntradaDestino): DestinoDoCartao {
       horasAteNegociacao: e.horasAteNegociacao,
     });
     if (!mov) break;
+    // ALTA de fim velho: nenhum cartão nasce (nem em ALTA, nem na etapa de antes — EM TRATAMENTO também tem robô de boas-vindas).
+    // O planejador deixa o paciente de fora com o motivo 'fim-velho'; se ele voltar a escrever, o cartão nasce pelo caminho normal.
+    if (mov.filaDeAlta) return { funil: atual.funil, status: atual.status, caminho, fimVelho: true };
     const chave = `${mov.funil}/${mov.para}`;
     // já passamos por aqui: duas regras se apontando. Para no que temos em vez de girar.
     if (vistos.has(chave)) break;
@@ -108,7 +116,9 @@ export interface PacienteDaFranquia {
 export type MotivoDeFora =
   | 'ja-tem-cartao'
   | 'sem-telefone'
-  | 'sem-fato';
+  | 'sem-fato'
+  /** ex-paciente de fim velho (> 30 d): a ALTA mandaria "Parabéns" a cada um; sem cartão, nada dispara */
+  | 'fim-velho';
 
 export interface CartaoAcriar {
   nome: string;
@@ -174,6 +184,10 @@ export function planejarCarga(e: EntradaCarga): PlanoDeCarga {
       agoraEpoch: e.agoraEpoch,
       horasAteNegociacao: e.horasAteNegociacao,
     });
+    if (destino.fimVelho) {
+      fora.push({ nome: p.nome, motivo: 'fim-velho' });
+      continue;
+    }
     criar.push({
       nome: p.nome,
       idClient: p.idClient,
