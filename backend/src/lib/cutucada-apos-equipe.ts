@@ -15,16 +15,16 @@
  *   - a SDR escrevendo DENTRO do Kommo sai como `internal` "Doutor Hérnia Petrópolis" (157) — o mesmo login do robô de ▶ Retomada;
  *   - "Agradecemos o seu contato! Nosso atendimento é de segunda a…" é a resposta automática do app (23), no máximo ~16 s depois
  *     da mensagem do paciente.
- * O classificador compartilhado (`classificarAutor`) lê `bot` como Sofia, então em Lite a equipe do celular vira "Sofia" lá (a
- * régua e a pausa pela equipe não a enxergam). Aqui NÃO se mexe nele — o comportamento das outras unidades fica como está —, e a
- * cutucada reclassifica as saídas pelo que prova de quem é cada uma (`reclassificarFalas`).
+ * O classificador compartilhado (`classificarAutor`) lia `bot` como Sofia, então em Lite a equipe do celular virava "Sofia" lá (a
+ * régua e a pausa pela equipe não a enxergavam); desde 18/11/2026 (Caxias 3526512) ele lê o app do celular (Lite e Business) como
+ * equipe. A cutucada segue reclassificando as saídas pelo que prova de quem é cada uma (`reclassificarFalas`), com regras próprias.
  */
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { JANELA_DO_ENVIO_MS } from '../services/kommo-talks-normalizar.js';
 import { porQueNaoTocar, intentsDe, inteiro, temEtiqueta, type Cartao, type OpcoesDeCartao, type RazaoDeFicar } from './rotina-nucleo.js';
 import { ETIQUETAS_RETOMADA } from './rotina-etapas-worker.js';
 import { RESPOSTA_AUTOMATICA_ANTES_MS, RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
-import { AVISO_DO_SISTEMA, NOMES_DOS_APPS_DO_CELULAR, RESPOSTA_AUTOMATICA_TEXTO, TEXTOS_DE_ROBO } from './fala-automatica.js';
+import { AVISO_DO_SISTEMA, NOMES_DOS_APPS_DO_CELULAR as APPS_DO_CELULAR, RESPOSTA_AUTOMATICA_TEXTO, TEXTOS_DE_ROBO } from './fala-automatica.js';
 import { normalizarNome } from './kommo-schema.js';
 import { retornoDaEquipe } from './retorno-da-equipe.js';
 import { fusoDaUnidade } from './fuso.js';
@@ -65,9 +65,7 @@ export function configDaCutucada(pipelineIntents: unknown): ConfigDaCutucada {
 
 // ─── quem falou ───────────────────────────────────────────────────────────────────────────────────
 
-/** Os apps do celular da clínica (Lite e Business) e os textos de robô/aviso moram em `fala-automatica.ts`, compartilhados com a pausa pela equipe. */
-const APPS_DO_CELULAR = NOMES_DOS_APPS_DO_CELULAR;
-export { TEXTOS_DE_ROBO };
+// Os apps do celular da clínica (Lite e Business) e os textos de robô/aviso moram em `fala-automatica.ts`, compartilhados com a pausa pela equipe.
 
 /** A mensagem é a resposta automática do app (saudação, ausência) ou aviso do sistema? Mesma ideia da `pausa-equipe`, estendida ao Lite. */
 export function ehRespostaAutomaticaDoApp(m: Pick<MensagemOficial, 'direcao' | 'texto' | 'autorNome' | 'anexo' | 'em'>, todas: ReadonlyArray<Pick<MensagemOficial, 'direcao' | 'em'>>): boolean {

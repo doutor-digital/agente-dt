@@ -12,14 +12,17 @@
 
 export type AppDoCelular = 'business' | 'lite';
 
-const APPS: Record<string, AppDoCelular> = { 'whatsapp business': 'business', 'whatsapp lite': 'lite' };
+const APPS = new Map<string, AppDoCelular>([
+  ['whatsapp business', 'business'],
+  ['whatsapp lite', 'lite'],
+]);
 
 /** Nomes (minúsculos) com que o Kommo assina a fala vinda do celular da clínica. */
-export const NOMES_DOS_APPS_DO_CELULAR: readonly string[] = Object.keys(APPS);
+export const NOMES_DOS_APPS_DO_CELULAR: readonly string[] = [...APPS.keys()];
 
 /** Qual app do celular é este autor? null = não é app do celular. */
 export function appDoCelular(autorNome: string | null | undefined): AppDoCelular | null {
-  return APPS[(autorNome ?? '').trim().toLowerCase()] ?? null;
+  return APPS.get((autorNome ?? '').trim().toLowerCase()) ?? null;
 }
 
 /** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…", «messageContextInfo» do Lite). */
@@ -31,25 +34,27 @@ export const RESPOSTA_AUTOMATICA_TEXTO = /agradecemos o seu contato|nosso atendi
 
 /**
  * Textos de robô do Kommo (etapa ▶ Retomada) que saem sem marca de robô: pelo celular (Caxias, "WhatsApp Lite") ou como o USUÁRIO
- * `internal` (Petrópolis). Na dúvida é robô: o erro custa uma cutucada a menos, nunca uma a mais.
+ * `internal` (Petrópolis; este caso é da cutucada). Na dúvida é robô: o erro custa uma cutucada a menos, nunca uma a mais.
  */
 export const TEXTOS_DE_ROBO: readonly RegExp[] = [
   /passando novamente porque vi que voc[eê] procurou ajuda/i,
   /vi que voc[eê] demonstrou interesse no nosso tratamento, tentei contato/i,
 ];
 
-/** O texto é de robô conhecido (ausência do app ou Retomada)? Não depende de hora nem de autor. */
-export function ehTextoDeRoboDoApp(texto: string): boolean {
-  const t = texto.trim();
-  return RESPOSTA_AUTOMATICA_TEXTO.test(t) || TEXTOS_DE_ROBO.some((r) => r.test(t));
+/**
+ * Mensagem de ROBÔ do Kommo (▶ Retomada) que saiu assinada pelo app do celular? É robô, não equipe: a conversa a trata como a Sofia/Salesbot
+ * (`normalizar` a marca 'sofia'), como sempre fez para os robôs. Só vale para saída do app, sem anexo.
+ */
+export function ehRoboConhecidoDoApp(m: { texto: string; autorNome: string; anexo?: unknown }): boolean {
+  return appDoCelular(m.autorNome) !== null && !m.anexo && TEXTOS_DE_ROBO.some((r) => r.test(m.texto.trim()));
 }
 
 /**
- * A saída é fala automática PELO TEXTO (sem olhar a hora): aviso do sistema (de qualquer autor) ou, vinda do app do celular
- * (Business/Lite) e sem anexo, ausência/saudação ou texto de robô conhecido. É o que não conta como «a equipe falou» em lugar nenhum:
- * nem na pausa, nem no bloco <conversa_oficial> do prompt, nem na leitura da régua.
+ * A saída é ausência/saudação ou aviso PELO TEXTO (sem olhar a hora): aviso do sistema (de qualquer autor) ou, vinda do app do celular
+ * (Business/Lite) e sem anexo, texto de ausência/saudação. Não conta como «a equipe falou» em lugar nenhum: nem na pausa, nem no bloco
+ * <conversa_oficial> do prompt, nem na leitura da régua.
  */
 export function ehFalaAutomaticaPeloTexto(m: { texto: string; autorNome: string; anexo?: unknown }): boolean {
   if (AVISO_DO_SISTEMA.test(m.texto.trim())) return true;
-  return appDoCelular(m.autorNome) !== null && !m.anexo && ehTextoDeRoboDoApp(m.texto);
+  return appDoCelular(m.autorNome) !== null && !m.anexo && RESPOSTA_AUTOMATICA_TEXTO.test(m.texto.trim());
 }

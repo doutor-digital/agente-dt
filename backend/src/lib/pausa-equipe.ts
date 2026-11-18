@@ -47,10 +47,7 @@ import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
-import { AVISO_DO_SISTEMA, appDoCelular, ehFalaAutomaticaPeloTexto } from './fala-automatica.js';
-
-// Reexportado: o módulo da cutucada e os testes importam daqui.
-export { AVISO_DO_SISTEMA };
+import { appDoCelular, ehFalaAutomaticaPeloTexto } from './fala-automatica.js';
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
 /** Fala da equipe mais velha que isto não pausa (e não faz a ligação da chave varrer conversas antigas). */

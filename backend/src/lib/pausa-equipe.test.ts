@@ -23,6 +23,7 @@ import { _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId } from './automacoes.js';
 import { normalizar, type MensagemOficial } from '../services/kommo-talks.service.js';
 import type { KommoTalkMessage } from '../services/kommo.service.js';
+import { roboSaiuDepois } from './recuperar-turnos.js';
 import type { Simulacao } from './so-no-papel.js';
 
 /**
@@ -189,18 +190,23 @@ test('Petrópolis, 22h: a ausência "Agradecemos o seu contato!…" do Lite NÃO
   assert.equal(chamadas.marcarPausa, 0);
 });
 
-test('Lite: aviso «messageContextInfo» e o robô de Retomada ("Passando novamente…") não são fala da equipe', () => {
+test('Lite: o aviso «messageContextInfo» não é fala da equipe', () => {
   const aviso = msg('saida', em('11:00:10'), "'messageContextInfo' is not yet supported. Use your device to view this message.", 'equipe', 'WhatsApp Lite');
-  const retomada = msg(
-    'saida',
-    em('11:12:06'),
-    'Oi! Passando novamente porque vi que você procurou ajuda para sua coluna. Você já tentou algum tratamento antes?',
-    'equipe',
-    'WhatsApp Lite',
-  );
   assert.equal(ehRespostaAutomatica(aviso, [aviso]), true);
-  assert.equal(ehRespostaAutomatica(retomada, [retomada]), true);
-  assert.deepEqual(falasHumanasDaEquipe([aviso, retomada]), []);
+  assert.deepEqual(falasHumanasDaEquipe([aviso]), []);
+});
+
+test('Lite: o robô de Retomada ("Passando novamente…", Caxias) é ROBÔ como o Salesbot — não pausa a Sofia e conta como robô na recuperação de turnos', () => {
+  const msgs = normalizar([
+    bruta('1', '2026-11-17T10:50:00-03:00', 'incoming', { type: 'external', name: 'Paciente' }, 'quero saber do tratamento'),
+    bruta('2', '2026-11-17T10:58:55-03:00', 'outgoing', LITE, 'Oi! Passando novamente porque vi que você procurou ajuda para sua coluna. Você já tentou algum tratamento antes?'),
+  ]);
+  assert.equal(msgs[1].autor, 'sofia');
+  assert.deepEqual(falasHumanasDaEquipe(msgs), []);
+  assert.equal(equipeComAPalavra(msgs, null, new Date('2026-11-17T11:00:00-03:00')).motivo, 'sem_equipe');
+  assert.equal(roboSaiuDepois(msgs, new Date('2026-11-17T10:50:00-03:00')), true);
+  // a mesma frase com anexo (ou de outro autor humano) não é tratada como robô
+  assert.equal(normalizar([bruta('3', '2026-11-17T11:00:00-03:00', 'outgoing', { type: 'internal', name: 'Talita' }, 'Oi! Passando novamente porque vi que você procurou ajuda')])[0].autor, 'equipe');
 });
 
 test('Lite: a regra de TEMPO não vale — fala humana longa logo depois do paciente pausa; no Business continua automática (como hoje)', () => {
