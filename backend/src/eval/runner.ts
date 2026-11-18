@@ -42,6 +42,10 @@ export interface ResultadoDoCaso {
   ferramentas: string[];
   /** O guardrail agiu? Já é sinal de erro, mesmo quando as conferências passam. */
   guardrailAgiu: boolean;
+  /** O que o modelo escreveu ANTES do guardrail — sem isto não dá para saber se o erro é do modelo ou da reescrita. */
+  textoAntesDoGuardrail: string;
+  /** Quais regras do guardrail dispararam (vazio quando ele não agiu). */
+  gatilhosDoGuardrail: string[];
   ms: number;
   erro?: string;
 }
@@ -62,7 +66,7 @@ const kommoDeMentira = new Proxy(
   },
 ) as never;
 
-function textoDaResposta(content: unknown): string {
+export function textoDaResposta(content: unknown): string {
   if (typeof content === 'string') return content;
   if (!Array.isArray(content)) return '';
   return content
@@ -110,6 +114,25 @@ export function marcadoresPorUnidade(units: Unit[]): OutraUnidade[] {
   }));
 }
 
+/**
+ * O modelo que a unidade usa de verdade: Anthropic ou Google só quando a chave existe, senão OpenAI
+ * (o do AgentConfig, o da unidade ou o do ambiente). Exportado para a juíza do Promptfoo
+ * (`promptfoo-sofia.ts`) escolher pelo mesmo critério, sem uma segunda cópia da regra.
+ */
+export function modeloDaUnidade(
+  unit: Unit,
+  modeloDoConfig: string | null | undefined,
+): { usaAnthropic: boolean; nomeDoModelo: string } {
+  const usaAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
+  const usaGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
+  const nomeDoModelo = usaAnthropic
+    ? unit.anthropicModel || 'claude-opus-4-8'
+    : usaGoogle
+      ? unit.googleModel || 'gemini-2.5-flash'
+      : modeloDoConfig || unit.openaiModel || env.OPENAI_MODEL;
+  return { usaAnthropic, nomeDoModelo };
+}
+
 export async function rodarCaso(
   caso: Caso,
   ctx: { outrasUnidades: OutraUnidade[]; promptDaUnidade?: boolean },
@@ -122,6 +145,8 @@ export async function rodarCaso(
     texto: '',
     ferramentas: [] as string[],
     guardrailAgiu: false,
+    textoAntesDoGuardrail: '',
+    gatilhosDoGuardrail: [] as string[],
   };
 
   const unit = await prisma.unit.findUnique({ where: { slug: caso.unidade } });
@@ -137,13 +162,7 @@ export async function rodarCaso(
   try {
     const config = await getActiveConfig(unit.id);
 
-    const usaAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
-    const usaGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
-    const nomeDoModelo = usaAnthropic
-      ? unit.anthropicModel || 'claude-opus-4-8'
-      : usaGoogle
-        ? unit.googleModel || 'gemini-2.5-flash'
-        : config.model || unit.openaiModel || env.OPENAI_MODEL;
+    const { usaAnthropic, nomeDoModelo } = modeloDaUnidade(unit, config.model);
 
     const ultimaDoPaciente = [...caso.historico].reverse().find((t) => t.de === 'paciente')?.texto;
     const primeiroTurno =
@@ -229,6 +248,8 @@ export async function rodarCaso(
       texto: g.text,
       ferramentas: ferramentas.map((f) => f.nome),
       guardrailAgiu: g.rewritten,
+      textoAntesDoGuardrail: bruto,
+      gatilhosDoGuardrail: g.triggered,
       passou: falhas.length === 0,
       falhas,
       ms: performance.now() - t0,
