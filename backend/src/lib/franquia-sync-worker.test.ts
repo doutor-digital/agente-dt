@@ -6,6 +6,7 @@ import { SPINE_STATUS, SpineService } from '../services/spine.service.js';
 import { CAMPOS_SYNC, chaveTelefone, nomeDaFranquia } from './franquia-sync.js';
 import { ETAPA } from './franquia-move.js';
 import { _semearParaTeste } from './automacoes-estado.js';
+import { prisma } from './prisma.js';
 
 // ── quais termos o cartão gera ─────────────────────────────────────────────────
 test('termosDeBuscaDoNome: cada pessoa do título vira termos, do específico ao largo, com sobrenome', () => {
@@ -390,4 +391,57 @@ test('cartão apagado no Kommo (GET 204 → corpo vazio) é pulado; cartão de v
   assert.equal(cartaoApagado(null), true);
   assert.equal(cartaoApagado({}), true);
   assert.equal(cartaoApagado({ id: 4843998, name: 'Paciente' }), false);
+});
+
+// ── ALTA de fim velho: NÃO move; vai para a fila da /alta (Petrópolis 5951463, 18/11/2026; Açailândia 10820048, 02/10) ──
+// O gatilho da ALTA no Kommo manda "Parabéns pela conclusão" sem condição nenhuma: em Açailândia o franquia-move pôs NO_FOLLOW_UP e moveu
+// às 15:49:40 e o Salesbot mandou o "Parabéns" às 15:49:41. A etiqueta não segura a ALTA.
+test('aplicarMovimento: ALTA de fim velho (filaDeAlta) entra na fila da /alta e NÃO etiqueta nem move o cartão', async () => {
+  const chamadas: string[] = [];
+  const kommo = new Proxy({}, { get: (_t, nome) => async () => { chamadas.push(String(nome)); } }) as never;
+  const funis = { idDe: () => ({ pipelineId: 1, statusId: 2 }) } as never;
+  const unit = { id: 'u-pet', slug: 'doutor-hernia-petropolis' } as never;
+  const resumo: ResumoSync = { unit: 'x', em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  const criados: Array<Record<string, unknown>> = [];
+  const original = Object.getOwnPropertyDescriptor(prisma, 'altaCandidato');
+  Object.defineProperty(prisma, 'altaCandidato', {
+    value: { findUnique: async () => null, create: async (a: { data: Record<string, unknown> }) => { criados.push(a.data); return a.data; }, update: async () => ({}) },
+    configurable: true,
+  });
+  const mov = { funil: 'TRATAMENTO' as const, para: ETAPA.ALTA, motivo: 'tratamento finalizado na franquia (sem atividade há 180 d)', dias: 180, filaDeAlta: { realizadas: 2, ultimaSessao: '2026-05-21T13:00:00.000Z' } };
+  _semearParaTeste([{ slug: 'doutor-hernia-petropolis', automacao: 'franquia-move', estado: 'ligado' }]);
+  try {
+    await aplicarMovimento(unit, kommo, funis, 5951463, mov, resumo, ETAPA.EM_TRATAMENTO, { id: 5951463, name: 'Rodrigo Chiminga' } as never);
+    assert.deepEqual(chamadas, [], 'nenhuma escrita no Kommo: nem NO_FOLLOW_UP, nem moveStage');
+    assert.equal(resumo.movimentos, 0);
+    assert.equal(criados.length, 1);
+    assert.deepEqual([criados[0].unitId, criados[0].leadId, criados[0].classe, criados[0].realizadas], ['u-pet', 5951463, 'ALTA', 2]);
+    assert.equal((criados[0].ultimaSessao as Date).toISOString(), '2026-05-21T13:00:00.000Z');
+    // em seco: nada na fila e nada no Kommo
+    _semearParaTeste([{ slug: 'doutor-hernia-petropolis', automacao: 'franquia-move', estado: 'seco' }]);
+    await aplicarMovimento(unit, kommo, funis, 5951463, mov, resumo, ETAPA.EM_TRATAMENTO);
+    assert.equal(criados.length, 1);
+    assert.deepEqual(chamadas, []);
+  } finally {
+    _semearParaTeste([]);
+    // devolve o original (a troca não pode vazar para os outros testes do arquivo)
+    if (original) Object.defineProperty(prisma, 'altaCandidato', original);
+    else delete (prisma as unknown as Record<string, unknown>).altaCandidato;
+  }
+});
+
+test('aplicarMovimento: a ALTA de fim recente (sem filaDeAlta) segue movendo o cartão, como sempre', async () => {
+  const chamadas: string[] = [];
+  const kommo = new Proxy({}, { get: (_t, nome) => async () => { chamadas.push(String(nome)); } }) as never;
+  const funis = { idDe: () => ({ pipelineId: 1, statusId: 2 }) } as never;
+  const unit = { id: 'u-pet', slug: 'doutor-hernia-petropolis' } as never;
+  const resumo: ResumoSync = { unit: 'x', em: '', agendamentos: 0, tratamentos: 0, pacientes: 0, comLead: 0, semLead: 0, escritas: 0, erros: 0, exemplosSemLead: [], movimentos: 0, revisados: 0 };
+  _semearParaTeste([{ slug: 'doutor-hernia-petropolis', automacao: 'franquia-move', estado: 'ligado' }]);
+  try {
+    await aplicarMovimento(unit, kommo, funis, 2, { funil: 'TRATAMENTO', para: ETAPA.ALTA, motivo: 'tratamento finalizado na franquia' }, resumo, ETAPA.EM_TRATAMENTO);
+  } finally {
+    _semearParaTeste([]);
+  }
+  assert.ok(chamadas.includes('moveStage'));
+  assert.equal(resumo.movimentos, 1);
 });

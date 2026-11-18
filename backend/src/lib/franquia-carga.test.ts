@@ -69,13 +69,33 @@ test('em tratamento na franquia: nasce no funil TRATAMENTO, não no COMERCIAL', 
   assert.equal(d.status, ETAPA.EM_TRATAMENTO);
 });
 
-test('tratamento finalizado: nasce em ALTA', () => {
+test('tratamento finalizado há pouco (fim recente, ≤ 30 d): nasce em ALTA', () => {
   const d = destinoDoCartao({
     ...base,
-    agendamentos: [consulta(AGORA - 120 * DIA, SPINE_STATUS.ATENDIDO), sessao(AGORA - 60 * DIA, SPINE_STATUS.ATENDIDO)],
+    agendamentos: [consulta(AGORA - 120 * DIA, SPINE_STATUS.ATENDIDO), sessao(AGORA - 10 * DIA, SPINE_STATUS.ATENDIDO)],
     tratamentos: [{ idStatus: TRATAMENTO_FINALIZADO, statusName: 'FINALIZADO' }],
   });
   assert.equal(d.status, ETAPA.ALTA);
+  assert.equal(d.fimVelho, undefined);
+});
+
+// Petrópolis tem 183 pacientes na carga em massa. A ALTA dispara um bot SEM condição ("Parabéns pela conclusão"): cartão novo de ex-paciente
+// antigo nascendo em ALTA seria uma mensagem por ex-paciente. Não nasce cartão nenhum (nem em ALTA, nem em EM TRATAMENTO, que também tem robô).
+test('tratamento finalizado há 180 d (fim velho): o cartão NÃO nasce em ALTA — o paciente fica de fora, motivo fim-velho', () => {
+  const velho = {
+    ...base,
+    agendamentos: [consulta(AGORA - 300 * DIA, SPINE_STATUS.ATENDIDO), sessao(AGORA - 180 * DIA, SPINE_STATUS.ATENDIDO)],
+    tratamentos: [{ idStatus: TRATAMENTO_FINALIZADO, statusName: 'FINALIZADO' }],
+  };
+  const d = destinoDoCartao(velho);
+  assert.equal(d.fimVelho, true);
+  assert.notEqual(d.status, ETAPA.ALTA);
+  const plano = planejarCarga({ ...base, temCartao: () => false, pacientes: [{ nome: 'ANTIGO', idClient: 1, telefone: '24988374861', agendamentos: velho.agendamentos, tratamentos: velho.tratamentos }] });
+  assert.equal(plano.criar.length, 0);
+  assert.deepEqual(plano.fora, [{ nome: 'ANTIGO', motivo: 'fim-velho' }]);
+  // avaliação desmarcada há 10 d no mesmo cadastro não rejuvenesce o fim
+  const comDesmarcada = planejarCarga({ ...base, temCartao: () => false, pacientes: [{ nome: 'ANTIGO', idClient: 1, telefone: '24988374861', agendamentos: [...velho.agendamentos, consulta(AGORA - 10 * DIA, SPINE_STATUS.DESMARCADO)], tratamentos: velho.tratamentos }] });
+  assert.equal(comDesmarcada.criar.length, 0);
 });
 
 test('sem fato nenhum o cartão fica no berço — e por isso quem não tem fato é filtrado antes', () => {

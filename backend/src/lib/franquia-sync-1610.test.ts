@@ -82,6 +82,14 @@ definir('automacaoSimulacao', {
   deleteMany: async () => ({ count: 0 }),
 });
 definir('unitAutomacao', { findMany: async () => [] });
+// a fila da /alta, em memória
+let filaDaAlta: Array<{ unitId: string; leadId: number; classe: string; estado: string; assinatura: string | null; realizadas: number }> = [];
+definir('altaCandidato', {
+  findUnique: async ({ where }: { where: { unitId_leadId_classe: { unitId: string; leadId: number; classe: string } } }) =>
+    filaDaAlta.find((f) => f.unitId === where.unitId_leadId_classe.unitId && f.leadId === where.unitId_leadId_classe.leadId && f.classe === where.unitId_leadId_classe.classe) ?? null,
+  create: async ({ data }: { data: { unitId: string; leadId: number; classe: string; realizadas: number; assinatura: string } }) => { filaDaAlta.push({ ...data, estado: 'pendente' }); return data; },
+  update: async () => ({}),
+});
 let unidadesNoBanco: Unit[] = [];
 definir('unit', { findUnique: async ({ where }: { where: { slug?: string; id?: string } }) => unidadesNoBanco.find((u) => u.slug === where.slug || u.id === where.id) ?? null, findMany: async () => [] });
 definir('unitCrmCompartilhado', { findMany: async () => [] });
@@ -140,6 +148,7 @@ function chaves(estado: Estado, extra: Array<{ automacao: string; estado: Estado
 beforeEach(() => {
   alertas = [];
   simulacoes = [];
+  filaDaAlta = [];
   vinculos = [];
   chamadasFranquia = [];
   agendaFalsa = [];
@@ -823,4 +832,60 @@ test('cartão APAGADO no Kommo (Timbó 17/11/2026, 4843998): a varredura pula se
   assert.deepEqual(reg.gravacoes, []);
   assert.equal(r2.semLead, 1, 'o paciente fica sem cartão até aparecer um vivo');
   assert.equal(r2.erros, 0);
+});
+
+// ── ALTA de fim velho: não move; fila da /alta; o papel diz isso (Petrópolis 5951463, 18/11/2026) ──
+
+/** O cadastro do 5951463: tratamento FINALIZADO, última sessão atendida há 180 d e uma avaliação DESMARCADA há 10 d no mesmo cadastro. */
+function fichaDoFimVelho(idClient: number) {
+  return {
+    idClient, name: 'RODRIGO CHIMINGA', whatsapp: FONE,
+    treatments: [{ idTreatment: 97775, idStatus: 46, statusName: 'FINALIZADO' }],
+    schedules: [
+      { idSchedule: 41, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-181) },
+      { idSchedule: 42, idStatus: 42, statusName: 'Atendido', category: 'PROTOCOLO 03 MESES - LOMBAR', dateAttendance: diaLocal(-180) },
+      { idSchedule: 43, idStatus: 57, statusName: 'Desmarcado', category: 'AVALIAÇÃO', dateAttendance: diaLocal(-10) },
+    ],
+  };
+}
+
+test('fim velho, move LIGADO: o cartão em EM TRATAMENTO NÃO vai para ALTA, não leva etiqueta e entra na fila da /alta (avaliação desmarcada não rejuvenesce o fim)', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'ligado' }]);
+  const { ctx, reg, rodar } = await cenarioDevolucao({ pipeline_id: 20, status_id: 202 }, { idClient: 4601, consultas: [] }, fichaDoFimVelho(4601));
+  ctx.jornada = 'ligado';
+  await rodar();
+  assert.deepEqual(reg.movidos, [], 'o cartão fica em EM TRATAMENTO: o robô da ALTA não dispara');
+  assert.deepEqual(reg.etiquetas, [], 'nenhum NO_FOLLOW_UP em quem está em tratamento');
+  assert.equal(filaDaAlta.length, 1);
+  assert.deepEqual([filaDaAlta[0].leadId, filaDaAlta[0].classe, filaDaAlta[0].realizadas], [70, 'ALTA', 2]);
+  await rodar();
+  assert.equal(filaDaAlta.length, 1, 'na varredura seguinte não duplica');
+});
+
+test('fim velho, move em SECO: o papel diz "fila da /alta" (alertaria), nunca "moveria ALTA"; nada é escrito', async () => {
+  chaves('ligado', [{ automacao: 'franquia-move', estado: 'seco' }]);
+  const { ctx, reg, rodar } = await cenarioDevolucao({ pipeline_id: 20, status_id: 202 }, { idClient: 4602, consultas: [] }, fichaDoFimVelho(4602));
+  ctx.jornada = 'ligado';
+  await rodar();
+  assert.deepEqual(reg.movidos, []);
+  assert.equal(filaDaAlta.length, 0);
+  assert.ok(simulacoes.some((s) => s.acao === 'alertaria' && s.alvo === 'fila da página /alta'), JSON.stringify(simulacoes));
+  assert.ok(!simulacoes.some((s) => s.acao === 'moveria' && /ALTA/.test(s.alvo)), 'não pode dizer "moveria ALTA"');
+});
+
+test('fim velho, revisão em SECO (franquia-revisao): também "fila da /alta", e o resumo conta como fila — não como "→ ALTA"', async () => {
+  chaves('ligado', [{ automacao: 'franquia-revisao', estado: 'ligado' }, { automacao: 'franquia-move', estado: 'seco' }]);
+  const { ctx, reg, rodar } = await cenarioDevolucao({ pipeline_id: 20, status_id: 202 }, { idClient: 4603, consultas: [] }, fichaDoFimVelho(4603));
+  ctx.jornada = 'ligado';
+  (ctx as unknown as { automacaoDoSeco: string; seco: boolean }).automacaoDoSeco = 'franquia-revisao';
+  (ctx as unknown as { seco: boolean }).seco = true;
+  await rodar();
+  assert.deepEqual(reg.movidos, []);
+  assert.ok(simulacoes.some((s) => s.acao === 'alertaria' && s.alvo === 'fila da página /alta'), JSON.stringify(simulacoes));
+});
+
+test('simulacaoDoMovimento: ALTA de fim velho = alertaria na fila; movimento comum = moveria', () => {
+  const fila = { funil: 'TRATAMENTO' as const, para: 'ALTA', motivo: 'm', filaDeAlta: { realizadas: 1, ultimaSessao: '2026-05-21T00:00:00.000Z' } };
+  assert.deepEqual(_interno.simulacaoDoMovimento(fila), { acao: 'alertaria', alvo: 'fila da página /alta', valor: 'ALTA' });
+  assert.deepEqual(_interno.simulacaoDoMovimento({ funil: 'TRATAMENTO', para: 'ALTA', motivo: 'm' }), { acao: 'moveria', alvo: 'ALTA', valor: undefined });
 });
