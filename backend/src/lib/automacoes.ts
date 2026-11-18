@@ -825,6 +825,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/pausa-equipe.ts',
   },
   {
+    id: 'duvida-no-lembrete',
+    chave: 'DUVIDA_NO_LEMBRETE_SLUGS',
+    nome: 'Toque em "Tenho uma dúvida" no lembrete vai direto para a secretária',
+    oQueFaz:
+      'Quando o paciente toca "Tenho uma dúvida" num lembrete de consulta ou sessão que o ROBÔ DO KOMMO mandou, a Sofia não responde e o paciente não recebe nada: o cartão fica com "Pausar IA" marcado, "assumido por humano" e uma tarefa para a equipe ("responda a dúvida pelo WhatsApp"). Não mexe na etapa do cartão nem na franquia.',
+    pegadinha:
+      'Pedido de Salto (17/11/2026, lead 3185496): o papel da unidade manda passar para a secretária na hora, calado, e a Sofia respondeu por cima. Só vale quando o texto é EXATAMENTE "Tenho uma dúvida" e a última mensagem que saiu na conversa oficial é um lembrete de robô (não fala da equipe nem da Sofia, até 30 h, fala de consulta ou sessão); "tenho uma dúvida sobre o valor" segue para a Sofia. Cartão que já está com "Pausar IA" marcado não ganha tarefa. Unidade sem a caixinha "Pausar IA" ou conversa oficial ilegível = a Sofia responde como sempre. Quem fica com a conversa depois: a pausa só se desfaz quando a equipe desmarca "Pausar IA" (não há volta automática). Em "só no papel" decide e registra na lista, sem pausar nem abrir tarefa, e a Sofia responde como hoje.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/duvida-no-lembrete.ts',
+  },
+  {
     id: 'calar-paciente-em-tratamento',
     chave: 'CALAR_PACIENTE_EM_TRATAMENTO_SLUGS',
     nome: 'Sofia calada para paciente em tratamento e número interno',
