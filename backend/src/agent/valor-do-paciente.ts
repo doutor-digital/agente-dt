@@ -74,6 +74,17 @@ const FALA_DO_PRECO_OU_PEDE =
 /** Pedido de comprovante ("me enviar", "manda o comprovante"): infinitivo ou imperativo, não o passado ("enviou", "mandou"). */
 const PEDE_ENVIO = /\b(?:enviar|envie|envia|mandar|mande|manda|reenviar|reenvie|reenvia|anexar|anexe|anexa)\b/i;
 
+/**
+ * O que vem COLADO depois do valor diz que ele é preço ("R$ 250 antecipado", "R$ 300 no dia", "R$ 300 a consulta antecipada"): então não é o que o
+ * paciente mandou, é o que a Sofia está dizendo que custa — e segue conferido. Até duas palavras no meio; vírgula, travessão ou ponto cortam
+ * ("R$ 50,00, mas o valor antecipado…" continua sendo o valor do comprovante).
+ */
+const PRECO_COLADO_DEPOIS = /^\s*(?:\p{L}+\s+){0,2}?(?:antecipad\w*|no\s+dia|na\s+cl[ií]nica|na\s+hora|[àa]\s+vista|no\s+ato|consulta|sinal)/iu;
+
+/** Condicional ("se você já pagou os R$ 250", "caso tenha mandado") e espera ("fico no aguardo do comprovante de R$ 250"): não relata nada, o R$ é preço ou pedido. */
+const CONDICIONAL_OU_ESPERA =
+  /\b(?:se|caso|quando|assim\s+que|depois\s+que|sempre\s+que|aguard\w+|esper\w+|falta\w*|preciso|precisamos|pendente)\b/i;
+
 function trechoDaFraseAntes(texto: string, ini: number): string {
   const antes = texto.slice(0, ini);
   let corte = 0;
@@ -102,7 +113,9 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
     const frase = trechoDaFraseAntes(texto, ini);
     const ultimoReal = frase.lastIndexOf('R$');
     const antes = ultimoReal === -1 ? frase : frase.slice(ultimoReal + 2);
-    const pedeEnvio = PEDE_ENVIO.test(frase);
+    // Pedido de comprovante, condicional ou espera na frase: o R$ não é relato. Preço colado depois do valor: idem.
+    const pedeEnvio = PEDE_ENVIO.test(frase) || CONDICIONAL_OU_ESPERA.test(frase);
+    if (pedeEnvio || PRECO_COLADO_DEPOIS.test(texto.slice(fim))) continue;
 
     let doPaciente = false;
     for (const re of ANTES_DO_PACIENTE) {

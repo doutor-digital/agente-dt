@@ -11,7 +11,7 @@ import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
 import { posicoesDeValorDoPaciente } from './valor-do-paciente.js';
-import { corrigirRestoDoSinal, ehTotalComSinal, fmtValor } from './total-com-sinal.js';
+import { corrigirRestoDoSinal, ehTotalComSinal, fmtValor, type PrecosComSinal } from './total-com-sinal.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -137,7 +137,7 @@ function corrigirValores(
    * antecipado da unidade, mesmo que o antecipado já apareça na frase (como o "resto no dia"). O "mais próximo que ainda não está no texto"
    * deixava "R$ 150 garantindo com sinal de R$ 50 (R$ 50 + R$ 200 no dia)" — ver total-com-sinal.ts.
    */
-  totalComSinal?: { antecipado: number; restoNoDia: number },
+  totalComSinal?: PrecosComSinal,
 ): { texto: string; trocas: string[] } | null {
   const jaNoTexto = new Set(
     [...parseAmounts(text)].filter((v) => amountApproved(v, aprovados)),
@@ -148,37 +148,59 @@ function corrigirValores(
 
   // Uma varredura só, com o mesmo formato que detectou os valores — assim
   // "R$ 200," "R$ 200,00" e "R$ 1.500" são tratados igual.
-  const re = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
-  let trocouOTotal = false;
-  let texto = text.replace(re, (match, num: string, posicao: number) => {
-    const v = Number(num.replace(/\./g, ''));
-    if (!alvo.has(v)) return match;
+  const re = () => /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
 
-    if (totalComSinal && ehTotalComSinal(text.slice(Math.max(0, posicao - 30), posicao), text.slice(posicao + match.length))) {
-      trocouOTotal = true;
-      jaNoTexto.add(totalComSinal.antecipado);
-      trocas.push(`${v}→${fmtValor(totalComSinal.antecipado)}`);
-      return `R$ ${fmtValor(totalComSinal.antecipado)}`;
+  // Total com sinal só vale se TODO valor fora do catálogo da mensagem está no lugar do total. Basta um que não esteja ("é mais R$ 120 na clínica",
+  // outro item) para a mensagem seguir o caminho de sempre: nada de acertar um e inventar preço para o outro.
+  const ehTotal = (parte: string, posicao: number, achado: string, v: number): boolean =>
+    !!totalComSinal && ehTotalComSinal(parte.slice(Math.max(0, posicao - 30), posicao), parte.slice(posicao + achado.length), v, totalComSinal);
+  const todosSaoTotal = (() => {
+    if (!totalComSinal) return false;
+    let algum = false;
+    for (const m of text.matchAll(re())) {
+      const v = Number(m[1]!.replace(/\./g, ''));
+      if (!alvo.has(v)) continue;
+      if (!ehTotal(text, m.index ?? 0, m[0], v)) return false;
+      algum = true;
     }
+    return algum;
+  })();
 
-    const certo = [...substitutos]
-      .filter((a) => !jaNoTexto.has(a))
-      .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
-    if (certo === undefined) {
-      semSubstituto = true;
-      return match;
+  const trocarEm = (parte: string): string => {
+    let trocouOTotal = false;
+    const saida = parte.replace(re(), (match, num: string, posicao: number) => {
+      const v = Number(num.replace(/\./g, ''));
+      if (!alvo.has(v)) return match;
+
+      if (todosSaoTotal && totalComSinal && ehTotal(parte, posicao, match, v)) {
+        trocouOTotal = true;
+        jaNoTexto.add(totalComSinal.antecipado);
+        trocas.push(`${v}→${fmtValor(totalComSinal.antecipado)}`);
+        return `R$ ${fmtValor(totalComSinal.antecipado)}`;
+      }
+
+      const certo = [...substitutos]
+        .filter((a) => !jaNoTexto.has(a))
+        .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
+      if (certo === undefined) {
+        semSubstituto = true;
+        return match;
+      }
+      jaNoTexto.add(certo);
+      trocas.push(`${v}→${certo}`);
+      return `R$ ${certo}`;
+    });
+    // Trocou o total pelo antecipado: o "resto no dia" DA MESMA FRASE fecha a conta com a ficha (R$ 50 + R$ 150 = R$ 200). Outra frase, outro assunto.
+    if (trocouOTotal && totalComSinal) {
+      const resto = corrigirRestoDoSinal(saida, totalComSinal.restoNoDia, totalComSinal.antecipado);
+      trocas.push(...resto.trocas);
+      return resto.texto;
     }
-    jaNoTexto.add(certo);
-    trocas.push(`${v}→${certo}`);
-    return `R$ ${certo}`;
-  });
+    return saida;
+  };
 
-  // Trocou o total pelo antecipado: o "resto no dia" da mesma mensagem fecha a conta com a ficha (R$ 50 + R$ 150 = R$ 200).
-  if (trocouOTotal && totalComSinal) {
-    const resto = corrigirRestoDoSinal(texto, totalComSinal.restoNoDia, totalComSinal.antecipado);
-    texto = resto.texto;
-    trocas.push(...resto.trocas);
-  }
+  // Em frases (o separador fica) só para o total com sinal; sem ele é a mensagem inteira, como sempre foi.
+  const texto = todosSaoTotal ? text.split(/((?<=[.!?])\s+|\n+)/).map(trocarEm).join('') : trocarEm(text);
 
   if (semSubstituto || trocas.length === 0) return null;
   return { texto, trocas };
@@ -412,7 +434,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
         aprovados,
         foraDoCatalogo,
         catalogo,
-        p && sinal ? { antecipado: p.antecipado, restoNoDia: sinal.restoNoDia } : undefined,
+        p && sinal ? { antecipado: p.antecipado, restoNoDia: sinal.restoNoDia, sinal: sinal.sinal, noDia: p.noDia } : undefined,
       );
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));

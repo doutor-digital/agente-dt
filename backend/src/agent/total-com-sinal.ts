@@ -13,17 +13,35 @@
  * é o número velho. SÓ nas mensagens em que o total foi trocado — fora disso nada é tocado, e "R$ 50 agora + R$ 200 no dia" certo fica como está.
  */
 
-/** Entre o valor e a palavra "garantindo": nada que diga que o valor é o do DIA ("R$ 300 no dia ou com sinal de R$ 50…" — o R$ 300 é o preço no dia). */
-const NAO_E_DO_DIA = String.raw`(?!R\$|no\s+dia|na\s+cl[ií]nica|no\s+local|presencial)`;
-/** O R$ que vem antes de "garantindo / reservar / com sinal": é o total com sinal. */
-const MARCA_DO_TOTAL = new RegExp(String.raw`^(?:${NAO_E_DO_DIA}[^\n.;)]){0,45}?\b(?:garant\w*|reserv\w*|com\s+(?:o\s+|um\s+)?sinal)\b`, 'i');
-/** "sinal de R$ 80 para garantir…": o R$ é o próprio sinal (errado), não o total — o texto logo ANTES do valor diz "sinal de". */
+/** Entre o valor e o "com sinal": nada que diga que o valor é o do DIA ("R$ 380 na hora, ou garantindo com sinal" — o R$ 380 é o preço no dia). */
+const NAO_E_DO_DIA = String.raw`(?!R\$|no\s+dia|na\s+cl[ií]nica|no\s+local|presencial|na\s+hora|no\s+ato|[àa]\s+vista|ao\s+chegar)`;
+/** O R$ que vem logo antes de "com (um) sinal" ("R$ 250 garantindo com sinal de R$ 50"): candidato a total. Só "com sinal" — "pra garantir", "reservar" NÃO bastam. */
+const MARCA_DO_TOTAL = new RegExp(String.raw`^(?:${NAO_E_DO_DIA}[^\n.;)]){0,45}?\bcom\s+(?:o\s+|um\s+)?sinal\b`, 'i');
+/** "sinal de R$ 80 …": o R$ é o próprio sinal (errado), não o total — o texto logo ANTES do valor diz "sinal de". */
 const ANTES_E_O_SINAL = /\bsinal\s*(?:de\s+|no\s+valor\s+de\s+|:\s*)?$/i;
 
-/** O valor está no lugar do total com sinal? `antes` / `depois` = o texto colado ao valor, de um lado e do outro. */
-export function ehTotalComSinal(antes: string, depois: string): boolean {
+/** Os preços da unidade com sinal, para saber de qual deles o valor está mais perto. */
+export interface PrecosComSinal {
+  antecipado: number;
+  restoNoDia: number;
+  /** O sinal (R$ 50). */
+  sinal: number;
+  /** O preço pagando tudo no dia (R$ 350); ausente se a ficha não o traz. */
+  noDia?: number | null;
+}
+
+/**
+ * O valor `v` está no lugar do total com sinal? Precisa de TRÊS coisas: vir seguido de "com (um) sinal"; não ser o próprio sinal ("sinal de R$ 80");
+ * e estar mais perto do antecipado do que do sinal e do preço no dia ("R$ 400, ou com sinal de R$ 50 fica R$ 200" — o R$ 400 é o preço do dia errado,
+ * vira R$ 350, e não R$ 200). `antes` / `depois` = o texto colado ao valor, de um lado e do outro.
+ */
+export function ehTotalComSinal(antes: string, depois: string, v: number, precos: PrecosComSinal): boolean {
   if (ANTES_E_O_SINAL.test(antes)) return false;
-  return MARCA_DO_TOTAL.test(depois);
+  if (!MARCA_DO_TOTAL.test(depois)) return false;
+  const dist = Math.abs(v - precos.antecipado);
+  if (dist > Math.abs(v - precos.sinal)) return false;
+  if (precos.noDia != null && dist > Math.abs(v - precos.noDia)) return false;
+  return true;
 }
 
 const VALOR = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;

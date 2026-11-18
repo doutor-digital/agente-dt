@@ -2,23 +2,33 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { corrigirRestoDoSinal, ehTotalComSinal } from './total-com-sinal.js';
 
-test('ehTotalComSinal: o R$ que vem antes de "garantindo / com sinal" é o total', () => {
-  assert.equal(ehTotalComSinal('ou ', ' garantindo com sinal de R$ 50 (R$ 50 agora + R$ 200 no dia)'), true);
-  assert.equal(ehTotalComSinal('ou ', ' garantindo com um sinal de R$ 50 antecipado no Pix'), true);
-  assert.equal(ehTotalComSinal('ou ', ' com sinal de R$ 50'), true);
-  assert.equal(ehTotalComSinal('ou ', ' para reservar o horário'), true);
+/** Balsas: R$ 350 no dia, ou R$ 200 com sinal de R$ 50 (R$ 50 + R$ 150). */
+const BALSAS = { antecipado: 200, restoNoDia: 150, sinal: 50, noDia: 350 };
+
+test('ehTotalComSinal: o R$ colado a "com (um) sinal" e mais perto do antecipado é o total', () => {
+  assert.equal(ehTotalComSinal('ou ', ' garantindo com sinal de R$ 50 (R$ 50 agora + R$ 200 no dia)', 250, BALSAS), true);
+  assert.equal(ehTotalComSinal('ou ', ' garantindo com um sinal de R$ 50 antecipado no Pix', 250, BALSAS), true);
+  assert.equal(ehTotalComSinal('ou ', ' com sinal de R$ 50', 230, BALSAS), true);
+  assert.equal(ehTotalComSinal('ou ', ' garantindo a vaga com um sinal de R$ 50', 250, BALSAS), true);
 });
 
-test('ehTotalComSinal: o próprio sinal errado, o preço do dia e outro R$ no meio NÃO são o total', () => {
-  // "sinal de R$ 80 para garantir sua vaga": o R$ 80 é o sinal
-  assert.equal(ehTotalComSinal('A consulta é R$ 350 no dia, com sinal de ', ' para garantir sua vaga'), false);
-  assert.equal(ehTotalComSinal('o sinal: ', ' para garantir'), false);
-  // "R$ 300 no dia ou com sinal de R$ 50": o R$ 300 é o preço no dia
-  assert.equal(ehTotalComSinal('A consulta é ', ' no dia ou com sinal de R$ 50'), false);
-  assert.equal(ehTotalComSinal('A consulta é ', ' na clínica, ou garantindo com sinal'), false);
-  assert.equal(ehTotalComSinal('', ' de sinal antecipado'), false);
-  assert.equal(ehTotalComSinal('', ' no dia, ou R$ 250 garantindo com sinal'), false); // outro R$ no meio: aquele "garantindo" é do 250
-  assert.equal(ehTotalComSinal('', ' no dia na clínica.'), false);
+test('ehTotalComSinal: "garantir / reservar" sozinhos NÃO bastam (R$ 80 pra garantir é o sinal errado, não o total)', () => {
+  assert.equal(ehTotalComSinal('Pix, ', ' pra garantir sua vaga de segunda', 80, BALSAS), false);
+  assert.equal(ehTotalComSinal('O sinal é de ', ' para garantir o horário', 80, BALSAS), false);
+  assert.equal(ehTotalComSinal('Valor da consulta: ', ' reservando agora', 300, BALSAS), false);
+  assert.equal(ehTotalComSinal('💳 ', ' de sinal para reservar o horário e os R$ 150,00 restantes', 80, BALSAS), false);
+});
+
+test('ehTotalComSinal: o próprio sinal, o preço do dia (na hora / no dia) e valor mais perto do dia NÃO são o total', () => {
+  assert.equal(ehTotalComSinal('A consulta é R$ 350 no dia, com sinal de ', ' para garantir sua vaga', 80, BALSAS), false);
+  assert.equal(ehTotalComSinal('o sinal: ', ' com sinal', 80, BALSAS), false);
+  assert.equal(ehTotalComSinal('A consulta é ', ' no dia ou com sinal de R$ 50', 300, BALSAS), false);
+  assert.equal(ehTotalComSinal('A consulta é ', ' na hora, ou garantindo com sinal de R$ 50', 380, BALSAS), false);
+  assert.equal(ehTotalComSinal('A consulta é ', ' à vista, ou com sinal', 380, BALSAS), false);
+  // R$ 400 está mais perto do preço do dia (350) que do antecipado (200): é o dia errado
+  assert.equal(ehTotalComSinal('A consulta sai por ', ', ou você pode garantir com sinal de R$ 50 e fica R$ 200', 400, BALSAS), false);
+  assert.equal(ehTotalComSinal('A consulta é ', ', ou com sinal de R$ 50 fica R$ 200 no total', 400, BALSAS), false);
+  assert.equal(ehTotalComSinal('', ' no dia, ou R$ 250 garantindo com sinal', 250, BALSAS), false); // outro R$ no meio
 });
 
 test('corrigirRestoDoSinal: só o valor claramente no lugar do "resto no dia", e só se diferente da ficha', () => {
