@@ -4,12 +4,14 @@ import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js'
 import { corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
-import { precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
+import { fmtBRL, precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { semProntoSocorro } from './sem-pronto-socorro.js';
 import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
+import { posicoesDeValorDoPaciente } from './valor-do-paciente.js';
+import { corrigirRestoDoSinal, ehTotalComSinal, type PrecosComSinal } from './total-com-sinal.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
 export interface ContextoDoGuardrail {
@@ -130,6 +132,12 @@ function corrigirValores(
   foraDoCatalogo: number[],
   /** De onde sai o valor que entra no lugar: a ficha. R$ 50/200 do sinal valem como corretos, mas nunca viram o "mais próximo" de um valor inventado. */
   substitutos: Set<number> = aprovados,
+  /**
+   * Unidade que vende sinal: o valor fora do catálogo que está no lugar do TOTAL COM SINAL ("R$ 250 garantindo com sinal de R$ 50") vira o
+   * antecipado da unidade, mesmo que o antecipado já apareça na frase (como o "resto no dia"). O "mais próximo que ainda não está no texto"
+   * deixava "R$ 150 garantindo com sinal de R$ 50 (R$ 50 + R$ 200 no dia)" — ver total-com-sinal.ts.
+   */
+  totalComSinal?: PrecosComSinal,
 ): { texto: string; trocas: string[] } | null {
   const jaNoTexto = new Set(
     [...parseAmounts(text)].filter((v) => amountApproved(v, aprovados)),
@@ -140,22 +148,62 @@ function corrigirValores(
 
   // Uma varredura só, com o mesmo formato que detectou os valores — assim
   // "R$ 200," "R$ 200,00" e "R$ 1.500" são tratados igual.
-  const re = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
-  const texto = text.replace(re, (match, num: string) => {
-    const v = Number(num.replace(/\./g, ''));
-    if (!alvo.has(v)) return match;
+  const re = () => /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
 
-    const certo = [...substitutos]
-      .filter((a) => !jaNoTexto.has(a))
-      .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
-    if (certo === undefined) {
-      semSubstituto = true;
-      return match;
+  // Total com sinal só vale se TODO valor fora do catálogo da mensagem está no lugar do total. Basta um que não esteja ("é mais R$ 120 na clínica",
+  // outro item) para a mensagem seguir o caminho de sempre: nada de acertar um e inventar preço para o outro.
+  const ehTotal = (parte: string, posicao: number, achado: string, v: number): boolean =>
+    !!totalComSinal && ehTotalComSinal(parte.slice(Math.max(0, posicao - 30), posicao), parte.slice(posicao + achado.length), v, totalComSinal);
+  // Frases (o separador fica) só para o total com sinal; sem ele é a mensagem inteira, como sempre foi. Divide UMA vez e decide sobre as mesmas partes em que troca.
+  const partes = totalComSinal ? text.split(/((?<=[.!?])\s+|\n+)/) : [text];
+  const todosSaoTotal = (() => {
+    if (!totalComSinal) return false;
+    let algum = false;
+    for (const parte of partes) {
+      for (const m of parte.matchAll(re())) {
+        const v = Number(m[1]!.replace(/\./g, ''));
+        if (!alvo.has(v)) continue;
+        if (!ehTotal(parte, m.index ?? 0, m[0], v)) return false;
+        algum = true;
+      }
     }
-    jaNoTexto.add(certo);
-    trocas.push(`${v}→${certo}`);
-    return `R$ ${certo}`;
-  });
+    return algum;
+  })();
+
+  const trocarEm = (parte: string): string => {
+    let trocouOTotal = false;
+    const saida = parte.replace(re(), (match, num: string, posicao: number) => {
+      const v = Number(num.replace(/\./g, ''));
+      if (!alvo.has(v)) return match;
+
+      if (todosSaoTotal && totalComSinal && ehTotal(parte, posicao, match, v)) {
+        trocouOTotal = true;
+        jaNoTexto.add(totalComSinal.antecipado);
+        trocas.push(`${v}→${fmtBRL(totalComSinal.antecipado)}`);
+        return `R$ ${fmtBRL(totalComSinal.antecipado)}`;
+      }
+
+      const certo = [...substitutos]
+        .filter((a) => !jaNoTexto.has(a))
+        .sort((a, b) => Math.abs(a - v) - Math.abs(b - v))[0];
+      if (certo === undefined) {
+        semSubstituto = true;
+        return match;
+      }
+      jaNoTexto.add(certo);
+      trocas.push(`${v}→${certo}`);
+      return `R$ ${certo}`;
+    });
+    // Trocou o total pelo antecipado: o "resto no dia" DA MESMA FRASE fecha a conta com a ficha (R$ 50 + R$ 150 = R$ 200). Outra frase, outro assunto.
+    if (trocouOTotal && totalComSinal) {
+      const resto = corrigirRestoDoSinal(saida, totalComSinal.restoNoDia, totalComSinal.antecipado);
+      trocas.push(...resto.trocas);
+      return resto.texto;
+    }
+    return saida;
+  };
+
+  const texto = todosSaoTotal ? partes.map(trocarEm).join('') : trocarEm(text);
 
   if (semSubstituto || trocas.length === 0) return null;
   return { texto, trocas };
@@ -317,16 +365,20 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const catalogo = parseAmounts(unit.sourceProdutos, unit.sourcePapel, unit.sourceNegocio);
   const exatosDaOferta = valoresExatos(contexto.ofertaDaCampanha);
   const escondidos: string[] = [];
-  const escondeOferta = (t: string): string =>
-    exatosDaOferta.size === 0
-      ? t
-      : t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi, (m, inteiro: string, centavos?: string) => {
-          const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
-          if (!exatosDaOferta.has(valor) || catalogo.has(Math.trunc(valor))) return m;
-          escondidos.push(m);
-          // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
-          return `R$ ⟦${escondidos.length - 1}⟧`;
-        });
+  // Também escondidos: o R$ que o PACIENTE pagou/mandou ("o comprovante mostra R$ 50,00") — dado dele, não slot de preço; ver valor-do-paciente.ts.
+  // Quem esconde é a posição do valor, então o preço da unidade na MESMA mensagem ("…mas o antecipado é R$ 200,00") continua conferido.
+  const escondeOferta = (t: string): string => {
+    const doPaciente = posicoesDeValorDoPaciente(t);
+    if (exatosDaOferta.size === 0 && doPaciente.size === 0) return t;
+    return t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi, (m, inteiro: string, centavos: string | undefined, posicao: number) => {
+      const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
+      const daOferta = exatosDaOferta.has(valor) && !catalogo.has(Math.trunc(valor));
+      if (!daOferta && !doPaciente.has(posicao)) return m;
+      escondidos.push(m);
+      // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
+      return `R$ ⟦${escondidos.length - 1}⟧`;
+    });
+  };
   const mostraOferta = (t: string): string => t.replace(/R\$ ⟦(\d+)⟧/g, (_, i: string) => escondidos[Number(i)] ?? '');
   texto = escondeOferta(texto);
 
@@ -380,7 +432,13 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
       (v) => v >= 20 && !amountApproved(v, aprovados) && !doSinal.has(v),
     );
     if (foraDoCatalogo.length > 0) {
-      const corrigido = corrigirValores(texto, aprovados, foraDoCatalogo, catalogo);
+      const corrigido = corrigirValores(
+        texto,
+        aprovados,
+        foraDoCatalogo,
+        catalogo,
+        p && sinal ? { antecipado: p.antecipado, restoNoDia: sinal.restoNoDia, sinal: sinal.sinal, noDia: p.noDia } : undefined,
+      );
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));
         return { text: mostraOferta(corrigido.texto), triggered, rewritten: true };
