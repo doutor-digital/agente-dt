@@ -1245,15 +1245,14 @@ const TURNO_PULADO = 'pulado' as const;
  */
 export async function processAgent(args: ArgsDoTurno): Promise<void> {
   // ⚑ Origem pelo texto pronto da 1ª mensagem (chave `origem-texto-pronto`, lib/origem-texto-pronto.ts): o WhatsApp Lite não traz o anúncio.
-  // Começa JUNTO com o turno (a Sofia, quando fala, leva segundos; o cadastro no fim do turno já encontra a origem no cartão) e roda tanto
-  // quando a Sofia fala quanto quando a IA é pulada. Nunca lança e ninguém espera por ela, exceto o cadastro do turno pulado, logo abaixo.
-  const origemPorTexto = aplicarOrigemPorTexto({ unit: args.unit, leadId: args.leadId, isChatMessage: args.isChatMessage });
+  // Começa JUNTO com o turno e roda tanto quando a Sofia fala quanto quando a IA é pulada. Nunca lança e ninguém espera por ela aqui: o cadastro
+  // na franquia (`cadastrarLeadDoTurno`, nos dois caminhos) é quem espera, até 8 s, se a origem deste lead ainda estiver sendo gravada.
+  void aplicarOrigemPorTexto({ unit: args.unit, leadId: args.leadId, isChatMessage: args.isChatMessage });
   try {
     const r = await processarTurno(args);
     // Sem `await`: a decisão pode chamar a IA de triagem e a franquia, e o turno (coalescer, desligamento gracioso) não espera por isso.
-    // `cadastrarQuandoIaPulada` nunca lança. Turno pulado: o cadastro espera a origem terminar (o espelho de leads lê o ⚑ Origem do cartão
-    // ao criar o lead na franquia); a origem é um `getLead` + um PATCH, e nunca lança.
-    if (r === TURNO_PULADO) void origemPorTexto.then(() => cadastrarQuandoIaPulada(args));
+    // `cadastrarQuandoIaPulada` nunca lança.
+    if (r === TURNO_PULADO) void cadastrarQuandoIaPulada(args);
     // Captura silenciosa (chave `captura-silenciosa`): no mesmo ponto, espera a conversa esfriar e preenche os campos vazios da etapa
     // lendo o Kommo. Só agenda (um timer); não lê, não espera e não lança. Chave desligada: nem agenda.
     if (r === TURNO_PULADO) agendarCapturaSilenciosa(args);

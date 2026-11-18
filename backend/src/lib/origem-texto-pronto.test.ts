@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { AUTOMACOES, automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { deveCriarNaFranquia } from './cadastro-na-franquia.js';
-import { _limparCacheParaTeste, decidirCadastroDoLead, type DepsDoCadastro } from './cadastro-todo-lead.js';
+import { _limparCacheParaTeste, cadastrarLeadDoTurno, decidirCadastroDoLead, type DepsDoCadastro } from './cadastro-todo-lead.js';
 import type { DefinicaoDeCampo } from './ponte-ligacao.js';
 import type { Simulacao } from './so-no-papel.js';
 import {
@@ -18,6 +18,7 @@ import {
   NOME_DO_CAMPO_ORIGEM,
   _limparOrigemParaTeste,
   anuncioPelaFrase,
+  esperarOrigem,
   aplicarOrigemPorTexto,
   casarFala,
   casarPrimeirasFalas,
@@ -488,4 +489,75 @@ test('prompt-composer: origem_por_texto está na lista de chaves de configuraç�
   const fonte = readFileSync(new URL('../agent/prompt-composer.ts', import.meta.url), 'utf8');
   const bloco = fonte.slice(fonte.indexOf('PIPELINE_INTENT_CONFIG_KEYS = new Set(['), fonte.indexOf(']);', fonte.indexOf('PIPELINE_INTENT_CONFIG_KEYS = new Set([')));
   assert.ok(bloco.includes(`'${CHAVE_DA_LISTA}'`));
+});
+
+// ── o cadastro espera a origem (o espelho de leads lê o ⚑ Origem do cartão) ───────────────────────
+
+test('esperarOrigem: sem tarefa em andamento devolve na hora; com tarefa, espera ela terminar; Kommo pendurado não prende além do prazo', async () => {
+  const t0 = Date.now();
+  await esperarOrigem(PET.id, 999);
+  assert.ok(Date.now() - t0 < 50, 'nada em andamento = nada a esperar');
+
+  // tarefa em andamento: o Kommo só responde quando o teste libera
+  let liberar!: () => void;
+  const trava = new Promise<void>((r) => (liberar = r));
+  const { deps } = montar({ estado: 'ligado' });
+  const kommoLento = {
+    ...(deps.kommo(PET) as object),
+    async getLead() {
+      await trava;
+      return cartao();
+    },
+  } as unknown as KommoDaOrigem;
+  const lenta = aplicarOrigemPorTexto(turno(), { ...deps, kommo: () => kommoLento });
+  let esperou = false;
+  const espera = esperarOrigem(PET.id, 777).then(() => (esperou = true));
+  await new Promise((res) => setTimeout(res, 20));
+  assert.equal(esperou, false, 'a origem ainda está sendo gravada: o cadastro espera');
+  liberar();
+  await espera;
+  assert.equal(esperou, true);
+  assert.equal((await lenta).tipo, 'gravou');
+
+  // pendurado de vez: sai pelo prazo
+  _limparOrigemParaTeste();
+  const pendurado = { ...(deps.kommo(PET) as object), getLead: () => new Promise(() => undefined) } as unknown as KommoDaOrigem;
+  void aplicarOrigemPorTexto(turno(778), { ...deps, kommo: () => pendurado });
+  const t1 = Date.now();
+  await esperarOrigem(PET.id, 778, 40);
+  const gastou = Date.now() - t1;
+  assert.ok(gastou >= 35 && gastou < 500, `saiu pelo prazo (${gastou} ms)`);
+});
+
+test('cadastrarLeadDoTurno espera a origem do lead antes de sincronizar (a franquia cria o lead com a ⚑ Origem já no cartão)', async () => {
+  semear('ligado', 'ligado');
+  const ordem: string[] = [];
+  let liberar!: () => void;
+  const trava = new Promise<void>((r) => (liberar = r));
+  const { deps } = montar({ estado: 'ligado' });
+  const kommoLento = {
+    ...(deps.kommo(PET) as object),
+    async getLead() {
+      await trava;
+      return cartao();
+    },
+    async gravarCamposDoLead() {
+      ordem.push('origem-gravada');
+    },
+  } as unknown as KommoDaOrigem;
+  const origem = aplicarOrigemPorTexto(turno(), { ...deps, kommo: () => kommoLento });
+  const cadastro = cadastrarLeadDoTurno(
+    { unit: CADASTRO_UNIT, leadId: 777, ferramentas: [] },
+    async () => {
+      ordem.push('lead-criado-na-franquia');
+    },
+    depsDoCadastro([NAVEGANDO], []),
+  );
+  await new Promise((res) => setTimeout(res, 20));
+  assert.deepEqual(ordem, [], 'o cadastro está esperando a origem');
+  liberar();
+  const { execucao } = await cadastro;
+  await execucao;
+  await origem;
+  assert.deepEqual(ordem, ['origem-gravada', 'lead-criado-na-franquia']);
 });

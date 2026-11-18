@@ -175,7 +175,10 @@ const unitInputBase = {
   pipelineIntents: z
     .record(
       z.string(),
-      z.union([z.coerce.number().int().positive(), z.array(z.object({ texto: z.string().min(1).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional() }))]),
+      z.union([
+        z.coerce.number().int().positive(),
+        z.array(z.object({ texto: z.string().min(15).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional() })).max(50),
+      ]),
     )
     .nullable()
     .optional(),

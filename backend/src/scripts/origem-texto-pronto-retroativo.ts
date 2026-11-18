@@ -36,7 +36,6 @@ async function main() {
   console.log(`${GRAVAR ? 'GRAVANDO' : 'SIMULAÇÃO (nada será escrito; use --gravar)'} · cartões criados desde ${DESDE.toISOString()} · ${SLUGS.join(', ')}\n`);
 
   const total = { vistos: 0, casam: 0, gravar: 0, gravados: 0, jaTinham: 0, pulados: 0, erros: 0 };
-  const gravados: string[] = [];
 
   for (const slug of SLUGS) {
     const unit = await prisma.unit.findUnique({ where: { slug } });
@@ -57,12 +56,15 @@ async function main() {
       orderBy: { createdAt: 'asc' },
       select: { leadId: true, messages: { where: { role: 'user' }, orderBy: { createdAt: 'asc' }, take: MAX_FALAS_OLHADAS, select: { content: true } } },
     });
+    const vistosNaUnidade = new Set<number>();
+    const gravadosDaUnidade: string[] = [];
     console.log(`== ${slug}: ${conversas.length} conversas criadas desde ${DESDE.toISOString().slice(0, 10)}, ${lista.length} frases na lista`);
 
     for (const c of conversas) {
       total.vistos++;
       const leadId = Number(c.leadId);
-      if (!Number.isFinite(leadId) || leadId <= 0) continue;
+      if (!Number.isFinite(leadId) || leadId <= 0 || vistosNaUnidade.has(leadId)) continue; // um cartão com duas conversas conta uma vez
+      vistosNaUnidade.add(leadId);
       const achou = casarPrimeirasFalas(c.messages.map((m) => m.content), lista);
       if (!achou) continue;
       total.casam++;
@@ -88,18 +90,18 @@ async function main() {
           await kommo.gravarCamposDoLead(leadId, [{ field_id: plano.campo.def.id, values: [{ enum_id: plano.campo.opcao.id }] }]);
           await kommo.addLeadNote(leadId, textoDaNota(achou.entrada)).catch(() => undefined);
           total.gravados++;
-          gravados.push(`${slug} ${leadId}: ⚑ Origem (vazio) → ${achou.entrada.origem}`);
+          gravadosDaUnidade.push(`${leadId}: ⚑ Origem (vazio) → ${achou.entrada.origem}`);
         }
       } catch (err) {
         total.erros++;
         console.log(`ERRO    ${leadId}  ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (GRAVAR && gravados.length > 0) {
+    if (GRAVAR && gravadosDaUnidade.length > 0) {
       await addChangeLog(unit.id, {
         category: 'kommo',
         summary: `⚑ Origem preenchida pelo texto pronto da 1ª mensagem (retroativo desde ${DESDE.toISOString().slice(0, 10)})`,
-        details: gravados.filter((g) => g.startsWith(`${slug} `)).join('\n'),
+        details: gravadosDaUnidade.join('\n'),
       }).catch((err) => console.log(`!! não registrei o change-log de ${slug}: ${String(err)}`));
     }
     console.log('');

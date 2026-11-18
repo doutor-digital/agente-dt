@@ -10,7 +10,7 @@
  * A LISTA É DADO, não código: `units.pipeline_intents.origem_por_texto` = `[{ "texto": "<frase>", "origem": "<nome exato da opção do ⚑ Origem>",
  * "anuncio": true|false }]`. Sem a chave = a unidade não usa. A opção do campo é resolvida pelo NOME na conta (nunca por id fixo).
  *
- * O que ela NUNCA faz: sobrescrever ⚑ Origem que já tem valor (do rastreio, da SDR ou da Sofia — relê o cartão logo antes de gravar),
+ * O que ela NUNCA faz: sobrescrever ⚑ Origem que já tem valor (do rastreio, da SDR ou da Sofia — lê o cartão imediatamente antes de gravar),
  * mexer em etapa, mandar mensagem. Só olha as primeiras falas do paciente (`MAX_FALAS_OLHADAS`): "Bom dia" no meio da conversa não conta.
  * Dois escritores do mesmo campo é regravação eterna: aqui só se escreve em campo VAZIO e uma vez por cartão (memória do processo); se o
  * rastreio chegar depois com o referral de verdade, ele sobrescreve e este não volta a mexer (o campo já não está vazio).
@@ -233,7 +233,25 @@ export type ResultadoDaOrigem =
 const UM_DIA_MS = 24 * 3600_000;
 /** `estado|unidade|lead` → até quando não olhar de novo. Só desfechos que não mudam sozinhos; falha de Kommo/banco NÃO entra (a próxima fala tenta). */
 const feitos = new Map<string, number>();
-const emCurso = new Set<string>();
+/** `unidade|lead` → a tarefa de origem em andamento. O cadastro na franquia espera por ela (`esperarOrigem`): o espelho de leads lê o ⚑ Origem do cartão ao criar o lead lá. */
+const emCurso = new Map<string, Promise<unknown>>();
+/** Quanto o cadastro espera, no máximo, a origem terminar (um `getLead` + um PATCH + uma nota; o Kommo pendurado não prende o cadastro). */
+export const ESPERA_MAXIMA_DA_ORIGEM_MS = 8_000;
+
+/**
+ * O cadastro na franquia chama isto antes de criar o lead: se a origem deste lead está sendo gravada AGORA, espera ela terminar (no máximo
+ * `ESPERA_MAXIMA_DA_ORIGEM_MS`). Sem tarefa em andamento (chave desligada, fala que não casa, já feito) devolve na hora. Nunca lança.
+ */
+export async function esperarOrigem(unitId: string, leadId: number, ateMs = ESPERA_MAXIMA_DA_ORIGEM_MS): Promise<void> {
+  const p = emCurso.get(`${unitId}|${leadId}`);
+  if (!p) return;
+  let t: NodeJS.Timeout | undefined;
+  const prazo = new Promise<void>((resolve) => {
+    t = setTimeout(resolve, ateMs);
+    t.unref?.();
+  });
+  await Promise.race([p.then(() => undefined, () => undefined), prazo]).finally(() => clearTimeout(t));
+}
 
 const lembrar = (chave: string, ms: number) => {
   if (feitos.size > 20_000) feitos.clear();
@@ -263,12 +281,15 @@ export async function aplicarOrigemPorTexto(
     if (!args.isChatMessage || !Number.isFinite(leadId) || leadId <= 0) return { tipo: 'ignorada' };
     const chave = `${estado}|${unit.id}|${leadId}`;
     if ((feitos.get(chave) ?? 0) > Date.now()) return { tipo: 'ja-feito' };
-    if (emCurso.has(chave)) return { tipo: 'em-curso' };
-    emCurso.add(chave);
+    const dono = `${unit.id}|${leadId}`;
+    if (emCurso.has(dono)) return { tipo: 'em-curso' };
+    // registrado de forma SÍNCRONA (antes de qualquer await): quem chama em seguida já enxerga a tarefa em `esperarOrigem`
+    const p = processar(estado, chave, unit, leadId, deps);
+    emCurso.set(dono, p);
     try {
-      return await processar(estado, chave, unit, leadId, deps);
+      return await p;
     } finally {
-      emCurso.delete(chave);
+      emCurso.delete(dono);
     }
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_ORIGEM_TEXTO_PRONTO}: erro — pulei (a próxima fala tenta de novo)`);
@@ -290,14 +311,15 @@ async function processar(estado: Estado, chave: string, unit: UnidadeDaOrigem, l
   const { entrada, fala } = achou;
 
   const kommo = deps.kommo(unit);
+  // a lista de campos (cache) e o grupo ANTES de ler o cartão: o cartão é lido imediatamente antes de gravar, para a janela de corrida ser a menor possível
+  const defs = await deps.campos(unit, kommo);
+  const grupo = await deps.grupo(unit.id);
   const lead = await kommo.getLead(leadId);
   // Kommo dividido: o cartão de outra unidade (ou sem unidade) não é meu
-  const grupo = await deps.grupo(unit.id);
   if (pularCartao(grupo, unit.id, lead, {})) {
-    lembrar(chave, 10 * 60_000);
+    lembrar(chave, 2 * 60_000); // cartão novo ainda sem unidade: o robô de unidade pode marcá-lo logo, tenta de novo em 2 min
     return { tipo: 'pulou', motivo: 'Kommo dividido: o cartão é de outra unidade (ou ainda não tem unidade)' };
   }
-  const defs = await deps.campos(unit, kommo);
   const plano = planejarOrigem(lead, defs, entrada);
   if (plano.tipo === 'pular') {
     (plano.aviso ? logger.warn : logger.info).call(logger, { unit: unit.slug, leadId, origem: entrada.origem }, `${ID_ORIGEM_TEXTO_PRONTO}: ${plano.motivo}`);

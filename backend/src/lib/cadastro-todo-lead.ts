@@ -41,7 +41,7 @@ import { unidadeDona } from '../agent/rede-doutor-hernia.js';
 import { resumoDaOrigem, veioDeAnuncio, type AnuncioDeOrigem } from '../agent/anuncio-de-origem.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { avaliarPelaIa, type DecisaoDaIa, type UnidadeDaIa } from './cadastro-triagem-ia.js';
-import { anuncioPelaFrase } from './origem-texto-pronto.js';
+import { anuncioPelaFrase, esperarOrigem } from './origem-texto-pronto.js';
 import type { Unit } from '@prisma/client';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
@@ -543,6 +543,8 @@ export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
   deps: DepsDoCadastro = depsPadrao,
 ): Promise<{ decisao: DecisaoDoLead; execucao: Promise<unknown> | null }> {
   const { unit, leadId } = entrada;
+  // Se a ⚑ Origem deste lead está sendo gravada agora (chave `origem-texto-pronto`), espera: o espelho de leads lê a origem do cartão ao criar o lead na franquia.
+  await esperarOrigem(unit.id, leadId);
   const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);
   if (!decisao.criar) return { decisao, execucao: null };
   const execucao = umCadastroPorVez(unit.id, leadId, () => sincronizar(unit, leadId, { soLead: decisao.soLead })).catch((err) => {
