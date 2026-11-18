@@ -161,6 +161,8 @@ const LIMITE_RESULTADO_FERRAMENTA = 320;
 const LIMITE_FICHA = 1400;
 const LIMITE_CONSULTA = 500;
 export const MAX_FALAS = 6;
+/** Quantas das mensagens mais novas podem estar na frente da resposta recém-gravada. */
+const ONDE_PROCURAR_A_ENVIADA = 4;
 
 const corta = (t: string, n: number): string => {
   const s = String(t ?? '').replace(/\s+/g, ' ').trim();
@@ -365,19 +367,25 @@ const JANELAS: Record<Cumprimento, Array<[number, number]>> = {
   ],
 };
 
-/**
- * O cumprimento que ABRE uma frase: no começo da mensagem (depois de "oi"/"olá"/"opa") ou no começo de uma linha. "Tenha uma boa noite"
- * é despedida e vale a qualquer hora — por isso só conta quando ele inicia a fala, não quando aparece no meio ou no fim.
- */
-const ABRE_COM_CUMPRIMENTO = /(?:^|\n)\s*(?:[^a-z0-9\n]*)(?:(?:oi|ola|opa|e ai|eai|hey)\b[^a-z0-9\n]{0,4})?(bom dia|boa tarde|boa noite)\b/g;
+/** Quanto texto pode vir ANTES do cumprimento na mesma linha para ele ainda ser uma saudação ("Oi, Maria! Bom dia"). */
+const ATE_ONDE_E_SAUDACAO = 40;
+/** Palavra imediatamente antes que faz dele despedida/desejo ("Tenha uma boa noite", "um bom dia pra você", "te desejo boa tarde"). */
+const ANTES_DE_DESPEDIDA = /(?:^|\s)(?:tenha|tenham|desejo|desejamos|deseje|um|uma|otimo|excelente)\s*$/;
+const CUMPRIMENTOS = /\b(bom dia|boa tarde|boa noite)\b/g;
 
+/**
+ * Procura a saudação linha a linha: o cumprimento conta quando está perto do começo da linha (até `ATE_ONDE_E_SAUDACAO` caracteres antes,
+ * cobrindo "Oi, Maria! Bom dia" e "Olá, tudo bem? Boa tarde") e NÃO é despedida/desejo — "Tenha uma boa noite" vale a qualquer hora,
+ * "Um bom dia pra você" também. Na dúvida (cumprimento no fim de frase longa) não conta: a regra errar para o lado de não acusar.
+ */
 export function cumprimentoForaDeHora(texto: string, hora: Pick<HoraLocal, 'hora' | 'min'>): Violacao | null {
-  const t = semAcento(String(texto ?? ''));
   const minutos = hora.hora * 60 + hora.min;
-  for (const m of t.matchAll(ABRE_COM_CUMPRIMENTO)) {
-    const dito = m[1] as Cumprimento;
-    const cabe = JANELAS[dito].some(([ini, fim]) => minutos >= ini && minutos <= fim);
-    if (!cabe) {
+  for (const linha of semAcento(String(texto ?? '')).split('\n')) {
+    for (const m of linha.matchAll(CUMPRIMENTOS)) {
+      const antes = linha.slice(0, m.index).trimEnd();
+      if (antes.length > ATE_ONDE_E_SAUDACAO || ANTES_DE_DESPEDIDA.test(antes)) continue;
+      const dito = m[1] as Cumprimento;
+      if (JANELAS[dito].some(([ini, fim]) => minutos >= ini && minutos <= fim)) continue;
       const dois = (n: number) => String(n).padStart(2, '0');
       return {
         regra: 'cumprimento_fora_de_hora',
@@ -494,9 +502,11 @@ export function falasParaARevisora(
   max: number = MAX_FALAS,
 ): { falas: FalaRevisada[]; inicioVisivel: boolean } {
   const lista = [...maisNovasPrimeiro];
-  const enviada = lista.findIndex((m) => m.role === 'assistant' && m.content.trim() === textoEnviado.trim());
-  // só a MAIS NOVA igual ao texto enviado é a que acabou de ser gravada; uma igual mais antiga é fala de outro turno
-  if (enviada === 0) lista.shift();
+  // A resposta recém-gravada é a mais nova... salvo o que o `processAgent` grava logo depois dela (Pix do sinal, cartão de chegada) ou
+  // uma fala do paciente que chegou no meio: por isso a procura vai até as primeiras `ONDE_PROCURAR_A_ENVIADA` linhas, e tira só UMA
+  // (uma igual MAIS ANTIGA, de outro turno, fica — é fala da Sofia).
+  const enviada = lista.slice(0, ONDE_PROCURAR_A_ENVIADA).findIndex((m) => m.role === 'assistant' && m.content.trim() === textoEnviado.trim());
+  if (enviada >= 0) lista.splice(enviada, 1);
   const recorte = lista.filter((m) => m.role !== 'system' && m.content.trim());
   const ficam = recorte.slice(0, max).reverse();
   const falas: FalaRevisada[] = ficam.map((m) => {

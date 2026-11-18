@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { guardarStatusDoPrompt, guardarStatusDoTurno, pegarStatusDoTurno, statusDoPacienteDoPrompt } from './revisora-de-saida-contexto.js';
+import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 
 test('status: prompt do paciente em tratamento (texto do renderPacienteNaFranquia)', () => {
   const s = statusDoPacienteDoPrompt('x\n- Este paciente JÁ TEM TRATAMENTO na clínica (fechado ou em andamento).\n- Já foi atendido: consulta de retorno em 02/11.\n');
@@ -47,7 +48,18 @@ test('guardar velho limpa os vencidos (a ponte não cresce sem fim)', () => {
 });
 
 test('guardarStatusDoPrompt nunca lança, nem com lixo', () => {
-  assert.doesNotThrow(() => guardarStatusDoPrompt('t3', null));
-  assert.doesNotThrow(() => guardarStatusDoPrompt('t4', { toString: () => { throw new Error('x'); } } as unknown as string));
+  _semearParaTeste([]);
+  assert.doesNotThrow(() => guardarStatusDoPrompt('caxias', 't3', null));
+  assert.doesNotThrow(() => guardarStatusDoPrompt('caxias', 't4', { toString: () => { throw new Error('x'); } } as unknown as string));
   pegarStatusDoTurno('t3');
+  _esquecerOBancoParaTeste();
+});
+
+test('unidade com a revisora DESLIGADA na tela: o grafo nem classifica nem retém o prompt', () => {
+  _semearParaTeste([{ slug: 'caxias', automacao: 'revisora-de-saida', estado: 'desligado' }]);
+  guardarStatusDoPrompt('caxias', 't5', '- ELE ESTÁ EM TRATAMENTO (funil TRATAMENTO).');
+  assert.equal(pegarStatusDoTurno('t5'), null);
+  guardarStatusDoPrompt('petropolis', 't6', '- ELE ESTÁ EM TRATAMENTO (funil TRATAMENTO).');
+  assert.equal(pegarStatusDoTurno('t6')?.emTratamento, true, 'a outra unidade segue seca');
+  _esquecerOBancoParaTeste();
 });

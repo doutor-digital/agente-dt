@@ -164,6 +164,19 @@ test('cumprimento: despedida no meio/fim da mensagem NÃO é saudação ("tenha 
   assert.equal(cumprimentoForaDeHora('Qualquer coisa me chama. Um bom dia pra você', as(15)), null);
 });
 
+test('cumprimento: nome antes do cumprimento NÃO esconde ("Oi, Maria! Bom dia", "Olá, tudo bem? Boa tarde")', () => {
+  assert.ok(cumprimentoForaDeHora('Oi, Maria! Bom dia! Como posso te ajudar?', as(15)));
+  assert.ok(cumprimentoForaDeHora('Oi Maria, bom dia', as(15)));
+  assert.ok(cumprimentoForaDeHora('Olá, tudo bem? Boa tarde', as(9)));
+  assert.equal(cumprimentoForaDeHora('Oi, Maria! Bom dia!', as(8)), null);
+});
+
+test('cumprimento: no fim de uma frase longa (mais de 40 caracteres antes) não é saudação; "desejo/tenha/um" antes é despedida', () => {
+  assert.equal(cumprimentoForaDeHora('Combinado, a equipe confirma o horário com você ainda hoje. Boa noite', as(15)), null);
+  assert.equal(cumprimentoForaDeHora('Te desejo boa tarde', as(9)), null);
+  assert.equal(cumprimentoForaDeHora('Fico por aqui, um bom dia', as(15)), null);
+});
+
 test('cumprimento: no começo de uma linha do meio vale; frase sem saudação é null', () => {
   assert.ok(cumprimentoForaDeHora('Entendi sua dor.\nBom dia, aliás!', as(15)));
   assert.equal(cumprimentoForaDeHora('A consulta é na terça às 10h.', as(15)), null);
@@ -352,8 +365,22 @@ test('falasParaARevisora: tira a resposta que acabou de ser gravada, ordena do m
   assert.equal(r.inicioVisivel, true);
 });
 
-test('falasParaARevisora: texto igual MAIS ANTIGO (outro turno) não é tirado; só a mais nova', () => {
-  const r = falasParaARevisora([msg('user', 'oi', 1), msg('assistant', 'Tudo bem?', 5)], 'Tudo bem?', agora);
+test('falasParaARevisora: a resposta recém-gravada sai mesmo com Pix/cartão (ou fala do paciente) gravados DEPOIS dela', () => {
+  const r = falasParaARevisora(
+    [
+      msg('assistant', '00020126...copia-e-cola', 0, { via: 'pix_do_sinal' }),
+      msg('user', 'ok, vou pagar', 0),
+      msg('assistant', 'Resposta nova', 1),
+      msg('user', 'quero marcar', 2),
+    ],
+    'Resposta nova',
+    agora,
+  );
+  assert.deepEqual(r.falas.map((f) => f.texto), ['quero marcar', 'ok, vou pagar', '00020126...copia-e-cola']);
+});
+
+test('falasParaARevisora: só UMA ocorrência sai; texto igual mais antigo é fala de outro turno', () => {
+  const r = falasParaARevisora([msg('assistant', 'Tudo bem?', 0), msg('user', 'oi', 1), msg('assistant', 'Tudo bem?', 5)], 'Tudo bem?', agora);
   assert.deepEqual(r.falas.map((f) => f.texto), ['Tudo bem?', 'oi']);
 });
 

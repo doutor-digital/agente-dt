@@ -16,10 +16,9 @@ import { Prisma } from '@prisma/client';
 import type { Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
-import { estadoDaAutomacao, type Estado } from '../lib/automacoes-estado.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
-import { custoComFallback, esforcoDoJuiz, montarPedidoAnthropic, respostaCortada, textoDaResposta } from '../lib/juiz-da-ia.js';
+import { custoComFallback, montarPedidoAnthropic, respostaCortada, textoDaResposta } from '../lib/juiz-da-ia.js';
 import {
   consolidar,
   cumprimentoForaDeHora,
@@ -43,17 +42,13 @@ import {
   type StatusDoPaciente,
   type VereditoLido,
 } from '../lib/revisora-de-saida.js';
-import { pegarStatusDoTurno } from '../lib/revisora-de-saida-contexto.js';
+import { AUTOMACAO_REVISORA_DE_SAIDA, estadoDaRevisora, pegarStatusDoTurno } from '../lib/revisora-de-saida-contexto.js';
 import { precosDaConsulta, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { sinalDeclaradoNaFicha } from '../agent/guardrail.js';
 import { calculateCost, recordLlmCall, resolveOpenAIApiKey } from './openai.service.js';
 
-/** `id` no catálogo (`lib/automacoes.ts`) e na tabela `unit_automacoes`. Nunca mude depois de criada. */
-export const AUTOMACAO_REVISORA_DE_SAIDA = 'revisora-de-saida';
-
-export function estadoDaRevisora(slug: string, env: NodeJS.ProcessEnv = process.env): Estado {
-  return estadoDaAutomacao(slug, AUTOMACAO_REVISORA_DE_SAIDA, env.REVISORA_SAIDA_SLUGS);
-}
+// O estado (`estadoDaRevisora`) mora em `lib/revisora-de-saida-contexto.ts`: o grafo também o consulta, e não deve importar este serviço.
+export { AUTOMACAO_REVISORA_DE_SAIDA, estadoDaRevisora };
 
 // ── limites: o auxiliar nunca derruba o principal ─────────────────────────────────────────────────
 
@@ -61,11 +56,15 @@ export const MAX_EM_VOO = 25;
 export const FALHAS_PARA_ABRIR = 5;
 export const PAUSA_DO_DISJUNTOR_MS = 60_000;
 
+/**
+ * Teto de revisões simultâneas (global: é o que protege o processo) + disjuntor POR UNIDADE. A chave do provedor é da unidade, então uma
+ * chave inválida (Salto/Tatuí têm Anthropic sem workspace) tem de abrir só o disjuntor DELA — com um disjuntor único, os sucessos das
+ * outras unidades o manteriam fechado e a unidade ruim pagaria 8 s por resposta; ou, no extremo oposto, ela silenciaria a rede toda.
+ */
 export class LimiteDaRevisora {
   private emVoo = 0;
-  private falhasSeguidas = 0;
-  private abertoAte = 0;
   private puladas = 0;
+  private readonly unidades = new Map<string, { falhasSeguidas: number; abertoAte: number }>();
 
   constructor(
     private readonly maxEmVoo = MAX_EM_VOO,
@@ -73,9 +72,9 @@ export class LimiteDaRevisora {
     private readonly pausaMs = PAUSA_DO_DISJUNTOR_MS,
   ) {}
 
-  /** Pode começar mais uma revisão? Se sim, ocupa a vaga (quem pediu TEM de chamar `terminou`). */
-  pedir(agoraMs: number = Date.now()): { ok: true } | { ok: false; motivo: 'disjuntor_aberto' | 'muitas_em_voo' } {
-    if (agoraMs < this.abertoAte) {
+  /** Pode começar mais uma revisão desta unidade? Se sim, ocupa a vaga (quem pediu TEM de chamar `terminou`). */
+  pedir(unitId: string, agoraMs: number = Date.now()): { ok: true } | { ok: false; motivo: 'disjuntor_aberto' | 'muitas_em_voo' } {
+    if (agoraMs < (this.unidades.get(unitId)?.abertoAte ?? 0)) {
       this.puladas++;
       return { ok: false, motivo: 'disjuntor_aberto' };
     }
@@ -87,17 +86,19 @@ export class LimiteDaRevisora {
     return { ok: true };
   }
 
-  /** `falhouOProvedor`: erro/prazo da chamada ao modelo. JSON fora do formato NÃO conta (o provedor respondeu). */
-  terminou(falhouOProvedor: boolean, agoraMs: number = Date.now()): { abriu: boolean } {
+  /** `falhouOProvedor`: erro/prazo da chamada ao modelo. JSON fora do formato (ou falha nossa) NÃO conta: o provedor respondeu. */
+  terminou(unitId: string, falhouOProvedor: boolean, agoraMs: number = Date.now()): { abriu: boolean } {
     this.emVoo = Math.max(0, this.emVoo - 1);
+    const u = this.unidades.get(unitId) ?? { falhasSeguidas: 0, abertoAte: 0 };
+    this.unidades.set(unitId, u);
     if (!falhouOProvedor) {
-      this.falhasSeguidas = 0;
+      u.falhasSeguidas = 0;
       return { abriu: false };
     }
-    this.falhasSeguidas++;
-    if (this.falhasSeguidas >= this.falhasParaAbrir) {
-      this.falhasSeguidas = 0;
-      this.abertoAte = agoraMs + this.pausaMs;
+    u.falhasSeguidas++;
+    if (u.falhasSeguidas >= this.falhasParaAbrir) {
+      u.falhasSeguidas = 0;
+      u.abertoAte = agoraMs + this.pausaMs;
       return { abriu: true };
     }
     return { abriu: false };
@@ -156,7 +157,7 @@ async function chamarAnthropic(escolha: EscolhaDaRevisora, system: string, user:
     modelo: escolha.modelo,
     system,
     user,
-    esforco: esforcoDoJuiz({ JUDGE_ANTHROPIC_EFFORT: process.env.REVISORA_ANTHROPIC_EFFORT ?? 'low' }),
+    esforco: 'low',
     schema: SCHEMA_DA_REVISORA,
     maxTokens: MAX_TOKENS_DA_REVISORA,
   });
@@ -313,31 +314,44 @@ export async function revisarSaida(pedido: PedidoDeRevisao, deps: DependenciasDa
   let falhouOProvedor = false;
   let lido: VereditoLido | null = null;
   let entrada: EntradaDaRevisora | null = null;
+  let chamou = false;
+  // A hora local não depende de banco nem de modelo: a regra 8 (código) roda com ela mesmo que tudo o mais falhe.
+  const hora = horaLocalDaUnidade(deps.agora(), fusoDaUnidade(unit));
 
+  // 1. a entrada. Falha NOSSA (banco, ficha mal formada) não é falha do provedor: não alimenta o disjuntor.
   try {
     entrada = await montarEntrada(pedido, deps);
-    const resposta = await deps.chamarModelo(escolha, promptDaRevisora(), dadosDaRevisao(entrada), unit, PRAZO_DA_REVISORA_MS);
-    promptTokens = resposta.promptTokens;
-    completionTokens = resposta.completionTokens;
-    // leitura ESTRITA: resposta cortada/recusada ou JSON fora do formato = sem veredito, nunca "barraria"
-    lido = respostaCortada(resposta.stopReason) ? null : lerVeredito(resposta.text);
-    if (!lido) {
-      erro = respostaCortada(resposta.stopReason) ? `resposta_cortada:${String(resposta.stopReason)}` : 'resposta_invalida';
-      logger.warn({ traceId: pedido.traceId, modelo: escolha.modelo, stopReason: resposta.stopReason ?? null, inicio: resposta.text.slice(0, 160) }, 'revisora de saída: resposta fora do formato — sem veredito');
-    }
   } catch (err) {
-    falhouOProvedor = true;
-    erro = err instanceof Error ? err.message : String(err);
-    logger.warn({ err: erro, traceId: pedido.traceId, modelo: escolha.modelo }, 'revisora de saída: a chamada ao modelo falhou — sem veredito');
+    erro = `entrada_falhou: ${err instanceof Error ? err.message : String(err)}`;
+    logger.warn({ err: erro, traceId: pedido.traceId }, 'revisora de saída: não consegui montar a entrada — sem veredito do modelo');
+  }
+
+  // 2. o modelo
+  if (entrada) {
+    try {
+      chamou = true;
+      const resposta = await deps.chamarModelo(escolha, promptDaRevisora(), dadosDaRevisao(entrada), unit, PRAZO_DA_REVISORA_MS);
+      promptTokens = resposta.promptTokens;
+      completionTokens = resposta.completionTokens;
+      // leitura ESTRITA: resposta cortada/recusada ou JSON fora do formato = sem veredito, nunca "barraria"
+      lido = respostaCortada(resposta.stopReason) ? null : lerVeredito(resposta.text);
+      if (!lido) {
+        erro = respostaCortada(resposta.stopReason) ? `resposta_cortada:${String(resposta.stopReason)}` : 'resposta_invalida';
+        logger.warn({ traceId: pedido.traceId, modelo: escolha.modelo, stopReason: resposta.stopReason ?? null, inicio: resposta.text.slice(0, 160) }, 'revisora de saída: resposta fora do formato — sem veredito');
+      }
+    } catch (err) {
+      falhouOProvedor = true;
+      erro = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: erro, traceId: pedido.traceId, modelo: escolha.modelo }, 'revisora de saída: a chamada ao modelo falhou — sem veredito');
+    }
   }
 
   const latencyMs = Math.round(performance.now() - t0);
-  // A regra 8 é aritmética sobre a hora local: roda mesmo quando o modelo falhou.
-  const doCodigo = entrada ? [cumprimentoForaDeHora(pedido.textoEnviado, entrada.hora)].filter((v): v is NonNullable<typeof v> => !!v) : [];
+  const doCodigo = [cumprimentoForaDeHora(pedido.textoEnviado, hora)].filter((v): v is NonNullable<typeof v> => !!v);
   const final = consolidar(lido, doCodigo);
 
   const costUsd = custoComFallback(escolha.modelo, calculateCost(escolha.modelo, promptTokens, completionTokens), promptTokens, completionTokens);
-  if (promptTokens > 0 || erro) {
+  if (chamou) {
     deps.registrarChamada({
       unitId: unit.id,
       // SEM traceId, como o juiz: o gasto da revisora entra na soma da unidade/mês (é dinheiro de verdade), mas não no custo do turno
@@ -351,7 +365,8 @@ export async function revisarSaida(pedido: PedidoDeRevisao, deps: DependenciasDa
       completionTokens,
       totalTokens: promptTokens + completionTokens,
       latencyMs,
-      status: erro ? 'error' : 'success',
+      // 'error' é o provedor que falhou; formato ruim gasta token e fica `success` (o motivo vai em errorMessage e em revisoes_de_saida.erro)
+      status: falhouOProvedor ? 'error' : 'success',
       ...(erro ? { errorMessage: erro } : {}),
       // `revisora: true` separa este gasto do da Sofia em qualquer soma por llm_calls
       requestBody: { revisora: true, leadId: pedido.leadId, conversationId: pedido.conversationId, traceId: pedido.traceId },
@@ -419,7 +434,7 @@ export function agendarRevisaoDeSaida(args: ArgsDaPorta, deps: DependenciasDaRev
     if (!decisao.revisar || !args.textoEnviado.trim()) return;
     if (decisao.aviso) logger.warn({ unit: args.unit.slug }, decisao.aviso);
 
-    const vaga = limite.pedir();
+    const vaga = limite.pedir(args.unit.id);
     if (!vaga.ok) {
       const puladas = limite.puladasTotal;
       if (puladas % 50 === 1) logger.warn({ motivo: vaga.motivo, emVoo: limite.emVooAgora }, 'revisora de saída: revisão pulada (o auxiliar não pode atrapalhar o principal)');
@@ -427,11 +442,11 @@ export function agendarRevisaoDeSaida(args: ArgsDaPorta, deps: DependenciasDaRev
     }
     void revisarSaida({ ...args, status }, deps)
       .then((d) => {
-        const { abriu } = limite.terminou(d.falhouOProvedor);
-        if (abriu) logger.error({ pausaMs: PAUSA_DO_DISJUNTOR_MS }, 'revisora de saída: disjuntor ABERTO — erros seguidos do provedor, sem chamar por um tempo');
+        const { abriu } = limite.terminou(args.unit.id, d.falhouOProvedor);
+        if (abriu) logger.error({ unit: args.unit.slug, pausaMs: PAUSA_DO_DISJUNTOR_MS }, 'revisora de saída: disjuntor ABERTO — erros seguidos do provedor, sem chamar por um tempo');
       })
       .catch((err) => {
-        limite.terminou(true);
+        limite.terminou(args.unit.id, false);
         logger.warn({ err: String(err) }, 'revisora de saída: falhou fora do previsto');
       });
   } catch (err) {

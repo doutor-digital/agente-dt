@@ -1638,7 +1638,7 @@ export async function buildAgentGraph(
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
       // Revisora de saída (modo seco): o status do paciente só o prompt DESTE turno sabe. Fica guardado por traceId para o `processAgent`
       // entregá-lo à revisora depois do envio — aqui nada é decidido nem alterado (ver lib/revisora-de-saida-contexto.ts).
-      guardarStatusDoPrompt(recorder.traceId, promptDoTurno);
+      guardarStatusDoPrompt(unit.slug, recorder.traceId, promptDoTurno);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';

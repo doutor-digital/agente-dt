@@ -171,7 +171,7 @@ test('erro/timeout do provedor: sem_veredito, erro gravado, falhouOProvedor, e n
   assert.equal(out.veredito, 'sem_veredito');
   assert.equal(out.falhouOProvedor, true);
   assert.match(r.gravadas[0].erro, /sem resposta em 8000 ms/);
-  assert.equal(r.chamadas[0].status, 'error', 'a falha também fica no llm_calls');
+  assert.equal(r.chamadas[0].status, 'error', 'a falha do provedor também fica no llm_calls');
 });
 
 test('bom dia às 14h30: o CÓDIGO barra a regra 8 mesmo com o modelo fora do ar', async () => {
@@ -187,6 +187,26 @@ test('bom dia + modelo aprova: a regra de código vale (fuso da unidade: Boa Vis
   const { d, r } = deps(APROVA);
   await revisarSaida(pedido({ unit: unidade({ businessHoursTimezone: 'America/Boa_Vista' }), textoEnviado: 'Bom dia!' }), d);
   assert.deepEqual(r.gravadas[0].regras, ['cumprimento_fora_de_hora']);
+});
+
+test('falha NOSSA ao montar a entrada (ficha mal formada) não é falha do provedor: sem chamar o modelo, sem alimentar o disjuntor, e a regra 8 ainda roda', async () => {
+  const { d, r } = deps(APROVA);
+  const ruim = unidade();
+  Object.defineProperty(ruim, 'sourceProdutos', { get: () => { throw new Error('ficha explodiu'); } });
+  const out = await revisarSaida(pedido({ unit: ruim, textoEnviado: 'Bom dia!' }), d);
+  assert.equal(out.falhouOProvedor, false);
+  assert.equal(r.modelo.length, 0);
+  assert.equal(r.chamadas.length, 0, 'nada foi pago');
+  assert.match(r.gravadas[0].erro, /entrada_falhou: ficha explodiu/);
+  assert.deepEqual(r.gravadas[0].regras, ['cumprimento_fora_de_hora']);
+});
+
+test('resposta fora do formato gasta token mas NÃO é falha do provedor no llm_calls (status success, motivo em errorMessage)', async () => {
+  const { d, r } = deps('lixo');
+  await revisarSaida(pedido(), d);
+  assert.equal(r.chamadas[0].status, 'success');
+  assert.equal(r.chamadas[0].errorMessage, 'resposta_invalida');
+  assert.equal(r.chamadas[0].traceId, null, 'fora do custo do turno e do teto por conversa');
 });
 
 test('falha ao GRAVAR não lança (a resposta já saiu) e a revisão ainda devolve o desfecho', async () => {
@@ -274,24 +294,38 @@ test('montarEntrada: falas do banco entram sem a resposta recém-gravada, com au
 
 test('limite: acima de N em voo a revisão é PULADA, e vaga liberada volta a servir', () => {
   const l = new LimiteDaRevisora(2, 5, 1000);
-  assert.equal(l.pedir(0).ok, true);
-  assert.equal(l.pedir(0).ok, true);
-  const nao = l.pedir(0);
+  assert.equal(l.pedir('a', 0).ok, true);
+  assert.equal(l.pedir('b', 0).ok, true);
+  const nao = l.pedir('a', 0);
   assert.deepEqual(nao, { ok: false, motivo: 'muitas_em_voo' });
-  l.terminou(false, 0);
-  assert.equal(l.pedir(0).ok, true);
+  l.terminou('a', false, 0);
+  assert.equal(l.pedir('a', 0).ok, true);
   assert.equal(l.puladasTotal, 1);
 });
 
-test('disjuntor: N falhas SEGUIDAS do provedor abrem por 1 min; sucesso no meio zera; formato ruim não conta (quem conta é o chamador)', () => {
+test('disjuntor: N falhas SEGUIDAS do provedor abrem por 1 min; sucesso no meio zera', () => {
   const l = new LimiteDaRevisora(10, 3, 60_000);
-  for (let i = 0; i < 2; i++) { l.pedir(0); assert.equal(l.terminou(true, 0).abriu, false); }
-  l.pedir(0); l.terminou(false, 0); // sucesso zera
-  for (let i = 0; i < 2; i++) { l.pedir(0); assert.equal(l.terminou(true, 0).abriu, false); }
-  l.pedir(0);
-  assert.equal(l.terminou(true, 1_000).abriu, true);
-  assert.deepEqual(l.pedir(2_000), { ok: false, motivo: 'disjuntor_aberto' });
-  assert.equal(l.pedir(61_001).ok, true, 'passou a pausa: tenta de novo');
+  for (let i = 0; i < 2; i++) { l.pedir('a', 0); assert.equal(l.terminou('a', true, 0).abriu, false); }
+  l.pedir('a', 0); l.terminou('a', false, 0); // sucesso zera
+  for (let i = 0; i < 2; i++) { l.pedir('a', 0); assert.equal(l.terminou('a', true, 0).abriu, false); }
+  l.pedir('a', 0);
+  assert.equal(l.terminou('a', true, 1_000).abriu, true);
+  assert.deepEqual(l.pedir('a', 2_000), { ok: false, motivo: 'disjuntor_aberto' });
+  assert.equal(l.pedir('a', 61_001).ok, true, 'passou a pausa: tenta de novo');
+});
+
+test('disjuntor é POR UNIDADE: a chave ruim de uma não silencia as outras, e o sucesso das outras não segura a dela fechada', () => {
+  const l = new LimiteDaRevisora(10, 3, 60_000);
+  // alterna: a unidade ruim falha, as boas têm sucesso no meio — com disjuntor único ele nunca abriria
+  for (let i = 0; i < 3; i++) {
+    l.pedir('salto', 0);
+    l.terminou('salto', true, 0);
+    l.pedir('caxias', 0);
+    l.terminou('caxias', false, 0);
+  }
+  assert.deepEqual(l.pedir('salto', 1_000), { ok: false, motivo: 'disjuntor_aberto' });
+  assert.equal(l.pedir('caxias', 1_000).ok, true);
+  assert.equal(l.pedir('petropolis', 1_000).ok, true);
 });
 
 // ── a porta de entrada: nada vaza para o paciente, estado manda ───────────────────────────────────

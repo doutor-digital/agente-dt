@@ -4,11 +4,20 @@
  * o grafo guarda por `traceId`, o controller consome. Em memória, com validade — nunca vai ao banco e uma réplica nunca lê a de outra
  * (o turno inteiro roda no mesmo processo).
  *
- * Não custa nada fora do modo seco: guardar é uma busca de texto no prompt já montado.
+ * Só guarda quando a revisora está LIGADA OU SECA na unidade: desligada na tela, o grafo nem classifica o prompt (nada é pago nem retido).
  */
 import { promptDizEmTratamento } from '../agent/taxa-de-reserva.js';
 import { blocoDaConsulta, promptTemConsulta } from '../agent/reserva-sem-marcar.js';
+import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import type { StatusDoPaciente } from './revisora-de-saida.js';
+
+/** `id` no catálogo (`lib/automacoes.ts`) e na tabela `unit_automacoes`. Nunca mude depois de criada. */
+export const AUTOMACAO_REVISORA_DE_SAIDA = 'revisora-de-saida';
+
+/** Nasce em SECO na rede toda (`quandoVazio: 'seco'`); a tela desliga por unidade. */
+export function estadoDaRevisora(slug: string, env: NodeJS.ProcessEnv = process.env): Estado {
+  return estadoDaAutomacao(slug, AUTOMACAO_REVISORA_DE_SAIDA, env.REVISORA_SAIDA_SLUGS);
+}
 
 const VALIDADE_MS = 10 * 60_000;
 const guardados = new Map<string, { em: number; status: StatusDoPaciente }>();
@@ -30,8 +39,9 @@ export function guardarStatusDoTurno(traceId: string, status: StatusDoPaciente, 
 }
 
 /** O que o grafo chama: nunca lança — o auxiliar não pode quebrar o turno que ele só observa. */
-export function guardarStatusDoPrompt(traceId: string, prompt: string | null | undefined): void {
+export function guardarStatusDoPrompt(slug: string, traceId: string, prompt: string | null | undefined): void {
   try {
+    if (estadoDaRevisora(slug) === 'desligado') return;
     guardarStatusDoTurno(traceId, statusDoPacienteDoPrompt(prompt));
   } catch {
     /* sem status a revisora trata o paciente como "sem informação" */
