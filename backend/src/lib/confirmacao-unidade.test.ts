@@ -84,6 +84,9 @@ test('jaConfirmou: CONFIRMADO na franquia ou "Agendamento confirmado" há menos 
   // o PACIENTE escrever "agendamento confirmado?" não é a confirmação da clínica
   assert.equal(jaConfirmou({ idStatus: 37, oficiais: [{ ...sofia, direcao: 'entrada' }], agora }), null);
   assert.equal(jaConfirmou({ idStatus: null, oficiais: null, agora }), null);
+  // relógio adiantado: "Agendamento confirmado" com data no FUTURO não segura a pergunta (Codex, 18/11)
+  const futura = { ...sofia, em: new Date(agora.getTime() + 3600_000) };
+  assert.equal(jaConfirmou({ idStatus: 37, oficiais: [futura], agora }), null);
 });
 
 test('confirmacaoDaUnidade: desligada = padrão da rede; ligada fora da lista = texto da rede, sem tirar a janela', () => {

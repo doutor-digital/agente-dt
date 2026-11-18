@@ -147,7 +147,11 @@ export function jaConfirmou(args: {
   if (args.idStatus === STATUS_CONFIRMADO) return 'consulta já CONFIRMADA na franquia';
   const agora = (args.agora ?? new Date()).getTime();
   const recente = (args.oficiais ?? []).find(
-    (m) => m.direcao === 'saida' && agora - m.em.getTime() < ACABOU_DE_AGENDAR_MS && CONFIRMACAO_DO_AGENDAMENTO.test(m.texto ?? ''),
+    // limite de baixo também (Codex, 18/11): mensagem com data no futuro (relógio adiantado) não conta como "acabou de agendar"
+    (m) => {
+      const idade = agora - m.em.getTime();
+      return m.direcao === 'saida' && idade >= 0 && idade < ACABOU_DE_AGENDAR_MS && CONFIRMACAO_DO_AGENDAMENTO.test(m.texto ?? '');
+    },
   );
   return recente ? 'recebeu "Agendamento confirmado" há menos de 12 h' : null;
 }
