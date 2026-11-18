@@ -27,3 +27,8 @@ test('hífen comum e travessão colado entre números/palavras ficam como hífen
   assert.equal(semTravessao('Atendemos seg–sex, das 08–12 e 14–18. Seja bem-vindo!'), 'Atendemos seg-sex, das 08-12 e 14-18. Seja bem-vindo!');
   assert.equal(semTravessao('Sem travessão nenhum aqui.'), 'Sem travessão nenhum aqui.');
 });
+
+test('faixa de horário com espaços vira "às", não lista (revisão do sênior, #397)', () => {
+  assert.equal(semTravessao('Atendemos das 08h – 12h e das 14h – 18h.'), 'Atendemos das 08h às 12h e das 14h às 18h.');
+  assert.equal(semTravessao('das 8 – 12'), 'das 8 às 12');
+});

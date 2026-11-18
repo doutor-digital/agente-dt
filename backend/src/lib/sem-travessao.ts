@@ -7,6 +7,7 @@
  * (que a equipe lê) ficam como estão. O hífen comum ("bem-vindo", "94246-9735", "425 - Centro") não é tocado.
  *
  *   colado entre palavras/números ("08–12", "seg–sex") → hífen comum
+ *   faixa de horário com espaços ("08h – 12h") → "08h às 12h"
  *   no começo da linha → some
  *   depois de pontuação (", —", "! —") → some
  *   no meio da frase ("consulta — ela é") → vírgula
@@ -15,6 +16,7 @@ export function semTravessao(texto: string): string {
   if (!/[—–]/.test(texto)) return texto;
   return texto
     .replace(/(\S)[—–](\S)/g, '$1-$2')
+    .replace(/(\d+[ \t]*h?)[ \t]+[—–][ \t]+(\d)/gi, '$1 às $2')
     .replace(/^[ \t]*[—–][ \t]*/gm, '')
     .replace(/([,.;:!?])[ \t]*[—–][ \t]*/g, '$1 ')
     .replace(/[ \t]*[—–][ \t]*/g, ', ')

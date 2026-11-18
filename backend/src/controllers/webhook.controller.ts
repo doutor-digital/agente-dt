@@ -1,3 +1,4 @@
+import { semTravessao } from '../lib/sem-travessao.js';
 import type { Request, Response } from 'express';
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -1871,7 +1872,9 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
 
     // A linha [[botoes: A | B]] sai do texto e vira botões na entrega (ou nada, se o
     // canal não permitir). Daqui em diante `reply` é o texto limpo que o paciente vê.
-    const replyBruto = (result.decision ?? '').toString().trim();
+    // Sem travessão NA ORIGEM (#397): trava, envio, botões, widget e a conferência de entrega usam o MESMO texto —
+    // senão a fala da Sofia não bate com o que chegou ao paciente e é lida como fala da equipe.
+    const replyBruto = semTravessao((result.decision ?? '').toString().trim());
     const { texto: reply, botoes } = extrairBotoes(replyBruto);
 
     const respostaSemPalavra = reply.length > 0 && !temPalavra(reply);
