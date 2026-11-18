@@ -67,8 +67,8 @@ const AUSENCIA_RIO_VERDE =
 const conversaBebedouro = (): MensagemOficial[] => [
   msg('entrada', new Date('2026-10-20T00:46:30-03:00'), '17 98143-8710'),
   msg('saida', new Date('2026-10-20T00:46:50-03:00'), 'Anotado! Qual é o seu nome?', 'sofia', 'Salesbot'),
-  msg('saida', em('12:19:51'), 'Olá Dona Nilza Bom dia tudo bem?'),
-  msg('saida', em('12:20:06'), 'Meu nome é Melissa sou Secretária da Clínica Doutor Hérnia.'),
+  msg('saida', em('10:25:51'), 'Olá Dona Nilza Bom dia tudo bem?'),
+  msg('saida', em('10:26:06'), 'Meu nome é Melissa sou Secretária da Clínica Doutor Hérnia.'),
   msg('entrada', em('12:28:26'), 'Nilza Maria Balieiro Lugato'),
 ];
 
@@ -114,54 +114,90 @@ test('Bebedouro 6374469: a Melissa falou depois da última mensagem da Sofia →
 });
 
 test('a Sofia falou depois da equipe (reativação, devolução) → a conversa é dela', () => {
-  const d = equipeComAPalavra(conversaBebedouro(), em('12:25:00'), em('12:28:30'));
+  const d = equipeComAPalavra(conversaBebedouro(), em('11:00:00'), em('12:28:30'));
   assert.deepEqual([d.fala, d.motivo], [null, 'ia_falou_depois']);
 });
 
 test('fala da equipe com mais de 24 h não pausa (ligar a chave não varre conversa antiga)', () => {
-  const agora = new Date(em('12:20:06').getTime() + JANELA_DA_EQUIPE_MS + 60_000);
+  const agora = new Date(em('10:26:06').getTime() + JANELA_DA_EQUIPE_MS + 60_000);
   const d = equipeComAPalavra(conversaBebedouro(), null, agora);
   assert.deepEqual([d.fala, d.motivo], [null, 'antiga']);
 });
 
-// ── a porta usa a MESMA janela da volta (PAUSA_EQUIPE_VOLTA_MIN, 60 min) ─────────────────────────
+// ── janela da porta: 60 min (a da volta) SÓ para o app "WhatsApp Lite"; os demais seguem com 24 h ──────────
 
 const DIA = '2026-11-18';
 const noDia = (hhmmss: string) => new Date(`${DIA}T${hhmmss}-03:00`);
-/** Sofia falou de manhã; a equipe (celular, Lite) falou em `quandoEquipe`; o paciente escreveu depois. */
-const conversaLite = (quandoEquipe: string, quandoPaciente: string): MensagemOficial[] =>
+const JANELA_LITE = minutosDaVolta({} as NodeJS.ProcessEnv) * 60_000;
+const BUSINESS = { type: 'bot', name: 'WhatsApp Business' };
+const USUARIO_KOMMO = { type: 'internal', name: 'Talita' };
+/** Sofia falou de manhã; a equipe (pelo app `quem`) falou em `quandoEquipe`; o paciente escreveu depois. */
+const conversaDaEquipe = (quem: { type: string; name: string }, quandoEquipe: string, quandoPaciente: string): MensagemOficial[] =>
   normalizar([
-    bruta('1', `${DIA}T09:00:00-03:00`, 'outgoing', { type: 'bot', name: 'Salesbot' }, 'Oi! Aqui é a Sofia, da Doutor Hérnia.'),
-    bruta('2', `${DIA}T${quandoEquipe}-03:00`, 'outgoing', LITE, 'Poderia me enviar o seu nome completo por gentileza ?'),
+    bruta('1', `${DIA}T05:00:00-03:00`, 'outgoing', { type: 'bot', name: 'Salesbot' }, 'Oi! Aqui é a Sofia, da Doutor Hérnia.'),
+    bruta('2', `${DIA}T${quandoEquipe}-03:00`, 'outgoing', quem, 'Poderia me enviar o seu nome completo por gentileza ?'),
     bruta('3', `${DIA}T${quandoPaciente}-03:00`, 'incoming', { type: 'external', name: 'Paciente' }, 'Claro, é Maria da Silva'),
   ]);
+const decide = (msgs: MensagemOficial[], agora: string, cutucada: Date | null = null) =>
+  equipeComAPalavra(msgs, noDia('05:00:00'), noDia(agora), cutucada, JANELA_LITE);
 
-test('Petrópolis, 20h: a equipe falou às 15h (5 h antes) → a Sofia responde (a volta já teria soltado e não responde a mensagem que ficou)', () => {
-  const d = equipeComAPalavra(conversaLite('15:00:00', '20:00:00'), noDia('09:00:00'), noDia('20:00:10'));
+test('Petrópolis, 20h: fala do Lite às 15h (5 h antes) → a Sofia responde (a volta já teria soltado e não responde a mensagem que ficou)', () => {
+  const d = decide(conversaDaEquipe(LITE, '15:00:00', '20:00:00'), '20:00:10');
   assert.deepEqual([d.fala, d.motivo], [null, 'antiga']);
 });
 
-test('Caxias: a equipe falou há 10 min pelo Lite → a Sofia pausa', () => {
-  const d = equipeComAPalavra(conversaLite('08:10:00', '08:20:00'), noDia('08:00:00'), noDia('08:20:10'));
+test('Caxias: fala do Lite há 10 min → a Sofia pausa', () => {
+  const d = decide(conversaDaEquipe(LITE, '08:10:00', '08:20:00'), '08:20:10');
   assert.equal(d.motivo, null);
   assert.equal(d.fala?.texto, 'Poderia me enviar o seu nome completo por gentileza ?');
 });
 
-test('a equipe falou há 61 min → a Sofia responde; há 59 min → pausa; o limite é PAUSA_EQUIPE_VOLTA_MIN', () => {
-  const msgs = conversaLite('08:00:00', '09:01:00');
-  assert.equal(equipeComAPalavra(msgs, noDia('07:00:00'), noDia('09:01:00')).motivo, 'antiga');
-  assert.equal(equipeComAPalavra(msgs, noDia('07:00:00'), noDia('08:59:00')).motivo, null);
-  // a janela acompanha a volta: com PAUSA_EQUIPE_VOLTA_MIN=120 a mesma fala de 61 min ainda pausa
+test('fala do Lite há 61 min → a Sofia responde; há 59 min → pausa; a janela é a passada por quem chama (a da volta)', () => {
+  const msgs = conversaDaEquipe(LITE, '08:00:00', '09:01:00');
+  assert.equal(decide(msgs, '09:01:00').motivo, 'antiga');
+  assert.equal(decide(msgs, '08:59:00').motivo, null);
   assert.equal(minutosDaVolta({ PAUSA_EQUIPE_VOLTA_MIN: '120' } as NodeJS.ProcessEnv), 120);
-  assert.equal(equipeComAPalavra(msgs, noDia('07:00:00'), noDia('09:01:00'), null, 120 * 60_000).motivo, null);
+  assert.equal(equipeComAPalavra(msgs, noDia('05:00:00'), noDia('09:01:00'), null, 120 * 60_000).motivo, null);
 });
 
-test('cutucada DEPOIS da equipe: a janela de 24 h conta a partir da cutucada, como antes (o paciente que responde a ela segue com a equipe)', () => {
-  const msgs = conversaLite('08:00:00', '16:00:00');
-  // sem cutucada, 8 h depois da equipe: a Sofia responde
-  assert.equal(equipeComAPalavra(msgs, noDia('07:00:00'), noDia('16:00:10')).motivo, 'antiga');
-  // com a cutucada às 10h (depois da equipe), o paciente que responde às 16h ainda está na conversa da equipe
-  assert.equal(equipeComAPalavra(msgs, noDia('07:00:00'), noDia('16:00:10'), noDia('10:00:00')).motivo, null);
+test('Business (Timbó) e usuário do Kommo: a fala de 2 h antes AINDA pausa — a janela é a de 24 h do main (Bebedouro)', () => {
+  for (const quem of [BUSINESS, USUARIO_KOMMO]) {
+    const msgs = conversaDaEquipe(quem, '08:00:00', '10:00:00');
+    assert.equal(decide(msgs, '10:00:10').motivo, null, quem.name);
+    assert.equal(decide(conversaDaEquipe(quem, '08:00:00', '10:00:00'), '10:00:10').fala?.autorNome, quem.name);
+    // e só deixa de pausar passadas as 24 h
+    assert.equal(equipeComAPalavra(msgs, noDia('05:00:00'), new Date(noDia('08:00:00').getTime() + JANELA_DA_EQUIPE_MS + 60_000), null, JANELA_LITE).motivo, 'antiga');
+  }
+});
+
+test('equipeComAPalavra é pura: sem a janela do Lite passada, o Lite usa as mesmas 24 h (não lê PAUSA_EQUIPE_VOLTA_MIN)', () => {
+  const msgs = conversaDaEquipe(LITE, '08:00:00', '16:00:00');
+  assert.equal(equipeComAPalavra(msgs, noDia('05:00:00'), noDia('16:00:10')).motivo, null);
+});
+
+test('cutucada DEPOIS da equipe: a janela de 24 h conta a partir da cutucada, como no main, inclusive para o Lite', () => {
+  for (const quem of [LITE, BUSINESS]) {
+    const msgs = conversaDaEquipe(quem, '08:00:00', '16:00:00');
+    // com a cutucada às 10h (depois da equipe), o paciente que responde às 16h ainda está na conversa da equipe
+    assert.equal(decide(msgs, '16:00:10', noDia('10:00:00')).motivo, null, quem.name);
+  }
+  // sem cutucada, o Lite de 8 h atrás libera; o Business de 8 h atrás ainda pausa
+  assert.equal(decide(conversaDaEquipe(LITE, '08:00:00', '16:00:00'), '16:00:10').motivo, 'antiga');
+  assert.equal(decide(conversaDaEquipe(BUSINESS, '08:00:00', '16:00:00'), '16:00:10').motivo, null);
+});
+
+test('conferirEquipe (porta, trava e recuperar-turnos): fala do Lite de 2 h atrás não pausa; a do Business de 2 h atrás ainda pausa e vira «equipe na conversa»', async () => {
+  const agora = noDia('10:00:10');
+  for (const [quem, pausa] of [[LITE, false], [BUSINESS, true]] as const) {
+    const { deps } = depsFalsas({
+      agora: () => agora,
+      mensagens: async () => conversaDaEquipe(quem, '08:00:00', '10:00:00'),
+      ultimaFalaDaIa: async () => noDia('05:00:00'),
+    });
+    const r = await conferirEquipe(unidade, LEAD, deps);
+    assert.equal(!!r.fala, pausa, quem.name);
+    assert.equal(r.motivo, pausa ? null : 'antiga', quem.name);
+  }
 });
 
 test('só robô (Salesbot, régua, transmissão) e resposta automática do app não dão a palavra à equipe', () => {
@@ -533,9 +569,9 @@ test('nada mudou durante o turno → a resposta sai, sem nota', async () => {
 // ── reativação de 30 min ────────────────────────────────────────────────────────────────────────
 
 test('reativação: a equipe falou pelo celular depois do handoff → acha a fala (e não reativa)', async () => {
-  const handoff = em('12:00:00');
+  const handoff = em('10:00:00');
   assert.equal(falaDaEquipeDepoisDe(conversaBebedouro(), handoff)?.texto, 'Olá Dona Nilza Bom dia tudo bem?');
-  assert.equal(falaDaEquipeDepoisDe(conversaBebedouro(), em('12:25:00')), null);
+  assert.equal(falaDaEquipeDepoisDe(conversaBebedouro(), em('11:00:00')), null);
   const lida = await falaDaEquipeDesde(unidade, LEAD, handoff, { mensagens: async () => conversaBebedouro() });
   assert.ok(lida);
 });

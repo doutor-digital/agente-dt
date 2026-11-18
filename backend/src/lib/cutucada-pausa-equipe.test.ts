@@ -105,22 +105,20 @@ test('NEUTRO para quem não tem cutucada: mesmas datas de `enviosDaSofia`, mesma
   assert.deepEqual(datas, [antes(0.5), antes(2), antes(3), antes(4)].map((d) => d.getTime()));
   assert.equal(await ultimaCutucadaDoLead(unidade, 1, antes(10)), null);
 
-  // a equipe falou há 45 min (dentro da janela da volta, 60 min): sem cutucada, a decisão é a de sempre
-  const msgs = conversa(0.75, 0.1);
+  const msgs = conversa(5, 1);
   // 3 argumentos (como todo chamador antigo) e 4º argumento nulo dão a MESMA resposta
-  for (const ia of [null, antes(6), antes(0.2)]) {
+  for (const ia of [null, antes(6), antes(2)]) {
     assert.deepEqual(equipeComAPalavra(msgs, ia, AGORA), equipeComAPalavra(msgs, ia, AGORA, null));
   }
-  assert.equal(equipeComAPalavra(msgs, antes(0.2), AGORA).motivo, 'ia_falou_depois');
+  assert.equal(equipeComAPalavra(msgs, antes(2), AGORA).motivo, 'ia_falou_depois');
   assert.equal(equipeComAPalavra(msgs, null, AGORA).motivo, null);
   assert.equal(equipeComAPalavra(conversa(25, 1), null, AGORA).motivo, 'antiga');
-  // a porta usa a janela da volta (60 min): fala de 5 h atrás, sem cutucada, já é «antiga»
-  assert.equal(equipeComAPalavra(conversa(5, 1), null, AGORA).motivo, 'antiga');
   assert.equal(JANELA_DA_EQUIPE_MS, 24 * H);
 
   // deps antigas, sem `ultimaCutucada`, funcionam como sempre
   linhas = [];
-  const antigas = deps({ mensagens: async () => msgs });
+  // (a fala é do app "WhatsApp Lite", que pausa só por 60 min: por isso aqui a conversa é de 45 min atrás; a de 5 h é «antiga» só para o Lite)
+  const antigas = deps({ mensagens: async () => conversa(0.75, 0.1) });
   delete antigas.ultimaCutucada;
   assert.equal((await conferirEquipe(unidade, 1, antigas)).motivo, null);
 });
