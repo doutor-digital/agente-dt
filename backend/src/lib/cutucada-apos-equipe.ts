@@ -23,7 +23,8 @@ import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { JANELA_DO_ENVIO_MS } from '../services/kommo-talks-normalizar.js';
 import { porQueNaoTocar, intentsDe, inteiro, temEtiqueta, type Cartao, type OpcoesDeCartao, type RazaoDeFicar } from './rotina-nucleo.js';
 import { ETIQUETAS_RETOMADA } from './rotina-etapas-worker.js';
-import { AVISO_DO_SISTEMA as AVISO_BASE, RESPOSTA_AUTOMATICA_ANTES_MS, RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
+import { RESPOSTA_AUTOMATICA_ANTES_MS, RESPOSTA_AUTOMATICA_MS, RESPOSTA_AUTOMATICA_MIN_CARACTERES } from './pausa-equipe.js';
+import { AVISO_DO_SISTEMA, NOMES_DOS_APPS_DO_CELULAR, RESPOSTA_AUTOMATICA_TEXTO, TEXTOS_DE_ROBO } from './fala-automatica.js';
 import { normalizarNome } from './kommo-schema.js';
 import { retornoDaEquipe } from './retorno-da-equipe.js';
 import { fusoDaUnidade } from './fuso.js';
@@ -64,24 +65,9 @@ export function configDaCutucada(pipelineIntents: unknown): ConfigDaCutucada {
 
 // ─── quem falou ───────────────────────────────────────────────────────────────────────────────────
 
-/** O app do celular da clínica: WhatsApp Business (coexistência) e WhatsApp Lite (QR code). O Kommo os marca como robô; quem escreve ali é gente. */
-const APPS_DO_CELULAR = ['whatsapp lite', 'whatsapp business'];
-
-/** Saudação/ausência que o app manda sozinho (Lite: "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…"). */
-const RESPOSTA_AUTOMATICA = /agradecemos o seu contato|nosso atendimento (é|e) de |fora do (nosso )?hor[aá]rio|hor[aá]rio de atendimento (é|e) /i;
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída: o da `pausa-equipe` + o «messageContextInfo» que o Lite mostra. */
-const AVISO_DO_SISTEMA = new RegExp(`${AVISO_BASE.source}|^'?messagecontextinfo'? is not yet supported`, 'i');
-
-/**
- * Textos de robô do Kommo que saem como o USUÁRIO `internal` — o mesmo login com que a SDR escreve dentro do Kommo, então o autor
- * não os separa da gente. A etiqueta ▶ Retomada no cartão é a marca geral (abaixo); estes cobrem o robô de gatilho de etapa que
- * não põe etiqueta (Petrópolis, 13/11/2026: 6 de 22 saídas de robô estavam em cartão sem a etiqueta). Na dúvida é robô: o erro
- * custa uma cutucada a menos, nunca uma a mais.
- */
-export const TEXTOS_DE_ROBO: readonly RegExp[] = [
-  /passando novamente porque vi que voc[eê] procurou ajuda/i,
-  /vi que voc[eê] demonstrou interesse no nosso tratamento, tentei contato/i,
-];
+/** Os apps do celular da clínica (Lite e Business) e os textos de robô/aviso moram em `fala-automatica.ts`, compartilhados com a pausa pela equipe. */
+const APPS_DO_CELULAR = NOMES_DOS_APPS_DO_CELULAR;
+export { TEXTOS_DE_ROBO };
 
 /** A mensagem é a resposta automática do app (saudação, ausência) ou aviso do sistema? Mesma ideia da `pausa-equipe`, estendida ao Lite. */
 export function ehRespostaAutomaticaDoApp(m: Pick<MensagemOficial, 'direcao' | 'texto' | 'autorNome' | 'anexo' | 'em'>, todas: ReadonlyArray<Pick<MensagemOficial, 'direcao' | 'em'>>): boolean {
@@ -90,7 +76,7 @@ export function ehRespostaAutomaticaDoApp(m: Pick<MensagemOficial, 'direcao' | '
   if (AVISO_DO_SISTEMA.test(texto)) return true;
   if (!APPS_DO_CELULAR.includes(m.autorNome.trim().toLowerCase())) return false;
   if (m.anexo) return false;
-  if (RESPOSTA_AUTOMATICA.test(texto)) return true;
+  if (RESPOSTA_AUTOMATICA_TEXTO.test(texto)) return true;
   if (texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();
   return todas.some((p) => {

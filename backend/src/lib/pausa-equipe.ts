@@ -47,6 +47,10 @@ import { registrarPausaDaEquipe } from './pausa-equipe-registro.js';
 import { createKommoClient, isLeadPaused } from '../services/kommo.service.js';
 import { enviosDaSofia, mensagensOficiaisDaUnidade, ultimaCutucadaDoLead, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { carimbarHumanoAssumiu } from '../services/lead-metrics.service.js';
+import { AVISO_DO_SISTEMA, appDoCelular, ehFalaAutomaticaPeloTexto } from './fala-automatica.js';
+
+// Reexportado: o módulo da cutucada e os testes importam daqui.
+export { AVISO_DO_SISTEMA };
 
 export const AUTOMACAO_PAUSA_EQUIPE = 'pausa-equipe';
 /** Fala da equipe mais velha que isto não pausa (e não faz a ligação da chave varrer conversas antigas). */
@@ -61,10 +65,6 @@ export const RESPOSTA_AUTOMATICA_ANTES_MS = 5_000;
 export const RESPOSTA_AUTOMATICA_MIN_CARACTERES = 40;
 const MENSAGENS_LIDAS = 40;
 
-const APP_DO_CELULAR = 'whatsapp business';
-/** Aviso do Kommo/WhatsApp que sai como mensagem de saída ("Unable to open this message…"). */
-export const AVISO_DO_SISTEMA = /^(unable to (open|display) this message|n[aã]o foi poss[ií]vel (abrir|exibir) (esta|essa) mensagem)/i;
-
 type Recorder = { step(args: { kind: 'THINKING' | 'KOMMO_ACTION' | 'COMPLETED' | 'ERROR'; title: string; payload?: unknown }): Promise<void> };
 
 export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = process.env): Estado {
@@ -74,17 +74,23 @@ export function estadoDaPausaPelaEquipe(slug: string, env: NodeJS.ProcessEnv = p
 // ── parte pura ──────────────────────────────────────────────────────────────────────────────────
 
 /**
- * PURA: a mensagem é a resposta automática do WhatsApp Business (saudação, ausência) ou aviso do sistema?
+ * PURA: a mensagem é a resposta automática do app do celular (saudação, ausência), aviso do sistema ou robô conhecido?
  * Visto em produção: Rio Verde, "⏰Nosso horário de atendimento é de segundas à sexta…" às 23:59, no mesmo
- * minuto da mensagem do paciente; Balsas, "Olá, tudo bem? 😄 Clínica Doutor Hérnia é especializada…".
+ * minuto da mensagem do paciente; Balsas, "Olá, tudo bem? 😄 Clínica Doutor Hérnia é especializada…"; Petrópolis (Lite),
+ * "Agradecemos o seu contato! Nosso atendimento é de segunda a sexta…" (35 em 72 h, 18/11/2026).
  * Áudio e texto curto pelo celular são gente.
+ *
+ * Para os DOIS apps (Business e Lite), sem depender de hora: aviso do sistema, texto de ausência/saudação e texto de robô conhecido.
+ * A regra de TEMPO (texto longo até 20 s depois de uma entrada) vale SÓ para o Business: no Lite ela escondia fala humana rápida
+ * ("Há quanto tempo ela vem sentindo essas dores ?", "Obrigada pela confirmação…" — 27 em 72 h nas duas contas) e a Sofia seguia
+ * falando por cima da secretária (Caxias, lead 3526512, 18/11/2026).
  */
 export function ehRespostaAutomatica(m: MensagemOficial, msgs: readonly MensagemOficial[]): boolean {
   if (m.direcao !== 'saida') return false;
   const texto = m.texto.trim();
-  if (AVISO_DO_SISTEMA.test(texto)) return true;
-  if (m.autorNome.trim().toLowerCase() !== APP_DO_CELULAR) return false;
-  if (m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
+  if (ehFalaAutomaticaPeloTexto(m)) return true;
+  const app = appDoCelular(m.autorNome);
+  if (app !== 'business' || m.anexo || texto.length < RESPOSTA_AUTOMATICA_MIN_CARACTERES) return false;
   const t = m.em.getTime();
   return msgs.some((p) => {
     if (p.direcao !== 'entrada') return false;
@@ -131,7 +137,8 @@ export function equipeComAPalavra(
 /** PURA: como a nota chama quem falou ("Melissa", "o celular da clínica (WhatsApp Business)", "a equipe"). */
 export function nomeDoAutor(autorNome: string): string {
   const nome = autorNome.trim();
-  return !nome ? 'a equipe' : nome.toLowerCase() === APP_DO_CELULAR ? 'o celular da clínica (WhatsApp Business)' : nome;
+  const app = appDoCelular(nome);
+  return !nome ? 'a equipe' : app === 'business' ? 'o celular da clínica (WhatsApp Business)' : app === 'lite' ? 'o celular da clínica (WhatsApp Lite)' : nome;
 }
 
 /** PURA: "Melissa em 20/10 10:25" / "o celular da clínica (WhatsApp Business) em 20/10 10:25". */

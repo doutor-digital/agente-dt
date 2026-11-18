@@ -21,7 +21,8 @@ import {
 import { _limparPausasProprias, handoffDaSofiaDesde, pausouSozinhaDesde, registrarPausaPropria } from './pausa-propria.js';
 import { _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId } from './automacoes.js';
-import type { MensagemOficial } from '../services/kommo-talks.service.js';
+import { normalizar, type MensagemOficial } from '../services/kommo-talks.service.js';
+import type { KommoTalkMessage } from '../services/kommo.service.js';
 import type { Simulacao } from './so-no-papel.js';
 
 /**
@@ -135,6 +136,100 @@ test('só robô (Salesbot, régua, transmissão) e resposta automática do app n
 test('descreverFala diz quem e quando, sem jargão', () => {
   assert.equal(descreverFala({ autorNome: 'WhatsApp Business', em: em('10:25:51') }), 'o celular da clínica (WhatsApp Business) em 20/10, 10:25');
   assert.equal(descreverFala({ autorNome: 'Giulia', em: em('10:25:51') }), 'Giulia em 20/10, 10:25');
+});
+
+// ── WhatsApp Lite (QR code): Caxias 3526512 e Petrópolis, 18/11/2026 ─────────────────────────────
+
+const AUSENCIA_PETROPOLIS =
+  'Agradecemos o seu contato! \nNosso atendimento é de segunda a sexta de 07:30 às 19:30 e aos sábados de 09:00 às 13:00. Retornaremos assim que possível.';
+const SOFIA_AGORA = new Date('2026-11-18T08:10:40-03:00');
+/** Como a rota /talks devolve: o celular da clínica pelo Lite é autor `bot` "WhatsApp Lite"; a Sofia, `bot` "Salesbot". */
+const bruta = (id: string, quando: string, type: 'incoming' | 'outgoing', autor: { type: string; name: string }, text: string): KommoTalkMessage => ({
+  id,
+  type,
+  text,
+  created_at: Math.floor(new Date(quando).getTime() / 1000),
+  author: autor,
+});
+const LITE = { type: 'bot', name: 'WhatsApp Lite' };
+
+test('Caxias 3526512 (18/11): fala da Jéssica pelo Lite depois da Sofia → a equipe tem a palavra (conversa lida como a rota devolve)', () => {
+  const msgs = normalizar([
+    bruta('1', '2026-11-18T08:10:07-03:00', 'incoming', { type: 'external', name: 'Leonardo' }, 'Bom dia\nEstou precisando da nota fiscal das minhas sessões'),
+    bruta('2', '2026-11-18T08:10:40-03:00', 'outgoing', { type: 'bot', name: 'Salesbot' }, 'Bom dia! ☺ Claro, a nota fiscal é emitida certo pela nossa equipe'),
+    bruta('3', '2026-11-18T08:10:45-03:00', 'outgoing', LITE, 'Poderia por gentileza me enviar seu nome completo ?'),
+    bruta('4', '2026-11-18T08:11:07-03:00', 'incoming', { type: 'external', name: 'Leonardo' }, 'Leonardo Costa da Silva'),
+  ]);
+  assert.deepEqual(msgs.map((m) => m.autor), ['paciente', 'sofia', 'equipe', 'paciente']);
+  const d = equipeComAPalavra(msgs, SOFIA_AGORA, new Date('2026-11-18T08:11:20-03:00'));
+  assert.equal(d.motivo, null);
+  assert.equal(d.fala?.texto, 'Poderia por gentileza me enviar seu nome completo ?');
+  assert.equal(descreverFala({ autorNome: 'WhatsApp Lite', em: d.fala!.em }), 'o celular da clínica (WhatsApp Lite) em 18/11, 08:10');
+});
+
+test('Petrópolis, 22h: a ausência "Agradecemos o seu contato!…" do Lite NÃO pausa a Sofia (nem a que chega 229 s depois)', async () => {
+  _semearParaTeste([{ slug: SLUG, automacao: 'pausa-equipe', estado: 'ligado' }]);
+  const msgs = normalizar([
+    bruta('1', '2026-11-17T21:59:00-03:00', 'outgoing', { type: 'bot', name: 'Salesbot' }, 'Oi! Aqui é a Sofia, da Doutor Hérnia Petrópolis.'),
+    bruta('2', '2026-11-17T22:00:05-03:00', 'incoming', { type: 'external', name: 'Paciente' }, 'Boa noite, queria saber o valor da consulta'),
+    bruta('3', '2026-11-17T22:00:09-03:00', 'outgoing', LITE, AUSENCIA_PETROPOLIS),
+    bruta('4', '2026-11-17T22:04:00-03:00', 'outgoing', LITE, AUSENCIA_PETROPOLIS), // chegou 229 s depois: a regra de tempo não a pegaria
+  ]);
+  assert.deepEqual(msgs.map((m) => m.autor), ['sofia', 'paciente', 'equipe', 'equipe']);
+  assert.equal(ehRespostaAutomatica(msgs[2], msgs), true);
+  assert.equal(ehRespostaAutomatica(msgs[3], msgs), true);
+  assert.deepEqual(falasHumanasDaEquipe(msgs), []);
+  const { deps, chamadas } = depsFalsas({
+    agora: () => new Date('2026-11-17T22:04:30-03:00'),
+    mensagens: async () => msgs,
+    ultimaFalaDaIa: async () => new Date('2026-11-17T21:59:00-03:00'),
+  });
+  const r = await portaDaEquipe({ unit: unidade, leadId: LEAD }, deps);
+  assert.equal(r.pausou, false);
+  assert.equal(chamadas.marcarPausa, 0);
+});
+
+test('Lite: aviso «messageContextInfo» e o robô de Retomada ("Passando novamente…") não são fala da equipe', () => {
+  const aviso = msg('saida', em('11:00:10'), "'messageContextInfo' is not yet supported. Use your device to view this message.", 'equipe', 'WhatsApp Lite');
+  const retomada = msg(
+    'saida',
+    em('11:12:06'),
+    'Oi! Passando novamente porque vi que você procurou ajuda para sua coluna. Você já tentou algum tratamento antes?',
+    'equipe',
+    'WhatsApp Lite',
+  );
+  assert.equal(ehRespostaAutomatica(aviso, [aviso]), true);
+  assert.equal(ehRespostaAutomatica(retomada, [retomada]), true);
+  assert.deepEqual(falasHumanasDaEquipe([aviso, retomada]), []);
+});
+
+test('Lite: a regra de TEMPO não vale — fala humana longa logo depois do paciente pausa; no Business continua automática (como hoje)', () => {
+  const entrada = msg('entrada', em('09:00:00'), 'oi');
+  const lite = msg('saida', em('09:00:05'), 'Há quanto tempo ela vem sentindo essas dores ?', 'equipe', 'WhatsApp Lite');
+  const business = msg('saida', em('09:00:05'), 'Há quanto tempo ela vem sentindo essas dores ?', 'equipe', 'WhatsApp Business');
+  assert.equal(ehRespostaAutomatica(lite, [entrada, lite]), false);
+  assert.equal(falasHumanasDaEquipe([entrada, lite]).length, 1);
+  assert.equal(ehRespostaAutomatica(business, [entrada, business]), true);
+});
+
+test('Lite: modelo de "confirmar sua sessão" e "parcela em aberto" são fala da equipe (a Sofia pausa nesses pacientes em tratamento)', () => {
+  const sessao = msg(
+    'saida',
+    em('08:23:17'),
+    '*CLÍNICA DOUTOR HÉRNIA DUQUE DE CAXIAS:*\nOlá, aqui é da Clínica Doutor Hérnia! 😀\n\nEstou entrando em contato para confirmar sua sessão agendada para:\n*Dia 19/11/26 às 18:30*',
+    'equipe',
+    'WhatsApp Lite',
+  );
+  const parcela = msg('saida', em('09:24:46'), 'Bom dia Sra Priscila tudo bem? 😊\n\nPassando para lembrar que ficou em aberto a parcela do seu tratamento, no valor de R$ 1.225,00', 'equipe', 'WhatsApp Lite');
+  assert.equal(ehRespostaAutomatica(sessao, [sessao]), false);
+  assert.equal(ehRespostaAutomatica(parcela, [parcela]), false);
+  assert.equal(falasHumanasDaEquipe([sessao, parcela]).length, 2);
+});
+
+test('ausência do WhatsApp Business agora também é pega pelo texto, mesmo fora dos 20 s', () => {
+  const entrada = msg('entrada', em('23:59:10'), 'oi');
+  const tarde = msg('saida', em('00:03:00'), AUSENCIA_RIO_VERDE);
+  assert.equal(ehRespostaAutomatica(tarde, [entrada, tarde]), true);
 });
 
 // ── leitura com dependências falsas ─────────────────────────────────────────────────────────────

@@ -19,6 +19,7 @@ import {
 } from '../services/kommo-talks.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { neutralizarMarcasDoSistema } from './comprovante-pix.js';
+import { ehFalaAutomaticaPeloTexto } from './fala-automatica.js';
 
 /** Mensagem mais nova que isto é o turno atual, que já chegou pelo webhook. */
 export const JANELA_DO_TURNO_MS = 3 * 60_000;
@@ -68,6 +69,9 @@ export function selecionarItens(
   const itens: MensagemOficial[] = [];
   for (const m of recentes) {
     if (m.autor === 'sofia') continue;
+    // ausência/saudação do app do celular, aviso do sistema e robô de Retomada não são a equipe falando: com o Lite como equipe, entrariam
+    // aqui como «Equipe» e o bloco mandaria a Sofia não se reapresentar (Petrópolis: a ausência sai a cada primeiro contato fora do horário)
+    if (m.direcao === 'saida' && ehFalaAutomaticaPeloTexto(m)) continue;
     if (m.autor === 'paciente') {
       if (m.texto && jaNaEntrada.has(m.texto)) continue;
       const ehAudioDoTurno = audioDoTurnoSemArquivo && m.anexo?.tipo === 'voice' && !!m.anexo.link;

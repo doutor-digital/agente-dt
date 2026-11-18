@@ -4,6 +4,7 @@
  * conector do claude.ai e os testes usarem. O serviço `kommo-talks.service.ts` reexporta tudo daqui.
  */
 import type { KommoClient, KommoTalkMessage } from './kommo.service.js';
+import { NOMES_DOS_APPS_DO_CELULAR } from '../lib/fala-automatica.js';
 
 export type AutorOficial = 'paciente' | 'sofia' | 'equipe';
 
@@ -28,11 +29,15 @@ export interface MensagemOficial {
 const NOMES_DA_SOFIA = ['doutor digital', 'i.a sofia', 'ia sofia', 'sofia'];
 
 /**
- * O app WhatsApp Business do celular da clínica (coexistência). O Kommo marca a mensagem como de robô, mas
- * quem escreve ali é gente: tratada como Sofia, a IA não via "Agendada consulta para 19/10 às 11h" da
- * equipe e seguiu pedindo confirmação (Canaã, lead 28339048, 17/10).
+ * Os apps do celular da clínica: WhatsApp Business (coexistência) e WhatsApp Lite (QR code). O Kommo marca a
+ * mensagem como de robô, mas quem escreve ali é gente: tratada como Sofia, a IA não via "Agendada consulta para
+ * 19/10 às 11h" da equipe e seguiu pedindo confirmação (Canaã, lead 28339048, 17/10).
+ * O Lite entrou em 18/11/2026 (Caxias, lead 3526512): a secretária Jéssica respondeu pelo celular às 08:10, 08:11 e 08:12
+ * e a Sofia falou por cima de cada fala dela, porque "WhatsApp Lite" caía em `tipo === 'bot'` e virava 'sofia'. Medido em
+ * Caxias e Petrópolis: nenhum envio do agente sai com esse autor (saem como "Salesbot"); a ausência automática do app e os
+ * robôs que saem assim são separados em `fala-automatica.ts` / `ehRespostaAutomatica`, não aqui.
  */
-const APPS_DA_EQUIPE = ['whatsapp business'];
+const APPS_DA_EQUIPE = NOMES_DOS_APPS_DO_CELULAR;
 
 export function classificarAutor(m: Pick<KommoTalkMessage, 'type' | 'author'>): AutorOficial {
   const tipo = (m.author?.type ?? '').toLowerCase();
