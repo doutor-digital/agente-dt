@@ -995,6 +995,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/cache-agenda.ts',
   },
   {
+    id: 'revisora-de-saida',
+    chave: 'REVISORA_SAIDA_SLUGS',
+    nome: 'Revisora de saída da Sofia',
+    oQueFaz:
+      'Uma IA rápida (Haiku 5.5) confere cada resposta que a Sofia JÁ ENVIOU contra a lista de erros que já aconteceram com paciente: preço que contradiz a tabela, "sem custo", horário antes de saber a dor, consulta/preço/Pix para quem já é paciente em tratamento, diagnóstico ou pronto-socorro sem sinal de alarme, promessa sem ação ou dado inventado, falar por cima da equipe, "bom dia" fora de hora. Só anota "barraria — regra — motivo"; não bloqueia, não troca e não muda nada do que o paciente recebeu.',
+    pegadinha:
+      'Só existe o modo "só no papel": a revisão roda DEPOIS do envio, sem segurar a resposta, e cada uma vira uma linha em revisoes_de_saida (aprovada, barraria ou sem veredito) — é dali que se mede o alarme falso antes de existir um modo ligado. Marcar "ligado" hoje também só anota. Custa cerca de US$ 0,0002 por resposta. Se o provedor falhar 5 vezes seguidas, ela para por 1 minuto sozinha; o paciente nunca percebe. Revisa só a resposta da conversa (não a régua de follow-up, a confirmação de véspera nem o lembrete). Desligar a unidade na tela e ela para de gastar.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/services/revisora-de-saida.service.ts',
+  },
+  {
     id: 'preco-convenio',
     chave: 'PRECO_CONVENIO_SLUGS',
     nome: 'Trava do preço de convênio',

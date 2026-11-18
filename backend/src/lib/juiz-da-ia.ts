@@ -269,16 +269,20 @@ export function montarPedidoAnthropic(a: {
   system: string;
   user: string;
   esforco: EsforcoDoJuiz;
+  /** Outro schema de saída (a revisora de saída usa o dela). Sem isto, o do juiz — nada muda para quem já chamava. */
+  schema?: Record<string, unknown>;
+  /** Teto de tokens de saída. Sem isto, `MAX_TOKENS_DO_JUIZ`. */
+  maxTokens?: number;
 }): PedidoAnthropic {
   return {
     model: a.modelo,
-    max_tokens: MAX_TOKENS_DO_JUIZ,
+    max_tokens: a.maxTokens ?? MAX_TOKENS_DO_JUIZ,
     system: a.system,
     messages: [{ role: 'user', content: a.user }],
     thinking: { type: 'disabled' },
     output_config: {
       ...(a.esforco ? { effort: a.esforco } : {}),
-      format: { type: 'json_schema', schema: SCHEMA_DO_JUIZ as unknown as Record<string, unknown> },
+      format: { type: 'json_schema', schema: a.schema ?? (SCHEMA_DO_JUIZ as unknown as Record<string, unknown>) },
     },
   };
 }

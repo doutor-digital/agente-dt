@@ -69,6 +69,7 @@ import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
 import { agendaMexidaNoTurno, consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
+import { agendarRevisaoDeSaida } from '../services/revisora-de-saida.service.js';
 import { descreverPausa, emPausa } from '../lib/pausa-unidade.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { voltarDaEsperaSeRespondeu } from '../lib/parados-worker.js';
@@ -2093,6 +2094,18 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           content: reply,
           meta: { via: sendResult.via, ...(botoes.length ? { botoes } : {}) },
         });
+        // Revisora de saída (modo seco): confere a resposta que o paciente JÁ recebeu. Sem await e sem retorno — não segura nada, não troca
+        // nada, e qualquer falha morre lá dentro (services/revisora-de-saida.service.ts). Só o que chegou de verdade (nada de nota interna).
+        if (!naoChegou) {
+          agendarRevisaoDeSaida({
+            unit,
+            leadId,
+            traceId,
+            conversationId: conv.id,
+            textoEnviado: reply,
+            mensagensDoGrafo: (result as { messages?: unknown[] }).messages ?? [],
+          });
+        }
         // Sinal da Sofia 2.0: o Pix copia-e-cola sai numa mensagem só com o código, depois da explicação (lib/pix-do-sinal-envio.ts).
         if (!naoChegou) {
           await enviarPixDoSinal({

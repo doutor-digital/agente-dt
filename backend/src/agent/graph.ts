@@ -117,6 +117,7 @@ import {
   textoDoTeto,
 } from './llm-policy.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
+import { guardarStatusDoPrompt } from '../lib/revisora-de-saida-contexto.js';
 import {
   agendamentoDoVinculo,
   blocoDaConsulta,
@@ -1635,6 +1636,9 @@ export async function buildAgentGraph(
       });
       // O que o guardrail devolve (correção ou texto de reserva) passa pela mesma trava do nome.
       const guard = { ...guardBruto, text: semDraSofiaNaDH(guardBruto.text, unit, rede) };
+      // Revisora de saída (modo seco): o status do paciente só o prompt DESTE turno sabe. Fica guardado por traceId para o `processAgent`
+      // entregá-lo à revisora depois do envio — aqui nada é decidido nem alterado (ver lib/revisora-de-saida-contexto.ts).
+      guardarStatusDoPrompt(recorder.traceId, promptDoTurno);
       if (guard.rewritten) {
         const ultimaIA = [...nonSystemMessages].reverse().find((m) => m.getType() === 'ai');
         const textoUltima = ultimaIA ? aiTextFromContent(ultimaIA.content) : '';
