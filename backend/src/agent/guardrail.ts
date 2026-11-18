@@ -79,6 +79,34 @@ function valoresDoSinalNaFrase(texto: string, candidatos: readonly number[]): Se
   return achados;
 }
 
+/**
+ * O sinal que a FICHA da unidade declara ("R$ 250 com sinal de R$ 50", "R$ 50 de sinal agora"), para as unidades que vendem
+ * sinal pelo texto e estão com `sinalPixCentavos` vazio — as da Sofia 2.0 (Araguaína, Imperatriz, Marabá, Balsas, resgates…).
+ * Sem isto o guardrail não sabia que R$ 50 é o sinal e trocava "sinal de R$ 50 antecipado" por "sinal de R$ 250 antecipado":
+ * 28 vezes em 30 dias (execution_steps `antecipado_corrigido:50->250`, a última em 18/11/2026; achado pelo Promptfoo).
+ *
+ * Só vale o valor EXATO que a ficha declara, menor que o antecipado; ficha com dois sinais diferentes não declara nenhum
+ * (na dúvida, a trava age como sempre). Não liga nada do Pix/Asaas: isso continua só com a flag (`sinalDaUnidade`).
+ */
+export function sinalDeclaradoNaFicha(
+  unit: { sourceProdutos?: string | null; systemPrompt?: string | null },
+  antecipado: number | null | undefined,
+): { sinal: number; restoNoDia: number } | null {
+  if (!antecipado || !Number.isFinite(antecipado)) return null;
+  const ficha = `${unit.sourceProdutos ?? ''}\n${unit.systemPrompt ?? ''}`;
+  const valor = String.raw`R\$\s?(\d{1,4})(?:,00)?`;
+  const padroes = [
+    new RegExp(String.raw`\bsinal\s+(?:de|no\s+valor\s+de)\s+${valor}`, 'gi'), // "sinal de R$ 50"
+    new RegExp(String.raw`${valor}\s+(?:de\s+sinal|antecipados?\s+\(sinal)`, 'gi'), // "R$ 50 de sinal", "R$ 50,00 antecipados (sinal"
+  ];
+  const achados = new Set<number>();
+  for (const re of padroes) for (const m of ficha.matchAll(re)) achados.add(Number(m[1]));
+  const validos = [...achados].filter((v) => v > 0 && v < antecipado);
+  if (validos.length !== 1) return null;
+  const sinal = validos[0]!;
+  return { sinal, restoNoDia: Math.round((antecipado - sinal) * 100) / 100 };
+}
+
 const FALLBACK_PRECO =
   'Sobre o valor, deixa eu confirmar direito pra não te passar informação errada 🙏 ' +
   'Já te falo por aqui, tá bem?';
@@ -304,7 +332,8 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
 
   // O desconto do convênio não pode sair como preço do Pix — ver preco-convenio.ts.
   const p = precosDaConsulta(unit);
-  const sinal = sinalDaUnidade(unit);
+  // Sinal: o da flag (Sofia 2.0 com Pix) ou, com a flag vazia, o que a ficha declara — ver `sinalDeclaradoNaFicha`.
+  const sinal = sinalDaUnidade(unit) ?? sinalDeclaradoNaFicha(unit, p?.antecipado);
   // R$ 50 e R$ 200 só são "do sinal" quando a MESMA frase fala de sinal / garantir / restante, e só como valor EXATO (sem a tolerância de
   // parcela do catálogo: "R$ 100" e "R$ 67" não são metade nem terço de R$ 200). Solto no texto continua sendo valor inventado.
   const doSinal = sinal ? valoresDoSinalNaFrase(texto, [sinal.sinal, sinal.restoNoDia]) : new Set<number>();
@@ -326,8 +355,9 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
     const va = corrigirValorAntecipado(texto, {
       antecipado: p.antecipado,
       taxaDeReserva: unit.spineBookingRequiresPayment ?? false,
-      // Sofia 2.0: o sinal (R$ 50) e o resto no dia (R$ 200) são preços legítimos; sem a flag a lista é vazia (nada muda)
-      valoresLegitimos: [...doSinal],
+      // Só o SINAL (R$ 50) é legítimo ao lado de "antecipado": o resto (R$ 200) se paga no dia, então "sinal de R$ 200
+      // antecipado" continua errado e é corrigido. Sem sinal (nem flag, nem ficha) a lista é vazia (nada muda).
+      valoresLegitimos: sinal ? [...doSinal].filter((v) => v === sinal.sinal) : [],
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
