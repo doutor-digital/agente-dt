@@ -3063,3 +3063,40 @@ model CrmTarefaZap {
   @@unique([conta, agenteId])
   @@map("crm_tarefa_zap")
 }
+
+/// A REVISORA DE SAÍDA da Sofia (18/11/2026): uma IA rápida confere cada resposta JÁ ENVIADA contra uma lista de erros que já
+/// aconteceram com paciente (lib/revisora-de-saida.ts). Em modo seco só REGISTRA aqui — nunca bloqueia nem altera nada. UMA linha
+/// por revisão, aprovada ou não, para dar o denominador do alarme falso: `veredito` = "aprova" | "barraria" | "sem_veredito"
+/// (modelo falhou, estourou o prazo ou devolveu JSON fora do formato — nunca conta como "barraria").
+model RevisaoDeSaida {
+  id               String   @id @default(cuid())
+  unitId           String   @map("unit_id")
+  /// o mesmo texto de `conversations.lead_id`
+  leadId           String   @map("lead_id")
+  traceId          String?  @map("trace_id")
+  conversationId   String?  @map("conversation_id")
+  /// "seco" hoje; "ligado" só existe quando a PR do modo ligado entrar
+  modo             String
+  veredito         String
+  /// as regras apontadas (vazio quando aprova ou sem veredito) — `unnest(regras)` para contar por regra
+  regras           String[] @default([])
+  /// [{ regra, motivo, trecho, origem: "modelo" | "codigo" }]
+  violacoes        Json?
+  textoEnviado     String   @map("texto_enviado")
+  /// O começo da conversa estava nas falas que a revisora leu? `false` = ela só viu o fim (e foi mandada aprovar na dúvida de `horario_antes_da_dor`);
+  /// `null` = a entrada nem chegou a ser montada. Para filtrar o alarme falso dessa regra: `where inicio_visivel is true`.
+  inicioVisivel    Boolean? @map("inicio_visivel")
+  provedor         String?
+  modelo           String?
+  promptTokens     Int      @default(0) @map("prompt_tokens")
+  completionTokens Int      @default(0) @map("completion_tokens")
+  costUsd          Decimal  @default(0) @map("cost_usd") @db.Decimal(12, 6)
+  latencyMs        Int      @default(0) @map("latency_ms")
+  erro             String?
+  criadoEm         DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm(sort: Desc)])
+  @@index([unitId, criadoEm(sort: Desc)])
+  @@index([leadId])
+  @@map("revisoes_de_saida")
+}
