@@ -48,6 +48,10 @@ test('valor do paciente: preço da unidade, pedido e sinal NÃO entram', () => {
   assert.deepEqual(doPaciente('Fico no aguardo do comprovante de R$ 250 pra confirmar.'), []);
   assert.deepEqual(doPaciente('Se você já mandou o Pix, fica R$ 300 no dia.'), []);
   assert.deepEqual(doPaciente('Você enviou o Pix, ficam R$ 250 no dia.'), []);
+  assert.deepEqual(doPaciente('O valor foi R$ 250 pra garantir.'), []);
+  assert.deepEqual(doPaciente('O valor foi de R$ 150 para a primeira consulta.'), []);
+  assert.deepEqual(doPaciente('Recebi o comprovante, mas o valor de R$ 250 é o antecipado.'), []);
+  assert.deepEqual(doPaciente('Você enviou tudo, o valor fica R$ 250 garantindo o horário.'), []);
   assert.deepEqual(doPaciente('Me manda o comprovante de R$ 200 pra eu confirmar.'), []);
   // "comprovante" na frase de antes não vale para a frase de depois
   assert.deepEqual(doPaciente('Recebi o comprovante, obrigada! A consulta antecipada é R$ 250.'), []);
