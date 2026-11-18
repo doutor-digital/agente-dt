@@ -96,34 +96,51 @@ export const DEPS_DUVIDA_PADRAO: DepsDuvida = {
 };
 
 export interface ResultadoDaDuvida {
-  /** 'em_andamento' = outro toque do mesmo paciente já está passando a conversa agora: este não refaz (nem vai para a Sofia). */
-  resultado: 'passou' | 'em_andamento';
-  pausa: ResultadoDaPausaDuvida | null;
+  resultado: 'passou';
+  pausa: ResultadoDaPausaDuvida;
   tarefa: boolean;
 }
 
-/** Dois toques seguidos (ids de mensagem diferentes) passariam os dois pela leitura da caixinha antes de qualquer um marcar. */
-const emAndamento = new Set<string>();
+/** A fila de cada cartão (`unit:lead`): um toque de cada vez. */
+const filas = new Map<string, Promise<unknown>>();
+
+interface ArgsDuvida {
+  unit: Unit;
+  leadId: number;
+  texto: string;
+  conv: Pick<Conversation, 'id' | 'contactName' | 'phone'>;
+  kommo: Pick<KommoClient, 'createTask'> & KommoDoLembrete;
+  env?: NodeJS.ProcessEnv;
+}
 
 /**
  * Trata o toque em "Tenho uma dúvida" de um lembrete do robô do Kommo. null = não é caso daqui (ou está só no papel) e a mensagem
- * segue para a Sofia como sempre. Erro ANTES de pausar sobe para o chamador (que manda para a Sofia — o lado de antes).
+ * segue para a Sofia como sempre.
+ *
+ * FALHA ABERTA, DE PROPÓSITO: erro ao ler a conversa ou a caixinha, ou ao MARCAR "Pausar IA", sobe para o chamador e a mensagem segue
+ * para a Sofia — o lado de antes, o mesmo de todas as travas desta casa (silêncio sem pausa e sem tarefa deixaria o paciente sem
+ * ninguém; "silêncio é o pior caso"). Pausa marcada e tarefa que falhou NÃO desfaz a pausa.
+ *
+ * Um toque de cada vez por cartão (fila em memória): dois toques seguidos (ids de mensagem diferentes) passariam os dois pela leitura da
+ * caixinha antes de qualquer um marcar e abririam duas tarefas. O 2º espera o 1º; já com a caixinha marcada, vira o «já é da equipe».
  */
-export async function tratarDuvidaDoLembrete(
-  args: {
-    unit: Unit;
-    leadId: number;
-    texto: string;
-    conv: Pick<Conversation, 'id' | 'contactName' | 'phone'>;
-    kommo: Pick<KommoClient, 'createTask'> & KommoDoLembrete;
-    env?: NodeJS.ProcessEnv;
-  },
-  deps: DepsDuvida = DEPS_DUVIDA_PADRAO,
-): Promise<ResultadoDaDuvida | null> {
-  const { unit, leadId, texto, conv, kommo } = args;
-  if (!ehToqueDeDuvida(texto)) return null;
-  const estado = estadoDaDuvidaNoLembrete(unit.slug, args.env ?? process.env);
+export async function tratarDuvidaDoLembrete(args: ArgsDuvida, deps: DepsDuvida = DEPS_DUVIDA_PADRAO): Promise<ResultadoDaDuvida | null> {
+  if (!ehToqueDeDuvida(args.texto)) return null;
+  const estado = estadoDaDuvidaNoLembrete(args.unit.slug, args.env ?? process.env);
   if (estado === 'desligado') return null;
+  const chave = `${args.unit.id}:${args.leadId}`;
+  const anterior = filas.get(chave) ?? Promise.resolve();
+  const minha = anterior.catch(() => undefined).then(() => decidir(args, estado, deps));
+  filas.set(chave, minha);
+  try {
+    return await minha;
+  } finally {
+    if (filas.get(chave) === minha) filas.delete(chave);
+  }
+}
+
+async function decidir(args: ArgsDuvida, estado: Estado, deps: DepsDuvida): Promise<ResultadoDaDuvida | null> {
+  const { unit, leadId, texto, conv, kommo } = args;
   const log = { unit: unit.slug, leadId };
 
   const agora = deps.agora();
@@ -159,35 +176,23 @@ export async function tratarDuvidaDoLembrete(
     return null;
   }
 
-  // A leitura da caixinha e a marcação não são atômicas: o 2º toque seguido espera a marca deste processo em vez de abrir outra tarefa.
-  // (Calado para a Sofia também: o 1º toque já está passando a conversa.)
-  const trava = `${unit.id}:${leadId}`;
-  if (emAndamento.has(trava)) {
-    logger.info(log, 'dúvida no lembrete: outro toque do mesmo paciente já está passando a conversa — este não refaz');
-    return { resultado: 'em_andamento', pausa: null, tarefa: false };
+  const pausa = await deps.pausar(unit, leadId);
+  if (pausa === 'sem_campo') {
+    // Sem a caixinha não há como segurar a Sofia: ela responde como sempre (e o toque segue para ela).
+    logger.warn(log, 'dúvida no lembrete: unidade sem a caixinha "Pausar IA" — não dá para passar calado, segue para a Sofia');
+    return null;
   }
-  emAndamento.add(trava);
-  try {
-    const pausa = await deps.pausar(unit, leadId);
-    if (pausa === 'sem_campo') {
-      // Sem a caixinha não há como segurar a Sofia: ela responde como sempre (e o toque segue para ela).
-      logger.warn(log, 'dúvida no lembrete: unidade sem a caixinha "Pausar IA" — não dá para passar calado, segue para a Sofia');
-      return null;
-    }
-    const tarefa = await kommo
-      .createTask({
-        leadId,
-        text: textoDaTarefaDeDuvida({ slug: unit.slug, nome: conv.contactName, prova, texto }),
-        completeAt: Math.floor(agora.getTime() / 1000) + PRAZO_DA_TAREFA_S,
-      })
-      .then(() => true)
-      .catch((err) => {
-        logger.warn({ ...log, err: String(err) }, 'dúvida no lembrete: falha ao abrir a tarefa (a pausa já está marcada)');
-        return false;
-      });
-    logger.info({ ...log, tipo: prova.tipo, pausa, tarefa }, 'dúvida no lembrete: a Sofia não respondeu — conversa passada para a equipe, calado');
-    return { resultado: 'passou', pausa, tarefa };
-  } finally {
-    emAndamento.delete(trava);
-  }
+  const tarefa = await kommo
+    .createTask({
+      leadId,
+      text: textoDaTarefaDeDuvida({ slug: unit.slug, nome: conv.contactName, prova, texto }),
+      completeAt: Math.floor(agora.getTime() / 1000) + PRAZO_DA_TAREFA_S,
+    })
+    .then(() => true)
+    .catch((err) => {
+      logger.warn({ ...log, err: String(err) }, 'dúvida no lembrete: falha ao abrir a tarefa (a pausa já está marcada)');
+      return false;
+    });
+  logger.info({ ...log, tipo: prova.tipo, pausa, tarefa }, 'dúvida no lembrete: a Sofia não respondeu — conversa passada para a equipe, calado');
+  return { resultado: 'passou', pausa, tarefa };
 }

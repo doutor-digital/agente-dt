@@ -932,10 +932,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     if (duvida) {
       await recorder.step({
         kind: 'COMPLETED',
-        title:
-          duvida.resultado === 'em_andamento'
-            ? 'Outro "Tenho uma dúvida" seguido — a conversa já está sendo passada para a equipe, sem IA'
-            : `Paciente tocou "Tenho uma dúvida" no lembrete — a Sofia não respondeu: "Pausar IA" marcado${duvida.tarefa ? ' e tarefa para a equipe' : ' (a tarefa falhou)'}, o paciente não foi avisado`,
+        title: `Paciente tocou "Tenho uma dúvida" no lembrete — a Sofia não respondeu: "Pausar IA" marcado${duvida.tarefa ? ' e tarefa para a equipe' : ' (a tarefa falhou)'}, o paciente não foi avisado`,
         payload: { mensagem: ctx.humanMessage.slice(0, 80), pausa: duvida.pausa, tarefa: duvida.tarefa },
       });
       await recorder.finalize({

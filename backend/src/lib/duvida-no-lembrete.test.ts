@@ -217,24 +217,39 @@ test('"só no papel" com o cartão já pausado não registra nada (não gravaria
 
 // ── dois toques seguidos ────────────────────────────────────────────────────────────────────────
 
-test('dois toques seguidos (ids de mensagem diferentes) antes da marca: uma pausa, uma tarefa; o 2º não vai para a Sofia', async () => {
-  let solta: () => void = () => undefined;
-  const portao = new Promise<void>((r) => {
-    solta = r;
-  });
+test('dois toques seguidos (ids de mensagem diferentes) antes da marca: uma pausa, uma tarefa; o 2º espera o 1º, vê a caixinha marcada e não faz nada', async () => {
+  let marcada = false;
   const f = fakes({
+    // lê o estado do Kommo com uma pausa no meio, como a rede de verdade: sem a fila os dois leriam «false»
+    pausado: async () => {
+      await new Promise((r) => setTimeout(r, 5));
+      return marcada;
+    },
     pausar: async () => {
       f.c.pausas++;
-      await portao;
+      await new Promise((r) => setTimeout(r, 5));
+      marcada = true;
       return 'marcou';
     },
   });
-  const primeiro = tratar(f);
-  const segundo = tratar(f);
-  assert.deepEqual(await segundo, { resultado: 'em_andamento', pausa: null, tarefa: false });
-  solta();
-  assert.deepEqual(await primeiro, { resultado: 'passou', pausa: 'marcou', tarefa: true });
+  const [primeiro, segundo] = await Promise.all([tratar(f), tratar(f)]);
+  assert.deepEqual(primeiro, { resultado: 'passou', pausa: 'marcou', tarefa: true });
+  assert.equal(segundo, null);
   assert.deepEqual([f.c.pausas, f.c.tarefas.length], [1, 1]);
-  // terminado o primeiro, a trava sai: um toque novo não fica preso
-  assert.deepEqual(await tratar(fakes()), { resultado: 'passou', pausa: 'marcou', tarefa: true });
+});
+
+test('a fila é por cartão e não prende depois de um erro: o toque seguinte ao que falhou é tratado', async () => {
+  let falhar = true;
+  const f = fakes({
+    pausado: async () => {
+      if (falhar) {
+        falhar = false;
+        throw new Error('429');
+      }
+      return false;
+    },
+  });
+  const [a, b] = await Promise.allSettled([tratar(f), tratar(f)]);
+  assert.equal(a.status, 'rejected');
+  assert.deepEqual(b.status === 'fulfilled' && b.value, { resultado: 'passou', pausa: 'marcou', tarefa: true });
 });
