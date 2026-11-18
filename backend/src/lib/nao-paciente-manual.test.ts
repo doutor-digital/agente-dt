@@ -10,6 +10,14 @@ test('os textos copiados batem com os de nao-paciente.ts (a marca da Sofia e a d
   assert.ok(fonte.includes(`OPCAO_MOTIVO_CURRICULO = '${OPCAO_NAO_PACIENTE}'`));
 });
 
+test('prompt-composer: nao_paciente_reentrada_status_id é chave de configuração (senão a Sofia lia "mover_etapa(111915771)")', () => {
+  const fonte = readFileSync(new URL('../agent/prompt-composer.ts', import.meta.url), 'utf8');
+  const inicio = fonte.indexOf('PIPELINE_INTENT_CONFIG_KEYS = new Set([');
+  assert.ok(inicio > 0, 'a lista de chaves de configuração do prompt sumiu');
+  const bloco = fonte.slice(inicio, fonte.indexOf(']);', inicio));
+  assert.ok(bloco.includes(`'nao_paciente_reentrada_status_id'`));
+});
+
 test('planoNaoPaciente: só o motivo "Não é paciente (currículo)"; com a etiqueta, só a conversa', () => {
   const naoContatar = 'NO_FOLLOW_UP';
   // o Heitor (Petrópolis, 17/11): PERDIDO "currículo" marcado à mão, sem a etiqueta
