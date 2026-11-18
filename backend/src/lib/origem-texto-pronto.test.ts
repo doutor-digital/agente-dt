@@ -193,6 +193,34 @@ test('casarFala: NÃO casa — "Bom dia", frase no MEIO da fala, frase cortada, 
   assert.equal(casarFala('Olá estava navegando e gostaria de mais informações sobre tratamentos', LISTA), null, 'fronteira de palavra: a frase não pode terminar no meio de uma palavra');
 });
 
+// ── formulário da GAC (18/11/2026): a frase está no MEIO da fala ──────────────────────────────────
+
+const FORM_CAXIAS = 'Olá! Meu nome é Wagner, moro em Duque de Caxias e estou com dor nas costas / lombar. Vim pelo formulário e quero saber mais sobre o tratamento.';
+const FORM_OLIMPIA = 'Olá! Meu nome é Vera Lucia, moro em uma cidade perto de Olímpia e estou com dor que desce para a perna (ciático). Vim pelo formulário e quero saber mais sobre o tratamento.';
+const LISTA_FORM = lerListaDeTextos({ [CHAVE_DA_LISTA]: [...LISTA_BRUTA, { texto: 'Vim pelo formulário', origem: 'Formulário', anuncio: true, contem: true }] });
+
+test('casarFala com contem: a mensagem real do formulário (nome e cidade mudam) casa com "Vim pelo formulário"', () => {
+  assert.equal(casarFala(FORM_CAXIAS, LISTA_FORM)?.origem, 'Formulário');
+  assert.equal(casarFala(FORM_OLIMPIA, LISTA_FORM)?.origem, 'Formulário');
+  assert.equal(casarFala('vim pelo formulario', LISTA_FORM)?.origem, 'Formulário', 'a frase sozinha também');
+  assert.equal(casarFala(FORM_CAXIAS, LISTA_FORM)?.contem, true);
+  // as frases sem `contem` seguem exigindo o começo
+  assert.equal(casarFala(`Bom dia. ${NAVEGANDO}`, LISTA_FORM), null);
+  assert.equal(casarFala(NAVEGANDO, LISTA_FORM)?.origem, 'WhatsApp anúncio');
+});
+
+test('casarFala com contem: só palavras inteiras, e sem a frase não casa', () => {
+  assert.equal(casarFala('Revim pelo formulários de ontem e quero saber', LISTA_FORM), null);
+  assert.equal(casarFala('Olá! Meu nome é Ana, moro em Taubaté e estou com dor. Quero saber mais sobre o tratamento.', LISTA_FORM), null);
+  assert.equal(casarFala('Preenchi o formulário', LISTA_FORM), null);
+});
+
+test('lerListaDeTextos: contem só vale se for true de verdade', () => {
+  const l = lerListaDeTextos({ [CHAVE_DA_LISTA]: [{ texto: 'Vim pelo formulário', origem: 'Formulário', contem: 'sim' }] });
+  assert.equal(l[0]?.contem, false);
+  assert.equal(casarFala(FORM_CAXIAS, l), null, 'sem contem=true, a frase no meio não casa');
+});
+
 test('casarPrimeirasFalas: só as primeiras falas do paciente contam', () => {
   const nada = ['Bom dia', 'Queria saber o preço', 'Qual o endereço?'];
   assert.equal(casarPrimeirasFalas([...nada, NAVEGANDO], LISTA), null, 'a frase na 4ª fala não vale');

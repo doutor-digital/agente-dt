@@ -177,7 +177,8 @@ const unitInputBase = {
       z.string(),
       z.union([
         z.coerce.number().int().positive(),
-        z.array(z.object({ texto: z.string().min(15).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional() })).max(50),
+        // `contem` precisa estar aqui: o z.object descarta chave desconhecida, e salvar pela tela apagaria a regra do formulário
+        z.array(z.object({ texto: z.string().min(15).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional(), contem: z.boolean().optional() })).max(50),
       ]),
     )
     .nullable()

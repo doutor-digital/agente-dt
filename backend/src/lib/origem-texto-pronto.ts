@@ -8,7 +8,10 @@
  * informações?»). Quem manda essa frase veio do anúncio/site; isto aqui lê a frase e preenche a ⚑ Origem que o rastreio não preencheu.
  *
  * A LISTA É DADO, não código: `units.pipeline_intents.origem_por_texto` = `[{ "texto": "<frase>", "origem": "<nome exato da opção do ⚑ Origem>",
- * "anuncio": true|false }]`. Sem a chave = a unidade não usa. A opção do campo é resolvida pelo NOME na conta (nunca por id fixo).
+ * "anuncio": true|false, "contem": true|false }]`. Sem a chave = a unidade não usa. A opção do campo é resolvida pelo NOME na conta (nunca por id fixo).
+ * `contem: true` = a frase pode estar no MEIO da fala (palavras inteiras), não só no começo. É o caso do formulário da GAC (18/11/2026,
+ * Taubaté, Olímpia, Capivari, Boituva e Caxias): «Olá! Meu nome é X, moro em Y e estou com Z. Vim pelo formulário e quero saber mais…» —
+ * o começo muda a cada lead, o que identifica é «vim pelo formulario».
  *
  * O que ela NUNCA faz: sobrescrever ⚑ Origem que já tem valor (do rastreio, da SDR ou da Sofia — lê o cartão imediatamente antes de gravar),
  * mexer em etapa, mandar mensagem. Só olha as primeiras falas do paciente (`MAX_FALAS_OLHADAS`): "Bom dia" no meio da conversa não conta.
@@ -62,6 +65,8 @@ export interface EntradaDaLista {
   origem: string;
   /** A frase é de anúncio PAGO (o `cadastro-todo-lead` trata como lead de anúncio). */
   anuncio: boolean;
+  /** A frase pode estar no meio da fala (palavras inteiras); sem isto, só vale no começo. */
+  contem: boolean;
   /** A frase normalizada: contra isto se compara. */
   chave: string;
 }
@@ -88,16 +93,19 @@ export function lerListaDeTextos(pipelineIntents: unknown, aviso: (motivo: strin
       aviso(`item ignorado (sem origem ou frase com menos de ${MIN_CARACTERES_DA_FRASE} letras): ${JSON.stringify(item).slice(0, 120)}`);
       continue;
     }
-    out.push({ texto, origem, anuncio: o.anuncio === true, chave });
+    out.push({ texto, origem, anuncio: o.anuncio === true, contem: o.contem === true, chave });
   }
   return out.sort((a, b) => b.chave.length - a.chave.length);
 }
 
-/** A fala COMEÇA com a frase (o lead às vezes acrescenta algo depois) — e termina numa fronteira de palavra. */
+/**
+ * A fala COMEÇA com a frase (o lead às vezes acrescenta algo depois) — e termina numa fronteira de palavra. Com `contem`, a frase pode estar
+ * em qualquer ponto da fala, sempre em palavras inteiras («vim pelo formulario» não casa com «revim pelo formularios»).
+ */
 export function casarFala(fala: unknown, lista: readonly EntradaDaLista[]): EntradaDaLista | null {
   const n = normalizarFrase(fala);
   if (!n) return null;
-  return lista.find((e) => n === e.chave || n.startsWith(`${e.chave} `)) ?? null;
+  return lista.find((e) => n === e.chave || n.startsWith(`${e.chave} `) || (e.contem && ` ${n} `.includes(` ${e.chave} `))) ?? null;
 }
 
 /** A primeira fala (entre as `max` primeiras) que casa com a lista. */
@@ -327,7 +335,7 @@ async function processar(estado: Estado, chave: string, unit: UnidadeDaOrigem, l
     return { tipo: 'pulou', motivo: plano.motivo };
   }
 
-  const motivo = `1ª fala do paciente «${fala.replace(/\s+/g, ' ').trim().slice(0, 100)}» começa com a frase pronta «${entrada.texto.slice(0, 100)}»${entrada.anuncio ? ' (anúncio)' : ''}`;
+  const motivo = `1ª fala do paciente «${fala.replace(/\s+/g, ' ').trim().slice(0, 100)}» ${entrada.contem ? 'contém' : 'começa com'} a frase pronta «${entrada.texto.slice(0, 100)}»${entrada.anuncio ? ' (anúncio)' : ''}`;
   if (estado === 'seco') {
     deps.simular(unit, ID_ORIGEM_TEXTO_PRONTO, { leadId, acao: 'gravaria', alvo: NOME_DO_CAMPO_ORIGEM, valor: entrada.origem, noCartao: null, motivo });
     logger.info({ unit: unit.slug, leadId, origem: entrada.origem, anuncio: entrada.anuncio }, `${ID_ORIGEM_TEXTO_PRONTO} [seco]: gravaria ${NOME_DO_CAMPO_ORIGEM} = ${entrada.origem}`);
