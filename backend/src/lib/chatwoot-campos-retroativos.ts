@@ -82,7 +82,7 @@ export interface Alteracao {
   porque: string;
 }
 
-export type CodigoDoBloqueio = 'tem-conferir-etapa' | 'ia-pausada-resolvida' | 'kommo-ambiguo' | 'perdido-sem-motivo' | 'perdido-com-consulta' | 'regua-acordaria' | 'regua-sumiria';
+export type CodigoDoBloqueio = 'tem-conferir-etapa' | 'ia-pausada-resolvida' | 'kommo-ambiguo' | 'perdido-sem-motivo' | 'perdido-motivo-invalido' | 'perdido-com-consulta' | 'regua-acordaria' | 'regua-sumiria';
 
 export interface Plano {
   conversa: number;
@@ -317,8 +317,12 @@ export function decidirCampos(e: EntradaDaConversa, agora: Date): Plano {
       plano.bloqueios.push({ codigo: 'perdido-com-consulta', detalhe: 'o Kommo diz Perdido, mas a conversa tem consulta de pé na agenda: a equipe decide' });
     } else if (k.tipo === 'perdido') {
       const motivoAtual = texto(a.motivo_nao_agendamento);
-      const motivo = motivoAtual || motivoDoChatwoot(k.lead.motivoPerda, e.motivosValidos);
-      if (!motivo) plano.bloqueios.push({ codigo: 'perdido-sem-motivo', detalhe: k.lead.motivoPerda ? 'o motivo de perda do Kommo não tem equivalente na lista do CRM' : 'o cartão está Perdido no Kommo sem motivo de perda' });
+      // o motivo que a conversa JÁ tem só vale se for uma opção da lista da conta: Perdido com motivo fora da lista quebra a regra da tela (Perdido exige motivo válido)
+      // e o texto livre de um robô/pessoa antiga não é fato do Kommo: não se grava a etapa por cima dele, a equipe decide
+      const atualInvalido = !!motivoAtual && !e.motivosValidos.includes(motivoAtual);
+      const motivo = atualInvalido ? null : motivoAtual || motivoDoChatwoot(k.lead.motivoPerda, e.motivosValidos);
+      if (atualInvalido) plano.bloqueios.push({ codigo: 'perdido-motivo-invalido', detalhe: e.motivosValidos.length ? 'o Kommo diz Perdido, mas o motivo que a conversa já tem não está na lista de motivos do CRM: a equipe decide' /* (sem o texto do campo: é livre e pode ter nome/telefone, e o detalhe vai para o log) */ : 'o Kommo diz Perdido e a conversa já tem motivo, mas a lista de motivos do CRM veio VAZIA (não consegui conferir): não gravo' });
+      else if (!motivo) plano.bloqueios.push({ codigo: 'perdido-sem-motivo', detalhe: k.lead.motivoPerda ? 'o motivo de perda do Kommo não tem equivalente na lista do CRM' : 'o cartão está Perdido no Kommo sem motivo de perda' });
       else {
         alteracoes.push({ campo: 'etapa', depois: 'Perdido', regra: 'etapa-kommo', porque: 'Kommo PERDIDO' });
         if (!motivoAtual) alteracoes.push({ campo: 'motivo_nao_agendamento', depois: motivo, regra: 'motivo-kommo', porque: 'motivo de perda do cartão do Kommo' });

@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { MensagemResumo, Vistos } from './chatwoot-regua.js';
 import type { LeadDoKommo } from './chatwoot-campos-retroativos.js';
+import { BuscaDeContatosIncompleta } from './chatwoot-campos-retroativos-kommo.js';
 import { desfazerCampos, lerArgumentos, rodarCampos, type ComoMarcou, type OpcoesDosCampos, type PortasDosCampos, type VistoAnterior } from './chatwoot-campos-retroativos-run.js';
 
 const AGORA = new Date('2026-11-17T20:00:00Z');
@@ -531,4 +532,28 @@ test('opções estritas: erro de digitação não cai num padrão calado', () =>
   assert.equal(lerArgumentos([]).max, 150);
   assert.equal(lerArgumentos([]).guardaMin, 12, 'a guarda padrão passa de um ciclo inteiro da régua (10 min)');
   for (const ruim of ['--so-conferr', '--max=0', '--caixa=x', '--conversas=1;2', '--guarda=61', 'foo']) assert.throws(() => lerArgumentos([ruim]), /inválid/);
+});
+
+test('busca do Kommo que não fecha (contatos demais): NADA é gravado nem contado como «sem cartão»; vira «kommo-ambiguo», não conta como falha do Kommo e não derruba a execução', async () => {
+  const m = mundo([raw(1), raw(2), raw(3), raw(4), raw(5), raw(6)], (t) => (t.endsWith('1001') || t.endsWith('1002') ? new BuscaDeContatosIncompleta() : [lead('AGENDADO')]));
+  const linhas: string[] = [];
+  const r = await rodarCampos(opcoes(), m.p, (l) => linhas.push(l), agora);
+  assert.equal(r.semCartao, 0, 'não é «sem cartão»');
+  assert.equal(r.erros, 0, 'não é falha do Kommo (não conta para parar a execução)');
+  assert.equal(r.parouPor, null);
+  assert.equal(r.bloqueios['kommo-ambiguo'], 2);
+  assert.equal(m.lojas.get(1)!.custom_attributes.etapa, undefined);
+  assert.equal(m.lojas.get(2)!.custom_attributes.etapa, undefined);
+  assert.equal(m.lojas.get(3)!.custom_attributes.etapa, 'Agendado', 'as outras seguem');
+  assert.equal(r.gravadas, 4);
+  assert.match(linhas.join('\n'), /PULA   conversa 1  kommo-ambiguo: .*pode haver contato que não vi/);
+  assert.doesNotMatch(linhas.join('\n'), /\d{6,}/, 'o log não leva pedaço de telefone');
+});
+
+test('o mesmo número cortado em duas conversas: pergunta ao Kommo UMA vez e as duas ficam como estão', async () => {
+  const m = mundo([raw(1, { fone: '+5594988887777' }), raw(2, { fone: '+5594988887777' })], () => new BuscaDeContatosIncompleta());
+  const r = await rodarCampos(opcoes(), m.p, () => undefined, agora);
+  assert.equal(m.kommoConsultado.length, 1);
+  assert.equal(r.bloqueios['kommo-ambiguo'], 2);
+  assert.equal(r.gravadas, 0);
 });

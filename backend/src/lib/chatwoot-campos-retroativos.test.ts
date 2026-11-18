@@ -116,6 +116,22 @@ test('regra 3: Perdido SEM motivo mapeável não é gravado (Perdido exige motiv
   assert.equal(motivoDoChatwoot('Financeiramente vulnerável', MOTIVOS), 'Sem condições');
 });
 
+test('regra 3: etapa vazia + motivo JÁ escrito que NÃO está na lista da conta: não grava Perdido (quebraria a regra «Perdido exige motivo válido»); bloqueio próprio, a equipe decide', () => {
+  for (const atual of ['Motivo antigo do robô', 'sem interesse']) {
+    const p = decidirCampos(entrada(conv({ attrs: { motivo_nao_agendamento: atual } }), [perdido('Sem interesse')]), AGORA);
+    assert.deepEqual(p.alteracoes, [], atual);
+    assert.equal(p.bloqueios[0]?.codigo, 'perdido-motivo-invalido', atual);
+    assert.match(p.bloqueios[0]!.detalhe, /não está na lista de motivos/);
+    assert.ok(!p.bloqueios[0]!.detalhe.includes(atual), 'o texto livre do campo não vai para o log');
+  }
+  // motivo válido continua sendo respeitado (só a etapa) e a lista vazia (CRM não respondeu) nunca libera
+  assert.deepEqual(campos(decidirCampos(entrada(conv({ attrs: { motivo_nao_agendamento: 'Sem interesse' } }), [perdido(null)]), AGORA)), { etapa: 'Perdido' });
+  const semLista = decidirCampos(entrada(conv({ attrs: { motivo_nao_agendamento: 'Sem interesse' } }), [perdido(null)], { motivosValidos: [] }), AGORA);
+  assert.deepEqual(semLista.alteracoes, []);
+  assert.equal(semLista.bloqueios[0]?.codigo, 'perdido-motivo-invalido');
+  assert.match(semLista.bloqueios[0]!.detalhe, /veio VAZIA/, 'a mensagem aponta a lista vazia, não o motivo');
+});
+
 test('regra 2: Perdido no Kommo mas com consulta DE PÉ na agenda é conflito: não grava Perdido, a equipe decide', () => {
   const dePe = conv({ attrs: { data_consulta: '2026-11-20', hora_consulta: '09:00', situacao_consulta: 'Confirmado', categoria_consulta: 'Avaliação' } });
   const p = decidirCampos(entrada(dePe, [perdido('Sem interesse')]), AGORA);
