@@ -503,10 +503,16 @@ test('a tarefa de uma CONTA nunca age na conta de outra unidade; teto de envios 
   assert.equal(fora.estado, 'pendente');
   linhas = [];
   for (let i = 0; i < C.MAX_ENVIOS_POR_CICLO + 5; i++) tarefa({ conversaId: 100 + i });
-  await ciclo();
-  assert.equal(reg.mandou.length, C.MAX_ENVIOS_POR_CICLO, 'se um defeito soltar tudo, vaza só o teto por ciclo');
-  await ciclo();
-  assert.equal(reg.mandou.length, C.MAX_ENVIOS_POR_CICLO + 5);
+  const r1 = await ciclo();
+  const saiu = () => reg.mandou.length + reg.notas.length + reg.zaps.length;
+  assert.ok(saiu() <= C.MAX_ENVIOS_POR_CICLO, 'se um defeito soltar tudo, vaza só o teto por ciclo — contando mensagem, nota e WhatsApp');
+  assert.ok(saiu() > C.MAX_ENVIOS_POR_CICLO - C.SAIDAS_POR_TAREFA, 'e usa a folga que tem');
+  assert.equal(r1.saidas, saiu(), 'o resumo conta exatamente o que saiu');
+  assert.ok(r1.noTeto > 0);
+  const antes = reg.mandou.length;
+  assert.ok(antes < C.MAX_ENVIOS_POR_CICLO + 5);
+  for (let k = 0; k < 6 && reg.mandou.length < C.MAX_ENVIOS_POR_CICLO + 5; k++) await ciclo();
+  assert.equal(reg.mandou.length, C.MAX_ENVIOS_POR_CICLO + 5, 'o que ficou para depois sai nos ciclos seguintes, cada um dentro do teto');
 });
 
 test('caixa que NÃO é WhatsApp oficial (celular/API): só texto livre, sem janela de 24 h', async () => {
@@ -547,9 +553,47 @@ test('confirmar o atraso FORA do horário (20h30) vale a partir das 8h do dia se
 test('o teto por ciclo vale também para os AVISOS de «não saiu»: um defeito que barra tudo não vira dezenas de WhatsApps', async () => {
   crm.sair = new Date(AGORA.getTime() - 86_400_000);
   for (let i = 0; i < C.MAX_ENVIOS_POR_CICLO + 10; i++) tarefa({ conversaId: 200 + i });
+  const r = await ciclo();
+  assert.ok(reg.zaps.length + reg.notas.length <= C.MAX_ENVIOS_POR_CICLO, 'nota + WhatsApp contam juntos no mesmo teto');
+  assert.ok(reg.zaps.length >= 5 && reg.notas.length >= 5);
+  assert.equal(r.saidas, reg.zaps.length + reg.notas.length);
+});
+
+test('o teto conta o que SAI de verdade: mensagem boa = paciente + WhatsApp da menina; falha = tentativa + nota + WhatsApp; nada passa de MAX_ENVIOS_POR_CICLO', async () => {
+  for (let i = 0; i < 12; i++) tarefa({ conversaId: 300 + i });
+  const r = await ciclo();
+  const saiu = reg.mandou.length + reg.notas.length + reg.zaps.length;
+  assert.ok(saiu <= C.MAX_ENVIOS_POR_CICLO, `saíram ${saiu}`);
+  assert.equal(r.saidas, saiu);
+  assert.ok(reg.zaps.length >= 1 && reg.zaps.length === reg.mandou.length, 'cada mensagem que saiu gerou o seu aviso no WhatsApp, e os dois entram na conta');
+  assert.ok(reg.mandou.length < 12, 'antes só a mensagem contava: saíam 12 mensagens + 12 WhatsApps');
+  assert.equal(reg.leituras.filter((l) => l === 'conversa').length, reg.mandou.length, 'as que não cabem no teto nem leem o CRM (sem rajada de leituras por minuto)');
+});
+
+test('com o teto estourado o ciclo CONTINUA: seco, silêncio e tarefa fora do horário seguem sendo tratados; só o que sai fica para o próximo ciclo', async () => {
+  for (let i = 0; i < 30; i++) tarefa({ conversaId: 400 + i, quando: new Date(AGORA.getTime() - 60_000 * (60 - i)) });
+  // chegam DEPOIS das 30 que saem (ordenadas por horário): antes o laço parava no teto e estas nunca eram vistas
+  const seguravel = tarefa({ conversaId: 500, tipo: 'ligacao', simuladoEm: new Date(AGORA.getTime() - 86_400_000), quando: new Date(AGORA.getTime() + 0) });
+  const decidida = tarefa({ conversaId: 501, simuladoEm: new Date(AGORA.getTime() - 86_400_000), quando: new Date(AGORA.getTime() + 0) });
+  const r = await ciclo();
+  assert.ok(r.noTeto > 0, 'o teto foi atingido');
+  assert.equal(seguravel.lembreteEm?.getTime(), AGORA.getTime(), 'o lembrete decidido em seco foi tratado (silencioso) mesmo com o teto estourado');
+  assert.equal(seguravel.estado, 'pendente');
+  assert.equal(decidida.estado, 'aguardando', 'a decidida em seco virou «Aguardando» em silêncio');
+  assert.equal(r.silenciadas, 2);
+  assert.ok(reg.mandou.length + reg.notas.length + reg.zaps.length <= C.MAX_ENVIOS_POR_CICLO);
+});
+
+test('lembrete de ligação também respeita o teto: sem folga, fica intocado (sem «lembrado») para o próximo ciclo', async () => {
+  for (let i = 0; i < 12; i++) tarefa({ tipo: 'ligacao', conversaId: 600 + i, quando: new Date(AGORA.getTime() - 60_000 * (20 - i)) });
+  const r = await ciclo();
+  assert.ok(reg.notas.length + reg.zaps.length <= C.MAX_ENVIOS_POR_CICLO);
+  assert.ok(r.lembretes < 12 && r.noTeto > 0);
+  const semAviso = linhas.filter((l) => l.lembreteEm === null);
+  assert.equal(semAviso.length, 12 - r.lembretes, 'quem não coube NÃO foi dado como lembrado');
   await ciclo();
-  assert.equal(reg.zaps.length, C.MAX_ENVIOS_POR_CICLO);
-  assert.equal(reg.notas.length, C.MAX_ENVIOS_POR_CICLO);
+  await ciclo();
+  assert.equal(linhas.filter((l) => l.lembreteEm === null).length, 0, 'todas acabam avisadas, ciclo a ciclo');
 });
 
 test('TRANSIÇÃO seco → ligado: o que o seco decidiu NÃO sai sozinho e NÃO gera aviso por tarefa — vira «Aguardando» em silêncio (0 envio, 0 nota, 0 WhatsApp)', async () => {

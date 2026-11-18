@@ -37,8 +37,15 @@ import {
 } from './regras.js';
 
 export const ID_CICLO = 'crm-tarefas';
-/** Se um defeito soltar tudo de uma vez, vaza só isto por ciclo. */
+/**
+ * Se um defeito soltar tudo de uma vez, vaza só isto por ciclo. O teto vale para TUDO o que sai do servidor: mensagem ao paciente,
+ * nota no CRM e WhatsApp da atendente (cada um conta 1, tentativa que falhou também). Ver `ResumoDoCiclo.saidas`.
+ */
 export const MAX_ENVIOS_POR_CICLO = 20;
+/** O mais que uma MENSAGEM solta (paciente + nota + WhatsApp, no pior caso: ela falha e a menina é avisada): só começa se couber, então o teto nunca estoura. */
+export const SAIDAS_POR_TAREFA = 3;
+/** O que um AVISO solta (lembrete, «não saiu», «aguardando»): nota + WhatsApp. */
+export const SAIDAS_DE_AVISO = 2;
 export const MAX_POR_UNIDADE = 100;
 
 export interface DaUnidade {
@@ -101,8 +108,12 @@ export interface ResumoDoCiclo {
   aguardando: number;
   adiadas: number;
   falhas: number;
+  /** tudo o que SAIU (ou tentou sair) do servidor neste ciclo, em todas as unidades: mensagem ao paciente + nota no CRM + WhatsApp da atendente. É o que o teto conta. */
+  saidas: number;
+  /** quantas tarefas ficaram para o próximo ciclo só porque o teto de saídas acabou */
+  noTeto: number;
 }
-const resumoVazio = (): ResumoDoCiclo => ({ presas: 0, vistas: 0, desligadas: 0, silenciadas: 0, mandadas: 0, lembretes: 0, simuladas: 0, barradas: 0, aguardando: 0, adiadas: 0, falhas: 0 });
+const resumoVazio = (): ResumoDoCiclo => ({ presas: 0, vistas: 0, desligadas: 0, silenciadas: 0, mandadas: 0, lembretes: 0, simuladas: 0, barradas: 0, aguardando: 0, adiadas: 0, falhas: 0, saidas: 0, noTeto: 0 });
 
 const statusDoErro = (e: unknown): number | undefined => {
   const s = (e as { status?: number } | null)?.status;
@@ -121,6 +132,14 @@ interface Ctx {
   ocupado: boolean;
 }
 
+/** Cabe mais uma tarefa que SAI neste ciclo? Quem não cabe fica intocada (pendente) para o próximo ciclo; o que não sai (seco, silêncio, espera) segue sendo tratado. */
+const cabe = (c: Ctx, custo: number): boolean => c.resumo.saidas + custo <= MAX_ENVIOS_POR_CICLO;
+/** Deixa a tarefa para o próximo ciclo porque o teto de saídas acabou. */
+const segurarNoTeto = (c: Ctx): void => {
+  c.resumo.adiadas++;
+  c.resumo.noTeto++;
+};
+
 const link = (u: DaUnidade, t: CrmTarefa): string => (u.linkDaConta ? `${u.linkDaConta}/conversations/${t.conversaId}` : '');
 
 /** Aviso à menina: nota privada com menção (o sininho do CRM) e/ou WhatsApp. Nunca lança. Devolve um resumo curto para o log. */
@@ -128,6 +147,7 @@ async function avisarMenina(c: Ctx, t: CrmTarefa, texto: string, canais: { nota:
   const { mundo, armazem } = c.deps;
   const partes: string[] = [];
   if (canais.nota) {
+    c.resumo.saidas++;
     try {
       await mundo.nota(c.ctx, t.conversaId, notaComMencao({ id: t.responsavelId, nome: t.responsavelNome }, texto));
       partes.push('CRM: ok');
@@ -140,6 +160,7 @@ async function avisarMenina(c: Ctx, t: CrmTarefa, texto: string, canais: { nota:
       const numero = await armazem.numeroDaMenina(t.conta, t.responsavelId);
       if (!numero) partes.push('WhatsApp: sem número cadastrado');
       else {
+        c.resumo.saidas++;
         const l = link(c.u, t);
         partes.push((await mundo.zap(numero, `Doutor Digital · ${c.u.nome}\n${texto}${l ? `\n${l}` : ''}`)) ? 'WhatsApp: ok' : 'WhatsApp: falhou');
       }
@@ -179,6 +200,7 @@ async function tratarLembrete(c: Ctx, t: CrmTarefa): Promise<void> {
     c.resumo.adiadas++;
     return;
   }
+  if (!cabe(c, SAIDAS_DE_AVISO)) return segurarNoTeto(c); // o aviso sai (nota + WhatsApp): sem folga no ciclo, fica para o próximo
   if (!(await armazem.pegarLembrete(t.id, agora))) return; // outra réplica já avisou
   const resumo = await avisarMenina(c, t, texto, { nota: true, zap: true });
   const nada = resumo.includes('CRM: falhou') && !resumo.includes('WhatsApp: ok');
@@ -207,6 +229,7 @@ async function barrar(c: Ctx, t: CrmTarefa, b: Barrado): Promise<void> {
     }
     return;
   }
+  if (!cabe(c, SAIDAS_DE_AVISO)) return segurarNoTeto(c); // barrar avisa a menina (nota + WhatsApp): sem folga no ciclo, a tarefa fica como está e é reavaliada no próximo
   // com a versão lida: se a menina editou no meio do ciclo, o robô não barra a versão nova com o motivo da velha
   if (!(await armazem.atualizar(t.id, ['pendente', 'enviando'], { estado: b.estado, motivo: b.motivo }, t.atualizadoEm))) return;
   c.resumo.barradas++;
@@ -264,11 +287,15 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
       }
       return;
     }
+    if (!cabe(c, SAIDAS_DE_AVISO)) return segurarNoTeto(c);
     if (!(await armazem.atualizar(t.id, ['pendente'], { estado: 'aguardando', motivo }, t.atualizadoEm))) return;
     c.resumo.aguardando++;
     await avisarMenina(c, t, `A mensagem para ${nomeCurto(t.contatoNome)} NÃO saiu sozinha: ${motivo}.`, { nota: true, zap: true });
     return;
   }
+
+  // daqui para baixo a tarefa só pode terminar em SAÍDA (mensagem ou aviso de «não saiu») ou em adiamento: sem folga no teto, nem lê o CRM (seria uma rajada de leituras por minuto)
+  if (!seco && !cabe(c, SAIDAS_POR_TAREFA)) return segurarNoTeto(c); // (o pior caso da mensagem: sem folga para ele, nem lê o CRM)
 
   // 2. o CRM: conversa, SAIR, janela de 24 h, modelo. Qualquer leitura que falhar ADIA (nunca vira «não pediu SAIR»).
   let via: ReturnType<typeof escolherVia>;
@@ -290,13 +317,17 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
     }
   } catch (e) {
     // não deu para ler o CRM: tenta no próximo ciclo; depois de algumas vezes desiste com o motivo
-    c.resumo.adiadas++;
     if (statusDoErro(e) === 429) {
+      c.resumo.adiadas++;
       c.ocupado = true;
       return;
     }
-    if (seco) return;
+    if (seco) {
+      c.resumo.adiadas++;
+      return;
+    }
     if (t.tentativas + 1 >= MAX_TENTATIVAS_DE_LEITURA) return barrar(c, t, { estado: 'falhou', motivo: `não consegui ler o CRM depois de ${MAX_TENTATIVAS_DE_LEITURA} tentativas (${msgDoErro(e).slice(0, 80)})` });
+    c.resumo.adiadas++;
     await armazem.atualizar(t.id, ['pendente'], { tentativas: t.tentativas + 1 });
     logger.warn({ unit: c.u.slug, tarefa: t.id, err: msgDoErro(e) }, `${ID_CICLO}: não consegui conferir a conversa — adio`);
     return;
@@ -323,9 +354,10 @@ async function tratarMensagem(c: Ctx, t: CrmTarefa): Promise<void> {
     return;
   }
 
-  // 4. LIGADO: pega a tarefa ANTES de mandar
+  // 4. LIGADO: pega a tarefa ANTES de mandar (o teto de saídas já foi conferido no começo do passo 2)
   if (!(await armazem.pegar(t.id, mundo.agora(), t.atualizadoEm))) return;
   try {
+    c.resumo.saidas++; // conta ao tentar: se o CRM não respondeu direito, pode ter saído
     const r = await mundo.mandar(c.ctx, t.conversaId, { content, modelo });
     // sem o id da mensagem não há prova de que entrou: INCERTO (nunca reenvia sozinha)
     if (r.id == null) {
@@ -367,7 +399,6 @@ export async function rodarCiclo(deps: { armazem: Armazem; mundo: MundoDoCiclo }
   const env = mundo.env ?? process.env;
   const janela = janelaDeEnvio(env);
   const atrasoMax = atrasoMaximoDaMensagemMs(env);
-  let envios = 0;
 
   for (const unitId of await armazem.unidadesComVencidas(agora)) {
     const u = await mundo.unidade(unitId);
@@ -383,7 +414,7 @@ export async function rodarCiclo(deps: { armazem: Armazem; mundo: MundoDoCiclo }
     const c: Ctx = { deps, u, ctx: u.ctx, resumo, janela, atrasoMax, ocupado: false };
     const lista = await armazem.vencidas(unitId, agora, u.modo === 'seco', MAX_POR_UNIDADE);
     for (const t of lista) {
-      if (c.ocupado || envios >= MAX_ENVIOS_POR_CICLO) break;
+      if (c.ocupado) break; // o teto de saídas NÃO para o laço: o que não sai (seco, silêncio, espera) segue sendo tratado
       // a conta da tarefa é a da unidade: tarefa de uma conta nunca age em outra
       if (t.conta !== u.ctx.conta.conta) {
         logger.warn({ unit: u.slug, tarefa: t.id }, `${ID_CICLO}: a conta da tarefa não é a da unidade — pulo`);
@@ -391,21 +422,18 @@ export async function rodarCiclo(deps: { armazem: Armazem; mundo: MundoDoCiclo }
       }
       resumo.vistas++;
       try {
-        // o teto vale para tudo o que SAI do servidor (mensagem, lembrete e os avisos de «não saiu»/«falhou»/«aguardando»): um defeito não pode virar dezenas de WhatsApps
-        const saiu = () => resumo.mandadas + resumo.lembretes + resumo.barradas + resumo.aguardando + resumo.falhas;
-        const antes = saiu();
+        // o teto vale para tudo o que SAI do servidor (mensagem, nota, WhatsApp da menina): cada ponto de saída conta em `resumo.saidas` e só começa tarefa que sai se couber
+        const antes = resumo.saidas;
         if (t.tipo === 'mensagem') await tratarMensagem(c, t);
         else await tratarLembrete(c, t);
-        if (saiu() > antes) {
-          envios++;
-          await mundo.pausa(150);
-        }
+        if (resumo.saidas > antes) await mundo.pausa(150);
       } catch (e) {
         resumo.falhas++;
         logger.warn({ unit: u.slug, tarefa: t.id, err: msgDoErro(e) }, `${ID_CICLO}: falhou numa tarefa — sigo com as outras`);
       }
     }
   }
+  if (resumo.noTeto) logger.warn({ saidas: resumo.saidas, noTeto: resumo.noTeto, teto: MAX_ENVIOS_POR_CICLO }, `${ID_CICLO}: teto de saídas do ciclo atingido — ${resumo.noTeto} tarefa(s) ficam para o próximo ciclo`);
   // só fala quando algo aconteceu (tarefa esperando a janela de horário abrir seria uma linha por minuto a noite inteira)
   if (resumo.presas || resumo.silenciadas || resumo.mandadas || resumo.lembretes || resumo.simuladas || resumo.barradas || resumo.aguardando || resumo.falhas) logger.info(resumo, `${ID_CICLO}: ciclo`);
   return resumo;

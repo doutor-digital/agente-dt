@@ -110,9 +110,14 @@ const ehCelularDaUnidade = (nome: string): boolean => nome.trim().startsWith('�
 
 /** Quem pode cuidar de uma tarefa: os membros das caixas da unidade (e, se não deu para ler, todas as atendentes da conta). Sem o «📱 Celular da unidade». */
 async function atendentesDaUnidade(r: Resolvida): Promise<Atendente[]> {
+  return (await lerAtendentes(r)).lista;
+}
+
+/** `completa` = a lista veio inteira do CRM (ou do cache de uma leitura inteira); falso = CRM lento/torto, a lista pode estar faltando gente. */
+async function lerAtendentes(r: Resolvida): Promise<{ lista: Atendente[]; completa: boolean }> {
   const k = `${r.conta}|${r.unit.slug}`;
   const feito = cacheDeAtendentes.get(k);
-  if (feito && feito.ate > Date.now()) return feito.v;
+  if (feito && feito.ate > Date.now()) return { lista: feito.v, completa: true };
   const lista = new Map<number, Atendente>();
   const pegar = (x: unknown): void => {
     const o = x as { id?: unknown; name?: unknown; available_name?: unknown } | null;
@@ -150,7 +155,7 @@ async function atendentesDaUnidade(r: Resolvida): Promise<Atendente[]> {
   const v = [...lista.values()].sort((a, b) => a.nome.localeCompare(b.nome));
   // lista degradada (CRM lento) NUNCA fica guardada: senão a unidade inteira veria uma atendente só por 1 minuto
   if (confiavel && leu) cacheDeAtendentes.set(k, { ate: Date.now() + 60_000, v });
-  return v;
+  return { lista: v, completa: confiavel && leu };
 }
 
 /** Só para o teste. */
@@ -579,7 +584,8 @@ export async function tarefasEditarHandler(req: Request, res: Response): Promise
   }
   // só edita enquanto ainda está parada (o robô pode ter pego no meio)
   const mexeu = await prisma.crmTarefa.updateMany({
-    where: { id: t.id, estado: { in: ['pendente', 'aguardando'] } },
+    // `atualizadoEm` = a versão que foi LIDA: se outra edição (ou o robô) mexeu enquanto este pedido se preparava, não atropela — devolve o 409 de baixo
+    where: { id: t.id, estado: { in: ['pendente', 'aguardando'] }, atualizadoEm: t.atualizadoEm },
     data: {
       quando: d.quando,
       responsavelId: d.responsavelId,
@@ -701,6 +707,13 @@ export async function tarefasResultadoHandler(req: Request, res: Response): Prom
     }
   }
   const agora = new Date();
+  // quem cuida da PRÓXIMA tentativa: a mesma atendente, se ela ainda atende a unidade (a caixa muda); senão quem registrou o resultado.
+  // Só troca com a lista COMPLETA: CRM lento devolve lista curta, e isso não prova que a atendente saiu da caixa (nesse caso mantém, como antes).
+  let doProximo = { id: t.responsavelId, nome: t.responsavelNome };
+  if (proxima) {
+    const lida = await lerAtendentes(r).catch(() => null);
+    if (lida?.completa && !lida.lista.some((a) => a.id === t.responsavelId)) doProximo = { id: r.id, nome: lida.lista.find((a) => a.id === r.id)?.nome ?? r.nome };
+  }
   // o resultado e a próxima tentativa são UMA coisa só: se criar a próxima falhar, o resultado também volta (senão a ligação ficaria «com resultado» sem a próxima)
   const feito = await prisma.$transaction(async (tx) => {
     const x = await tx.crmTarefa.updateMany({
@@ -712,7 +725,7 @@ export async function tarefasResultadoHandler(req: Request, res: Response): Prom
     const n = await tx.crmTarefa.create({
       data: {
         unitId: t.unitId, conta: t.conta, caixa: t.caixa, conversaId: t.conversaId, contatoId: t.contatoId, contatoNome: t.contatoNome, tipo: 'ligacao', quando: proxima,
-        responsavelId: t.responsavelId, responsavelNome: t.responsavelNome, texto: t.texto, criadoPor: por(r),
+        responsavelId: doProximo.id, responsavelNome: doProximo.nome, texto: t.texto, criadoPor: por(r),
       },
     });
     return { proximaId: n.id as string | null };

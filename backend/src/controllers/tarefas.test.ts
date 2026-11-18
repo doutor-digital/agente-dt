@@ -26,6 +26,7 @@ const R = await import('../lib/conta-da-requisicao.js');
 const Regras = await import('../lib/crm-tarefas/regras.js');
 const { abasDaConta } = await import('../lib/kit-unidade/fase2.js');
 const { apiRouter } = await import('../routes/api.routes.js');
+const { _esquecerAtendentes } = await import('./tarefas.controller.js');
 
 const CW = 'https://atendimento.exemplo.test';
 
@@ -118,6 +119,7 @@ const PERFIS: Record<string, { id: number; name: string; email: string; accounts
 const INBOX_DA_CONVERSA: Record<number, number> = { 40: 3, 41: 2, 50: 9, 60: 4 };
 let chamadas: string[] = [];
 let ultimaMensagemEm: number | null = null;
+let membrosFalham = false;
 const fetchReal = globalThis.fetch;
 const MODELO_OK = { name: 'parau_retorno', language: 'pt_BR', status: 'APPROVED', category: 'UTILITY', components: [{ type: 'BODY', text: 'Oi {{1}}, tudo bem?' }] };
 
@@ -132,6 +134,7 @@ function chatwootDeMentira() {
     }
     if (/\/inboxes$/.test(u.pathname)) return resp(200, { payload: [{ id: 3, name: 'WhatsApp Parauapebas', channel_type: 'Channel::Whatsapp', provider: 'whatsapp_cloud' }, { id: 2, name: 'Celular', channel_type: 'Channel::Api' }, { id: 4, name: 'Histórico', channel_type: 'Channel::Api' }] });
     if (/\/inboxes\/3\/message_templates$/.test(u.pathname)) return resp(200, { payload: [MODELO_OK, { ...MODELO_OK, name: 'parau_pausado', status: 'PAUSED' }] });
+    if (membrosFalham && /\/inbox_members\/\d+$/.test(u.pathname)) return resp(500, { error: 'lento' });
     if (/\/inbox_members\/3$/.test(u.pathname)) return resp(200, { payload: [{ id: 7, name: 'Ana Souza' }, { id: 8, name: 'Bia Lima' }, { id: 77, name: '📱 Celular da unidade' }] });
     if (/\/inbox_members\/\d+$/.test(u.pathname)) return resp(200, { payload: [] });
     if (/\/agents$/.test(u.pathname)) return resp(200, [{ id: 7, name: 'Ana Souza' }]);
@@ -171,6 +174,7 @@ type Linha = Record<string, any>;
 let tarefas: Linha[] = [];
 let zaps: Linha[] = [];
 let consultas: Linha[] = [];
+let depoisDeLer: ((t: Linha) => void) | null = null;
 const bate = (l: Linha, where: Linha): boolean =>
   Object.entries(where).every(([k, v]) => {
     if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v)) {
@@ -192,6 +196,8 @@ function preparar() {
   tarefas = [];
   zaps = [];
   consultas = [];
+  depoisDeLer = null;
+  membrosFalham = false;
   ultimaMensagemEm = Date.now() - 3_600_000;
   mock.method(globalThis, 'fetch', (async (url: string, o: never) => (String(url).startsWith(base) ? fetchReal(url, o) : chatwootDeMentira()(url, o))) as never);
   falso('unit', { findUnique: async (a: { where: { slug: string } }) => (a.where.slug === PARAU ? { id: 'u1', slug: PARAU, name: 'Doutor Hérnia Parauapebas', isActive: true, spineTimezone: 'America/Belem' } : null) });
@@ -206,7 +212,15 @@ function preparar() {
       if (campo) l = [...l].sort((x, y) => (a.orderBy![campo] === 'desc' ? -1 : 1) * (x[campo] - y[campo]));
       return a.take ? l.slice(0, a.take) : l;
     },
-    findFirst: async (a: { where: Linha }) => (consultas.push(a.where), tarefas.find((t) => bate(t, a.where)) ?? null),
+    // devolve uma CÓPIA (como o banco): quem lê não vê a edição que outro faz depois; `depoisDeLer` simula essa edição no intervalo entre a leitura e a gravação
+    findFirst: async (a: { where: Linha }) => {
+      consultas.push(a.where);
+      const f = tarefas.find((t) => bate(t, a.where));
+      if (!f) return null;
+      const copia = { ...f };
+      depoisDeLer?.(f);
+      return copia;
+    },
     count: async (a: { where: Linha }) => tarefas.filter((t) => bate(t, a.where)).length,
     create: async (a: { data: Linha }) => {
       const t = { id: `nova-${tarefas.length + 1}-abcdefgh`, estado: 'pendente', motivo: null, simuladoEm: null, simulado: null, lembreteEm: null, lembreteResumo: null, enviadaEm: null, resultado: null, resultadoPor: null, atualizadoEm: new Date(), criadoEm: new Date(), ...a.data };
@@ -411,6 +425,49 @@ test('editar uma tarefa pendente: o robô decide de novo (zera a decisão do sec
   assert.equal(r.status, 200, JSON.stringify(r.corpo));
   const t = tarefas[0]!;
   assert.deepEqual([t.estado, t.texto, t.responsavelNome, t.simuladoEm, t.lembreteEm, t.confirmadaEm, t.tentativas], ['pendente', 'novo', 'Bia Lima', null, null, null, 0]);
+});
+
+test('editar com OUTRA edição no meio (entre ler e gravar): 409 «a tarefa mudou», a edição de quem chegou primeiro não é atropelada', async () => {
+  preparar();
+  tarefas.push({ id: 'conc-1-abcdefgh', unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoId: 55, contatoNome: 'Maria Silva', tipo: 'ligacao', quando: new Date(Date.now() + HORA), responsavelId: 7, responsavelNome: 'Ana Souza', texto: 'velho', modeloNome: null, modeloVariaveis: [], estado: 'pendente', atualizadoEm: new Date(1_000_000) });
+  depoisDeLer = (t) => Object.assign(t, { texto: 'edição da colega', atualizadoEm: new Date(2_000_000) });
+  const r = await pedir('POST', '/public/tarefas/conc-1-abcdefgh/editar', 'tok-agente', { slug: PARAU, tipo: 'ligacao', quandoLocal: local(4 * HORA), texto: 'minha edição' });
+  assert.equal(r.status, 409, JSON.stringify(r.corpo));
+  assert.match(r.corpo.error, /mudou enquanto/);
+  assert.equal(tarefas[0]!.texto, 'edição da colega', 'a edição que chegou primeiro continua valendo');
+  // sem concorrência a edição passa (a versão lida é a atual)
+  depoisDeLer = null;
+  tarefas[0]!.atualizadoEm = new Date(3_000_000);
+  const ok = await pedir('POST', '/public/tarefas/conc-1-abcdefgh/editar', 'tok-agente', { slug: PARAU, tipo: 'ligacao', quandoLocal: local(4 * HORA), texto: 'minha edição' });
+  assert.equal(ok.status, 200, JSON.stringify(ok.corpo));
+  assert.equal(tarefas[0]!.texto, 'minha edição');
+});
+
+test('«não atendeu» → próxima tentativa: a responsável que saiu da caixa NÃO é copiada (cai para quem registrou o resultado); a que continua, continua', async () => {
+  preparar();
+  _esquecerAtendentes();
+  const lig = (extra: Linha = {}) => (tarefas.push({ id: `r${tarefas.length}-abcdefgh`, unitId: 'u1', conta: 1, caixa: 3, conversaId: 40, contatoId: 55, contatoNome: 'Maria Silva', tipo: 'ligacao', quando: new Date(Date.now() - HORA), responsavelId: 7, responsavelNome: 'Ana Souza', texto: 'confirmar', modeloNome: null, modeloVariaveis: [], estado: 'pendente', ...extra }), tarefas[tarefas.length - 1]!);
+  // 99 não está mais nas caixas da unidade (só Ana 7 e Bia 8)
+  const saiu = lig({ responsavelId: 99, responsavelNome: 'Carla (saiu da caixa)' });
+  const a = await pedir('POST', `/public/tarefas/${saiu.id}/resultado`, 'tok-agente', { slug: PARAU, resultado: 'nao_atendeu', proximaLocal: local(26 * HORA) });
+  assert.equal(a.status, 200, JSON.stringify(a.corpo));
+  const proxA = tarefas.find((t) => t.id === a.corpo.proximaId)!;
+  assert.deepEqual([proxA.responsavelId, proxA.responsavelNome], [7, 'Ana Souza'], 'quem registrou o resultado assume');
+  // a Bia (8) continua na caixa: a próxima fica com ela mesmo quando outra pessoa registra o resultado
+  const fica = lig({ responsavelId: 8, responsavelNome: 'Bia Lima' });
+  const b = await pedir('POST', `/public/tarefas/${fica.id}/resultado`, 'tok-agente', { slug: PARAU, resultado: 'nao_atendeu', proximaLocal: local(26 * HORA) });
+  assert.equal(b.status, 200, JSON.stringify(b.corpo));
+  const proxB = tarefas.find((t) => t.id === b.corpo.proximaId)!;
+  assert.deepEqual([proxB.responsavelId, proxB.responsavelNome], [8, 'Bia Lima']);
+  // CRM lento: a lista de quem atende vem CURTA (só quem registrou o resultado). Isso não prova que a Bia saiu da caixa: a próxima continua com ela
+  _esquecerAtendentes();
+  membrosFalham = true;
+  const lenta = lig({ responsavelId: 8, responsavelNome: 'Bia Lima' });
+  const c = await pedir('POST', `/public/tarefas/${lenta.id}/resultado`, 'tok-agente', { slug: PARAU, resultado: 'nao_atendeu', proximaLocal: local(26 * HORA) });
+  assert.equal(c.status, 200, JSON.stringify(c.corpo));
+  const proxC = tarefas.find((t) => t.id === c.corpo.proximaId)!;
+  assert.deepEqual([proxC.responsavelId, proxC.responsavelNome], [8, 'Bia Lima'], 'lista incompleta (CRM lento) não reatribui');
+  nada_de_post();
 });
 
 test('resultado da ligação: «atendeu» fecha; «não atendeu» pode criar a próxima tentativa; «remarcar» exige o novo horário; só ligação tem resultado', async () => {
