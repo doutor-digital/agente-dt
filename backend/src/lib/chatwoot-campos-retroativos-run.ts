@@ -14,8 +14,9 @@
  * faria um ciclo com a listagem velha enxergar «etapa nova» e mandar a mensagem). As marcas do CAPI só saem depois de uma guarda e com o campo
  * conferido vazio de novo.
  */
-import { conversaDoChatwoot, ehArquivo, type AjustesDaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
+import { conversaDoChatwoot, ehArquivo, type AjustesDaRegua, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
 import type { EventoCapi } from './chatwoot-capi.js';
+import { BuscaDeContatosIncompleta } from './chatwoot-campos-retroativos-kommo.js';
 import {
   chaveDoFone,
   decidirCampos,
@@ -42,7 +43,7 @@ export interface PortasDosCampos {
   fresca(id: number): Promise<any | null>;
   /** a última mensagem PÚBLICA da conversa (null = nenhuma): é o que o worker da régua olha nas etapas de qualificação */
   ultimaPublica(id: number): Promise<MensagemResumo | null>;
-  /** os cartões do Kommo deste telefone (lança se o Kommo falhou: nunca «sem cartão» por engano) */
+  /** os cartões do Kommo deste telefone (lança se o Kommo falhou: nunca «sem cartão» por engano; `BuscaDeContatosIncompleta` = não deu para fechar a busca: vira «ambíguo», nada é gravado) */
   leadsDoKommo(telefone: string): Promise<LeadDoKommo[]>;
   qualificacoes(leadIds: number[]): Promise<FatoDeQualificacao[]>;
   vistosDaCaixa(): Promise<Map<number, Vistos>>;
@@ -158,6 +159,15 @@ export interface Registro {
   em: string;
 }
 
+/** A conversa cujo número tem contatos demais no Kommo para eu ter certeza do cartão: nada é decidido nem gravado (nem «sem cartão»); a equipe decide. */
+function planoAmbiguo(c: ConversaRegua, raw: any, motivosValidos: string[], ajustes: AjustesDaRegua | undefined, detalhe: string): { plano: Plano; ent: Omit<EntradaDaConversa, 'vistos'>; raw: any } {
+  return {
+    plano: { conversa: c.id, alteracoes: [], etiquetaNova: null, bloqueios: [{ codigo: 'kommo-ambiguo', detalhe }], semRegra: null, marcasVisto: [], marcasCapi: [] },
+    ent: { conv: c, status: String(raw?.status ?? ''), leads: [], qualificacoes: [], motivosValidos, ajustes },
+    raw,
+  };
+}
+
 export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (linha: string) => void, agora: () => Date = () => new Date()): Promise<ResumoDosCampos> {
   const r: ResumoDosCampos = { conversas: 0, comCampoVazio: 0, jaMarcadasParaConferir: 0, irmas: 0, semCartao: 0, porRegra: {}, conversasComAlteracao: 0, arquivoQueAcorda: 0, ganhamFaltaEtapa: 0, bloqueios: {}, semRegra: {}, erros: 0, gravadas: 0, falhas: 0, marcasReafirmadas: 0, atividadeMexeu: 0, truncado: false, parouPor: null };
   const { lista, truncado } = await p.conversas();
@@ -180,6 +190,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
   const alvos = todas.filter((x) => !o.so || o.so.includes(x.c.id));
   const planos: Array<{ plano: Plano; ent: Omit<EntradaDaConversa, 'vistos'>; raw: any }> = [];
   const cacheDoKommo = new Map<string, LeadDoKommo[]>();
+  const cortadosDoKommo = new Set<string>();
   let errosSeguidos = 0;
   for (const { raw, c } of alvos) {
     if (!algumCampoVazio(c.attrs)) continue;
@@ -197,6 +208,11 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
     let leads: LeadDoKommo[] = [];
     if (c.telefone && chave) {
       const guardado = cacheDoKommo.get(chave);
+      if (cortadosDoKommo.has(chave)) {
+        // outra conversa do mesmo número já mostrou que a busca não fecha: mesma resposta, sem bater de novo no Kommo
+        planos.push(planoAmbiguo(c, raw, motivosValidos, ajustes, 'a busca deste número no Kommo voltou cheia demais para eu ter certeza do cartão: a equipe decide'));
+        continue;
+      }
       if (guardado) leads = guardado;
       else {
         try {
@@ -204,6 +220,14 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
           cacheDoKommo.set(chave, leads);
           errosSeguidos = 0;
         } catch (err) {
+          if (err instanceof BuscaDeContatosIncompleta) {
+            // não é falha do Kommo: o número tem contatos demais para eu ter certeza de qual é o cartão. Nada é decidido (nem «sem cartão»): vai para a equipe
+            cortadosDoKommo.add(chave);
+            errosSeguidos = 0;
+            planos.push(planoAmbiguo(c, raw, motivosValidos, ajustes, `${err.message}: a equipe decide`));
+            await p.pausa(PAUSA_ENTRE_CONSULTAS_MS);
+            continue;
+          }
           r.erros++;
           errosSeguidos++;
           log(`ERRO   conversa ${c.id}: não consegui ler o Kommo (${motivoDoErro(err)}) — não decido esta`);

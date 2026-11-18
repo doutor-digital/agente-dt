@@ -1328,6 +1328,7 @@ export class KommoClient {
   async buscarContatosPorTelefone(
     texto: string,
     limite = 50,
+    pagina = 1,
   ): Promise<Array<{ id: number; telefones: string[]; leadIds: number[] }>> {
     const termo = texto.trim();
     if (!termo) return [];
@@ -1340,7 +1341,7 @@ export class KommoClient {
             _embedded?: { leads?: Array<{ id?: number }> };
           }>;
         };
-      }>('/contacts', { params: { query: termo, limit: Math.min(50, Math.max(1, limite)), with: 'leads' } });
+      }>('/contacts', { params: { query: termo, limit: Math.min(50, Math.max(1, limite)), with: 'leads', ...(pagina > 1 ? { page: Math.floor(pagina) } : {}) } });
       if (status === 204) return [];
       return (data?._embedded?.contacts ?? []).flatMap((c) => {
         if (typeof c.id !== 'number') return [];
