@@ -36,6 +36,33 @@ test('pega as variações de escrita que a IA usa de verdade', () => {
   }
 });
 
+test('o valor logo depois de "sinal de" é o sinal — não vira o antecipado (produção, 18/11/2026)', () => {
+  // Araguaína/Imperatriz/Canaã/Marabá/Balsas: R$ 350 no dia ou R$ 250 com sinal de R$ 50, e `sinalPixCentavos`
+  // vazio na ficha — então o guardrail chama sem `valoresLegitimos`. Estas três frases saíram assim do modelo
+  // e foram ao paciente com "sinal de R$ 250".
+  const SOFIA_2 = { antecipado: 250 };
+  const certas = [
+    'A consulta com o nosso especialista é R$ 350 no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado (R$ 50 agora + R$ 200 no dia) 😊',
+    'A consulta com o nosso especialista é R$ 350 no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado no Pix 😊',
+    'A consulta com o nosso especialista é R$ 350, pago no dia, ou R$ 250 garantindo com sinal de R$ 50 antecipado no Pix (R$ 200 no dia).',
+    'R$ 250 garantindo a vaga com um sinal de R$ 50,00 antecipado pelo Pix',
+    'ou R$ 250 com sinal no valor de R$ 50 pagando antes por Pix',
+    'ou R$ 250 com um sinal de apenas R$ 50 antecipado',
+  ];
+  for (const frase of certas) {
+    const r = corrigirValorAntecipado(frase, SOFIA_2);
+    assert.equal(r.texto, frase, frase);
+    assert.deepEqual(r.corrigiu, [], frase);
+  }
+});
+
+test('"sinal" longe do R$ não protege o valor errado no slot do antecipado', () => {
+  // A palavra "sinal" numa frase anterior não pode virar passe livre para o R$ 250 da Serra.
+  const r = corrigirValorAntecipado('Não precisa de sinal. A consulta é R$ 250 antecipado, ou R$ 350 no dia.', SERRA);
+  assert.equal(r.texto, 'Não precisa de sinal. A consulta é R$ 280 antecipado, ou R$ 350 no dia.');
+  assert.deepEqual(r.corrigiu, [250]);
+});
+
 test('NÃO casa com o valor do dia, mesmo ele vindo antes na frase', () => {
   // Sem a trava do "nenhum R$ no meio", o 350 seria capturado como antecipado.
   const r = corrigirValorAntecipado('R$ 350 no dia, ou R$ 280 com pagamento antecipado.', SERRA);

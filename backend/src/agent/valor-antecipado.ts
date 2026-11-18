@@ -77,6 +77,13 @@ export function corrigirValorAntecipado(
     // olhar dentro de `todo` não enxerga nada (ele começa no "R$").
     const antes = texto.slice(Math.max(0, posicao - 14), posicao);
     if (/\d\s*x\s*(?:de\s*)?$/i.test(antes)) return todo;
+    // O valor que vem logo depois de "sinal (de)" É O SINAL, não o slot do antecipado: "R$ 250 garantindo com
+    // sinal de R$ 50 antecipado no Pix" está certo. Sem isto, nas unidades da Sofia 2.0 com `sinalPixCentavos`
+    // vazio (o `valoresLegitimos` chega sem o 50), o paciente lia "sinal de R$ 250 antecipado (R$ 50 agora +
+    // R$ 200 no dia)" — 34 vezes em 30 dias em Araguaína, Imperatriz, Canaã, Marabá e Balsas (achado pelo
+    // Promptfoo, 18/11/2026). Mesma leitura pela posição que a do parcelamento acima.
+    const antesDoSinal = texto.slice(Math.max(0, posicao - 32), posicao);
+    if (/\bsinal(?:\s+(?:de|no\s+valor\s+de))?(?:\s+(?:apenas|s[óo]))?\s*$/i.test(antesDoSinal)) return todo;
     corrigiu.push(v);
     return `R$ ${fmt(antecipado)}${meio}`;
   });
