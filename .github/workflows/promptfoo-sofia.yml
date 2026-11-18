@@ -80,7 +80,7 @@ jobs:
           echo "::add-mask::$URL_SERVICO"
           echo "::add-mask::$URL"
           [ -n "$URL" ] && [ "$URL" != "$URL_SERVICO" ] || { rm -f "$OUT/env.bruto"; echo "não consegui trocar o host do banco na DATABASE_URL"; exit 1; }
-          grep -vE '^(DATABASE_URL|KOMMO_ACCESS_TOKEN|LOG_LEVEL|TELEGRAM_[A-Z_]*)=' "$OUT/env.bruto" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$OUT/env"
+          grep -vE '^(DATABASE_URL|KOMMO_ACCESS_TOKEN|LOG_LEVEL|TELEGRAM_[A-Z_]*|EVOLUTION_ALERT_[A-Z_]*|ALERTA_WHATSAPP_NUMERO)=' "$OUT/env.bruto" | grep -E '^[A-Za-z_][A-Za-z0-9_]*=' > "$OUT/env"
           rm -f "$OUT/env.bruto"
           {
             echo "DATABASE_URL=$URL"
@@ -95,7 +95,8 @@ jobs:
 
           # baixa o Promptfoo SEM nenhum segredo no ambiente (scripts de instalação de 600 pacotes não veem a senha);
           # a rodada de verdade usa o que ficou no cache
-          docker run --rm --memory 1g -v promptfoo-npm:/root/.npm "$IMG" npx -y "$PF_VERSAO" --version </dev/null
+          docker run --rm --memory 1g -v promptfoo-npm:/root/.npm -e PROMPTFOO_DISABLE_UPDATE=1 -e PROMPTFOO_DISABLE_TELEMETRY=1 \
+            "$IMG" npx -y "$PF_VERSAO" --version </dev/null
 
           set +e
           docker run --rm --name "$NOME" --memory 1g --network host \
