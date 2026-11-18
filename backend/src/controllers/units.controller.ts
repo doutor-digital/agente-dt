@@ -170,7 +170,15 @@ const unitInputBase = {
   qualificationColdTag: z.string().max(50).optional(),
   handoffEnabled: z.boolean().optional(),
   handoffKeywords: z.array(z.string().min(1).max(50)).max(50).optional(),
-  pipelineIntents: z.record(z.string(), z.coerce.number().int().positive()).nullable().optional(),
+  // chave → id (inteiro positivo), EXCETO `origem_por_texto` (automação origem-texto-pronto), que é uma lista de {texto, origem, anuncio}:
+  // sem isto, salvar a unidade pela tela devolveria o JSON inteiro e a lista derrubaria a validação.
+  pipelineIntents: z
+    .record(
+      z.string(),
+      z.union([z.coerce.number().int().positive(), z.array(z.object({ texto: z.string().min(1).max(500), origem: z.string().min(1).max(120), anuncio: z.boolean().optional() }))]),
+    )
+    .nullable()
+    .optional(),
   contactCollectionEnabled: z.boolean().optional(),
   contactCollectionAfterTurns: z.coerce.number().int().min(1).max(20).optional(),
   welcomeCouponEnabled: z.boolean().optional(),
