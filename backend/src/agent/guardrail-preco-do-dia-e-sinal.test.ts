@@ -480,8 +480,9 @@ test('corrigirValorAntecipado: decide por NÚMERO (noDia), não por palavra', ()
     texto: 'A consulta custa R$ 220 no dia, mas se puder pagar por Pix antes, fica R$ 200.',
     corrigiu: [],
   });
-  // "no dia" sozinho, com Y errado e X que não é o noDia: segue como no main (nada é inventado)
-  assert.deepEqual(corrigirValorAntecipado('R$ 280 no dia, mas pagando antes fica R$ 230.', U).corrigiu, [280]);
+  // "no dia" explícito e Y: o R$ de antes é o preço do dia (mesmo diferente do noDia da ficha) e nunca vira o antecipado
+  assert.deepEqual(corrigirValorAntecipado('R$ 280 no dia, mas pagando antes fica R$ 230.', U).corrigiu, []); // X é pulado (o catálogo olha), Y não é mexido
+  assert.deepEqual(corrigirValorAntecipado('R$ 400 no dia, mas pagando antes fica R$ 200.', { antecipado: 250, noDia: 350 }).corrigiu, []); // não vira "R$ 250 no dia"
   // Y é o sinal ("agora"): não vira o antecipado; o R$ de antes é o slot, como no main
   assert.deepEqual(corrigirValorAntecipado('R$ 250, mas pagando antes fica R$ 50 agora.', { ...U, noDia: 300 }), {
     texto: 'R$ 200, mas pagando antes fica R$ 50 agora.',
@@ -489,8 +490,9 @@ test('corrigirValorAntecipado: decide por NÚMERO (noDia), não por palavra', ()
   });
   // "no dia 21" é data, não preço do dia
   assert.deepEqual(corrigirValorAntecipado('Fica R$ 250 no dia 21, pagando antes.', U), { texto: 'Fica R$ 200 no dia 21, pagando antes.', corrigiu: [250] });
-  // sem noDia (chamador antigo): tudo como no main
-  assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 250.', { antecipado: 280 }).corrigiu, [350]);
+  // sem noDia (chamador antigo): o "no dia" explícito + Y ainda pula o R$ de antes; sem isso, como no main
+  assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 250.', { antecipado: 280 }).corrigiu, []);
+  assert.deepEqual(corrigirValorAntecipado('R$ 350, mas pagando antes fica R$ 250.', { antecipado: 280 }).corrigiu, [350]);
 });
 
 test('corrigirValorAntecipado: sem sinal de preço do dia o slot segue corrigido', () => {

@@ -34,8 +34,8 @@
  *    a unidade sabe quanto custa o dia (`noDia`, de `precosDaConsulta`) e quanto custa o antecipado. Com a marca há dois lugares de R$: X (antes) e Y (o que
  *    a marca traz logo depois dela, numa gramática fechada: "pagando antes [por Pix], fica [em] R$ Y" / "antecipado de R$ Y" / "antecipado: R$ Y").
  *    X é o preço do DIA da unidade quando é igual ao `noDia`. Se existe Y, X NÃO é o slot (é a outra opção) e Y é conferido (vira o antecipado). A frase
- *    dizer "no dia" (não "no dia 21") sozinha não basta; junto de um Y que já é o antecipado certo, X é pulado (nada a conferir em Y). Sem Y, X só é pulado
- *    se for o `noDia` E a frase disser "no dia". Em todo outro caso nada muda: a frase segue como no main. Y nunca é conferido se for o `noDia`, o sinal
+ *    dizer "no dia" (não "no dia 21") entre X e a marca também faz X ser pulado quando há Y (X errado, "R$ 400 no dia, mas pagando antes fica R$ 200", é cortado
+ *    pelo catálogo, nunca vira o antecipado), mas aí Y não é mexido. Sem Y, X só é pulado se for o `noDia` E a frase disser "no dia". Em todo outro caso nada muda: a frase segue como no main. Y nunca é conferido se for o `noDia`, o sinal
  *    ("agora", "de sinal") ou vier seguido de "no dia".
  */
 
@@ -132,9 +132,9 @@ export function corrigirValorAntecipado(
       const yFim = d ? yIni + d[2]!.length : -1;
       const yV = d ? paraNumero(d[3]!) : NaN;
       const temY = !!d && yV !== noDia && !NAO_E_O_ANTECIPADO_DEPOIS.test(texto.slice(yFim));
-      // X é o preço do dia e há Y: o antecipado é o Y, que passa a ser conferido. X diz "no dia" e Y já é o antecipado certo: X é o preço do dia, nada a conferir em Y.
-      // X é o preço do dia e diz "no dia", sem Y: nada a trocar. Em todo outro caso a frase segue como no main.
-      if ((temY && (xEhNoDia || (xDizNoDia && yV === antecipado))) || (xEhNoDia && xDizNoDia)) {
+      // X é o preço do dia (é o noDia, ou a frase diz "no dia") e há Y: X é a outra opção, nunca vira o antecipado (se estiver errado, quem corta é o catálogo).
+      // Y é conferido só quando X é o noDia da unidade. X é o noDia e diz "no dia", sem Y: nada a trocar. Em todo outro caso a frase segue como no main.
+      if (temY || (xEhNoDia && xDizNoDia)) {
         if (temY && xEhNoDia) {
           tratados.add(yIni);
           trocar(yV, yIni, yFim);
