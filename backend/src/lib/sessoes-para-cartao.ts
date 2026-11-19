@@ -19,7 +19,12 @@
  *  - marcadas = AGENDADO ou CONFIRMADO ainda por vir;
  *  - previstas = realizadas + faltas + marcadas (desmarcada e remarcada não entram — é arrumação
  *    de agenda, e contá-las faria o tratamento parecer maior do que é);
- *  - próxima = a primeira sessão marcada por vir; última = a última ATENDIDA.
+ *  - última = a última ATENDIDA (deste tratamento);
+ *  - próxima = a primeira sessão por vir DO PACIENTE, de qualquer tratamento dele (AGENDADO, CONFIRMADO ou
+ *    REMARCADO — a mesma regra de `services/proxima-sessao.ts`). É a única exceção ao "por tratamento": quem
+ *    faz dois tratamentos em horários consecutivos (Timbó, 16/11/2026: 9h00 e 9h30) vem UMA vez, e o lembrete
+ *    do robô lê esta data — com a do tratamento do cartão, o paciente recebia só o horário de trás. Depois que a
+ *    primeira COMEÇA, a seguinte (mesmo dia, até 60 min depois) não vira a próxima: ver `proximaDoPaciente`.
  *  Sessão agendada com data já passada e sem desfecho na franquia não conta em nada: ninguém sabe
  *  se foi atendida, e chutar aqui seria inventar dado.
  *
@@ -27,6 +32,8 @@
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { ehConsulta, normalizar } from './franquia-sync.js';
+import { proximaSessao } from '../services/proxima-sessao.js';
+import { epochDaSessao, filaApos } from './sessoes-encadeadas.js';
 
 export const CAMPOS_SESSOES = {
   PREVISTAS: '# Sessões no histórico',
@@ -122,7 +129,7 @@ export interface ResumoDeSessoes {
   faltas: number;
   marcadas: number;
   previstas: number;
-  /** epoch (s) da primeira sessão marcada por vir */
+  /** epoch (s) da primeira sessão por vir do PACIENTE (qualquer tratamento) — ver o cabeçalho */
   proxima: number | null;
   /** última sessão atendida: epoch (s) e o dia no fuso da clínica (AAAA-MM-DD) */
   ultima: { epoch: number; dia: string | null } | null;
@@ -134,16 +141,57 @@ const epochDe = (iso: string | null | undefined): number | null => {
 };
 
 /**
+ * A próxima sessão do PACIENTE (qualquer tratamento), sem a que vem colada numa que JÁ COMEÇOU. Às 09:01, com a das
+ * 09:00 em curso, a das 09:30 (mesmo dia, até 60 min depois) não é "a próxima": o paciente já está na clínica e o robô
+ * do Kommo mandaria um 2º lembrete. Vale a primeira sessão que não é seguida de uma começada — a de outro horário ou dia.
+ * Sem o filtro de tratamento e sem o `desde`: sessão por vir não é do ciclo antigo.
+ */
+export function proximaDoPaciente(schedules: SpineSchedule[], agoraEpoch: number) {
+  const doPaciente = schedules.filter(
+    (s) => !ehConsulta(s) && !!s.dateAttendanceUtc && s.idStatus !== SPINE_STATUS.DESMARCADO,
+  );
+  const coladas = new Set<SpineSchedule>();
+  for (const comecada of doPaciente) {
+    if (!(epochDaSessao(comecada) <= agoraEpoch)) continue;
+    for (const s of filaApos(comecada, doPaciente)) coladas.add(s);
+  }
+  return proximaSessao(
+    doPaciente.filter((s) => !coladas.has(s)),
+    agoraEpoch * 1000,
+  );
+}
+
+/**
  * Conta as sessões do tratamento `idTreatment`. Devolve null quando não há NENHUMA sessão dele na
  * lista — caso em que gravar zero seria afirmar que o tratamento não tem sessão, quando talvez só
  * não tenhamos a agenda dele em mãos.
  */
+export interface QuemEOPaciente {
+  /** ids dos tratamentos do PACIENTE (ficha). Sessão com idTreatment fora disto não é dele (a agenda é agrupada por NOME: homônimo). */
+  idsDosTratamentos?: ReadonlySet<number> | null;
+  /** idSchedule das sessões que vieram da ficha dele (`GET /clients/{id}`): essas são provadamente dele, mesmo sem idTreatment. */
+  idsDaFicha?: ReadonlySet<number> | null;
+  /** Tratamento ENCERRADO (finalizado/cancelado): a próxima é só a dele, como era — a do outro tratamento é do cartão do outro. */
+  encerrado?: boolean;
+}
+
+/**
+ * A sessão é PROVADAMENTE do paciente deste cartão? Com os tratamentos dele em mãos: tem o idTreatment de um deles, ou
+ * veio da ficha dele. Sem eles (chamada que não sabe), vale a regra antiga: o tratamento do cartão ou sem id.
+ */
+export function sessaoProvadaDoPaciente(s: SpineSchedule, idTreatmentDoCartao: number, q: QuemEOPaciente = {}): boolean {
+  if (!q.idsDosTratamentos) return s.idTreatment === null || s.idTreatment === idTreatmentDoCartao;
+  if (s.idTreatment !== null) return q.idsDosTratamentos.has(s.idTreatment) || s.idTreatment === idTreatmentDoCartao;
+  return !q.idsDaFicha || (s.idSchedule !== null && q.idsDaFicha.has(s.idSchedule));
+}
+
 export function resumirSessoes(
   schedules: SpineSchedule[],
   idTreatment: number | null,
   agoraEpoch: number,
   criadoEm: string | null = null,
   protocolo: string | null = null,
+  paciente: QuemEOPaciente = {},
 ): ResumoDeSessoes | null {
   if (!idTreatment) return null;
   const desde = epochDe(criadoEm);
@@ -166,10 +214,13 @@ export function resumirSessoes(
   });
   if (sessoes.length === 0) return null;
 
+  // A próxima olha o paciente (só sessões provadas dele), salvo tratamento encerrado: aí é só a do próprio tratamento.
+  const daProxima = paciente.encerrado ? sessoes : schedules.filter((s) => sessaoProvadaDoPaciente(s, idTreatment, paciente));
+  const proxima = epochDe(proximaDoPaciente(daProxima, agoraEpoch)?.dateAttendanceUtc);
+
   let realizadas = 0;
   let faltas = 0;
   let marcadas = 0;
-  let proxima: number | null = null;
   let ultima: ResumoDeSessoes['ultima'] = null;
   for (const s of sessoes) {
     const epoch = epochDe(s.dateAttendanceUtc);
@@ -181,7 +232,6 @@ export function resumirSessoes(
       faltas++;
     } else if ((s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && epoch > agoraEpoch) {
       marcadas++;
-      if (proxima === null || epoch < proxima) proxima = epoch;
     }
   }
   return { realizadas, faltas, marcadas, previstas: realizadas + faltas + marcadas, proxima, ultima };
@@ -208,6 +258,8 @@ export interface EntradaSessoes {
   tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
   /** todos os tratamentos do paciente, como a ficha os descreve; sem isto, o tratamento é tratado como único */
   tratamentosDoPaciente?: TratamentoDaFicha[];
+  /** idSchedule das sessões que vieram da ficha do paciente (as da agenda são agrupadas por NOME); sem isto, sessão sem id vale como da ficha */
+  idsDaFicha?: ReadonlySet<number>;
   agoraEpoch: number;
   /** Devolve o campo da conta pelo nome, ou null se a conta não o tem. */
   campo: (nome: string) => CampoDoCartao | null;
@@ -263,7 +315,13 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   const ciclo = separarCiclo(t.idTreatment, e.tratamentosDoPaciente, t, t.created != null);
   if (!ciclo.separavel) return out;
 
-  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, t.created ?? null, ciclo.protocolo);
+  const idsDosTratamentos = e.tratamentosDoPaciente
+    ? new Set(e.tratamentosDoPaciente.map((x) => x.idTreatment).filter((x): x is number => typeof x === 'number'))
+    : null;
+  const encerrado = /finaliz|cancel/.test(normalizar(t.statusName));
+  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, t.created ?? null, ciclo.protocolo, {
+    idsDosTratamentos, idsDaFicha: e.idsDaFicha, encerrado,
+  });
   if (!r) return out; // sem agenda do tratamento em mãos: não afirma zero
 
   numerico(CAMPOS_SESSOES.REALIZADAS, r.realizadas, 'sessões atendidas na franquia');

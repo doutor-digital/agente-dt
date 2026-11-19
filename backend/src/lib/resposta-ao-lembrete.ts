@@ -59,6 +59,8 @@ import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks.service.js';
 import { addMessage } from '../services/conversations.service.js';
 import { nomeApresentavel, vocativo } from './nome-apresentavel.js';
+import { VAI_ACONTECER } from '../services/proxima-sessao.js';
+import { filaApos } from './sessoes-encadeadas.js';
 
 export type { TipoLembrete } from './lembrete-chaves.js';
 
@@ -260,9 +262,14 @@ const epochDoAgendamento = (s: Pick<SpineSchedule, 'dateAttendanceUtc'>): number
 /**
  * PURA: entre os agendamentos do paciente, o que o lembrete anunciou.
  *
- * Tem de ser do tipo certo (avaliação/retorno × sessão), estar de pé (agendado ou confirmado) e cair
- * no MESMO horário do cartão (±5 min). Campo do cartão só com o dia (meia-noite): vale o único
- * agendamento daquele dia. Dois no mesmo horário, ou nenhum: null — não se confirma no escuro.
+ * Tem de ser do tipo certo (avaliação/retorno × sessão), estar de pé (agendado ou confirmado; para sessão,
+ * também remarcado — a ◷ Próxima sessão passou a mostrá-lo) e cair no MESMO horário do cartão (±5 min). Campo do
+ * cartão só com o dia (meia-noite): vale o único agendamento daquele dia. Dois no mesmo horário, ou nenhum: null —
+ * não se confirma no escuro.
+ *
+ * Sessão: vale a de QUALQUER tratamento do paciente. A ◷ Próxima sessão é a primeira do paciente, e quem faz
+ * dois tratamentos seguidos (9h00 e 9h30) tem o cartão ligado ao segundo e a data do primeiro (Timbó, 16/11/2026).
+ * O `idTreatment` do cartão só desempata dois agendamentos no mesmo horário.
  */
 export function escolherAgendamento(args: {
   schedules: SpineSchedule[];
@@ -273,19 +280,24 @@ export function escolherAgendamento(args: {
 }): SpineSchedule | null {
   const { schedules, tipo, quandoEpoch, idTreatment, tz } = args;
   const vistos = new Set<number>();
+  // estados que contam: agendado e confirmado; para sessão, também remarcado (a ◷ Próxima sessão o mostra)
+  const estadosQueContam: readonly number[] = tipo === 'sessao' ? VAI_ACONTECER : [SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO];
   const vivos = schedules.filter((s) => {
     if (!s.idSchedule || vistos.has(s.idSchedule)) return false;
     if (!Number.isFinite(epochDoAgendamento(s))) return false;
-    if (s.idStatus !== null && s.idStatus !== SPINE_STATUS.AGENDADO && s.idStatus !== SPINE_STATUS.CONFIRMADO) return false;
+    if (s.idStatus !== null && !estadosQueContam.includes(s.idStatus)) return false;
     if (tipo === 'consulta' ? !ehConsulta(s) : ehConsulta(s)) return false;
-    if (tipo === 'sessao' && idTreatment && s.idTreatment !== null && s.idTreatment !== idTreatment) return false;
     vistos.add(s.idSchedule);
     return true;
   });
 
   const exatos = vivos.filter((s) => Math.abs(epochDoAgendamento(s) - quandoEpoch) <= MESMO_HORARIO_S);
   if (exatos.length === 1) return exatos[0];
-  if (exatos.length > 1) return null;
+  if (exatos.length > 1) {
+    // dois no mesmo horário: só o do tratamento do cartão desempata (e só se for um)
+    const doCartao = tipo === 'sessao' && idTreatment ? exatos.filter((s) => s.idTreatment === idTreatment) : [];
+    return doCartao.length === 1 ? doCartao[0] : null;
+  }
 
   // Campo de data sem hora: o Kommo guarda meia-noite (no fuso da conta ou em UTC, conforme a conta).
   const dias = new Set<string>();
@@ -295,7 +307,15 @@ export function escolherAgendamento(args: {
   if (utc.slice(11, 16) === '00:00') dias.add(utc.slice(0, 10));
   if (dias.size === 0) return null;
   const doDia = vivos.filter((s) => s.dayLocal !== null && dias.has(s.dayLocal));
-  return doDia.length === 1 ? doDia[0] : null;
+  if (doDia.length === 1) return doDia[0];
+  // vários no dia (dois tratamentos do MESMO paciente: a lista é dele): o campo só tem o dia, e a ◷ Próxima sessão é a
+  // primeira dele — vale a primeira do dia, nunca a de trás.
+  // Só quando o dia inteiro é UMA fila (cada uma até 60 min depois da anterior); sessões soltas no dia seguem ambíguas.
+  if (tipo === 'sessao' && doDia.length > 1) {
+    const primeira = [...doDia].sort((a, b) => epochDoAgendamento(a) - epochDoAgendamento(b))[0];
+    return filaApos(primeira, doDia).length === doDia.length - 1 ? primeira : null;
+  }
+  return null;
 }
 
 /** O agendamento escolhido no formato que `confirmarNaFranquia` já entende. */
@@ -303,6 +323,24 @@ export function comoConsultaReconciliada(s: SpineSchedule): ConsultaReconciliada
   if (!s.idSchedule || !s.dayLocal || !s.timeLocal) return null;
   const quando = `${s.dayLocal}T${s.timeLocal}`;
   return { idSchedule: s.idSchedule, quando, salvo: quando, estado: 'confirmada', mudou: false, especialista: null, idStatus: s.idStatus };
+}
+
+/** Teto da fila: cada seguida é uma chamada à franquia (e, se ela recusar, um alerta) antes de o Kommo reenviar o webhook. */
+export const MAX_ENCADEADAS = 3;
+
+/**
+ * PURA: as sessões do MESMO paciente, no MESMO dia, encadeadas à `escolhido` (regra em `sessoes-encadeadas.ts`: cada
+ * uma começa até 60 min depois do início da anterior). Quem faz dois tratamentos em horários consecutivos recebe UM
+ * lembrete (o do primeiro horário) e o "Confirmar presença" vale para a fila toda. Só olha para frente. Só entram as
+ * que ainda vão acontecer (agendada, confirmada, remarcada); avaliação/retorno não.
+ * Quem chama passa só agendamentos DO PACIENTE (a ficha, ou a agenda do dia já filtrada pelo ⚙ idTreatment).
+ */
+export function sessoesEncadeadas(escolhido: SpineSchedule, schedules: readonly SpineSchedule[]): SpineSchedule[] {
+  return filaApos(
+    escolhido,
+    schedules.filter((s) => !ehConsulta(s) && s.idStatus !== null && VAI_ACONTECER.includes(s.idStatus)),
+    MAX_ENCADEADAS,
+  );
 }
 
 // ── textos ────────────────────────────────────────────────────────────────────────────────────────
@@ -318,12 +356,21 @@ function quandoPorExtenso(quando: string | null): string {
   return ` ${diaCurto(quando)} às ${quando.slice(11, 16)}`;
 }
 
+/** " (e na seguinte, às 09:30)" — as sessões coladas na que o lembrete anunciou. Vazio quando não há. */
+function textoSeguidas(horas: readonly string[] | undefined): string {
+  const h = (horas ?? []).filter(Boolean);
+  if (h.length === 0) return '';
+  return h.length === 1 ? ` (e na seguinte, às ${h[0]})` : ` (e nas seguintes, às ${h.slice(0, -1).join(', às ')} e às ${h[h.length - 1]})`;
+}
+
 export function textoRespostaAoLembrete(args: {
   tipo: TipoLembrete;
   resposta: RespostaD1;
   nome: string | null | undefined;
   /** "AAAA-MM-DDTHH:mm" local, ou null */
   quando: string | null;
+  /** horários ("HH:MM") das sessões seguidas, no mesmo dia, que o toque também cobre */
+  seguidas?: readonly string[];
 }): string {
   const nome = primeiroNome(args.nome);
   const quando = quandoPorExtenso(args.quando);
@@ -331,7 +378,7 @@ export function textoRespostaAoLembrete(args: {
     return `Sem problema${nome}! 🙏 Vou pedir para a equipe combinar um novo horário com você por aqui. Se preferir, me diga qual dia e período ficam melhores.`;
   }
   if (args.tipo === 'sessao') {
-    return `Presença confirmada${nome}! 💙 Te esperamos na sua sessão${quando}. Qualquer coisa é só me chamar por aqui.`;
+    return `Presença confirmada${nome}! 💙 Te esperamos na sua sessão${quando}${textoSeguidas(args.seguidas)}. Qualquer coisa é só me chamar por aqui.`;
   }
   return `Confirmado${nome}! 💙 Te esperamos${quando}. Chegue uns 15 minutos antes, tá? Qualquer coisa é só me chamar por aqui.`;
 }
@@ -342,9 +389,13 @@ export function textoTarefaRemarcar(args: {
   nome: string | null | undefined;
   quando: string | null;
   texto: string;
+  /** horários ("HH:MM") das sessões seguidas, no mesmo dia, que o pedido também alcança */
+  seguidas?: readonly string[];
 }): string {
-  const oQue = args.tipo === 'sessao' ? 'a sessão' : 'a consulta';
-  const quando = args.quando ? ` de${quandoPorExtenso(args.quando)}` : '';
+  const seguidas = (args.seguidas ?? []).filter(Boolean);
+  const oQue = args.tipo === 'sessao' ? (seguidas.length > 0 ? 'as sessões' : 'a sessão') : 'a consulta';
+  const horarios = seguidas.length > 0 ? ` e às ${seguidas.join(' e às ')} (horários seguidos no mesmo dia)` : '';
+  const quando = args.quando ? ` de${quandoPorExtenso(args.quando)}${horarios}` : seguidas.length > 0 ? ` das ${seguidas.join(' e das ')} (horários seguidos)` : '';
   return (
     `ALERTA · ${args.slug} · [Contato: ${args.nome ?? 'paciente'}] 🔁 Pediu para remarcar ${oQue}${quando} ` +
     `(tocou "${args.texto.trim().slice(0, 60)}" no lembrete). Combinar novo horário com o paciente.`
@@ -390,6 +441,8 @@ export async function agendamentosDoPaciente(args: {
     const dia = instanteNoFuso(new Date(quandoEpoch * 1000), tz).slice(0, 10);
     const r = await SpineService.searchSchedules(unit, { initialDate: dia, endDate: dia, rowsPerPage: 100 });
     if (!r.ok || !r.data) return null;
+    // Sem o idClient a agenda do dia só diz de quem é pelo ⚙ idTreatment do cartão: o nome não é prova (homônimo),
+    // então aqui não se estende a outros tratamentos. Se a próxima for de outro, o toque vira tarefa — nunca palpite.
     return r.data.schedules.filter((s) => s.idTreatment === datas.idTreatment);
   }
 
@@ -570,6 +623,8 @@ export interface ResultadoDoLembrete {
   tipo: TipoLembrete | 'incerto';
   /** O agendamento da franquia que o toque confirmou (ou ia confirmar). */
   idSchedule: number | null;
+  /** As sessões seguidas, do mesmo paciente e dia, que o mesmo toque também tratou (sessão com dois tratamentos em fila). */
+  encadeadas?: Array<{ idSchedule: number; franquia: ResultadoFranquia }>;
   /** Só no "confirmou" de um tipo certo: o que aconteceu na franquia. */
   franquia: ResultadoFranquia | null;
   /** No "incerto": por que não deu para saber. */
@@ -704,6 +759,8 @@ export async function tratarBotaoDoLembrete(
   const chave = chaveDoToque(alvo.tipo, ref, resposta);
 
   if (alvo.estado === 'seco') {
+    const fila = alvo.tipo === 'sessao' && escolhido && schedules ? sessoesEncadeadas(escolhido, schedules) : [];
+    const seguidasNoSeco = fila.length > 0 ? ` + seguidas: ${fila.map((e) => `${e.idSchedule} (${e.timeLocal})`).join(', ')}` : '';
     const oQue = alvo.tipo === 'sessao' ? 'sessão' : alvo.tipo === 'consulta' ? 'consulta' : 'agendamento';
     deps.simular(unit, automacao, {
       leadId,
@@ -719,7 +776,7 @@ export async function tratarBotaoDoLembrete(
         alvo.tipo === 'incerto'
           ? alvo.motivo
           : escolhido
-            ? `agendamento ${escolhido.idSchedule} (${escolhido.statusName ?? escolhido.idStatus ?? 'status ?'})`
+            ? `agendamento ${escolhido.idSchedule} (${escolhido.statusName ?? escolhido.idStatus ?? 'status ?'})${seguidasNoSeco}`
             : schedules === null
               ? 'a franquia não respondeu — responderia e abriria tarefa'
               : 'não achei o agendamento do horário do cartão na franquia — responderia e abriria tarefa',
@@ -777,12 +834,15 @@ async function responderAoLembrete(
   // O horário dito ao paciente: o da franquia quando bateu; senão o do cartão (é o que o lembrete mostrou),
   // a não ser que o campo só tenha o dia.
   const quandoDito = consulta?.quando ?? (horarioDoCartao.slice(11, 16) === '00:00' ? null : horarioDoCartao);
+  // Dois tratamentos em horários seguidos: o lembrete falou do primeiro, e o toque vale para a fila toda.
+  const encadeadas = tipo === 'sessao' && escolhido && a.schedules ? sessoesEncadeadas(escolhido, a.schedules) : [];
+  const seguidas = encadeadas.map((e) => e.timeLocal).filter((h): h is string => !!h);
 
   if (resposta === 'remarcar') {
     await kommo
       .createTask({
         leadId,
-        text: textoTarefaRemarcar({ slug: unit.slug, tipo, nome: conv.contactName, quando: quandoDito, texto }),
+        text: textoTarefaRemarcar({ slug: unit.slug, tipo, nome: conv.contactName, quando: quandoDito, texto, seguidas }),
         completeAt: Math.floor(deps.agora().getTime() / 1000) + 30 * 60,
       })
       .catch((err) => logger.warn({ ...c.log, err: String(err) }, 'lembrete: falha ao abrir a tarefa de remarcação'));
@@ -793,13 +853,14 @@ async function responderAoLembrete(
     });
   }
 
-  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: nomeDoContexto(c), quando: quandoDito });
+  const resp = textoRespostaAoLembrete({ tipo, resposta, nome: nomeDoContexto(c), quando: quandoDito, seguidas });
   await kommo.sendChatReply({ leadId, text: resp, chatId: null, talkId: null, contactId: null });
   // A resposta já saiu: marca antes de falar com a franquia, que pode demorar ou falhar.
   await deps.marcarTratado(unit.id, leadId, chave).catch(() => undefined);
   await deps.registrarResposta(conv.id ?? null, resp);
 
   let franquia: ResultadoFranquia | null = null;
+  const dasEncadeadas: NonNullable<ResultadoDoLembrete['encadeadas']> = [];
   if (resposta === 'confirmou') {
     franquia = await confirmarNaFranquia(
       { unit, leadId, consulta, contactName: conv.contactName, kommo, oQue },
@@ -807,7 +868,23 @@ async function responderAoLembrete(
       // horário do cartão bateu com o da franquia (escolherAgendamento).
       { ...deps.franquia, perguntou: async () => consulta !== null },
     );
+    // As seguidas entram pela mesma prova: são do mesmo paciente, do mesmo dia, coladas na que o lembrete anunciou.
+    // Cada uma tem a sua própria confirmação (e o seu próprio alerta se a franquia recusar).
+    // Só se a primeira ficou confirmada (ou já estava): se ela falhou ou não foi achada, o toque não prova nada das outras.
+    const primeiraOk = franquia === 'confirmada' || franquia === 'ja_confirmada';
+    for (const e of primeiraOk ? encadeadas : []) {
+      const seguida = comoConsultaReconciliada(e);
+      if (!seguida || !e.idSchedule) continue;
+      const r = await confirmarNaFranquia(
+        { unit, leadId, consulta: seguida, contactName: conv.contactName, kommo, oQue },
+        { ...deps.franquia, perguntou: async () => true },
+      );
+      dasEncadeadas.push({ idSchedule: e.idSchedule, franquia: r });
+    }
   }
-  logger.info({ ...c.log, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia }, 'lembrete: toque respondido em código, sem Sofia');
-  return { resposta, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia };
+  logger.info(
+    { ...c.log, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia, encadeadas: dasEncadeadas },
+    'lembrete: toque respondido em código, sem Sofia',
+  );
+  return { resposta, tipo, idSchedule: escolhido?.idSchedule ?? null, franquia, ...(dasEncadeadas.length > 0 ? { encadeadas: dasEncadeadas } : {}) };
 }
