@@ -601,10 +601,12 @@ test('WhatsApp RECUSADO (a Evolution respondeu com erro): desfaz e tenta UMA vez
   await ciclo('ligado');
   assert.equal(doAviso10().length, 1);
   assert.ok(!regras().includes('demora-aviso-10'), 'desfeita: pode tentar de novo');
+  memoria = C.novaMemoriaDaDemora(); // o servidor reiniciou: o limite de tentativas mora no BANCO, não na memória
   avanca(6);
   await ciclo('ligado');
   assert.equal(doAviso10().length, 2, 'a 2ª tentativa');
   for (let i = 0; i < 3; i++) {
+    memoria = C.novaMemoriaDaDemora();
     avanca(6);
     await ciclo('ligado');
   }

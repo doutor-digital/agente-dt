@@ -37,7 +37,6 @@ export const MAX_SAIDAS_POR_CICLO = 12;
  */
 export const MINUTOS_UTEIS_DE_LEITURA = 200;
 /** Recusa clara do WhatsApp (a Evolution respondeu com erro): tenta de novo UMA vez; a segunda recusa fica registrada e para. */
-export const MAX_RECUSAS_DO_WHATSAPP = 2;
 export const SUFIXO_SECO = '~seco';
 
 
@@ -98,12 +97,10 @@ export interface MemoriaDaDemora {
   adiados: Map<string, number>;
   /** conta → id do conector (só guarda o que deu certo) */
   conectores: Map<number, number>;
-  /** `caixa|conversa|regra|chave` → quantas vezes o WhatsApp foi RECUSADO (a Evolution respondeu com erro) */
-  recusas: Map<string, number>;
   /** caixa → quando foi vista ligada pela primeira vez */
   ligadoDesde: Map<number, Date>;
 }
-export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map(), recusas: new Map(), ligadoDesde: new Map() });
+export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map(), ligadoDesde: new Map() });
 /** Depois de uma falha (ou de «sem ninguém a avisar»), espera isto para tentar de novo. */
 export const ESPERA_ENTRE_TENTATIVAS_MS = 5 * 60_000;
 const LIMITE_DA_MEMORIA = 20_000;
@@ -219,8 +216,6 @@ function passoTratado(c: Ctx, a: Alvo, id: number, passo: Passo, chaveEp: string
   return resolvido(c, a, id, 'demora-aviso-10', chaveEp) && (a.u.modo === 'seco' || resolvido(c, a, id, 'demora-aviso-10-nota', chaveEp));
 }
 
-const chaveDaRecusa = (a: Alvo, id: number, base: RegraBase, chave: string): string => chaveDaMemoria(a, id, base, chave);
-
 /**
  * Depois de mandar o WhatsApp: `ok` conta como feito; `incerto` (estouro de tempo: pode ter saído) NUNCA desfaz a linha — repetir seria mandar em dobro; `recusado`
  * (a Evolution respondeu com erro) desfaz e adia para UMA nova tentativa, e na segunda recusa a linha fica e a conta fecha.
@@ -233,14 +228,12 @@ async function aposOZap(c: Ctx, a: Alvo, id: number, base: RegraBase, chave: str
     logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp sem resposta (pode ter saído) — não repito`);
     return false;
   }
-  const k = chaveDaRecusa(a, id, base, chave);
-  const n = (c.deps.memoria.recusas.get(k) ?? 0) + 1;
-  if (c.deps.memoria.recusas.size > LIMITE_DA_MEMORIA) c.deps.memoria.recusas.clear();
-  c.deps.memoria.recusas.set(k, n);
-  if (n < MAX_RECUSAS_DO_WHATSAPP) {
+  // a 1ª recusa deixa uma linha DURÁVEL (sobrevive a reinício do servidor); com ela já no banco, esta é a 2ª recusa: a linha do aviso fica e a conta fecha
+  const primeira = await c.deps.armazem.registrar({ caixa: a.caixa.id, conversationId: id, regra: `${base}-recusa`, chave, modo: a.u.modo, texto: 'WhatsApp recusado pela Evolution (1 nova tentativa permitida)' });
+  if (primeira) {
     await desfazer(c, a, id, base, chave);
     adiar(c, a, id, base, chave);
-  } else logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp recusado ${n} vezes — desisto deste aviso`);
+  } else logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp recusado pela 2ª vez — desisto deste aviso`);
   return false;
 }
 
