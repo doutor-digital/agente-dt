@@ -356,26 +356,42 @@ test('criar pelo CONTATO escolhe a conversa mais recente DA UNIDADE (ignora outr
   nada_de_post();
 });
 
-test('o mesmo pedido de novo (a atendente tenta outra vez depois de a conexão cair) não duplica nem se a primeira já andou; tarefa velha ou cancelada não conta', async () => {
+test('o mesmo pedido de novo (a atendente tenta outra vez depois de a conexão cair) não duplica nem se a primeira já foi FEITA; velha, falhada, barrada ou cancelada não contam', async () => {
   preparar();
   const corpo = { slug: PARAU, tipo: 'lembrete', conversaId: 40, quandoLocal: local(5 * HORA), texto: 'ver o exame' };
   const a = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
   assert.equal(a.status, 200, JSON.stringify(a.corpo));
-  // a primeira já andou (feita/falhou/barrada) há pouco: o pedido igual é repetição
+  // a primeira já foi feita há pouco: o pedido igual é repetição
   tarefas[0]!.estado = 'feita';
   const b = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
   assert.deepEqual([b.corpo.repetida, b.corpo.id], [true, a.corpo.id]);
   assert.equal(tarefas.length, 1);
-  // criada há mais de 15 min e já terminada: é um pedido novo
+  // criada há mais de 15 min e já feita: é um pedido novo
   tarefas[0]!.criadoEm = new Date(Date.now() - 16 * 60_000);
   const c = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
   assert.equal(c.corpo.repetida, undefined);
   assert.equal(tarefas.length, 2);
-  // a CANCELADA de propósito não impede de criar a mesma de novo
-  tarefas[1]!.estado = 'cancelada';
-  const d = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
-  assert.equal(d.corpo.repetida, undefined);
-  assert.equal(tarefas.length, 3);
+  // a que FALHOU, foi barrada ou foi cancelada de propósito: tentar de novo é pedido novo (a atendente não pode ficar sem janela para repetir)
+  for (const estado of ['falhou', 'barrada', 'cancelada']) {
+    tarefas[tarefas.length - 1]!.estado = estado;
+    const antes: number = tarefas.length;
+    const d = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+    assert.equal(d.corpo.repetida, undefined, estado);
+    assert.equal(tarefas.length, antes + 1, estado);
+  }
+});
+
+test('as tarefas RECENTES (para a tela conferir a que acabou de pedir): criadas ou editadas há pouco, sem os cortes da lista, e só da unidade da pessoa', async () => {
+  preparar();
+  const nova = await pedir('POST', '/public/tarefas', 'tok-agente', { slug: PARAU, tipo: 'lembrete', conversaId: 40, quandoLocal: local(300 * 24 * HORA), texto: 'daqui a dez meses' });
+  assert.equal(nova.status, 200, JSON.stringify(nova.corpo));
+  tarefas.push({ id: 'velha-abcdefgh', unitId: 'u1', conta: 1, conversaId: 40, estado: 'pendente', tipo: 'lembrete', quando: new Date(Date.now() + 3 * HORA), atualizadoEm: new Date(Date.now() - 3 * HORA), criadoEm: new Date(Date.now() - 3 * HORA), texto: 'velha' });
+  const r = await pedir('GET', `/public/tarefas/recentes?slug=${PARAU}`, 'tok-agente');
+  assert.equal(r.status, 200, JSON.stringify(r.corpo));
+  assert.deepEqual(r.corpo.tarefas.map((t: Linha) => t.texto), ['daqui a dez meses'], 'só a mexida há pouco, mesmo para daqui a meses');
+  assert.ok(typeof r.corpo.tarefas[0].criadaEm === 'string' && typeof r.corpo.tarefas[0].criadoPor === 'string');
+  const l = await pedir('GET', `/public/tarefas?slug=${PARAU}`, 'tok-agente');
+  assert.ok(typeof l.corpo.eu.criador === 'string' && l.corpo.eu.criador === r.corpo.tarefas[0].criadoPor, 'quem criou é quem a lista diz que sou eu');
 });
 
 test('a lista traz quando cada tarefa foi criada (a tela confere com isso a tarefa que acabou de pedir)', async () => {
@@ -388,12 +404,13 @@ test('a lista traz quando cada tarefa foi criada (a tela confere com isso a tare
   assert.ok(typeof t.criadaEm === 'string' && Math.abs(Date.now() - new Date(t.criadaEm).getTime()) < 60_000);
 });
 
-test('a tela salva pelo salvarTarefa (conferindo a lista quando o POST fica sem resposta), a releitura não fica no mesmo try do POST e a rede que cai não vira «Failed to fetch» cru', () => {
+test('a tela salva pelo salvarTarefa (conferindo as tarefas recentes quando o POST fica sem resposta), a releitura não fica no mesmo try do POST e a chamada passa pelo buscar com tempo máximo', () => {
   const js = scriptDaPagina();
-  assert.ok(js.includes('await salvarTarefa({') && js.includes('tarefaPedida(d, pedido)'), 'o salvar passa pela conferência');
+  assert.ok(js.includes('await salvarTarefa({') && js.includes('tarefaPedida(d, pedido)') && js.includes('/api/public/tarefas/recentes?slug='), 'o salvar passa pela conferência');
   const salvarForm = js.slice(js.indexOf('async function salvarForm'), js.indexOf('// ── WhatsApp das meninas'));
-  assert.ok(!/await carregar\(\)/.test(salvarForm), 'a releitura da lista não está no try do agendamento (é o `atualizar` do salvarTarefa)');
-  assert.ok(js.includes('AbortController') && js.includes('semResposta = true') && js.includes('Sem resposta do servidor'), 'rede que cai ou demora vira erro SEM status, com texto de gente');
+  assert.ok(!/await carregar\(/.test(salvarForm), 'a releitura da lista não está no try do agendamento (é o atualizar do salvarTarefa)');
+  assert.ok(/await buscar\(fetch, url, opcoes, 45000\)/.test(js), 'toda chamada à API tem tempo máximo e a rede que cai vira erro sem status');
+  assert.ok(js.includes('function carregar(forcar)'), 'depois de salvar a lista é relida DE NOVO, mesmo com outra leitura em andamento');
 });
 
 test('limite de tarefas abertas por conversa', async () => {

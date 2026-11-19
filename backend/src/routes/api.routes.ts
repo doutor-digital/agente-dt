@@ -162,7 +162,7 @@ import {
 } from '../controllers/funil.controller.js';
 import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
-import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
+import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasRecentesHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
 import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
 import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
@@ -421,6 +421,7 @@ apiRouter.post('/public/disparos/ajuste', disparosAjusteHandler);
 apiRouter.get('/public/tarefas', tarefasHandler);
 apiRouter.get('/public/tarefas/buscar', tarefasBuscarHandler);
 apiRouter.get('/public/tarefas/contexto', tarefasContextoHandler);
+apiRouter.get('/public/tarefas/recentes', tarefasRecentesHandler);
 apiRouter.get('/public/tarefas/modelos', tarefasModelosHandler);
 apiRouter.post('/public/tarefas', tarefasCriarHandler);
 apiRouter.post('/public/tarefas/zap', tarefasZapHandler);

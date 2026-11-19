@@ -20,17 +20,20 @@ export const MARCADOR_DO_SALVAR = '/*__SALVAR_JS__*/';
 export const ESPERAS_DA_CONFERENCIA_MS = [700, 2500, 6000];
 
 export const SALVAR_NA_PAGINA_JS =
-  '// a tarefa pedida está na lista? p = { id (só ao editar), conversaId, tipo, quandoLocal, texto, responsavelId }\n' +
+  '// a tarefa pedida está na lista? p = { id (só ao editar), verificavel (editar: mudou hora, texto ou responsável), conversaId, tipo, quandoLocal, texto, responsavelId, criadoPor }\n' +
   '  function tarefaPedida(d, p){\n' +
   '    var lista = (d && d.tarefas) || [];\n' +
   '    var agora = d && d.agora ? new Date(d.agora).getTime() : Date.now();\n' +
   '    for (var i = 0; i < lista.length; i++) {\n' +
   '      var t = lista[i];\n' +
   "      if (t.quandoLocal !== p.quandoLocal || (t.texto || '') !== (p.texto || '')) continue;\n" +
-  '      if (p.id) { if (t.id === p.id) return true; continue; }\n' +
+  '      if (p.responsavelId && t.responsavel && t.responsavel.id !== p.responsavelId) continue;\n' +
+  '      // editar: só prova a edição quem mudou algo que a lista mostra (salvar sem mudar nada, ou mudar só o modelo, não dá para conferir)\n' +
+  '      if (p.id) { if (t.id === p.id && p.verificavel) return true; continue; }\n' +
   '      if (t.tipo !== p.tipo) continue;\n' +
   '      if (p.conversaId && t.conversaId !== p.conversaId) continue;\n' +
-  '      if (p.responsavelId && t.responsavel && t.responsavel.id !== p.responsavelId) continue;\n' +
+  '      // a tarefa igual de uma colega não prova a minha\n' +
+  '      if (p.criadoPor && t.criadoPor !== p.criadoPor) continue;\n' +
   '      // criada agora há pouco: uma tarefa igual de ontem não prova nada\n' +
   '      var criada = t.criadaEm ? new Date(t.criadaEm).getTime() : 0;\n' +
   '      if (criada && agora - criada <= 180000 && agora - criada >= -60000) return true;\n' +
@@ -62,6 +65,21 @@ export const SALVAR_NA_PAGINA_JS =
   '    var atualizou = true;\n' +
   '    try { await x.atualizar(); } catch (e) { atualizou = false; }\n' +
   '    return { resposta: r.resposta, conferida: r.conferida, atualizou: atualizou };\n' +
+  '  }\n' +
+  '  // A chamada ao servidor com tempo máximo. Só a REDE vira «sem resposta» (erro sem status, texto de gente, nunca o «Failed to fetch» cru do navegador); bug de montagem do pedido não.\n' +
+  '  // O tempo vale também para ler o corpo da resposta.\n' +
+  '  async function buscar(fetchFn, url, opcoes, ms){\n' +
+  '    var ctl = typeof AbortController !== \'undefined\' ? new AbortController() : null;\n' +
+  '    var estourou = false;\n' +
+  '    var corte = ctl ? setTimeout(function(){ estourou = true; ctl.abort(); }, ms) : null;\n' +
+  '    var semResposta = function(){ var er = new Error(\'Sem resposta do servidor (a conexão caiu ou demorou demais).\'); er.semResposta = true; return er; };\n' +
+  '    try {\n' +
+  '      var r;\n' +
+  '      try { r = await fetchFn(url, ctl ? Object.assign({}, opcoes, { signal: ctl.signal }) : opcoes); } catch (e0) { throw semResposta(); }\n' +
+  '      var j;\n' +
+  '      try { j = await r.json(); } catch (e1) { if (estourou) throw semResposta(); j = {}; }\n' +
+  '      return { r: r, j: j };\n' +
+  '    } finally { if (corte) clearTimeout(corte); }\n' +
   '  }';
 
 /** Troca o marcador pela cópia única. */

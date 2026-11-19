@@ -149,7 +149,7 @@ details[open]>summary{margin-bottom:8px}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
-  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], D = null, ABA = 'hoje', QUEM = 'minhas', CONV = null, SO_CONV = true, FORM = null, tPoll = null, CARREGANDO = false, PAINEL = null;
+  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], D = null, ABA = 'hoje', QUEM = 'minhas', CONV = null, SO_CONV = true, FORM = null, tPoll = null, CARREGANDO = null, PAINEL = null;
   var MENU = /[?&]menu=1/.test(location.search);
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -166,14 +166,9 @@ details[open]>summary{margin-bottom:8px}
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   async function api(method, path, body){
-    // rede que cai ou demora demais: erro SEM status (não se sabe se o servidor chegou a gravar) e sem o «Failed to fetch» cru do navegador
-    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    var corte = ctl ? setTimeout(function(){ ctl.abort(); }, 45000) : null;
-    var r;
-    try { r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}), signal: ctl ? ctl.signal : undefined }); }
-    catch (e0) { var er0 = new Error('Sem resposta do servidor (a conexão caiu ou demorou demais).'); er0.semResposta = true; throw er0; }
-    finally { if (corte) clearTimeout(corte); }
-    var j = await r.json().catch(function(){ return {}; });
+    // a rede que cai ou demora vira erro SEM status (o servidor pode ter gravado) e sem o «Failed to fetch» cru do navegador (ver buscar)
+    var url = comConta(path), opcoes = { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) };
+    var x = await buscar(fetch, url, opcoes, 45000), r = x.r, j = x.j || {};
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.corpo = j; er.status = r.status; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
   }
@@ -450,7 +445,7 @@ details[open]>summary{margin-bottom:8px}
   function primeiroNome(n){ return String(n || '').trim().split(/\s+/)[0] || ''; }
   async function abrirForm(modo, base){
     PAINEL = null;
-    FORM = { modo: modo, id: modo === 'editar' && base ? base.id : null, tipo: base ? base.tipo : 'mensagem', alvo: null, quandoLocal: base && modo === 'editar' ? base.quandoLocal : localDoDia(1, 9), resp: base ? base.responsavel.id : D.eu.id, texto: base ? base.texto : '', modeloSel: null, fontes: [], fixo: [], ctxAlvo: null, modelos: null, via: 'texto' };
+    FORM = { modo: modo, id: modo === 'editar' && base ? base.id : null, tipo: base ? base.tipo : 'mensagem', alvo: null, quandoLocal: base && modo === 'editar' ? base.quandoLocal : localDoDia(1, 9), resp: base ? base.responsavel.id : D.eu.id, texto: base ? base.texto : '', original: modo === 'editar' && base ? { quandoLocal: base.quandoLocal, texto: base.texto, resp: base.responsavel.id } : null, modeloSel: null, fontes: [], fixo: [], ctxAlvo: null, modelos: null, via: 'texto' };
     if (base) FORM.alvo = { conversaId: base.conversaId, nome: base.contato };
     else if (CONV) FORM.alvo = { conversaId: CONV.conversaId, nome: CONV.nome };
     if (modo !== 'novo' && base && base.modelo) FORM.modeloGuardado = base.modelo;
@@ -658,11 +653,18 @@ details[open]>summary{margin-bottom:8px}
     if (F.modo === 'editar') corpo.id = F.id; else if (F.alvo.conversaId) corpo.conversaId = F.alvo.conversaId; else corpo.contatoId = F.alvo.contatoId;
     bt.disabled = true; var texto0 = bt.textContent; bt.textContent = 'Salvando…';
     var url = F.modo === 'editar' ? '/api/public/tarefas/' + enc(F.id) + '/editar' : '/api/public/tarefas';
-    var pedido = { id: F.modo === 'editar' ? F.id : null, conversaId: corpo.conversaId || null, tipo: F.tipo, quandoLocal: F.quandoLocal, texto: corpo.texto, responsavelId: corpo.responsavelId || null };
+    var o = F.original, eu = D && D.eu ? D.eu : {};
+    var pedido = {
+      id: F.modo === 'editar' ? F.id : null,
+      // editar: só dá para conferir pela lista o que ela mostra (hora, texto, responsável) e só se algo disso mudou
+      verificavel: !!o && (o.quandoLocal !== F.quandoLocal || o.texto !== corpo.texto || (!!corpo.responsavelId && corpo.responsavelId !== o.resp)),
+      conversaId: corpo.conversaId || null, tipo: F.tipo, quandoLocal: F.quandoLocal, texto: corpo.texto, responsavelId: corpo.responsavelId || null, criadoPor: eu.criador || null
+    };
     try {
       var res = await salvarTarefa({
         enviar: function(){ return api('POST', url, corpo); },
-        listar: function(){ return api('GET', '/api/public/tarefas?slug=' + enc(U.slug)); },
+        // a conferência lê as tarefas que mudaram há pouco (sem os cortes da lista de verdade)
+        listar: function(){ return api('GET', '/api/public/tarefas/recentes?slug=' + enc(U.slug)); },
         confere: function(d){ return tarefaPedida(d, pedido); },
         espera: function(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); },
         // só roda depois de a tarefa existir; se a lista não atualizar, isso NÃO é erro do agendamento
@@ -670,17 +672,21 @@ details[open]>summary{margin-bottom:8px}
           var quando = paraUtcAprox(F.quandoLocal), hoje = agoraDoServidor();
           ABA = quando && diaNum(partes(quando)) === diaNum(partes(hoje)) ? 'hoje' : 'proximas';
           fecharForm();
-          return carregar();
+          return carregar(true);
         }
       });
       var r = res.resposta || {};
-      toast(res.conferida ? 'Tarefa agendada. A conexão oscilou, mas conferi na lista: está lá.' : r.repetida ? 'Esta tarefa já estava agendada.' : r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.'));
-      if (!res.atualizou) { aviso('Tarefa salva. Não consegui atualizar a lista agora: ela aparece sozinha em instantes.', false); setTimeout(function(){ carregar().then(function(){ aviso(''); }).catch(function(){}); }, 4000); }
+      var msg = res.conferida ? 'Tarefa agendada. A conexão oscilou, mas conferi: ela está lá.' : r.repetida ? 'Esta tarefa já estava agendada.' + (r.aviso ? ' ' + r.aviso : '') : r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.');
+      if (!res.atualizou) {
+        msg += ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.';
+        setTimeout(function(){ carregar(true).catch(function(){}); }, 4000);
+      }
+      toast(msg);
     } catch (e) {
       toast(e.message, true); bt.disabled = false; bt.textContent = texto0;
       if (e.corpo && e.corpo.exigeModelo) desenharForm();
       // sem resposta: pode ter gravado — mostra a lista para a atendente ver antes de tentar de novo
-      if (e.incerto) carregar().catch(function(){});
+      if (e.incerto) carregar(true).catch(function(){});
     }
   }
 
@@ -711,15 +717,21 @@ details[open]>summary{margin-bottom:8px}
   }
 
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
-  async function carregar(){
-    if (CARREGANDO) return D;
-    CARREGANDO = true;
-    try {
-      var d = await api('GET', '/api/public/tarefas?slug=' + enc(U.slug));
-      d.lidoEm = Date.now(); D = d;
-      cabecalho(); faixaDoModo(); faixaDoZap(); faixaDoLimite(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
-      return D;
-    } finally { CARREGANDO = false; }
+  // uma leitura por vez: quem pede enquanto outra voa divide a mesma; com forcar, espera a que voa e lê DE NOVO (depois de salvar, a lista tem de trazer a tarefa nova)
+  function carregar(forcar){
+    if (CARREGANDO && !forcar) return CARREGANDO;
+    var anterior = CARREGANDO;
+    var p = (async function(){
+      if (anterior) { try { await anterior; } catch (e) {} }
+      try {
+        var d = await api('GET', '/api/public/tarefas?slug=' + enc(U.slug));
+        d.lidoEm = Date.now(); D = d;
+        cabecalho(); faixaDoModo(); faixaDoZap(); faixaDoLimite(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
+        return D;
+      } finally { if (CARREGANDO === p) CARREGANDO = null; }
+    })();
+    CARREGANDO = p;
+    return p;
   }
   async function escolherUnidade(u){
     U = u; guardar('tarefas:unidade', u.slug); $('unidadeNome').textContent = u.nome;
