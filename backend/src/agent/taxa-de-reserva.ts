@@ -772,7 +772,8 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
     const r = conservandoOResto(texto, dados, (t) => afirmaNoTrecho(t), recadoSemComprovante(dados), recadoSemComprovante(dados));
     return { ...r, motivo: 'horario_sem_comprovante' };
   }
-  if (pedeDadosAntesDaTaxa(texto, ctx.respostaAnterior)) {
+  // A chave já foi enviada (o paciente vai pagar): pedir o nome agora não repete o bloco da taxa a cada turno.
+  if (!chaveJaEnviada && pedeDadosAntesDaTaxa(texto, ctx)) {
     const r = conservandoOResto(texto, dados, (t) => pedeDadosNoTrecho(normalizar(t)) || afirmaNoTrecho(t), pedidoDaChave(dados), recadoSemComprovante(dados));
     return { ...r, motivo: 'dados_antes_da_taxa' };
   }
@@ -786,23 +787,40 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
 // vaga está salva. Nesta unidade o passo seguinte à escolha do horário é a taxa; nome e telefone só entram depois do comprovante (a
 // trava nem chega aqui com comprovante na conversa, cartão pago ou consulta de pé).
 
-/** Pede o cadastro do paciente: nome completo / sobrenome / telefone com DDD / o nome de quem vai (filho, mãe…). */
-const PEDE_DADOS_DO_CADASTRO =
-  /\b(?:nome completo|nome e sobrenome|sobrenome|telefone com ddd|um telefone|seu telefone|telefone de contato|nome (?:dele|dela|do seu \w+|da sua \w+))\b/;
+/**
+ * Pede o cadastro do paciente: nome completo / sobrenome / telefone com DDD / CPF / nascimento, ou «preciso do seu nome», «me passa o nome
+ * dele». Exige o pedido (verbo) junto da palavra: «posso te ligar no seu telefone» e «vou anotar o nome dele» não são pedidos.
+ */
+const PEDE_DADOS_DO_CADASTRO = new RegExp(
+  [
+    String.raw`\b(?:nome completo|nome e sobrenome|sobrenome|telefone com ddd|um telefone|telefone de contato|data de nascimento|cpf)\b`,
+    String.raw`\b(?:preciso|precisamos|preciso so|me (?:passa|passe|diz|diga|confirma|confirme|informa|informe|manda|mande)|pode (?:me )?(?:passar|confirmar|informar|dizer)|qual (?:e )?o)\b[^.?!]{0,40}\b(?:nome|telefone|numero)\b`,
+  ].join('|'),
+);
 /** Já fala da taxa na mesma resposta: o pedido de dados vem junto do que importa. */
 const FALA_DA_TAXA = /\b(?:taxa|pix|comprovante|antecipad\w*|sinal)\b/;
+/** O paciente ESCOLHEU um horário: dia ou hora na fala dele («sexta às 8», «16:00», «amanhã», «as 9»). */
+const ESCOLHA_DE_HORARIO = /\b(?:as|a|na|no|pra|para)\s+\d{1,2}\b/;
+/** «sim», «ok», «pode ser»: aceite curto a UMA proposta de horário da Sofia. */
+const ACEITE_CURTO = /^\s*(?:sim|ok|okay|pode(?: ser)?|beleza|combinado|isso|certo|fechado|tá|ta|vamos|quero)\b/;
 
 function pedeDadosNoTrecho(n: string): boolean {
-  return PEDE_DADOS_DO_CADASTRO.test(n) && !/\bcomo (?:posso|devo) (?:te )?chamar\b/.test(n);
+  return PEDE_DADOS_DO_CADASTRO.test(n);
 }
 
 /**
- * A resposta pede nome/telefone com um horário em jogo (na resposta ou na que a IA mandou antes) e sem falar da taxa. Quem pergunta
- * "como posso te chamar?" no primeiro contato não entra: sem horário em jogo, ou sem pedido de cadastro, devolve false.
+ * A resposta pede nome/telefone logo depois de o paciente ESCOLHER o horário e sem falar da taxa. Só vale com PROPOSTA de horário na
+ * resposta anterior da Sofia E a escolha dele na última fala (dia/hora, ou um aceite curto): quem pergunta o preço depois da oferta e
+ * recebe «me passa seu nome» não escolheu nada, e quem pede «sexta» no primeiro contato ainda não recebeu proposta. Devolve false sem
+ * horário escolhido, sem pedido de cadastro, ou quando a resposta já fala da taxa.
  */
-export function pedeDadosAntesDaTaxa(texto: string, respostaAnterior = ''): boolean {
+export function pedeDadosAntesDaTaxa(texto: string, ctx: Pick<ContextoDaTaxa, 'falasDoPaciente' | 'respostaAnterior'>): boolean {
   const n = normalizar(texto);
   if (FALA_DA_TAXA.test(n)) return false;
-  if (!QUANDO_HORARIO.test(n) && !QUANDO_HORARIO.test(normalizar(respostaAnterior))) return false;
+  const ultima = normalizar(ctx.falasDoPaciente[ctx.falasDoPaciente.length - 1] ?? '');
+  // Houve proposta de horário antes (a resposta anterior da Sofia) E ele escolheu: dia/hora na fala dele, ou um aceite curto.
+  const propostaAntes = QUANDO_HORARIO.test(normalizar(ctx.respostaAnterior));
+  const escolheu = propostaAntes && (QUANDO_HORARIO.test(ultima) || ESCOLHA_DE_HORARIO.test(ultima) || ACEITE_CURTO.test(ultima));
+  if (!escolheu) return false;
   return trechos(texto).some((t) => pedeDadosNoTrecho(normalizar(t)));
 }

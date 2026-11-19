@@ -557,7 +557,7 @@ export async function abrirTarefaParaEquipe(args: {
     const quem = nome ? ` · ${nome}` : '';
     const texto = {
       comprovante: args.semLancar
-        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante da taxa: conferir no extrato se o Pix caiu. A IA não confirmou o pagamento e NÃO lance a consulta ainda: ela marca sozinha.`
+        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante da taxa: conferir no extrato se o Pix caiu. A IA não confirmou o pagamento. NÃO lance a consulta agora: a Sofia marca sozinha, e lançar por ela deixaria a consulta em dobro.`
         : `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`,
       desmarcada: `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`,
       insistiu_na_clinica: `FALAR COM O PACIENTE · ${slug}${quem} · reserva com taxa: ele já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido: falar com ele em até 1 h.`,

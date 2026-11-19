@@ -38,7 +38,7 @@ const ERROS_DE_PRODUCAO = [
 
 test('pede nome/telefone com horário em jogo e sem falar da taxa: a resposta é trocada pelo pedido da taxa com a chave', () => {
   for (const texto of ERROS_DE_PRODUCAO) {
-    assert.equal(pedeDadosAntesDaTaxa(texto, CTX.respostaAnterior), true, texto);
+    assert.equal(pedeDadosAntesDaTaxa(texto, CTX), true, texto);
     const troca = travaDaTaxaDeReserva(texto, DADOS, CTX);
     // a frase com «vaga garantida» já era pega pelo detector de horário garantido; as outras, só pela rede nova
     assert.ok(troca?.motivo === 'dados_antes_da_taxa' || troca?.motivo === 'horario_sem_comprovante', `${troca?.motivo}: ${texto}`);
@@ -51,12 +51,12 @@ test('pede nome/telefone com horário em jogo e sem falar da taxa: a resposta é
 
 test('o que NÃO é o erro: primeiro contato, resposta que já fala da taxa, pergunta de nome sem horário', () => {
   // sem horário em jogo (nem na resposta nem na anterior)
-  assert.equal(pedeDadosAntesDaTaxa('Oi! Aqui é a Sofia. Qual o seu nome completo?', 'Olá!'), false);
+  assert.equal(pedeDadosAntesDaTaxa('Oi! Aqui é a Sofia. Qual o seu nome completo?', { falasDoPaciente: ['quero marcar sexta'], respostaAnterior: 'Olá!' }), false);
   // "como posso te chamar" é o nome de tratamento do primeiro contato
-  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Como posso te chamar?', ''), false);
+  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Como posso te chamar?', CTX), false);
   // já fala da taxa/Pix/comprovante: o pedido de dados vem junto do que importa
   assert.equal(
-    pedeDadosAntesDaTaxa('Pra garantir esse horário, a taxa de agendamento é R$ 100 por Pix (chave 49.485.277/0001-40). Me manda o comprovante e seu nome completo?', ''),
+    pedeDadosAntesDaTaxa('Pra garantir esse horário, a taxa de agendamento é R$ 100 por Pix (chave 49.485.277/0001-40). Me manda o comprovante e seu nome completo?', CTX),
     false,
   );
   assert.equal(travaDaTaxaDeReserva('Pra garantir quarta às 9h, a taxa é R$ 100 por Pix. Me manda o comprovante e seu nome completo?', DADOS, CTX), null);
@@ -84,4 +84,29 @@ test('o resto útil da resposta fica: o endereço que ele também perguntou', ()
   assert.match(troca!.texto, /Ville Roy/);
   assert.match(troca!.texto, /49\.485\.277\/0001-40/);
   assert.doesNotMatch(troca!.texto, /nome completo/);
+});
+
+test('só vale com a ESCOLHA do horário: pergunta de preço depois da oferta, pedido no primeiro contato e chave já enviada não trocam', () => {
+  // ofereceu horários e ele pergunta o preço: "me passa seu nome completo" não é resposta a uma escolha
+  assert.equal(
+    travaDaTaxaDeReserva('Pode me passar seu nome completo?', DADOS, { ...CTX, falasDoPaciente: ['quanto custa a consulta?'] }),
+    null,
+  );
+  // primeiro contato com um dia, sem proposta de horário antes
+  assert.equal(
+    travaDaTaxaDeReserva('Claro! Qual o seu nome completo?', DADOS, { ...CTX, falasDoPaciente: ['quero marcar sexta'], respostaAnterior: 'Olá! Aqui é a Sofia.' }),
+    null,
+  );
+  // a chave já foi enviada: o bloco da taxa não se repete a cada turno
+  assert.equal(
+    travaDaTaxaDeReserva('Ótimo! Pra terça às 16h, me confirma seu nome completo?', DADOS, { ...CTX, respostaAnterior: 'A chave é 49.485.277/0001-40. Me manda o comprovante?' }),
+    null,
+  );
+});
+
+test('o pedido é reconhecido por verbo: «preciso do seu nome» pega; «posso te ligar no seu telefone» e «vou anotar o nome dele» não', () => {
+  assert.equal(pedeDadosAntesDaTaxa('Pra eu garantir esse horário, preciso do seu nome, pode me passar?', CTX), true);
+  assert.equal(pedeDadosAntesDaTaxa('Me passa o seu telefone, por favor?', CTX), true);
+  assert.equal(pedeDadosAntesDaTaxa('Certo, quarta às 9h! Se precisar posso te ligar no seu telefone.', CTX), false);
+  assert.equal(pedeDadosAntesDaTaxa('Certo, quarta às 9h! Vou anotar o nome dele.', CTX), false);
 });

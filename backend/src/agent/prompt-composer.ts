@@ -525,19 +525,23 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
       : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
   // Taxa de reserva obrigatória: o dia combinado leva à TAXA, não ao agendar_consulta (a ferramenta recusa sem o comprovante, e a recusa
   // mandava dizer que "o horário fica separado" — a promessa que o passo 3 da agenda acaba de proibir). Nas demais, o texto de sempre.
-  const seguirEMarque = unit?.spineBookingRequiresPayment && !semAntecipado
-    ? 'o dia está combinado: siga para a taxa de agendamento (Pix + comprovante) e NÃO\n  marque ainda'
-    : 'siga e\n  marque';
-  const marqueSemPerguntar = unit?.spineBookingRequiresPayment && !semAntecipado ? 'vá à taxa' : 'marque';
+  const comTaxaObrigatoria = !!unit?.spineBookingRequiresPayment && !semAntecipado;
+  const confirmacaoDoDia = comTaxaObrigatoria
+    ? `Resposta curta à SUA PRIMEIRA pergunta "consegue
+  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — o dia está combinado: siga para a taxa de agendamento
+  (Pix + comprovante) e NÃO marque ainda. Também JÁ É confirmação — vá à taxa sem perguntar "consegue vir?" de novo: a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").`
+    : `Resposta curta à SUA PRIMEIRA pergunta "consegue
+  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
+  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").`;
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
   Se a informação não está em nenhum dos dois, responda: "Vou confirmar isso
   com a equipe e te retorno, tá? 😊". Pequenas variações de tom OK; inventar fatos NÃO.
 - CONFIRMAÇÃO: só está confirmado quando a pessoa diz, SEM condição, que vem naquele dia e hora
-  ("sim, vou", "confirmado", "pode confirmar"). Resposta curta à SUA PRIMEIRA pergunta "consegue
-  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — ${seguirEMarque}. Também JÁ É confirmação — ${marqueSemPerguntar} sem perguntar "consegue vir?" de novo: a própria
-  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
+  ("sim, vou", "confirmado", "pode confirmar"). ${confirmacaoDoDia}
   ${linhaDoComprovante} NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
   sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
   cartão e pergunte UMA vez só, com o dia e a hora por extenso, assim: "Pra eu marcar: você consegue
@@ -847,14 +851,14 @@ export function sequenciaDepoisDoHorario(unit: Unit, moverDepois: (passo: number
     ? `a chave Pix ${chave}${titular ? ` (${titular})` : ''}`
     : 'a chave Pix de <dados_da_clinica> (nunca invente uma)';
   const exemplo = `Pra garantir esse horário, a taxa de agendamento ${p ? `é R$ ${fmtBRL(p.antecipado)}` : 'é {o valor das Fontes Oficiais}'} por Pix${chave ? ` (chave ${chave})` : ''}. Me manda o comprovante aqui?`;
-  return `3. Quando ele ESCOLHER o horário, a PRÓXIMA mensagem é sobre a TAXA — não pede nome nem telefone, não chama agendar_consulta e
-   não diz que a vaga JÁ está garantida, reservada ou salva. Nessa mensagem diga: o horário só fica garantido com a taxa de
+  return `3. Quando ele ESCOLHER o horário, a PRÓXIMA mensagem é sobre a TAXA e é só texto, SEM chamar ferramenta
+   nenhuma (nem consultar_horarios, nem agendar_consulta) — não pede nome nem telefone e não diz que a vaga JÁ está garantida, reservada ou salva. Nessa mensagem diga: o horário só fica garantido com a taxa de
    agendamento${valorDaTaxa}${resto}, paga por Pix; passe ${ondeEstaAChave} e peça o comprovante (foto ou PDF) aqui na conversa.
    Exemplo: "${exemplo}". Só isso: nem nome, nem telefone, nem outro pedido na mesma mensagem (um passo por mensagem).
    Nessa mensagem NÃO escreva "ficou reservado", "fica reservado", "está garantido" nem "é seu": o horário
    só passa a existir quando agendar_consulta marcar.
    Escolher o horário JÁ confirma o dia: não pergunte "consegue vir?" antes da taxa. Esse horário saiu da lista que você consultou
-   há instantes, nesta conversa: NÃO chame consultar_horarios de novo para pedir a taxa (a ferramenta agendar_consulta confere se o
+   há instantes, nesta conversa: consultar_horarios de novo só atrasa o pedido da taxa (a ferramenta agendar_consulta confere se o
    horário segue livre quando o comprovante chegar). Responda já, em uma mensagem curta, SEM repetir dia e hora; o endereço e o que
    falta pagar no dia vêm na confirmação, depois que a consulta for marcada.
 4. Com o comprovante na conversa, é AGORA que entram os dados: se você ainda não sabe o nome completo dele (o que ele escreveu na

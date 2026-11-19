@@ -549,9 +549,10 @@ test('comprovante ACEITO e a Sofia ainda marca sozinha (falta o nome): a tarefa 
   const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
   const f = tarefaDoComprovanteQueFicou(t);
   assert.equal(f?.tipo === 'conferir' && f.marcaSozinha, true);
-  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /MARCA SOZINHA/);
-  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /NÃO lance a consulta/);
-  assert.doesNotMatch(f?.tipo === 'conferir' ? f.detalhe : '', /falta combinar|lançar a consulta se ele não voltar/);
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /marca sozinha quando ele responder/);
+  // tem hora para a equipe agir se ele sumir (a tarefa vence em 1 h), e o detalhe não repete o «NÃO lance» do texto-base
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /vence em 1 h: se nessa hora o cartão AINDA estiver sem consulta, lançar/);
+  assert.doesNotMatch(f?.tipo === 'conferir' ? f.detalhe : '', /NÃO lance|falta combinar/);
   // o texto-base da tarefa também: sem «confirmá-la em até 1 h»
   const textos: string[] = [];
   const kommo = { getLead: async () => ({ name: 'Maria', responsible_user_id: 7 }), createTask: async (x: { text: string }) => { textos.push(x.text); return { id: 1 }; } };
@@ -561,7 +562,8 @@ test('comprovante ACEITO e a Sofia ainda marca sozinha (falta o nome): a tarefa 
     motivo: 'comprovante', dedupe: semDedupe, detalhe: f?.tipo === 'conferir' ? f.detalhe : '', semLancar: true,
   });
   assert.equal(textos.length, 1);
-  assert.match(textos[0], /NÃO lance a consulta ainda: ela marca sozinha/);
+  assert.match(textos[0], /NÃO lance a consulta agora: a Sofia marca sozinha/);
+  assert.equal((textos[0].match(/NÃO lance/g) ?? []).length, 1);
   assert.doesNotMatch(textos[0], /confirmá-la em até 1 h/);
 });
 

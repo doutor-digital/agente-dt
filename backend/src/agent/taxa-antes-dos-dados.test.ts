@@ -50,7 +50,7 @@ test('taxa obrigatória: escolher o horário leva à taxa e ao comprovante, e no
   assert.match(passo3, /chave Pix 49\.485\.277\/0001-40 \(BENSAG FISIOTERAPIA LTDA\)/);
   assert.match(passo3, /comprovante/);
   // a resposta à escolha não vira uma nova consulta de agenda (a rodada local de 19/11 caía em "vou confirmar a disponibilidade")
-  assert.match(passo3, /NÃO chame consultar_horarios de novo/);
+  assert.match(passo3, /SEM chamar ferramenta\s+nenhuma \(nem consultar_horarios, nem agendar_consulta\)/);
   assert.match(passo3, /não diz que a vaga JÁ está garantida/);
   // o pedido de nome e telefone vem DEPOIS do comprovante, no passo 4
   const passo4 = seq.slice(seq.indexOf('4. '), seq.indexOf('5. '));
@@ -112,7 +112,7 @@ test('taxa obrigatória: a tabela de estados e a regra CONFIRMAÇÃO não mandam
   const prompt = composeSystemPrompt({ unit: BOA_VISTA });
   assert.match(prompt, /escolheu horário\s+→\s+pedir a taxa de agendamento \(Pix\) e o comprovante; só com ele, cadastro e agenda/);
   assert.doesNotMatch(prompt, /escolheu horário\s+→\s+buscar\/cadastrar paciente e agendar/);
-  assert.match(prompt, /o dia está combinado: siga para a taxa de agendamento \(Pix \+ comprovante\) e NÃO\s+marque ainda/);
+  assert.match(prompt, /o dia está combinado: siga para a taxa de agendamento\s+\(Pix \+ comprovante\) e NÃO marque ainda/);
   assert.match(prompt, /JÁ É confirmação — vá à taxa sem perguntar "consegue vir\?" de novo/);
   assert.doesNotMatch(prompt, /siga e\s+marque\./);
   assert.doesNotMatch(prompt, /marque sem perguntar "consegue vir\?"/);

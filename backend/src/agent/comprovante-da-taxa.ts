@@ -194,7 +194,8 @@ export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefa
     detalhe: a?.aceito
       ? consultaNoCrm
         ? `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas o paciente já tem consulta no CRM (marcada antes, pela equipe ou pela IA) e este comprovante não a marcou: conferir no extrato se o Pix caiu`
-        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele (a Sofia ainda está concluindo o cadastro ou combinando o horário com o paciente e MARCA SOZINHA quando ele responder: NÃO lance a consulta por ela agora, senão fica em dobro; se ele não voltar, aí sim lançar o horário combinado na conversa e conferir no extrato)`
+        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele: a Sofia ainda conclui o cadastro ou combina o horário com o paciente e marca sozinha quando ele responder. ` +
+          'Esta tarefa vence em 1 h: se nessa hora o cartão AINDA estiver sem consulta, lançar o horário combinado na conversa (e conferir o extrato)'
       : 'não há leitura em campos guardada para este comprovante (a leitura falhou, ou o texto não veio de uma imagem lida pelo servidor): conferir',
   };
 }
