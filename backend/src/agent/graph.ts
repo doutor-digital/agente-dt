@@ -19,7 +19,8 @@ import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/op
 import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
-import { falasDoTurno, fraseDoPasse } from './sinal-de-alerta.js';
+import { falasDoTurno, fraseDoPasse, soFalaDoPaciente } from './sinal-de-alerta.js';
+import { evidenciaDoNome as juntarEvidenciaDoNome, falasDoPacienteNoPrompt } from './titulo-ancorado.js';
 import { confirmouConsultaNoTurno } from './venda-em-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { SLUG_MAGALHAES } from '../lib/magalhaes.js';
@@ -151,6 +152,18 @@ export function buildThreadId(unitSlug: string, leadId: string | number): string
 function semAReferenciaDoComprovante(m: BaseMessage): BaseMessage {
   if (m.getType() !== 'human' || typeof m.content !== 'string' || !m.content.includes('[comprovante-lido:')) return m;
   return new HumanMessage({ content: semAReferencia(m.content), additional_kwargs: m.additional_kwargs, id: m.id });
+}
+
+/** A evidência de nome deste turno: falas do paciente (sem as linhas da equipe do bloco oficial) e o que o cadastro devolveu. */
+function evidenciaDoNomeDoTurno(mensagens: BaseMessage[]): string[] {
+  return juntarEvidenciaDoNome(
+    mensagens.map((m) => ({
+      tipo: m.getType(),
+      texto: aiTextFromContent(m.content),
+      ferramenta: m.getType() === 'tool' ? (m as { name?: string }).name : undefined,
+    })),
+    soFalaDoPaciente,
+  );
 }
 
 function aiTextFromContent(content: unknown): string {
@@ -556,6 +569,12 @@ export async function buildAgentGraph(
 
   const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
 
+  // O que a IA viu e prova um nome de paciente (falas dele + cadastro). O agentNode renova a cada volta; atualizar_titulo_lead lê.
+  let mensagensDoTurnoParaNome: BaseMessage[] = [];
+  let promptDoTurnoParaNome = '';
+  const evidenciaDoNome = {
+    obter: () => [...evidenciaDoNomeDoTurno(mensagensDoTurnoParaNome), ...falasDoPacienteNoPrompt(promptDoTurnoParaNome)],
+  };
   const allTools = kommoClient
     ? buildTools({
         recorder,
@@ -564,6 +583,7 @@ export async function buildAgentGraph(
         pausedFieldId: unit.kommoPausedFieldId,
         leadFieldRules,
         unit,
+        evidenciaDoNome,
       })
     : [];
 
@@ -657,6 +677,7 @@ export async function buildAgentGraph(
     });
 
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
+    mensagensDoTurnoParaNome = nonSystemMessages;
     // O que o PACIENTE disse neste turno (sem as linhas da equipe do <conversa_oficial>): de onde saem a rede de
     // segurança do sinal de alerta e a exceção do pronto-socorro.
     const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));
@@ -750,6 +771,7 @@ export async function buildAgentGraph(
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    promptDoTurnoParaNome = promptDoTurno;
     const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
     // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.

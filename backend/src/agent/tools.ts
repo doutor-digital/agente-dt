@@ -11,6 +11,7 @@ import { getRecentMessagesByLead } from '../services/conversations.service.js';
 import { createChatOpenAI, invokeChatModel } from '../services/openai.service.js';
 import { logger } from '../lib/logger.js';
 import { looksLikeName } from './name-capture.js';
+import { ancoraDoNomeLigada, nomeAncoradoNaConversa } from './titulo-ancorado.js';
 import { esquemaDaUnidade } from '../lib/kommo-schema.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { capturaUnificada, coergirValor, descricaoRegistrarCampo } from './captura-unificada.js';
@@ -129,6 +130,11 @@ export interface BuildToolsArgs {
   pausedFieldId?: number | null;
   leadFieldRules?: LeadFieldRule[];
   unit?: Unit;
+  /**
+   * O que a IA viu neste turno e prova um nome (falas do paciente + cadastro), preenchido pelo grafo a cada volta. Sem ele
+   * (eval, aquecimento de cache) `atualizar_titulo_lead` não confere de onde o nome veio.
+   */
+  evidenciaDoNome?: { obter: () => string[] };
 }
 
 /**
@@ -163,6 +169,7 @@ export function buildTools({
   pausedFieldId = null,
   leadFieldRules = [],
   unit,
+  evidenciaDoNome,
 }: BuildToolsArgs) {
   const desc = (name: string) => descriptionOverrides[name] || DEFAULT_TOOL_DESCRIPTIONS[name];
 
@@ -840,6 +847,47 @@ export function buildTools({
           latencyMs: Math.round(performance.now() - t0),
         });
         return `NÃO gravei: "${nome}" não parece um nome de pessoa. Pergunte o nome ao paciente com clareza (ex.: "Como posso te chamar?") e só chame esta tool quando ele responder o nome de fato.`;
+      }
+
+      // Nome de onde? Tatuí 19/11/2026: o paciente disse "Olá" e a IA gravou "Ocupado" no cartão e no contato. Só grava o que
+      // o paciente escreveu, o cadastro devolveu ou o perfil do WhatsApp (contato do cartão) já tinha. Ver titulo-ancorado.ts.
+      if (evidenciaDoNome && ancoraDoNomeLigada()) {
+        const textosDaConversa = evidenciaDoNome.obter();
+        let ancora = nomeAncoradoNaConversa(nome, textosDaConversa);
+        let contatoLido = '';
+        if (!ancora.ancorado) {
+          try {
+            const lead = await kommo.getLead(leadId);
+            const contatos = lead._embedded?.contacts ?? [];
+            const contatoId = (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
+            if (contatoId) contatoLido = await kommo.getContactNome(contatoId);
+            ancora = nomeAncoradoNaConversa(nome, [...textosDaConversa, contatoLido]);
+          } catch (err) {
+            // Sem ler o contato não dá para provar de onde veio o nome. Fica sem gravar (Codex, review do PR): nome errado no contato
+            // estraga o "Olá, {{contact.name}}" dos modelos de WhatsApp; título atrasado um turno não custa nada.
+            logger.warn({ err: String(err), leadId }, 'atualizar_titulo_lead: não consegui ler o contato para conferir o nome');
+            await recorder.step({
+              kind: 'THINKING',
+              title: `"${nome}" não está nas falas do paciente e não consegui ler o contato para conferir — não gravei no card`,
+              payload: { leadId, rejeitado: nome, erro: err instanceof Error ? err.message : String(err) },
+              latencyMs: Math.round(performance.now() - t0),
+            });
+            return `NÃO gravei: não consegui conferir o nome "${nome}" agora. Siga a conversa normalmente, sem mencionar isto ao paciente, e chame esta tool de novo no próximo turno.`;
+          }
+        }
+        if (!ancora.ancorado) {
+          await recorder.step({
+            kind: 'THINKING',
+            title: `"${nome}" não aparece em nada que o paciente disse nem no contato do WhatsApp — não gravei no card`,
+            payload: { leadId, rejeitado: nome, faltando: ancora.faltando, contato: contatoLido || null },
+            latencyMs: Math.round(performance.now() - t0),
+          });
+          return (
+            `RECUSADO: "${nome}" não é um nome que o paciente tenha escrito nesta conversa — não gravei no card. ` +
+            `Não invente nome nem use palavra de exemplo do prompt. Se ainda não sabe como ele se chama, pergunte ("Como posso te chamar?") ` +
+            `e só chame esta tool depois que ele responder. NÃO mencione isto ao paciente: siga a conversa normalmente.`
+          );
+        }
       }
 
       try {

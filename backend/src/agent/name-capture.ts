@@ -63,6 +63,10 @@ const STOPWORDS = new Set([
   // avisos do WhatsApp/Kommo que chegam como mensagem do paciente ("Unable to display this message…",
   // "Flow responses received")
   'unable', 'flow',
+  // Palavras que a IA grava no lugar de um nome quando não tem nenhum (Tatuí 19/11/2026 e Salto 13/11: "Ocupado"; 21/10 e 23/10:
+  // "Cliente"). Ficam no prompt como exemplo de "isso não é nome" — e daí o modelo as copia.
+  'ocupado', 'ocupada', 'cliente', 'clientes', 'loja', 'lead', 'contato', 'usuario', 'usuaria',
+  'desconhecido', 'desconhecida', 'anonimo', 'anonima', 'indisponivel', 'placeholder', 'informado', 'definir',
 ]);
 
 /** "Oiii", "Oie", "Olaaa", "kkkk", "rsrs": cumprimento e risada esticados não cabem numa lista. */
@@ -94,8 +98,15 @@ export function looksLikeName(candidate: string): boolean {
   if (words.length < 1 || words.length > MAX_PALAVRAS) return false;
   if (CONNECTORS.has(norm(words[0]))) return false;
   let tokensReais = 0;
-  for (const w of words) {
+  for (let i = 0; i < words.length; i++) {
+    const w = words[i];
     const n = norm(w);
+    // "Maria das Dores" (sobrenome/devoção comum): "Dores" com D maiúsculo logo depois de "das" e depois de um nome. "dores nas costas",
+    // "Dores lombares" e "sofro de dores" continuam fora (sem "das" antes, ou minúsculo).
+    if (n === 'dores' && i > 0 && norm(words[i - 1]) === 'das' && w.startsWith('D') && tokensReais > 0) {
+      tokensReais++;
+      continue;
+    }
     if (PALAVRAS_DE_QUEIXA.has(n)) return false;
     // Conector ANTES de stopword E de verbo: "e" está nas duas listas, e como
     // stopword vinha primeiro, nenhum nome com "e" no meio passava. Mesma razão
