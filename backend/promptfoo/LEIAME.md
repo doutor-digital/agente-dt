@@ -30,7 +30,7 @@ Sai com código **100** se algum caso reprovar (serve para travar deploy).
 
 ## Em produção (todo dia)
 
-O fluxo `.github/workflows/promptfoo-sofia.yml` roda o banco inteiro **todo dia às 06:00** contra a Sofia que está no ar (mesma imagem do serviço, num contêiner à parte, no runner da própria VPS) e manda o resultado no **Telegram do João**. O relatório HTML fica como artefato da execução no GitHub (30 dias). Para rodar na hora: GitHub → Actions → `promptfoo-sofia` → *Run workflow* (dá para escolher caso, unidade e número de voltas).
+O fluxo `.github/workflows/promptfoo-sofia.yml` roda o banco inteiro **todo dia às 05:37** contra a Sofia que está no ar (mesma imagem do serviço, num contêiner à parte, no runner da própria VPS) e manda o resultado no **Telegram do João**. O relatório HTML fica como artefato da execução no GitHub (30 dias). Para rodar na hora: GitHub → Actions → `promptfoo-sofia` → *Run workflow* (dá para escolher caso, unidade e número de voltas).
 
 ## Caso novo
 

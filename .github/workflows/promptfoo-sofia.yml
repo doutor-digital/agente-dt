@@ -11,7 +11,9 @@ name: promptfoo-sofia
 
 on:
   schedule:
-    - cron: '0 9 * * *' # 06:00 em Brasília, antes do movimento
+    # minuto quebrado de propósito: o GitHub atrasa ou DESCARTA agendamentos marcados no começo da hora (pico)
+    # — o de 0 9 * * * não disparou em 19/11. 08:37 UTC = 05:37 em Brasília.
+    - cron: '37 8 * * *'
   workflow_dispatch:
     inputs:
       caso:
