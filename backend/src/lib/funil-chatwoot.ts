@@ -6,6 +6,7 @@
  *
  * Aqui só a lógica pura (chave, montar o quadro); quem fala HTTP é `controllers/funil.controller.ts`.
  */
+import { ehMensagemDeEspera } from './crm-demora/marca.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const ATRIBUTO_ETAPA = 'etapa';
@@ -150,7 +151,8 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
     responsavel: texto(c?.meta?.assignee?.name, 40) || null,
     responsavelId: Number.isInteger(Number(c?.meta?.assignee?.id)) && Number(c?.meta?.assignee?.id) > 0 ? Number(c.meta.assignee.id) : null,
     ultimaMensagem: ultima ? texto(ultima.content, 120) : soNota ? '(nota interna)' : texto(undefined, 120),
-    ultimaDela: ultima ? Number(ultima.message_type) === 0 : Number(c?.waiting_since ?? 0) > 0,
+    // a nossa mensagem de espera (crm-demora) só sai quando o paciente está sem resposta: se ela é a última, a paciente ainda espera
+    ultimaDela: ultima ? Number(ultima.message_type) === 0 || ehMensagemDeEspera(ultima) : Number(c?.waiting_since ?? 0) > 0,
     atividade: Number(c?.last_activity_at ?? c?.timestamp ?? 0) || 0,
     criado: Number(c?.created_at ?? 0) || 0,
     etiquetas: Array.isArray(c?.labels) ? c.labels.map(String).slice(0, 5) : [],

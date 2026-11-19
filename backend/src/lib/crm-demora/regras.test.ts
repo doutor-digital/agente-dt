@@ -178,13 +178,43 @@ test('passo atrasado demais não sai (servidor parado não vira rajada)', () => 
   assert.ok(decidir(181).barrados.some((b) => b.motivo.includes('prazo')));
 });
 
-test('só dentro das 8h–20h da unidade (nada à noite, para o paciente nem para a equipe)', () => {
-  const noite = T.localParaUtc('2026-11-18T21:00', FUSO)!;
-  const cedo = T.localParaUtc('2026-11-18T07:59', FUSO)!;
-  assert.deepEqual(decidir(40, { agora: noite, espera: { desde: new Date(noite.getTime() - 40 * 60_000), ultimaDoPaciente: new Date(noite.getTime() - 40 * 60_000), pelaPassagem: false } }).devidos, []);
-  assert.deepEqual(decidir(12, { agora: cedo, espera: { desde: new Date(cedo.getTime() - 12 * 60_000), ultimaDoPaciente: new Date(cedo.getTime() - 12 * 60_000), pelaPassagem: false } }).devidos, []);
-  const abre = T.localParaUtc('2026-11-18T08:00', FUSO)!;
-  assert.deepEqual(decidir(12, { agora: abre, espera: { desde: new Date(abre.getTime() - 12 * 60_000), ultimaDoPaciente: new Date(abre.getTime() - 12 * 60_000), pelaPassagem: false } }).devidos, ['espera', 'aviso-10']);
+test('só dentro das 8h–20h da unidade (nada à noite, para o paciente nem para a equipe) e a espera conta só as horas de atender', () => {
+  const em = (local: string) => T.localParaUtc(local, FUSO)!;
+  const na = (agora: Date, desde: Date) => ({ agora, espera: { desde, ultimaDoPaciente: desde, pelaPassagem: false } });
+  // 21h: fora do horário, mesmo com 40 min de espera
+  assert.deepEqual(decidir(40, na(em('2026-11-18T21:00'), em('2026-11-18T20:20'))).devidos, []);
+  // escreveu 7h48; às 8h00 ainda não houve um minuto sequer de espera dentro do horário; às 8h12, 12 minutos
+  assert.deepEqual(decidir(0, na(em('2026-11-18T08:00'), em('2026-11-18T07:48'))).devidos, []);
+  assert.deepEqual(decidir(0, na(em('2026-11-18T08:12'), em('2026-11-18T07:48'))).devidos, ['espera', 'aviso-10']);
+  // a conversa mais parada da NOITE: escreveu às 20h10, ninguém respondeu; às 8h07 do dia seguinte são 7 min úteis (e 11 h 57 min corridos)
+  const noite = decidir(0, na(em('2026-11-19T08:07'), em('2026-11-18T20:10')));
+  assert.deepEqual(noite.devidos, ['espera']);
+  assert.equal(noite.minutos, 7);
+  assert.equal(noite.minutosReais, 717);
+  assert.deepEqual(decidir(0, na(em('2026-11-19T08:11'), em('2026-11-18T20:10'))).devidos, ['espera', 'aviso-10']);
+  // mas a conversa de ontem à tarde, já estourada em horas de atender, não volta
+  assert.deepEqual(decidir(0, na(em('2026-11-19T09:00'), em('2026-11-18T14:00'))).devidos, []);
+});
+
+test('minutosUteis e duracaoCurta', () => {
+  const em = (local: string) => T.localParaUtc(local, FUSO)!;
+  const u = (a: string, b: string) => R.minutosUteis(em(a), em(b), FUSO, JANELA);
+  assert.equal(u('2026-11-18T10:00', '2026-11-18T10:30'), 30);
+  assert.equal(u('2026-11-18T19:50', '2026-11-18T20:30'), 10, 'só até as 20h');
+  assert.equal(u('2026-11-18T19:00', '2026-11-19T09:00'), 120, '1 h de hoje + 1 h de amanhã');
+  assert.equal(u('2026-11-18T22:00', '2026-11-19T07:00'), 0, 'a noite inteira');
+  assert.equal(u('2026-11-18T12:00', '2026-11-18T11:00'), 0);
+  assert.equal(R.minutosUteis(em('2026-11-01T12:00'), em('2026-11-18T12:00'), FUSO, JANELA), 999_999, 'mais de uma semana: muito');
+  assert.equal(R.duracaoCurta(10), '10 min');
+  assert.equal(R.duracaoCurta(120), '2 h');
+  assert.equal(R.duracaoCurta(717), '11 h 57 min');
+});
+
+test('classificar: o conector de OUTRA conta (id que não é o 2) é robô quando a conta diz qual é', () => {
+  const doConector = { ...ROBO(3), sender: { id: 31, type: 'user' } };
+  assert.equal(R.classificarMensagem(doConector)?.papel, 'humano', 'sem saber, na dúvida é gente (não incomoda ninguém)');
+  assert.equal(R.classificarMensagem(doConector, new Set([31]))?.papel, 'robo');
+  assert.equal(min(R.esperaDaEquipe(R.mensagensDaConversa([P(20), doConector], new Set([31])), { esperandoHumano: false })?.desde), 20);
 });
 
 test('nunca para grupo, contato interno, histórico, conversa resolvida ou adiada', () => {

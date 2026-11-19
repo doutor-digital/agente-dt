@@ -191,3 +191,13 @@ test('cartão: id do responsável (o filtro "Minhas" compara por id, não por no
   assert.equal(cartaoDaConversa({ id: 2, meta: {} }, ['Novo']).responsavelId, null);
   assert.equal(cartaoDaConversa({ id: 3, meta: { assignee: { id: 'x' } } }, ['Novo']).responsavelId, null);
 });
+
+test('cartão: a nossa mensagem de espera (crm-demora) como última pública NÃO tira a paciente de «esperando resposta»', async () => {
+  const { textoDaEspera } = await import('./crm-demora/marca.js');
+  const etapas = ['Novo', 'Agendado'];
+  const nossa = { message_type: 1, private: false, content: textoDaEspera('Maria') };
+  const c = cartaoDaConversa(conv(7, { messages: [{ message_type: 0, content: 'quero marcar', private: false }, nossa] }), etapas);
+  assert.equal(c.ultimaDela, true);
+  // resposta de gente depois dela: a paciente deixa de esperar
+  assert.equal(cartaoDaConversa(conv(8, { messages: [{ message_type: 0, content: 'quero marcar', private: false }, nossa, { message_type: 1, content: 'Oi, Maria!', private: false }] }), etapas).ultimaDela, false);
+});

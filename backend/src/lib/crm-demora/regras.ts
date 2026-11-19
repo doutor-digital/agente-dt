@@ -18,7 +18,8 @@ import { ETIQUETA_HUMANO } from '../chatwoot-sofia.js';
 import { ETIQUETA_SOFIA_ATENDENDO, sofiaPodeAtender } from '../chatwoot-sofia-atendendo.js';
 import { ETIQUETA_SEM_FOLLOW_UP } from '../disparo/chatwoot/filtro.js';
 import { ehRespostaDeCortesia } from '../cortesia.js';
-import { dentroDaJanela, type JanelaDeEnvio } from '../crm-tarefas/regras.js';
+import { dentroDaJanela, localParaUtc, type JanelaDeEnvio } from '../crm-tarefas/regras.js';
+import { partesNoFuso } from '../fuso.js';
 import type { ConversaLida } from '../chatwoot-porta.js';
 import { AUTOMACAO_DEMORA, ehMensagemDeEspera, ehNotaDePassagem } from './marca.js';
 
@@ -27,14 +28,14 @@ export { AUTOMACAO_DEMORA };
 export type Passo = 'espera' | 'aviso-10' | 'aviso-30';
 export const PASSOS: readonly Passo[] = ['espera', 'aviso-10', 'aviso-30'];
 
-/** Minutos de espera da equipe a partir dos quais cada passo é devido. */
+/** Minutos de espera da equipe (dentro do horário de atender) a partir dos quais cada passo é devido. */
 export const MINUTOS_DO_PASSO: Readonly<Record<Passo, number>> = { espera: 5, 'aviso-10': 10, 'aviso-30': 30 };
 /**
  * Até quantos minutos de espera o passo ainda vale. Depois disso é atraso (servidor fora do ar, janela de horário fechada): não acorda ninguém
  * nem fala com o paciente sobre uma mensagem velha — nem a retomada de um deploy vira rajada.
  */
 export const VALE_ATE_MINUTOS: Readonly<Record<Passo, number>> = { espera: 60, 'aviso-10': 90, 'aviso-30': 180 };
-/** Com a etiqueta `sofia-atendendo`, os avisos à equipe esperam este tanto: a Sofia está conversando. Passou disso, ela travou — a equipe é avisada. */
+/** Com a etiqueta `sofia-atendendo` (e o tanto de espera em minutos úteis), os avisos à equipe esperam este tanto: a Sofia está conversando. Passou disso, ela travou — a equipe é avisada. */
 export const SOFIA_TRAVADA_APOS_MINUTOS = 15;
 /** O paciente escreveu há menos que isto e a Sofia pode responder: a mensagem de espera NÃO sai (a rodada da Sofia ainda vai ler a conversa). */
 export const SOFIA_AINDA_LENDO_MS = 3 * 60_000;
@@ -67,7 +68,7 @@ const atributos = (v: unknown): Record<string, unknown> => {
  * Uma mensagem crua do Chatwoot (`/conversations/:id/messages`) → o papel dela na conversa. `null` = não conta (atividade, nota, a nossa mensagem de espera).
  * Quem responde e não sabemos quem é (saída sem remetente e sem eco) conta como HUMANO: na dúvida, não incomoda ninguém.
  */
-export function classificarMensagem(m: any): MensagemDaConversa | null {
+export function classificarMensagem(m: any, robos: ReadonlySet<number> = new Set()): MensagemDaConversa | null {
   const tipo = Number(m?.message_type);
   const em = new Date(Number(m?.created_at) * 1000);
   if (!Number.isFinite(em.getTime()) || em.getTime() <= 0) return null;
@@ -86,13 +87,14 @@ export function classificarMensagem(m: any): MensagemDaConversa | null {
   const tipoDoRemetente = String(m?.sender?.type ?? m?.sender_type ?? '').toLowerCase().replace(/[^a-z]/g, '');
   if (tipoDoRemetente === 'agentbot') return { papel: 'sofia', em };
   const id = Number(m?.sender?.id ?? m?.sender_id);
-  if (tipoDoRemetente === 'user' && id === USUARIO_ROBO) return { papel: 'robo', em };
+  // o conector (régua, tarefas, disparos) é o usuário 2 na conta 1; numa clínica de conta própria é outro id (`robos` traz o da conta)
+  if (tipoDoRemetente === 'user' && (id === USUARIO_ROBO || robos.has(id))) return { papel: 'robo', em };
   // usuário do CRM (inclusive o «📱 Celular da unidade» da caixa Evolution) ou remetente desconhecido: gente
   return { papel: 'humano', em };
 }
 
-export const mensagensDaConversa = (cruas: unknown[]): MensagemDaConversa[] =>
-  cruas.map((m) => classificarMensagem(m)).filter((m): m is MensagemDaConversa => m !== null);
+export const mensagensDaConversa = (cruas: unknown[], robos: ReadonlySet<number> = new Set()): MensagemDaConversa[] =>
+  cruas.map((m) => classificarMensagem(m, robos)).filter((m): m is MensagemDaConversa => m !== null);
 
 // ── 2. desde quando a equipe está devendo resposta ───────────────────────────────────────────────────
 
@@ -145,8 +147,48 @@ export interface EntradaDaDecisao {
   caixaOficial: boolean;
 }
 
+const z2 = (n: number) => String(n).padStart(2, '0');
+
+/**
+ * Quantos minutos da espera caíram DENTRO do horário de atender (8h–20h do fuso da unidade). Quem escreve às 20h10 e não é respondido está esperando
+ * 5 minutos às 8h05 do dia seguinte — e é aí que a mensagem de espera e os avisos começam; contar o relógio corrido deixaria a conversa mais parada da
+ * noite fora de todos os prazos. Mais de uma semana corrida = «muito», sem conta.
+ */
+export function minutosUteis(desde: Date, agora: Date, fuso: string, j: JanelaDeEnvio): number {
+  if (agora.getTime() <= desde.getTime()) return 0;
+  const MAX_DIAS = 8;
+  if (agora.getTime() - desde.getTime() > MAX_DIAS * 86_400_000) return 999_999;
+  const p0 = partesNoFuso(desde, fuso);
+  const dia0 = Date.UTC(p0.ano, p0.mes - 1, p0.dia);
+  let total = 0;
+  for (let i = 0; i <= MAX_DIAS + 1; i++) {
+    const d = new Date(dia0 + i * 86_400_000);
+    const rotulo = (dd: Date, hora: number) => `${dd.getUTCFullYear()}-${z2(dd.getUTCMonth() + 1)}-${z2(dd.getUTCDate())}T${z2(hora)}:00`;
+    const ini = localParaUtc(rotulo(d, j.inicio), fuso);
+    const fim = j.fim >= 24 ? localParaUtc(rotulo(new Date(d.getTime() + 86_400_000), 0), fuso) : localParaUtc(rotulo(d, j.fim), fuso);
+    if (!ini || !fim) continue;
+    if (ini.getTime() >= agora.getTime()) break;
+    const de = Math.max(ini.getTime(), desde.getTime());
+    const ate = Math.min(fim.getTime(), agora.getTime());
+    if (ate > de) total += ate - de;
+  }
+  return Math.floor(total / 60_000);
+}
+
+/** «10 min», «2 h», «14 h 30 min». */
+export function duracaoCurta(minutos: number): string {
+  const m = Math.max(0, Math.round(minutos));
+  if (m < 60) return `${m} min`;
+  const h = Math.floor(m / 60);
+  const r = m % 60;
+  return r ? `${h} h ${r} min` : `${h} h`;
+}
+
 export interface Decisao {
+  /** minutos de espera DENTRO do horário de atender (o que decide os passos) */
   minutos: number;
+  /** minutos corridos desde que a espera abriu (o que o texto diz) */
+  minutosReais: number;
   devidos: Passo[];
   /** o que NÃO sai e por quê (só para o resumo do ciclo e o seco) */
   barrados: Array<{ passo: Passo; motivo: string }>;
@@ -155,10 +197,10 @@ export interface Decisao {
 const tem = (etiquetas: readonly string[], e: string) => etiquetas.some((x) => x.trim().toLowerCase() === e);
 
 export function decidirDemora(e: EntradaDaDecisao): Decisao {
-  const vazio: Decisao = { minutos: 0, devidos: [], barrados: [] };
+  const vazio: Decisao = { minutos: 0, minutosReais: 0, devidos: [], barrados: [] };
   if (!e.espera) return vazio;
-  const minutos = Math.floor((e.agora.getTime() - e.espera.desde.getTime()) / 60_000);
-  const saida: Decisao = { minutos, devidos: [], barrados: [] };
+  const minutos = minutosUteis(e.espera.desde, e.agora, e.fuso, e.janela);
+  const saida: Decisao = { minutos, minutosReais: Math.max(0, Math.floor((e.agora.getTime() - e.espera.desde.getTime()) / 60_000)), devidos: [], barrados: [] };
   if (minutos < MINUTOS_DO_PASSO.espera) return saida;
   const etiquetas = e.lida.etiquetas;
   // conversa que não é de paciente a atender: nada sai (nem aviso à equipe)

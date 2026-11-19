@@ -105,7 +105,10 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
     const id = Number(c.id);
     const nome = nomeDe(c);
     const criada = Number(c?.created_at) * 1000;
-    const esperandoDesde = Number(c?.waiting_since) * 1000;
+    // o Chatwoot zera o `waiting_since` com a nossa mensagem de espera (crm-demora), que só sai com o paciente sem resposta há 5 min ou mais:
+    // se ela é a última mensagem, a espera segue e conta daquele instante (menos os 5 min, o mínimo para ela sair)
+    const ultimaEEspera = ehMensagemDeEspera(c?.last_non_activity_message);
+    const esperandoDesde = Number(c?.waiting_since) > 0 ? Number(c?.waiting_since) * 1000 : ultimaEEspera ? Number(c?.last_non_activity_message?.created_at) * 1000 - 5 * 60_000 : NaN;
     const ultima = c?.last_non_activity_message;
     const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true && !ehMensagemDeEspera(ultima);
     const ultimaEm = Number(ultima?.created_at) * 1000;

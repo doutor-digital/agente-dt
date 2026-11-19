@@ -25,7 +25,7 @@ import { ETIQUETA_HUMANO } from '../chatwoot-sofia.js';
 import { janelaDeEnvio, nomeCurto, notaComMencao } from '../crm-tarefas/regras.js';
 import { primeiroNomeSeguro } from '../disparo/regras.js';
 import { ehMensagemDeEspera, textoDaEspera } from './marca.js';
-import { chaveDoEpisodio, decidirDemora, diaNoFuso, esperaDaEquipe, mensagensDaConversa, type EsperaDaEquipe, type Passo } from './regras.js';
+import { chaveDoEpisodio, decidirDemora, diaNoFuso, duracaoCurta, esperaDaEquipe, mensagensDaConversa, type EsperaDaEquipe, type Passo } from './regras.js';
 
 export const ID_CICLO = 'crm-demora';
 /** Tudo o que SAI do servidor (mensagem ao paciente, nota no CRM, WhatsApp) conta 1; se um defeito soltar tudo, vaza só isto por ciclo. */
@@ -62,9 +62,11 @@ export interface MundoDaDemora {
   conversa(ctx: ContextoChatwoot, id: number): Promise<any>;
   /** as mensagens mais novas, em ordem crescente */
   mensagens(ctx: ContextoChatwoot, id: number): Promise<any[]>;
+  /** o id do usuário «conector» DESTA conta (por onde saem a régua, as tarefas e a mensagem de espera): sua fala é do robô, não da equipe. null = não deu para saber. */
+  conector?(ctx: ContextoChatwoot): Promise<number | null>;
   /** o paciente pediu SAIR? (data do pedido; null = não). Lança se não deu para conferir. */
   pediuSair(ctx: ContextoChatwoot, conversaId: number, contatoId: number | null): Promise<Date | null>;
-  /** a mensagem PÚBLICA de espera ao paciente (pelo robô da Sofia quando ele existe: o `waiting_since` do CRM não é zerado) */
+  /** a mensagem PÚBLICA de espera ao paciente (pelo robô da Sofia quando ele existe nesta conta; senão pelo conector) */
   mandarEspera(u: UnidadeDaDemora, ctx: ContextoChatwoot, conversaId: number, texto: string): Promise<{ id: number | null }>;
   nota(ctx: ContextoChatwoot, conversaId: number, texto: string): Promise<void>;
   zap(numero: string, texto: string): Promise<boolean>;
@@ -79,8 +81,15 @@ export interface MemoriaDaDemora {
   esperas: Map<string, { assinatura: string; espera: EsperaDaEquipe | null }>;
   /** `caixa|conversa|regra|chave` que este processo já tratou (registrou, barrou ou viu registrado): não relê a conversa por isso */
   tratados: Set<string>;
+  /** `caixa|conversa|regra|chave` → só tenta de novo depois deste instante (WhatsApp que falhou, ninguém a avisar): não gasta o teto do ciclo nem relê a conversa a cada minuto */
+  adiados: Map<string, number>;
+  /** conta → id do conector (só guarda o que deu certo) */
+  conectores: Map<number, number>;
 }
-export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set() });
+export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map() });
+/** Depois de uma falha (ou de «sem ninguém a avisar»), espera isto para tentar de novo. */
+export const ESPERA_ENTRE_TENTATIVAS_MS = 5 * 60_000;
+const LIMITE_DA_MEMORIA = 20_000;
 
 export interface ResumoDaDemora {
   unidades: number;
@@ -112,6 +121,8 @@ interface Alvo {
   ctx: ContextoChatwoot;
   conta: number;
   caixa: UnidadeDaDemora['caixas'][number];
+  /** ids de usuário do Chatwoot que são o robô nesta conta (o conector) */
+  robos: ReadonlySet<number>;
 }
 
 interface Estado1 {
@@ -122,11 +133,11 @@ interface Estado1 {
   mensagens: any[];
 }
 
-function lerConversa(raw: any, mensagens: any[]): Estado1 | null {
+function lerConversa(raw: any, mensagens: any[], robos: ReadonlySet<number>): Estado1 | null {
   const lida = conversaLidaDoChatwoot(raw);
   if (!lida) return null;
   const esperandoHumano = lida.etiquetas.includes(ETIQUETA_HUMANO) || String(lida.attrs.etapa ?? '').trim() === 'Esperando humano';
-  return { raw, lida, status: String(raw?.status ?? ''), mensagens, espera: esperaDaEquipe(mensagensDaConversa(mensagens), { esperandoHumano }) };
+  return { raw, lida, status: String(raw?.status ?? ''), mensagens, espera: esperaDaEquipe(mensagensDaConversa(mensagens, robos), { esperandoHumano }) };
 }
 
 const assinatura = (raw: any): string =>
@@ -135,9 +146,9 @@ const assinatura = (raw: any): string =>
 const linkDaConversa = (a: Alvo, id: number): string => (a.ctx.conta ? `${a.ctx.conta.url}/app/accounts/${a.conta}/conversations/${id}` : '');
 
 /** O responsável pela conversa (o conector e o robô nunca são «quem atende»). */
-function responsavelDe(raw: any): { id: number; nome: string } | null {
+function responsavelDe(raw: any, robos: ReadonlySet<number>): { id: number; nome: string } | null {
   const id = Number(raw?.meta?.assignee?.id);
-  if (!Number.isInteger(id) || id <= 0 || id === USUARIO_ROBO) return null;
+  if (!Number.isInteger(id) || id <= 0 || id === USUARIO_ROBO || robos.has(id)) return null;
   return { id, nome: String(raw?.meta?.assignee?.name ?? '').trim() || 'atendente' };
 }
 
@@ -157,6 +168,7 @@ const chaveDaMemoria = (a: Alvo, id: number, base: RegraBase, chave: string): st
 /** Registra ANTES de agir. true = esta cópia é quem age. */
 async function registrar(c: Ctx, a: Alvo, conversationId: number, base: RegraBase, chave: string, texto: string): Promise<boolean> {
   const novo = await c.deps.armazem.registrar({ caixa: a.caixa.id, conversationId, regra: nomeDaRegra(a, base), chave, modo: a.u.modo, texto: texto.slice(0, 1000) });
+  if (c.deps.memoria.tratados.size > LIMITE_DA_MEMORIA) c.deps.memoria.tratados.clear();
   c.deps.memoria.tratados.add(chaveDaMemoria(a, conversationId, base, chave));
   return novo;
 }
@@ -169,11 +181,35 @@ async function desfazer(c: Ctx, a: Alvo, conversationId: number, base: RegraBase
   c.deps.memoria.tratados.delete(chaveDaMemoria(a, conversationId, base, chave));
 }
 
+const agoraMs = (c: Ctx): number => c.deps.mundo.agora().getTime();
+const adiado = (c: Ctx, a: Alvo, id: number, base: RegraBase, chave: string): boolean => (c.deps.memoria.adiados.get(chaveDaMemoria(a, id, base, chave)) ?? 0) > agoraMs(c);
+function adiar(c: Ctx, a: Alvo, id: number, base: RegraBase, chave: string): void {
+  const m = c.deps.memoria;
+  if (m.adiados.size > LIMITE_DA_MEMORIA) m.adiados.clear();
+  m.adiados.set(chaveDaMemoria(a, id, base, chave), agoraMs(c) + ESPERA_ENTRE_TENTATIVAS_MS);
+}
+/** Quem já foi tratado ou está esperando a hora de tentar de novo. */
+const resolvido = (c: Ctx, a: Alvo, id: number, base: RegraBase, chave: string): boolean => jaTratado(c, a, id, base, chave) || adiado(c, a, id, base, chave);
+
 /** O passo já foi tratado por este processo (registrado, barrado ou visto registrado)? O aviso de 10 min só está tratado com o WhatsApp E a nota (no seco, a linha única). */
 function passoTratado(c: Ctx, a: Alvo, id: number, passo: Passo, chaveEp: string, dia: string): boolean {
-  if (passo === 'espera') return jaTratado(c, a, id, 'demora-espera', dia);
-  if (passo === 'aviso-30') return jaTratado(c, a, id, 'demora-aviso-30', chaveEp);
-  return jaTratado(c, a, id, 'demora-aviso-10', chaveEp) && (a.u.modo === 'seco' || jaTratado(c, a, id, 'demora-aviso-10-nota', chaveEp));
+  if (passo === 'espera') return resolvido(c, a, id, 'demora-espera', dia);
+  if (passo === 'aviso-30') return resolvido(c, a, id, 'demora-aviso-30', chaveEp);
+  return resolvido(c, a, id, 'demora-aviso-10', chaveEp) && (a.u.modo === 'seco' || resolvido(c, a, id, 'demora-aviso-10-nota', chaveEp));
+}
+
+/** Os usuários que são o robô nesta conta: o 2 de sempre e o conector que o Chatwoot disser (uma clínica de conta própria tem outro id). */
+async function robosDaConta(deps: { mundo: MundoDaDemora; memoria: MemoriaDaDemora }, ctx: ContextoChatwoot): Promise<ReadonlySet<number>> {
+  const conta = ctx.conta?.conta;
+  const robos = new Set<number>([USUARIO_ROBO]);
+  if (!conta || !deps.mundo.conector) return robos;
+  let id = deps.memoria.conectores.get(conta);
+  if (id === undefined) {
+    id = (await deps.mundo.conector(ctx).catch(() => null)) ?? undefined;
+    if (id !== undefined) deps.memoria.conectores.set(conta, id);
+  }
+  if (id !== undefined) robos.add(id);
+  return robos;
 }
 
 // ── os três passos ───────────────────────────────────────────────────────────────────────────────
@@ -201,6 +237,7 @@ async function passoEspera(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promis
   } catch (err) {
     contar(c.resumo.barrados, 'espera: não deu para conferir SAIR');
     logger.warn({ unit: u.slug, conversa: id, err: msgDoErro(err) }, `${ID_CICLO}: não consegui conferir SAIR — não mando agora`);
+    adiar(c, a, id, 'demora-espera', dia);
     return;
   }
   const texto = textoDaEspera(primeiroNomeSeguro(e.lida.nome));
@@ -208,7 +245,7 @@ async function passoEspera(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promis
     c.resumo.noTeto++;
     return;
   }
-  if (!(await registrar(c, a, id, 'demora-espera', dia, u.modo === 'seco' ? `mandaria ao paciente (espera há ${minutos} min): ${texto}` : texto))) return;
+  if (!(await registrar(c, a, id, 'demora-espera', dia, u.modo === 'seco' ? `mandaria ao paciente (espera há ${duracaoCurta(minutos)}): ${texto}` : texto))) return;
   c.resumo.devidos.espera++;
   if (u.modo === 'seco') {
     c.resumo.simulados.espera++;
@@ -223,7 +260,10 @@ async function passoEspera(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promis
   } catch (err) {
     c.resumo.falhas++;
     const status = statusDoErro(err);
-    if (status !== undefined && status >= 400 && status < 500) await desfazer(c, a, id, 'demora-espera', dia);
+    if (status !== undefined && status >= 400 && status < 500) {
+      await desfazer(c, a, id, 'demora-espera', dia);
+      adiar(c, a, id, 'demora-espera', dia); // recusa do CRM: não insiste a cada minuto
+    }
     logger.warn({ unit: u.slug, conversa: id, status, err: msgDoErro(err) }, `${ID_CICLO}: não consegui mandar a mensagem de espera`);
   }
 }
@@ -242,7 +282,7 @@ async function destinoDaGerente(c: Ctx, a: Alvo): Promise<Destino> {
 
 const textoDoAviso = (a: Alvo, nome: string, minutos: number, id: number, extra = ''): string => {
   const link = linkDaConversa(a, id);
-  return `Doutor Digital · ${a.u.nome}\n⏰ ${nome} está esperando resposta há ${minutos} min${extra}${link ? `\n${link}` : ''}`;
+  return `Doutor Digital · ${a.u.nome}\n⏰ ${nome} está esperando resposta há ${duracaoCurta(minutos)}${extra}${link ? `\n${link}` : ''}`;
 };
 
 /**
@@ -256,7 +296,7 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
   const { u } = a;
   const id = e.lida.id;
   const chave = chaveDoEpisodio(e.espera!.desde);
-  const dono = responsavelDe(e.raw);
+  const dono = responsavelDe(e.raw, a.robos);
   const donoZap = dono ? await armazem.numeroDoAgente(a.conta, dono.id) : null;
   const gerente = !dono || !donoZap ? await destinoDaGerente(c, a) : null;
   const numero = donoZap?.telefone ?? gerente?.numero ?? null;
@@ -266,7 +306,7 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
   const pularZap = numero !== null && numero === numeroDo30;
   if (u.modo === 'seco') {
     const descricao = `${mencionado ? `nota com @${mencionado.nome.split(/\s+/)[0]}` : 'sem a quem mencionar'} · WhatsApp ${numero ? `para ${donoZap ? 'o responsável' : 'a gerente'}${pularZap ? ' (junto com o de 30 min)' : ''}` : 'NÃO (sem número cadastrado)'}`;
-    if (!(await registrar(c, a, id, 'demora-aviso-10', chave, `mandaria (há ${minutos} min): ${descricao}`))) return;
+    if (!(await registrar(c, a, id, 'demora-aviso-10', chave, `mandaria (há ${duracaoCurta(minutos)}): ${descricao}`))) return;
     c.resumo.devidos['aviso-10']++;
     c.resumo.simulados['aviso-10']++;
     logger.info({ unit: u.slug, conversa: id, minutos, descricao }, `${ID_CICLO}: SECO — mandaria o aviso de 10 min (nada foi enviado)`);
@@ -274,6 +314,8 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
   }
   if (!mencionado && !numero) {
     contar(c.resumo.barrados, 'aviso-10: sem ninguém a avisar (sem responsável e sem número da gerente)');
+    adiar(c, a, id, 'demora-aviso-10', chave);
+    adiar(c, a, id, 'demora-aviso-10-nota', chave);
     return;
   }
   let saiu = false;
@@ -282,11 +324,14 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
     else if (await registrar(c, a, id, 'demora-aviso-10-nota', chave, `nota com @${mencionado.nome.split(/\s+/)[0]}`)) {
       c.resumo.saidas++;
       try {
-        await mundo.nota(a.ctx, id, notaComMencao(mencionado, `⏰ ${nome} está esperando resposta há ${minutos} min. Responda agora.`));
+        await mundo.nota(a.ctx, id, notaComMencao(mencionado, `⏰ ${nome} está esperando resposta há ${duracaoCurta(minutos)}. Responda agora.`));
         saiu = true;
       } catch (err) {
         c.resumo.falhas++;
-        if (statusDoErro(err) !== undefined && statusDoErro(err)! >= 400 && statusDoErro(err)! < 500) await desfazer(c, a, id, 'demora-aviso-10-nota', chave);
+        if (statusDoErro(err) !== undefined && statusDoErro(err)! >= 400 && statusDoErro(err)! < 500) {
+          await desfazer(c, a, id, 'demora-aviso-10-nota', chave);
+          adiar(c, a, id, 'demora-aviso-10-nota', chave);
+        }
         logger.warn({ unit: u.slug, conversa: id, err: msgDoErro(err) }, `${ID_CICLO}: não consegui deixar a nota com menção`);
       }
     }
@@ -294,13 +339,15 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
   if (numero && !jaTratado(c, a, id, 'demora-aviso-10', chave)) {
     if (!cabe(c, 1)) c.resumo.noTeto++;
     else if (await registrar(c, a, id, 'demora-aviso-10', chave, pularZap ? 'WhatsApp junto com o aviso de 30 min' : `WhatsApp para ${donoZap ? 'o responsável' : 'a gerente'}`)) {
-      if (pularZap) saiu = true;
-      else {
+      if (pularZap) {
+        // o WhatsApp deste número sai no aviso de 30 min (mesmo destino): aqui só fica a linha dizendo isso, sem contar como enviado
+      } else {
         c.resumo.saidas++;
         if (await mundo.zap(numero, textoDoAviso(a, nome, minutos, id))) saiu = true;
         else {
           c.resumo.falhas++;
-          await desfazer(c, a, id, 'demora-aviso-10', chave); // não saiu: tenta no próximo ciclo
+          await desfazer(c, a, id, 'demora-aviso-10', chave); // não saiu: tenta de novo daqui a pouco
+          adiar(c, a, id, 'demora-aviso-10', chave);
         }
       }
     }
@@ -318,19 +365,20 @@ async function passoAviso30(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promi
   const chave = chaveDoEpisodio(e.espera!.desde);
   if (jaTratado(c, a, id, 'demora-aviso-30', chave)) return;
   const gerente = await destinoDaGerente(c, a);
-  const dono = responsavelDe(e.raw);
+  const dono = responsavelDe(e.raw, a.robos);
   const nome = nomeCurto(e.lida.nome || e.lida.telefone || '');
   const texto = textoDoAviso(a, nome, minutos, id, ` — ${dono ? `com ${dono.nome.split(/\s+/)[0]}` : 'sem responsável'}`);
   if (!gerente.numero && u.modo !== 'seco') {
     // sem o número da gerente não há o que mandar: NÃO registra (quando o número for cadastrado, ainda dentro do prazo, sai)
     contar(c.resumo.barrados, 'aviso-30: a gerente não tem WhatsApp cadastrado');
+    adiar(c, a, id, 'demora-aviso-30', chave);
     return;
   }
   if (u.modo === 'ligado' && !cabe(c, 1)) {
     c.resumo.noTeto++;
     return;
   }
-  if (!(await registrar(c, a, id, 'demora-aviso-30', chave, u.modo === 'seco' ? `mandaria à gerente (há ${minutos} min)${gerente.numero ? '' : ' — SEM número cadastrado'}` : texto))) return;
+  if (!(await registrar(c, a, id, 'demora-aviso-30', chave, u.modo === 'seco' ? `mandaria à gerente (há ${duracaoCurta(minutos)})${gerente.numero ? '' : ' — SEM número cadastrado'}` : texto))) return;
   c.resumo.devidos['aviso-30']++;
   if (u.modo === 'seco') {
     c.resumo.simulados['aviso-30']++;
@@ -342,6 +390,7 @@ async function passoAviso30(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promi
   else {
     c.resumo.falhas++;
     await desfazer(c, a, id, 'demora-aviso-30', chave);
+    adiar(c, a, id, 'demora-aviso-30', chave);
   }
 }
 
@@ -357,7 +406,7 @@ async function tratarConversa(c: Ctx, a: Alvo, atual: Estado1, devidos: Passo[],
   if (!faltam.length) return;
   // RELÊ a conversa e as mensagens: a equipe pode ter respondido (ou a Sofia assumido) entre a listagem e agora
   const [raw, msgs] = await Promise.all([mundo.conversa(a.ctx, id), mundo.mensagens(a.ctx, id)]);
-  const fresco = lerConversa(raw, msgs);
+  const fresco = lerConversa(raw, msgs, a.robos);
   if (!fresco) return;
   const agora = mundo.agora();
   const d = decidirDemora({ espera: fresco.espera, agora, fuso: a.u.fuso, janela, status: fresco.status, lida: fresco.lida, iaLigada: a.u.iaLigada, caixaOficial: a.caixa.oficial });
@@ -365,7 +414,7 @@ async function tratarConversa(c: Ctx, a: Alvo, atual: Estado1, devidos: Passo[],
   const agir = d.devidos.filter((p) => faltam.includes(p));
   if (!agir.length || !fresco.espera) return;
   c.agora = agora;
-  const minutos = d.minutos;
+  const minutos = d.minutosReais;
   if (agir.includes('espera')) await passoEspera(c, a, fresco, minutos);
   const numeroDo30 = agir.includes('aviso-30') ? (await destinoDaGerente(c, a)).numero : null;
   if (agir.includes('aviso-10')) await passoAviso10(c, a, fresco, minutos, numeroDo30);
@@ -385,7 +434,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
     }
     resumo.unidades++;
     for (const caixa of u.caixas) {
-      const a: Alvo = { u, ctx: u.ctx, conta: u.ctx.conta.conta, caixa };
+      const a: Alvo = { u, ctx: u.ctx, conta: u.ctx.conta.conta, caixa, robos: await robosDaConta(deps, u.ctx) };
       let lista: any[];
       try {
         lista = await mundo.listar(a.ctx, caixa.id, Math.floor((mundo.agora().getTime() - JANELA_DE_LEITURA_MS) / 1000));
@@ -408,7 +457,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
           let guardada = memoria.esperas.get(chave);
           let estado: Estado1 | null = null;
           if (!guardada || guardada.assinatura !== sig) {
-            estado = lerConversa(raw, await mundo.mensagens(a.ctx, lida.id));
+            estado = lerConversa(raw, await mundo.mensagens(a.ctx, lida.id), a.robos);
             if (!estado) continue;
             guardada = { assinatura: sig, espera: estado.espera };
             if (memoria.esperas.size > 4000) memoria.esperas.clear();

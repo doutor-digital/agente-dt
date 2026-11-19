@@ -116,9 +116,19 @@ export function mundoReal(): MundoDaDemora {
       }
       return todas;
     },
+    async conector(ctx) {
+      // quem é o dono do token desta conta (`/api/v1/profile`, fora do caminho da conta)
+      const conta = ctx.conta;
+      if (!conta) return null;
+      const r = await ctx.fetch(`${conta.url}/api/v1/profile`, { headers: { api_access_token: conta.token, Accept: 'application/json' }, signal: AbortSignal.timeout(15_000) });
+      if (!r.ok) return null;
+      const id = Number(((await r.json().catch(() => null)) as { id?: unknown } | null)?.id);
+      return Number.isInteger(id) && id > 0 ? id : null;
+    },
     pediuSair: (ctx, conversaId, contatoId) => ultimoPedidoDeSaidaDoContato(ctx, conversaId, contatoId, 3),
     async mandarEspera(u, ctx, conversaId, texto) {
-      // pelo robô da Sofia quando ele existe nesta conta (não é «usuário»: não conta como primeira resposta humana nos relatórios do CRM)
+      // pelo robô da Sofia quando ele existe nesta conta: não é «usuário», então não conta como a 1ª resposta HUMANA nos relatórios de tempo de resposta do CRM
+      // (o `waiting_since` é zerado do mesmo jeito por qualquer saída — por isso a espera é contada pelas mensagens, ver regras.ts)
       const token = ctx.conta && ehContaDoAmbiente(ctx.conta.conta) ? tokenDoRobo() : tokenDoRobo(process.env, configDaUnidade(u.slug)?.envSufixo);
       const robo = token ? portaDoRobo(ctx, token) : null;
       if (robo) {

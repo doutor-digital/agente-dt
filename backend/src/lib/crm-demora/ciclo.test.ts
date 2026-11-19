@@ -80,6 +80,8 @@ let relidas = 0;
 
 /** o usuário do Chatwoot por onde sai a mensagem de espera: o conector da conta 1 é o 2; o de outra conta pode ser qualquer id */
 let conector = 2;
+/** o que a conta diz ser o conector (null = não deu para saber) */
+let conectorDaConta: number | null = null;
 function mundo(modo: Estado, o: { iaLigada?: boolean; gerente?: number | null; aoRelerDepoisDaListagem?: () => void } = {}) {
   const u: UnidadeDaDemora = {
     slug: 'doutor-hernia-parauapebas',
@@ -104,6 +106,9 @@ function mundo(modo: Estado, o: { iaLigada?: boolean; gerente?: number | null; a
     },
     async mensagens(_: unknown, id: number) {
       return convs.find((c) => c.id === id)!.mensagens.map((m) => ({ ...m }));
+    },
+    async conector() {
+      return conectorDaConta;
     },
     async pediuSair() {
       if (sair === 'erro') throw new Error('Chatwoot fora do ar');
@@ -170,6 +175,7 @@ beforeEach(() => {
   relidas = 0;
   memoria = C.novaMemoriaDaDemora();
   conector = 2;
+  conectorDaConta = null;
 });
 
 const avanca = (minutos: number) => void (agora = new Date(agora.getTime() + minutos * 60_000));
@@ -321,6 +327,7 @@ test('nem o responsável nem a gerente têm WhatsApp: só a nota com menção; o
   assert.equal(saidas.notas.length, 1);
   assert.ok(!regras().includes('demora-aviso-30'), 'sem número não registra: quando o cadastro sair, ainda dentro do prazo, o aviso sai');
   zaps = { 4: { telefone: '5594999990001', nome: 'Cleia' } };
+  avanca(6);
   await ciclo('ligado');
   assert.deepEqual(saidas.zaps.map((z) => z.numero), ['5594999990001'], 'agora a gerente tem número');
 });
@@ -341,8 +348,11 @@ test('o WhatsApp que falha não vira «feito»: o ciclo seguinte tenta de novo; 
   let r = await ciclo('ligado');
   assert.equal(r.falhas >= 1, true);
   zapFunciona = true;
+  await ciclo('ligado');
+  assert.equal(saidas.zaps.length, 1, 'não insiste no mesmo minuto');
+  avanca(6);
   r = await ciclo('ligado');
-  assert.equal(saidas.zaps.filter((z) => z.numero === '5594999990002').length, 2, 'tentou de novo e agora foi');
+  assert.equal(saidas.zaps.filter((z) => z.numero === '5594999990002').length, 2, 'tentou de novo daqui a pouco e agora foi');
   assert.equal(r.feitos['aviso-10'], 1);
 });
 
@@ -435,4 +445,40 @@ test('uma falha de leitura numa conversa não derruba as outras', async () => {
   const r = await C.rodarCicloDaDemora({ armazem: armazem(), mundo: m, memoria });
   assert.equal(r.falhas, 1);
   assert.equal(saidas.espera.filter((e) => e.conversa === 42).length, 1);
+});
+
+test('falha PERSISTENTE do WhatsApp (instância caída) não gasta o teto do ciclo a cada minuto: as outras conversas seguem', async () => {
+  zapFunciona = false;
+  for (let i = 0; i < 15; i++) conv({ id: 200 + i, mensagens: [P(-12)] });
+  for (let i = 0; i < 8; i++) await ciclo('ligado');
+  assert.equal(saidas.espera.length, 15, 'todas as conversas receberam a mensagem de espera');
+  assert.equal(saidas.zaps.length, 15, 'e cada WhatsApp foi tentado UMA vez nesses minutos (não 1 por ciclo)');
+  avanca(6);
+  await ciclo('ligado');
+  assert.ok(saidas.zaps.length > 15, 'passada a espera entre tentativas, tenta de novo');
+});
+
+test('a conversa mais parada da NOITE é avisada quando o horário de atender abre (os prazos contam só as horas de atender)', async () => {
+  agora = T.localParaUtc('2026-11-19T08:07', FUSO)!;
+  const c = conv({ mensagens: [] });
+  c.mensagens.push({ id: ++mid, message_type: 0, private: false, content: 'preciso de ajuda com minha coluna', created_at: Math.floor(T.localParaUtc('2026-11-18T20:10', FUSO)!.getTime() / 1000), sender: { type: 'contact', id: 55 } });
+  await ciclo('ligado');
+  assert.equal(saidas.espera.length, 1, 'às 8h07, 7 min úteis de espera');
+  assert.equal(saidas.zaps.length, 0);
+  avanca(5); // 8h12
+  await ciclo('ligado');
+  assert.equal(saidas.zaps.length, 1);
+  assert.match(saidas.zaps[0]!.texto, /esperando resposta há 12 h 2 min/, 'o texto diz o tempo corrido de verdade');
+});
+
+test('conta de clínica: a régua falando pelo conector (usuário 31) NÃO é a equipe respondendo — mas só se a conta disser quem é o conector', async () => {
+  const doConector = (min: number) => ({ id: ++mid, message_type: 1, private: false, content: 'Lembrete: sua consulta é amanhã', created_at: em(min), sender: { id: 31, type: 'user' } });
+  conv({ id: 300, mensagens: [P(-12), doConector(-8)] });
+  await ciclo('ligado'); // a conta não diz quem é o conector: o 31 conta como gente
+  nada();
+  memoria = C.novaMemoriaDaDemora();
+  conectorDaConta = 31;
+  await ciclo('ligado');
+  assert.equal(saidas.espera.length, 1);
+  assert.equal(saidas.zaps.length, 1);
 });

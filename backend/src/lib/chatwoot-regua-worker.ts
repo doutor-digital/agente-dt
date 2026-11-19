@@ -174,7 +174,10 @@ export function avisoDaGerenteDoBanco(
   return async (texto) => {
     if ((d.modo ?? modoDaDemora)(slug) !== 'ligado') return false;
     const numero = await (d.numero ?? numeroDaGerenteNoBanco)(conta, caixa);
-    if (!numero) return false;
+    if (!numero) {
+      logger.warn({ slug, caixa }, `${ID_REGUA}: lead quente parado, mas a gerente da caixa não tem WhatsApp em crm_tarefa_zap — o aviso não saiu`);
+      return false;
+    }
     return (d.enviar ?? enviarPelaEvolution)({ url, header, valor, numero, texto });
   };
 }
