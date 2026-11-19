@@ -184,7 +184,7 @@ afterEach(() => {
 });
 
 /** Chatwoot de mentira com estado: a conversa 5 (status e etiquetas vivos); `quebrar` faz um caminho responder 500. */
-function chatwootVivo(ini: { status: string; labels: string[] }, quebrar: RegExp | null = null) {
+function chatwootVivo(ini: { status: string; labels: string[]; attrs?: Record<string, unknown> }, quebrar: RegExp | null = null) {
   const conv = { ...ini, labels: [...ini.labels] };
   const log: string[] = [];
   const f = (async (url: string, o: { method?: string; body?: string; headers?: Record<string, string> } = {}) => {
@@ -197,7 +197,7 @@ function chatwootVivo(ini: { status: string; labels: string[] }, quebrar: RegExp
     const r = (j: unknown, ok = true) => ({ ok, status: ok ? 200 : 500, text: async () => JSON.stringify(j) }) as Response;
     if (quebrar && quebrar.test(`${metodo} ${caminho}`)) return r({ error: 'falhou' }, false);
     if (metodo === 'GET' && caminho === 'conversations/5') {
-      return r({ id: 5, status: conv.status, labels: conv.labels, meta: { sender: { name: 'Maria', phone_number: '+5594999990000' }, assignee: null }, custom_attributes: { etapa: 'Novo lead' } });
+      return r({ id: 5, status: conv.status, labels: conv.labels, meta: { sender: { name: 'Maria', phone_number: '+5594999990000' }, assignee: null }, custom_attributes: ini.attrs ?? { etapa: 'Novo lead' } });
     }
     if (metodo === 'POST' && caminho === 'conversations/5/labels') conv.labels = corpo.labels;
     if (metodo === 'POST' && caminho === 'conversations/5/toggle_status') conv.status = corpo.status;
@@ -341,6 +341,18 @@ test('1ª MENSAGEM espera o anúncio gravar a etiqueta dele (as duas regravam a 
     soltar();
     for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
     assert.deepEqual(w.conv.labels, ['anuncio', ETQ]);
+  } finally {
+    f.mock.restore();
+  }
+});
+
+test('UM evento, VÁRIOS escritores de etiqueta (resolvida + pausada + sem etapa + sofia-atendendo): rodam em fila e nenhuma desfaz a outra', async () => {
+  Object.assign(process.env, ENV);
+  const w = chatwootVivo({ status: 'resolved', labels: [ETIQUETA_PAUSA, ETQ, 'quente'], attrs: {} });
+  const f = mock.method(globalThis, 'fetch', w.f as never);
+  try {
+    await dispararEvento({ event: 'conversation_updated', id: 5, inbox_id: 3, status: 'resolved', labels: [ETIQUETA_PAUSA, ETQ, 'quente'], custom_attributes: {}, meta: { sender: {} } });
+    assert.deepEqual([...w.conv.labels].sort(), ['falta-etapa', 'quente'], w.log.join('\n'));
   } finally {
     f.mock.restore();
   }

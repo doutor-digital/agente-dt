@@ -59,8 +59,8 @@ export async function acertarPendentes(a: ArgumentosDoAcerto, p: PortasDoAcerto,
         continue;
       }
       const recente = c.ultimaAtividade !== null && c.ultimaAtividade >= limite;
-      // a decisão da etiqueta é a do fluxo ao vivo, tomada como se a conversa já estivesse aberta
-      const etiquetar = p.sofiaLigada && recente && sofiaPodeAtender({ ...viva, status: 'open' }) && !viva.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO);
+      // a decisão da etiqueta é a do fluxo ao vivo (pendente conta como viva; resolvida/adiada nesse meio-tempo, não)
+      const etiquetar = p.sofiaLigada && recente && sofiaPodeAtender(viva) && !viva.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO);
       if (viva.status === 'pending') r.abertas++;
       if (etiquetar) r.etiquetadas++;
       else r.semEtiqueta++;
@@ -71,7 +71,7 @@ export async function acertarPendentes(a: ArgumentosDoAcerto, p: PortasDoAcerto,
         await p.atendimento.garantirEtiqueta();
         // relê logo antes de regravar a lista (o Chatwoot a substitui inteira)
         const fresca = await p.atendimento.conversa(c.id);
-        if (fresca && !fresca.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO)) await p.atendimento.etiquetas(c.id, [...fresca.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
+        if (fresca && sofiaPodeAtender(fresca) && !fresca.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO)) await p.atendimento.etiquetas(c.id, [...fresca.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
       }
     } catch (err) {
       r.falhou++;

@@ -593,6 +593,7 @@ test('etiqueta sofia-atendendo: sai quando a Sofia NÃO responde e não vai tent
     ['pausada pela equipe', { estado: 'ligado', lida: { etiquetas: ['ia-pausada'] } }, 'calada'],
     ['sem telefone', { estado: 'ligado', lida: { telefone: null } }, 'sem-telefone'],
     ['modelo sem texto', { estado: 'ligado', sofia: { resposta: '' } }, 'sem-texto'],
+    ['a equipe já respondeu (a pausa pode ter falhado)', { estado: 'ligado', mensagens: [msg(0, 'oi'), msg(1, 'Oi! Já te respondo')] }, 'equipe-respondeu'],
   ];
   for (const [rotulo, o, desfecho] of casos) {
     const a = portas(o);

@@ -376,6 +376,10 @@ test('registrar_qualificacao e aplicar_tag: conferem a lista viva; etiqueta rese
   assert.match(r, /RECUSADO \(não é sua\): retomada, esperando-humano, interno/);
   assert.match(r, /Não existe na conta: inventada/);
   assert.deepEqual(m.chat.etiquetas, [['quente']]);
+  // «sofia-atendendo» é sinal do servidor: o modelo não põe (mesmo existindo na conta)
+  const x = montar('ligado', { chat: chatFalso({ etiquetasDaConta: ['quente', 'sofia-atendendo'] }) });
+  assert.match(await x.por('aplicar_tag').invoke({ tags: ['sofia-atendendo'] }), /RECUSADO \(não é sua\): sofia-atendendo/);
+  assert.deepEqual(x.chat.etiquetas, []);
   const s = montar('seco');
   await s.por('aplicar_tag').invoke({ tag: 'quente' });
   assert.equal(s.chat.escreveu(), 0);

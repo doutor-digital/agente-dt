@@ -392,7 +392,7 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
       await p.abrirParaEquipe(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe`));
     }
     // a Sofia não vai mais responder nesta conversa (por ora): a etiqueta `sofia-atendendo` sai. Desfecho que ela vai tentar de novo
-    // (`mudou`: o paciente escreveu outra vez; `ocupada`) ou que é da pausa (`equipe-respondeu`) não mexe aqui.
+    // (`mudou`: o paciente escreveu outra vez; `ocupada`) não mexe aqui.
     if (p.encerrarAtendimento && DESFECHOS_QUE_ENCERRAM.has(desfecho)) {
       await p.encerrarAtendimento(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
     }
@@ -411,12 +411,14 @@ export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'teto',
   'sem-unidade',
   'falhou',
-  'desligado',
   'calada',
   'sem-telefone',
   'horario-divergente',
   'cartao-no-kommo',
   'kommo-indisponivel',
+  // a última fala pública é nossa: a equipe respondeu (a pausa já teria tirado a etiqueta; se ela falhou, é aqui que sai) — se fosse a Sofia
+  // mesma de outra cópia do servidor, a próxima mensagem do paciente repõe
+  'equipe-respondeu',
 ]);
 
 /** O que a rodada conta para o Registro além do desfecho (ex.: por que ficou calada). */
@@ -723,6 +725,18 @@ export function aoAcharReferral(r: EstadoDaConta | null): (m: { conversa: number
   };
 }
 
+/** Espera `p` por no máximo `ms` (o relógio é desarmado quando `p` termina). Nunca rejeita. */
+function esperarNoMaximo(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((ok) => {
+    const t = setTimeout(ok, ms);
+    t.unref();
+    void p.then(
+      () => (clearTimeout(t), ok()),
+      () => (clearTimeout(t), ok()),
+    );
+  });
+}
+
 export function eventoChatwootHandler(req: Request, res: Response): void {
   // A chave é DA CONTA a que o evento diz pertencer (derivada do token dela): a chave de Parauapebas não forja evento de outra clínica e vice-versa.
   // Evento que não é de conta nenhuma que o servidor conheça só passa com a chave do ambiente (e é ignorado com aviso logo abaixo).
@@ -754,30 +768,32 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     }
     return;
   }
-  const reativa = eventoDeReativacao(req.body);
-  if (reativa) {
+  // Um mesmo `conversation_updated` pode pedir até quatro coisas, e TODAS regravam a lista de etiquetas da conversa (o Chatwoot a substitui
+  // inteira): rodam UMA DEPOIS DA OUTRA, não em paralelo — em paralelo cada uma leria a lista velha e a última a gravar desfaria as outras.
+  // O resolver vai primeiro porque grava a lista que veio no AVISO (+ falta-etapa); as seguintes releem a lista e não a desfazem.
+  const resol = eventoDeResolucao(req.body); // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira
+  const reativa = eventoDeReativacao(req.body); // resolvida e pausada → reativa a IA
+  const atend = eventoDeAtendimento(req.body); // etiqueta `sofia-atendendo` numa conversa em que a Sofia já saiu → tira
+  const etq = eventoDeEtiqueta(req.body); // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão
+  if (resol?.acao || reativa || atend || etq) {
     const e = estadoDoReceptor(conta);
-    if (e) void reativar(reativa.conversa, null, e.pausa).catch((err) => logger.warn({ err: String(err), conversa: reativa.conversa }, 'chatwoot-pausa: não consegui reativar'));
+    if (e) {
+      void (async () => {
+        const passo = async (de: string, conversa: number, fn: () => Promise<unknown>) => {
+          try {
+            await fn();
+          } catch (err) {
+            logger.warn({ err: String(err), conversa }, `${de}: falhou`);
+          }
+        };
+        if (resol?.acao) await passo('chatwoot-resolver', resol.conversa, () => aplicarResolucao(resol, e.resolver));
+        if (reativa) await passo('chatwoot-pausa (reativar)', reativa.conversa, () => reativar(reativa.conversa, null, e.pausa));
+        if (atend && e.portas.conferirAtendimento) await passo(`${ID_IA} (etiqueta sofia-atendendo)`, atend.conversa, () => e.portas.conferirAtendimento!(atend.conversa));
+        if (etq) await passo('chatwoot-etiquetas', etq.conversa, () => aplicarEtiqueta(etq, e.ponte, e.trava));
+      })();
+    }
   }
-  // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira (chatwoot-resolver.ts)
-  const resol = eventoDeResolucao(req.body);
-  if (resol?.acao) {
-    const e = estadoDoReceptor(conta);
-    if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
-  }
-  // etiqueta `sofia-atendendo` numa conversa que já mostra que a Sofia saiu (resolvida, pausada, passada à equipe) → tira (chatwoot-sofia-atendendo.ts)
-  const atend = eventoDeAtendimento(req.body);
-  if (atend) {
-    const e = estadoDoReceptor(conta);
-    if (e?.portas.conferirAtendimento) void e.portas.conferirAtendimento(atend.conversa).catch((err) => logger.warn({ err: String(err), conversa: atend.conversa }, `${ID_IA}: não consegui conferir a etiqueta sofia-atendendo`));
-  }
-  // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
-  const etq = eventoDeEtiqueta(req.body);
-  if (etq) {
-    const e = estadoDoReceptor(conta);
-    if (e) void aplicarEtiqueta(etq, e.ponte, e.trava).catch((err) => logger.warn({ err: String(err), conversa: etq.conversa }, 'chatwoot-etiquetas: falhou'));
-    return;
-  }
+  if (etq) return;
   // o código do anúncio: o referral que o Chatwoot já traz na mensagem, ou (sem ele) o que o Kapso diz — guarda e aplica (kapso-referral.ts)
   const consultar = mensagemParaConsultar(req.body);
   let anuncioPronto: Promise<unknown> = Promise.resolve();
@@ -792,5 +808,5 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   const e = estadoDoReceptor(conta);
   if (!e) return;
   // o «Sofia atendendo» espera o anúncio gravar a etiqueta `anuncio` (no máximo 8 s): as duas regravam a lista de etiquetas da conversa
-  void aoChegar(m, e.portas, e.mem, Promise.race([anuncioPronto, new Promise((ok) => setTimeout(ok, ESPERA_DO_ANUNCIO_MS).unref())])).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
+  void aoChegar(m, e.portas, e.mem, esperarNoMaximo(anuncioPronto, ESPERA_DO_ANUNCIO_MS)).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
 }

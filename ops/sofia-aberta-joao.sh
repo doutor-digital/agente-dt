@@ -20,7 +20,7 @@ CHAVE="${CHAVE_SSH:-$HOME/.ssh/doutordigital_vps}"
 # só as opções conhecidas, no formato certo (nada é interpretado na VPS)
 ARGS=""
 for a in "$@"; do
-  if [[ "$a" == "--so-conferir" || "$a" =~ ^--caixa=[0-9]+$ || "$a" =~ ^--etiquetar-horas=[0-9]{1,4}$ ]]; then
+  if [[ "$a" == "--so-conferir" || "$a" =~ ^--caixa=[0-9]{1,6}$ || "$a" =~ ^--etiquetar-horas=[0-9]{1,4}$ ]]; then
     ARGS+=" $(printf '%q' "$a")"
   else
     echo "opção inválida: $a (use --so-conferir, --caixa=N, --etiquetar-horas=N)"; exit 2

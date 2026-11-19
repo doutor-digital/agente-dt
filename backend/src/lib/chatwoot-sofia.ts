@@ -73,7 +73,9 @@ export const ETIQUETA_HUMANO = 'esperando-humano';
 /** Etiquetas que DISPARAM a régua ou marcam outro processo: a Sofia não as põe. */
 const ETIQUETAS_RESERVADAS = new Set(['confirmar-retorno', 'retomada', 'reativacao', 'boas-vindas', 'aderencia-meio', 'sem-follow-up', 'pagou-antecipado', 'respondeu-pelo-celular', ETIQUETA_HUMANO, 'interno', 'sem-resposta', 'pendente-de-revisao',
   // «anuncio» = veio de anúncio COMPROVADO pelo Kapso (chatwoot-origem.ts); palpite da Sofia ("vi o anúncio") misturaria a pasta
-  'anuncio']);
+  'anuncio',
+  // «Sofia atendendo» é um SINAL do servidor (chatwoot-sofia-atendendo.ts): se o modelo pudesse pôr, mentiria numa conversa já passada à equipe
+  'sofia-atendendo']);
 
 /**
  * A Sofia deve ficar calada? Contato interno, conversa já passada para a equipe, paciente em tratamento (o funil de tratamento é humano)

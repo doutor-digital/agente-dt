@@ -58,7 +58,8 @@ export type Comeco = 'sem-conversa' | 'etiquetada' | 'ja-etiquetada' | 'sem-etiq
 
 /**
  * Primeira mensagem (ou a seguinte, se a Sofia voltou): abre a conversa que está em «Pendentes» e, se a Sofia pode atender, põe a etiqueta.
- * Falhar ao abrir não impede a etiqueta (e vice-versa): cada passo é conferido e avisa no log. Devolve o que ficou.
+ * Falhar ao abrir não impede a etiqueta: cada passo avisa no log. A lista de etiquetas é relida logo ANTES de regravar (o Chatwoot a substitui
+ * inteira; abrir e criar a etiqueta na conta demoram, e a equipe pode ter respondido — pausa — nesse meio-tempo). Devolve o que ficou.
  */
 export async function comecarAtendimento(conversa: number, p: PortaDoAtendimento): Promise<{ comeco: Comeco; abriu: boolean }> {
   let c = await p.conversa(conversa);
@@ -68,8 +69,6 @@ export async function comecarAtendimento(conversa: number, p: PortaDoAtendimento
     try {
       await p.abrir(conversa);
       abriu = true;
-      // a lista de etiquetas pode ter mudado enquanto abria: releitura curta antes de regravar
-      c = (await p.conversa(conversa)) ?? c;
     } catch (err) {
       logger.warn({ err: String(err), conversa }, 'chatwoot-sofia-atendendo: não consegui abrir a conversa');
     }
@@ -77,25 +76,26 @@ export async function comecarAtendimento(conversa: number, p: PortaDoAtendimento
   if (!sofiaPodeAtender(c)) return { comeco: 'sem-etiqueta', abriu };
   if (tem(c)) return { comeco: 'ja-etiquetada', abriu };
   await p.garantirEtiqueta();
+  c = (await p.conversa(conversa)) ?? c;
+  if (!sofiaPodeAtender(c)) return { comeco: 'sem-etiqueta', abriu };
+  if (tem(c)) return { comeco: 'ja-etiquetada', abriu };
   await p.etiquetas(conversa, [...c.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
   return { comeco: 'etiquetada', abriu };
 }
 
-/** Tira a etiqueta (a equipe respondeu, a Sofia passou, a rodada não respondeu). Relê antes de regravar. `true` = tirou. */
-export async function encerrarAtendimento(conversa: number, p: PortaDoAtendimento): Promise<boolean> {
+/** Relê a conversa e, se ela tem a etiqueta e `tirarSe` diz que deve sair, regrava a lista sem ela. `true` = tirou. */
+async function tirarEtiqueta(conversa: number, p: PortaDoAtendimento, tirarSe: (c: ConversaDoAtendimento) => boolean): Promise<boolean> {
   const c = await p.conversa(conversa);
-  if (!c || !tem(c)) return false;
+  if (!c || !tem(c) || !tirarSe(c)) return false;
   await p.etiquetas(conversa, c.lida.etiquetas.filter((e) => e !== ETIQUETA_SOFIA_ATENDENDO));
   return true;
 }
 
+/** Tira a etiqueta (a equipe respondeu, a Sofia passou, a rodada não respondeu). `true` = tirou. */
+export const encerrarAtendimento = (conversa: number, p: PortaDoAtendimento): Promise<boolean> => tirarEtiqueta(conversa, p, () => true);
+
 /** Tira a etiqueta SÓ se a conversa mostra que a Sofia não está mais atendendo (resolvida, pausada, passada à equipe…). `true` = tirou. */
-export async function conferirAtendimento(conversa: number, p: PortaDoAtendimento): Promise<boolean> {
-  const c = await p.conversa(conversa);
-  if (!c || !tem(c) || sofiaPodeAtender(c)) return false;
-  await p.etiquetas(conversa, c.lida.etiquetas.filter((e) => e !== ETIQUETA_SOFIA_ATENDENDO));
-  return true;
-}
+export const conferirAtendimento = (conversa: number, p: PortaDoAtendimento): Promise<boolean> => tirarEtiqueta(conversa, p, (c) => !sofiaPodeAtender(c));
 
 /**
  * `conversation_updated` de conversa de caixa do mapa que TEM a etiqueta e já mostra que a Sofia saiu (resolvida, pausada, esperando humano,
