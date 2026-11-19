@@ -90,7 +90,7 @@ test('sem taxa obrigatória: a sequência é a de sempre, palavra por palavra', 
 6. X`,
   );
   const prompt = composeSystemPrompt({ unit: OUTRA });
-  assert.doesNotMatch(prompt, /taxa de\s+reserva de R\$/);
+  assert.doesNotMatch(prompt, /taxa de\s+agendamento de R\$/);
   assert.match(renderRulesGlobal(OUTRA), /dia → horário → dados → Pix/);
 });
 
@@ -106,4 +106,33 @@ test('taxa obrigatória com fontes sem valor legível: a frase continua inteira 
   assert.match(texto, /taxa de\s+agendamento \(o valor exato está nas Fontes Oficiais\) \(ela abate do total\), paga por Pix/);
   assert.match(texto, /a taxa de agendamento é \{o valor das Fontes Oficiais\} por Pix/);
   assert.doesNotMatch(texto, /agendamento de a taxa/);
+});
+
+test('taxa obrigatória: a tabela de estados e a regra CONFIRMAÇÃO não mandam marcar ao escolher o horário', () => {
+  const prompt = composeSystemPrompt({ unit: BOA_VISTA });
+  assert.match(prompt, /escolheu horário\s+→\s+pedir a taxa de agendamento \(Pix\) e o comprovante; só com ele, cadastro e agenda/);
+  assert.doesNotMatch(prompt, /escolheu horário\s+→\s+buscar\/cadastrar paciente e agendar/);
+  assert.match(prompt, /o dia está combinado: siga para a taxa de agendamento \(Pix \+ comprovante\) e NÃO\s+marque ainda/);
+  assert.match(prompt, /JÁ É confirmação — vá à taxa sem perguntar "consegue vir\?" de novo/);
+  assert.doesNotMatch(prompt, /siga e\s+marque\./);
+  assert.doesNotMatch(prompt, /marque sem perguntar "consegue vir\?"/);
+});
+
+test('sem taxa obrigatória: a tabela de estados e a regra CONFIRMAÇÃO são as de sempre, letra por letra', () => {
+  const prompt = composeSystemPrompt({ unit: OUTRA });
+  assert.match(prompt, /escolheu horário             →  buscar\/cadastrar paciente e agendar\n/);
+  assert.ok(prompt.includes('"combinado" — siga e\n  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria\n'));
+});
+
+test('o prompt de taxa chama a cobrança de «taxa de agendamento», sem «taxa de reserva» no texto que o paciente poderia copiar', () => {
+  const prompt = composeSystemPrompt({ unit: BOA_VISTA });
+  const regras = renderRulesGlobal(BOA_VISTA);
+  assert.doesNotMatch(regras, /taxa de reserva/);
+  assert.doesNotMatch(sequencia(prompt), /taxa de reserva/);
+});
+
+test('a recusa da ferramenta sem comprovante não manda dizer que o horário "fica separado"', async () => {
+  const { RECUSA_SEM_COMPROVANTE_DA_TAXA } = await import('./confirmacao-so-com-crm.js');
+  assert.doesNotMatch(RECUSA_SEM_COMPROVANTE_DA_TAXA, /fica separado/);
+  assert.match(RECUSA_SEM_COMPROVANTE_DA_TAXA, /NÃO diga que o horário está separado, reservado ou garantido/);
 });

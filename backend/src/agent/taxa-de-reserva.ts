@@ -449,6 +449,8 @@ export interface TrocaDaTaxa {
     /** depois da insistência tratada, o modelo liberou pagar tudo na clínica: saiu o lembrete da taxa, sem a chave */
     | 'lembrete_da_taxa'
     | 'horario_sem_comprovante'
+    /** a resposta pedia nome/telefone na hora do horário, antes da taxa e do comprovante: saiu o pedido da taxa com a chave */
+    | 'dados_antes_da_taxa'
     /** cartão ilegível: só a afirmação falsa de horário saiu, sem pedir pagamento (`semAAfirmacaoDoHorario`) */
     | 'afirmacao_retirada'
     /** cartão pago ou ilegível e a resposta trazia chave, titular ou valor fora do cadastro: saiu a cortesia, sem dados e sem pedir pagamento (`semODadoErrado`) */
@@ -770,5 +772,37 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
     const r = conservandoOResto(texto, dados, (t) => afirmaNoTrecho(t), recadoSemComprovante(dados), recadoSemComprovante(dados));
     return { ...r, motivo: 'horario_sem_comprovante' };
   }
+  if (pedeDadosAntesDaTaxa(texto, ctx.respostaAnterior)) {
+    const r = conservandoOResto(texto, dados, (t) => pedeDadosNoTrecho(normalizar(t)) || afirmaNoTrecho(t), pedidoDaChave(dados), recadoSemComprovante(dados));
+    return { ...r, motivo: 'dados_antes_da_taxa' };
+  }
   return null;
+}
+
+// --- Nome e telefone na hora do horário, antes da taxa ---------------------------------------------------------------------------
+//
+// Boa Vista, 19/11/2026: "Perfeito, terça às 16h! Pra eu deixar seu cadastro pronto, me confirma seu nome completo?" — 6 conversas entre
+// 05/11 e 17/11. Nada ali é uma afirmação de horário garantido (`afirmaHorarioGarantido` não pega), mas o paciente sai achando que a
+// vaga está salva. Nesta unidade o passo seguinte à escolha do horário é a taxa; nome e telefone só entram depois do comprovante (a
+// trava nem chega aqui com comprovante na conversa, cartão pago ou consulta de pé).
+
+/** Pede o cadastro do paciente: nome completo / sobrenome / telefone com DDD / o nome de quem vai (filho, mãe…). */
+const PEDE_DADOS_DO_CADASTRO =
+  /\b(?:nome completo|nome e sobrenome|sobrenome|telefone com ddd|um telefone|seu telefone|telefone de contato|nome (?:dele|dela|do seu \w+|da sua \w+))\b/;
+/** Já fala da taxa na mesma resposta: o pedido de dados vem junto do que importa. */
+const FALA_DA_TAXA = /\b(?:taxa|pix|comprovante|antecipad\w*|sinal)\b/;
+
+function pedeDadosNoTrecho(n: string): boolean {
+  return PEDE_DADOS_DO_CADASTRO.test(n) && !/\bcomo (?:posso|devo) (?:te )?chamar\b/.test(n);
+}
+
+/**
+ * A resposta pede nome/telefone com um horário em jogo (na resposta ou na que a IA mandou antes) e sem falar da taxa. Quem pergunta
+ * "como posso te chamar?" no primeiro contato não entra: sem horário em jogo, ou sem pedido de cadastro, devolve false.
+ */
+export function pedeDadosAntesDaTaxa(texto: string, respostaAnterior = ''): boolean {
+  const n = normalizar(texto);
+  if (FALA_DA_TAXA.test(n)) return false;
+  if (!QUANDO_HORARIO.test(n) && !QUANDO_HORARIO.test(normalizar(respostaAnterior))) return false;
+  return trechos(texto).some((t) => pedeDadosNoTrecho(normalizar(t)));
 }

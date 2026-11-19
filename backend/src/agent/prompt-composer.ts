@@ -493,11 +493,11 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
   // As demais unidades: o texto de sempre, palavra por palavra (o bloco é cacheado).
   const linhaDoComprovante = unit?.spineBookingRequiresPayment
-    ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de reserva: com o comprovante na conversa e o dia e a hora já combinados,
+    ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de agendamento: com o comprovante na conversa e o dia e a hora já combinados,
   chame agendar_consulta — o sistema confere o comprovante (favorecido, valor, código da transação) e marca. Se a ferramenta recusar, diga ao
   paciente só o que ela mandar. NUNCA escreva "pagamento confirmado" nem "Pix caiu": o dinheiro quem confere é a equipe. "Já paguei" ou "fiz o
   pix" ESCRITO, sem a foto ou o PDF, não vale: peça o comprovante, uma vez, e não marque.
-  TAXA OBRIGATÓRIA: nesta unidade a consulta só é marcada com a taxa de reserva paga antes. NUNCA ofereça pagar tudo na
+  TAXA OBRIGATÓRIA: nesta unidade a consulta só é marcada com a taxa de agendamento paga antes. NUNCA ofereça pagar tudo na
   clínica, NUNCA dê a escolha "Pix antecipado ou na clínica" e NÃO pergunte "como prefere pagar": diga o total e as duas
   partes (a taxa antes + o restante no dia) e siga para a taxa. Se o paciente insistir em pagar tudo no dia, explique uma
   vez que a taxa garante o horário e já faz parte do valor; se recusar de novo, passe para a equipe.`
@@ -523,6 +523,12 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
     : comSinal
       ? `(escolher entre os horários que você ofereceu; "Sinal de R$ ${fmtBRL((unit?.sinalPixCentavos ?? 0) / 100)}" ou "Pagar no dia";\n  `
       : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
+  // Taxa de reserva obrigatória: o dia combinado leva à TAXA, não ao agendar_consulta (a ferramenta recusa sem o comprovante, e a recusa
+  // mandava dizer que "o horário fica separado" — a promessa que o passo 3 da agenda acaba de proibir). Nas demais, o texto de sempre.
+  const seguirEMarque = unit?.spineBookingRequiresPayment && !semAntecipado
+    ? 'o dia está combinado: siga para a taxa de agendamento (Pix + comprovante) e NÃO\n  marque ainda'
+    : 'siga e\n  marque';
+  const marqueSemPerguntar = unit?.spineBookingRequiresPayment && !semAntecipado ? 'vá à taxa' : 'marque';
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
@@ -530,8 +536,7 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   com a equipe e te retorno, tá? 😊". Pequenas variações de tom OK; inventar fatos NÃO.
 - CONFIRMAÇÃO: só está confirmado quando a pessoa diz, SEM condição, que vem naquele dia e hora
   ("sim, vou", "confirmado", "pode confirmar"). Resposta curta à SUA PRIMEIRA pergunta "consegue
-  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
-  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
+  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — ${seguirEMarque}. Também JÁ É confirmação — ${marqueSemPerguntar} sem perguntar "consegue vir?" de novo: a própria
   pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
   ${linhaDoComprovante} NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
   sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
@@ -817,7 +822,7 @@ function renderHorariosPorDia(unit: Unit): string {
 }
 
 /**
- * Os passos 3 a 5 da SEQUÊNCIA OBRIGATÓRIA da agenda: o que acontece quando o paciente escolhe o horário.
+ * Os passos 3 a 6 da SEQUÊNCIA OBRIGATÓRIA da agenda: o que acontece quando o paciente escolhe o horário.
  *
  * Unidade com taxa de reserva obrigatória (Boa Vista): a escolha do horário NÃO é a hora de pedir nome e telefone nem de dizer que a
  * vaga está garantida — é a hora de explicar a taxa, passar a chave Pix e pedir o comprovante. O código já recusa marcar sem o
@@ -845,7 +850,8 @@ export function sequenciaDepoisDoHorario(unit: Unit, moverDepois: (passo: number
   return `3. Quando ele ESCOLHER o horário, a PRÓXIMA mensagem é sobre a TAXA — não pede nome nem telefone, não chama agendar_consulta e
    não diz que a vaga JÁ está garantida, reservada ou salva. Nessa mensagem diga: o horário só fica garantido com a taxa de
    agendamento${valorDaTaxa}${resto}, paga por Pix; passe ${ondeEstaAChave} e peça o comprovante (foto ou PDF) aqui na conversa.
-   Exemplo: "${exemplo}". Nessa mensagem NÃO escreva "ficou reservado", "fica reservado", "está garantido" nem "é seu": o horário
+   Exemplo: "${exemplo}". Só isso: nem nome, nem telefone, nem outro pedido na mesma mensagem (um passo por mensagem).
+   Nessa mensagem NÃO escreva "ficou reservado", "fica reservado", "está garantido" nem "é seu": o horário
    só passa a existir quando agendar_consulta marcar.
    Escolher o horário JÁ confirma o dia: não pergunte "consegue vir?" antes da taxa. Esse horário saiu da lista que você consultou
    há instantes, nesta conversa: NÃO chame consultar_horarios de novo para pedir a taxa (a ferramenta agendar_consulta confere se o
@@ -1433,7 +1439,7 @@ oferecer horário para quem ainda não contou a dor perde a venda, e investigar 
 dor de quem já escolheu o horário perde a paciência dele.
 
   ESTADO                          PRÓXIMO MOVIMENTO
-${tabelaInicio}  escolheu horário             →  buscar/cadastrar paciente e agendar
+${tabelaInicio}  escolheu horário             →  ${comTaxa ? 'pedir a taxa de agendamento (Pix) e o comprovante; só com ele, cadastro e agenda' : 'buscar/cadastrar paciente e agendar'}
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
                                   que estava fazendo — não recomece do zero

@@ -545,6 +545,32 @@ test('comprovante ACEITO mas a consulta não foi marcada (a Sofia ainda combina 
   assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /ainda NÃO foi marcada/);
 });
 
+test('comprovante ACEITO e a Sofia ainda marca sozinha (falta o nome): a tarefa NÃO manda a equipe lançar a consulta (ficaria em dobro)', async () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  const f = tarefaDoComprovanteQueFicou(t);
+  assert.equal(f?.tipo === 'conferir' && f.marcaSozinha, true);
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /MARCA SOZINHA/);
+  assert.match(f?.tipo === 'conferir' ? f.detalhe : '', /NÃO lance a consulta/);
+  assert.doesNotMatch(f?.tipo === 'conferir' ? f.detalhe : '', /falta combinar|lançar a consulta se ele não voltar/);
+  // o texto-base da tarefa também: sem «confirmá-la em até 1 h»
+  const textos: string[] = [];
+  const kommo = { getLead: async () => ({ name: 'Maria', responsible_user_id: 7 }), createTask: async (x: { text: string }) => { textos.push(x.text); return { id: 1 }; } };
+  const semDedupe = { avisoRecente: async () => false, marcarAviso: async () => {} };
+  await abrirTarefaParaEquipe({
+    slug: 'doutor-hernia-boa-vista', unitId: 'u', leadId: 1, kommo: kommo as never, recorder: { step: async () => {} } as never,
+    motivo: 'comprovante', dedupe: semDedupe, detalhe: f?.tipo === 'conferir' ? f.detalhe : '', semLancar: true,
+  });
+  assert.equal(textos.length, 1);
+  assert.match(textos[0], /NÃO lance a consulta ainda: ela marca sozinha/);
+  assert.doesNotMatch(textos[0], /confirmá-la em até 1 h/);
+});
+
+test('comprovante aceito e a consulta já está no CRM: não é «marca sozinha»', () => {
+  const t = turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados()))]);
+  const f = tarefaDoComprovanteQueFicou(t, true);
+  assert.equal(f?.tipo === 'conferir' && f.marcaSozinha, false);
+});
+
 test('comprovante recusado pelo código → tarefa da recusa; de outra negociação → tarefa da recusa para a EQUIPE', () => {
   const recusado = tarefaDoComprovanteQueFicou(turnoComComprovante([CHAVE_ENVIADA, humano(fala(dados({ valor: 20 })))]));
   assert.equal(recusado?.tipo, 'recusa');

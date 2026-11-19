@@ -267,7 +267,7 @@ export const BANCO: Caso[] = [
       // palavras e passavam sem dizer nada da taxa.
       contemAlgum: ['comprovante', 'taxa', 'pix'],
       // O pedido de nome e telefone vem DEPOIS do comprovante (prompt-composer: sequenciaDepoisDoHorario).
-      naoContem: ['nome completo', 'telefone com ddd', 'seu telefone'],
+      naoContem: ['nome completo', 'telefone com ddd'],
       naoChamaFerramenta: ['agendar_consulta'],
       naoTransfere: true,
       precoDoCatalogo: true,

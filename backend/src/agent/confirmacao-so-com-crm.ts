@@ -307,11 +307,11 @@ export const RECUSA_AGUARDANDO_EQUIPE =
 
 /** Unidade com taxa de reserva (Boa Vista) e nenhum comprovante da taxa lido nesta negociação. */
 export const RECUSA_SEM_COMPROVANTE_DA_TAXA =
-  'RECUSADO: nesta unidade a vaga só é reservada DEPOIS da taxa de reserva, e ainda não há comprovante dela (foto ou PDF) ' +
+  'RECUSADO: nesta unidade a vaga só é reservada DEPOIS da taxa de agendamento, e ainda não há comprovante dela (foto ou PDF) ' +
   'nesta conversa. A consulta NÃO foi marcada. NÃO diga que está agendada e NÃO chame agendar_consulta de novo neste ' +
   'turno. Se o paciente disse que JÁ PAGOU ("já paguei", "fiz o pix") mas não mandou o comprovante, peça o comprovante ' +
   '(foto ou PDF) UMA vez, nesta mensagem: o que ele escreve NÃO vale como pagamento e o horário só é lançado depois do comprovante. ' +
-  'Diga ao paciente que o horário fica separado por enquanto e explique como garantir: PIX da taxa de reserva ' +
+  'NÃO diga que o horário está separado, reservado ou garantido (ele só passa a existir quando a consulta for marcada) e explique como garantir: PIX da taxa de agendamento ' +
   'desta unidade (mande a chave e peça o COMPROVANTE aqui na conversa). NUNCA ofereça pagar na clínica nem dê a escolha ' +
   '"Pix ou na clínica": a taxa é obrigatória e já faz parte do valor. Quando o comprovante chegar (foto ou PDF), aí sim ' +
   'chame agendar_consulta — e nunca diga "pagamento confirmado": quem confere o dinheiro é a equipe. Se ele insistir em ' +
@@ -533,6 +533,11 @@ export async function abrirTarefaParaEquipe(args: {
    * ao paciente uma resposta sobre UM horário usa o horário aqui — a tarefa de outro horário não cobre a promessa.
    */
   chaveExtra?: string;
+  /**
+   * Só `comprovante`, unidade com taxa de reserva: o comprovante foi aceito e a Sofia marca a consulta sozinha quando o paciente responder
+   * (falta o nome, por exemplo). O texto de sempre manda a equipe «confirmá-la em até 1 h», o que lançaria a consulta em dobro.
+   */
+  semLancar?: boolean;
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
@@ -551,7 +556,9 @@ export async function abrirTarefaParaEquipe(args: {
     }
     const quem = nome ? ` · ${nome}` : '';
     const texto = {
-      comprovante: `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`,
+      comprovante: args.semLancar
+        ? `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante da taxa: conferir no extrato se o Pix caiu. A IA não confirmou o pagamento e NÃO lance a consulta ainda: ela marca sozinha.`
+        : `CONFERIR COMPROVANTE · ${slug}${quem} · o paciente mandou o comprovante: conferir se o pagamento caiu e, se a consulta ainda não estiver na franquia, confirmá-la em até 1 h. A IA não confirmou o pagamento.`,
       desmarcada: `CONFERIR CONSULTA · ${slug}${quem} · a consulta está DESMARCADA no CRM e o paciente respondeu como se estivesse marcada. A IA não confirmou: falar com ele e remarcar em até 1 h.`,
       insistiu_na_clinica: `FALAR COM O PACIENTE · ${slug}${quem} · reserva com taxa: ele já recebeu a chave Pix e INSISTE em pagar só na clínica. Sem o comprovante da taxa o horário NÃO está garantido: falar com ele em até 1 h.`,
       cadastro_duplicado: `CONFERIR CADASTRO · ${slug}${quem} · há outro cadastro na franquia com o MESMO telefone e nome parecido (talvez a mesma pessoa em dobro, talvez parente) que já tem consulta marcada. A IA NÃO juntou os cadastros nem usou o do outro: confirmar quem é e, se for a mesma pessoa, manter uma só consulta.`,
