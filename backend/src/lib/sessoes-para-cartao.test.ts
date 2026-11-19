@@ -493,3 +493,46 @@ test('paciente de um tratamento só: depois que a de hoje começou, a próxima s
   const w = proximaEm('2026-11-19T12:35:00Z', unico);
   assert.equal((w as { valor: number }).valor, epochTimbo('2026-11-26', '09:30'));
 });
+
+// --- quem é o paciente: a agenda é agrupada por NOME (homônimo) e o cartão de tratamento encerrado ---
+
+const sessaoDe = (id: number, idTreatment: number | null, iso: string, status: number, categoryName = 'PROTOCOLO 03 MESES - LOMBAR') =>
+  sessao({ dia: iso.slice(0, 10), idSchedule: id, idTreatment, idStatus: status, categoryName, clientName: 'MARIA DA SILVA', dateAttendanceUtc: iso, dateAttendanceLocal: iso.slice(0, 19), timeLocal: iso.slice(11, 16) });
+const AGORA_H = Date.parse('2026-11-19T12:00:00Z') / 1000;
+const campoH = (n: string, proxima: string | null = null) =>
+  n === CAMPOS_SESSOES.PROXIMA ? { tipo: 'date_time', valor: proxima } : { tipo: n.startsWith('#') || n.startsWith('⚙') ? 'numeric' : 'text', valor: null };
+const TRAT_H = { idTreatment: 100, local: 'LOMBAR', degree: 'X', statusName: 'EM ANDAMENTO', created: '2026-10-01T00:00:00Z' };
+const FICHA_H: TratamentoDaFicha[] = [{ idTreatment: 100, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }];
+const proxH = (w: ReturnType<typeof escritasDeSessoes>) => w.find((x) => x.campo === CAMPOS_SESSOES.PROXIMA) as { valor?: number; limpar?: boolean } | undefined;
+
+test('HOMÔNIMO: sessão de OUTRA "Maria da Silva" (idTreatment que não é dela) nunca vira a próxima', () => {
+  const dela = [sessaoDe(1, 100, '2026-11-21T13:00:00Z', SPINE_STATUS.AGENDADO), sessaoDe(2, 100, '2026-11-12T13:00:00Z', SPINE_STATUS.ATENDIDO)];
+  const daOutra = [sessaoDe(9, 999, '2026-11-20T11:00:00Z', SPINE_STATUS.AGENDADO)];
+  const w = escritasDeSessoes({ schedules: [...dela, ...daOutra], tratamento: TRAT_H, tratamentosDoPaciente: FICHA_H, agoraEpoch: AGORA_H, campo: (n) => campoH(n) });
+  assert.equal(proxH(w)?.valor, Date.parse('2026-11-21T13:00:00Z') / 1000);
+});
+
+test('HOMÔNIMO: sessão SEM idTreatment que veio da agenda por nome (fora da ficha) não entra; a da ficha entra', () => {
+  const daFicha = sessaoDe(1, null, '2026-11-22T13:00:00Z', SPINE_STATUS.AGENDADO);
+  const daAgendaPorNome = sessaoDe(8, null, '2026-11-20T11:00:00Z', SPINE_STATUS.AGENDADO);
+  const base = { tratamento: TRAT_H, tratamentosDoPaciente: FICHA_H, agoraEpoch: AGORA_H, campo: (n: string) => campoH(n) };
+  const w = escritasDeSessoes({ ...base, schedules: [daFicha, daAgendaPorNome], idsDaFicha: new Set([1]) });
+  assert.equal(proxH(w)?.valor, Date.parse('2026-11-22T13:00:00Z') / 1000);
+  // a própria ficha dela (idTreatment que é dela, ainda que de outro tratamento) conta
+  const dela2 = sessaoDe(3, 300, '2026-11-20T10:00:00Z', SPINE_STATUS.AGENDADO);
+  const w2 = escritasDeSessoes({ ...base, tratamentosDoPaciente: [...FICHA_H, { idTreatment: 300, typeName: 'PROTOCOLO 02 MESES, CERVICAL, CRÔNICO' }], schedules: [daFicha, dela2, daAgendaPorNome], idsDaFicha: new Set([1]) });
+  assert.equal(proxH(w2)?.valor, Date.parse('2026-11-20T10:00:00Z') / 1000);
+});
+
+test('CARTÃO DE TRATAMENTO FINALIZADO: não recebe a data do OUTRO tratamento — a próxima velha é limpa', () => {
+  const fichaA = sessaoDe(11, null, '2026-10-10T13:00:00Z', SPINE_STATUS.ATENDIDO, 'PROTOCOLO 02 MESES - CERVICAL');
+  const fichaB = sessaoDe(21, null, '2026-11-24T13:00:00Z', SPINE_STATUS.AGENDADO, 'PROTOCOLO 03 MESES - LOMBAR');
+  const tA = { idTreatment: 200, local: null, degree: null, statusName: 'FINALIZADO', created: null };
+  const trats = [{ idTreatment: 200, typeName: 'PROTOCOLO 02 MESES, CERVICAL, CRÔNICO' }, { idTreatment: 300, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }];
+  const velha = String(Date.parse('2026-10-10T13:00:00Z') / 1000);
+  const w = escritasDeSessoes({ schedules: [fichaA, fichaB], tratamento: tA, tratamentosDoPaciente: trats, agoraEpoch: AGORA_H, campo: (n) => campoH(n, velha) });
+  assert.equal(proxH(w)?.limpar, true);
+  // o mesmo paciente com o tratamento A EM ANDAMENTO: vale a próxima do paciente (a de B)
+  const w2 = escritasDeSessoes({ schedules: [fichaA, fichaB], tratamento: { ...tA, statusName: 'EM ANDAMENTO' }, tratamentosDoPaciente: trats, agoraEpoch: AGORA_H, campo: (n) => campoH(n, velha) });
+  assert.equal(proxH(w2)?.valor, Date.parse('2026-11-24T13:00:00Z') / 1000);
+});

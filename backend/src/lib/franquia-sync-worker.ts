@@ -1312,7 +1312,8 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       'franquia-sessoes: mais de um tratamento e não sei de qual é cada sessão — não gravo contador',
     );
   }
-  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, agoraEpoch, campo });
+  const idsDaFicha = hist ? new Set(hist.schedules.map((x) => x.idSchedule).filter((x): x is number => typeof x === 'number')) : undefined;
+  const planejadas = escritasDeSessoes({ schedules, tratamento: p.tratamento, tratamentosDoPaciente, idsDaFicha, agoraEpoch, campo });
   if (planejadas.length > 0) resumo.sessoes = (resumo.sessoes ?? 0) + 1;
   for (const e of planejadas) {
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);

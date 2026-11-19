@@ -166,12 +166,32 @@ export function proximaDoPaciente(schedules: SpineSchedule[], agoraEpoch: number
  * lista — caso em que gravar zero seria afirmar que o tratamento não tem sessão, quando talvez só
  * não tenhamos a agenda dele em mãos.
  */
+export interface QuemEOPaciente {
+  /** ids dos tratamentos do PACIENTE (ficha). Sessão com idTreatment fora disto não é dele (a agenda é agrupada por NOME: homônimo). */
+  idsDosTratamentos?: ReadonlySet<number> | null;
+  /** idSchedule das sessões que vieram da ficha dele (`GET /clients/{id}`): essas são provadamente dele, mesmo sem idTreatment. */
+  idsDaFicha?: ReadonlySet<number> | null;
+  /** Tratamento ENCERRADO (finalizado/cancelado): a próxima é só a dele, como era — a do outro tratamento é do cartão do outro. */
+  encerrado?: boolean;
+}
+
+/**
+ * A sessão é PROVADAMENTE do paciente deste cartão? Com os tratamentos dele em mãos: tem o idTreatment de um deles, ou
+ * veio da ficha dele. Sem eles (chamada que não sabe), vale a regra antiga: o tratamento do cartão ou sem id.
+ */
+export function sessaoProvadaDoPaciente(s: SpineSchedule, idTreatmentDoCartao: number, q: QuemEOPaciente = {}): boolean {
+  if (!q.idsDosTratamentos) return s.idTreatment === null || s.idTreatment === idTreatmentDoCartao;
+  if (s.idTreatment !== null) return q.idsDosTratamentos.has(s.idTreatment) || s.idTreatment === idTreatmentDoCartao;
+  return !q.idsDaFicha || (s.idSchedule !== null && q.idsDaFicha.has(s.idSchedule));
+}
+
 export function resumirSessoes(
   schedules: SpineSchedule[],
   idTreatment: number | null,
   agoraEpoch: number,
   criadoEm: string | null = null,
   protocolo: string | null = null,
+  paciente: QuemEOPaciente = {},
 ): ResumoDeSessoes | null {
   if (!idTreatment) return null;
   const desde = epochDe(criadoEm);
@@ -194,7 +214,9 @@ export function resumirSessoes(
   });
   if (sessoes.length === 0) return null;
 
-  const proxima = epochDe(proximaDoPaciente(schedules, agoraEpoch)?.dateAttendanceUtc);
+  // A próxima olha o paciente (só sessões provadas dele), salvo tratamento encerrado: aí é só a do próprio tratamento.
+  const daProxima = paciente.encerrado ? sessoes : schedules.filter((s) => sessaoProvadaDoPaciente(s, idTreatment, paciente));
+  const proxima = epochDe(proximaDoPaciente(daProxima, agoraEpoch)?.dateAttendanceUtc);
 
   let realizadas = 0;
   let faltas = 0;
@@ -236,6 +258,8 @@ export interface EntradaSessoes {
   tratamento: (Pick<SpineTreatment, 'idTreatment' | 'local' | 'degree' | 'statusName' | 'created'> & { category?: string | null }) | null;
   /** todos os tratamentos do paciente, como a ficha os descreve; sem isto, o tratamento é tratado como único */
   tratamentosDoPaciente?: TratamentoDaFicha[];
+  /** idSchedule das sessões que vieram da ficha do paciente (as da agenda são agrupadas por NOME); sem isto, sessão sem id vale como da ficha */
+  idsDaFicha?: ReadonlySet<number>;
   agoraEpoch: number;
   /** Devolve o campo da conta pelo nome, ou null se a conta não o tem. */
   campo: (nome: string) => CampoDoCartao | null;
@@ -291,7 +315,13 @@ export function escritasDeSessoes(e: EntradaSessoes): EscritaDeSessao[] {
   const ciclo = separarCiclo(t.idTreatment, e.tratamentosDoPaciente, t, t.created != null);
   if (!ciclo.separavel) return out;
 
-  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, t.created ?? null, ciclo.protocolo);
+  const idsDosTratamentos = e.tratamentosDoPaciente
+    ? new Set(e.tratamentosDoPaciente.map((x) => x.idTreatment).filter((x): x is number => typeof x === 'number'))
+    : null;
+  const encerrado = /finaliz|cancel/.test(normalizar(t.statusName));
+  const r = resumirSessoes(e.schedules, t.idTreatment, e.agoraEpoch, t.created ?? null, ciclo.protocolo, {
+    idsDosTratamentos, idsDaFicha: e.idsDaFicha, encerrado,
+  });
   if (!r) return out; // sem agenda do tratamento em mãos: não afirma zero
 
   numerico(CAMPOS_SESSOES.REALIZADAS, r.realizadas, 'sessões atendidas na franquia');

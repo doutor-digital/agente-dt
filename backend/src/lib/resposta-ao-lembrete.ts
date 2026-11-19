@@ -60,7 +60,7 @@ import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks
 import { addMessage } from '../services/conversations.service.js';
 import { nomeApresentavel, vocativo } from './nome-apresentavel.js';
 import { VAI_ACONTECER } from '../services/proxima-sessao.js';
-import { ENCADEADA_ATE_S, filaApos } from './sessoes-encadeadas.js';
+import { filaApos } from './sessoes-encadeadas.js';
 
 export type { TipoLembrete } from './lembrete-chaves.js';
 
@@ -308,9 +308,14 @@ export function escolherAgendamento(args: {
   if (dias.size === 0) return null;
   const doDia = vivos.filter((s) => s.dayLocal !== null && dias.has(s.dayLocal));
   if (doDia.length === 1) return doDia[0];
-  // vários no dia (dois tratamentos): só o do tratamento do cartão desempata, e só se for um
-  const doCartaoNoDia = tipo === 'sessao' && idTreatment ? doDia.filter((s) => s.idTreatment === idTreatment) : [];
-  return doCartaoNoDia.length === 1 ? doCartaoNoDia[0] : null;
+  // vários no dia (dois tratamentos do MESMO paciente: a lista é dele): o campo só tem o dia, e a ◷ Próxima sessão é a
+  // primeira dele — vale a primeira do dia, nunca a de trás.
+  // Só quando o dia inteiro é UMA fila (cada uma até 60 min depois da anterior); sessões soltas no dia seguem ambíguas.
+  if (tipo === 'sessao' && doDia.length > 1) {
+    const primeira = [...doDia].sort((a, b) => epochDoAgendamento(a) - epochDoAgendamento(b))[0];
+    return filaApos(primeira, doDia).length === doDia.length - 1 ? primeira : null;
+  }
+  return null;
 }
 
 /** O agendamento escolhido no formato que `confirmarNaFranquia` já entende. */
@@ -322,7 +327,6 @@ export function comoConsultaReconciliada(s: SpineSchedule): ConsultaReconciliada
 
 /** Teto da fila: cada seguida é uma chamada à franquia (e, se ela recusar, um alerta) antes de o Kommo reenviar o webhook. */
 export const MAX_ENCADEADAS = 3;
-export { ENCADEADA_ATE_S };
 
 /**
  * PURA: as sessões do MESMO paciente, no MESMO dia, encadeadas à `escolhido` (regra em `sessoes-encadeadas.ts`: cada
@@ -866,7 +870,9 @@ async function responderAoLembrete(
     );
     // As seguidas entram pela mesma prova: são do mesmo paciente, do mesmo dia, coladas na que o lembrete anunciou.
     // Cada uma tem a sua própria confirmação (e o seu próprio alerta se a franquia recusar).
-    for (const e of encadeadas) {
+    // Só se a primeira ficou confirmada (ou já estava): se ela falhou ou não foi achada, o toque não prova nada das outras.
+    const primeiraOk = franquia === 'confirmada' || franquia === 'ja_confirmada';
+    for (const e of primeiraOk ? encadeadas : []) {
       const seguida = comoConsultaReconciliada(e);
       if (!seguida || !e.idSchedule) continue;
       const r = await confirmarNaFranquia(
