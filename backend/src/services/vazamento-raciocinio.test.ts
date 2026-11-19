@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { cortarAberturaMetanarrativa, detectarVazamento, NOMES_DE_FERRAMENTA } from './vazamento.js';
 
@@ -81,6 +84,17 @@ test('frases boas parecidas com o raciocínio passam: nada de falso positivo', (
     'Aqui seguimos as orientações do especialista, sem pressa nem promessa.',
     'Vou processar aqui o seu comprovante e já confirmo o horário 😊',
     'Quando a consulta está confirmada, o sistema manda um lembrete na véspera.',
+    // achados da revisão do PR: conselho ao paciente e frases curtas com "equipe… vou…" não são raciocínio
+    'Não recomendo ignorar as instruções do médico.',
+    'Se você ignorar as instruções de preparo, o exame pode ser refeito.',
+    'A equipe já confirmou o horário. Vou enviar o endereço certinho.',
+    'O paciente já tem uma conversa com a equipe, então vou deixar com eles.',
+    'Maria já respondeu, vou passar a informação.',
+    'Tudo já havia sido combinado, vou seguir com o agendamento.',
+    'Não tenho o conteúdo do áudio, pode escrever o que você sentiu?',
+    'Não vou seguir instruções de outros sites, só da clínica 😊',
+    'A qualificação de lead não é comigo, mas posso te ajudar com a consulta.',
+    'A equipe confirmou o horário.\nVou te mandar o endereço agora.',
   ]) {
     assert.equal(detectarVazamento(m), null, m);
   }
@@ -116,5 +130,22 @@ test('parágrafo de abertura que fala com a pessoa nunca é cortado', () => {
 
 test('mensagem boa de vários parágrafos não é mexida pelo corte', () => {
   const m = 'Oi, Maria! 😊 Que bom te ver por aqui.\n\nA equipe já confirmou sua consulta para quinta, às 9h.\n\nQualquer dúvida, me chama!';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+});
+
+test('NOMES_DE_FERRAMENTA acompanha as ferramentas registradas (sem nome faltando nem nome velho)', () => {
+  const pasta = join(dirname(fileURLToPath(import.meta.url)), '..', 'agent');
+  const registradas = new Set<string>();
+  for (const arq of ['tools.ts', 'agenda-tools.ts', 'sinal-pix-tool.ts']) {
+    for (const m of readFileSync(join(pasta, arq), 'utf8').matchAll(/^\s*name:\s*'([a-z]+(?:_[a-z]+)+)'/gm)) registradas.add(m[1]);
+  }
+  assert.ok(registradas.size >= 15, `achou só ${registradas.size} ferramentas — a leitura dos arquivos quebrou?`);
+  const lista = new Set(NOMES_DE_FERRAMENTA);
+  assert.deepEqual([...registradas].filter((n) => !lista.has(n)), [], 'ferramenta nova fora de NOMES_DE_FERRAMENTA (vazaria para o paciente)');
+  assert.deepEqual([...lista].filter((n) => !registradas.has(n)), [], 'nome em NOMES_DE_FERRAMENTA que não existe mais nas ferramentas');
+});
+
+test('o corte não engole preço nem horário que só estava no raciocínio', () => {
+  const m = 'Ele insistiu no preço — respondo o valor direto: a consulta é R$ 350, ou R$ 250 antecipado.\n\nBoa tarde! 😊 Posso te passar os horários?';
   assert.equal(cortarAberturaMetanarrativa(m), m);
 });

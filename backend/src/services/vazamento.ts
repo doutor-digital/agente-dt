@@ -223,11 +223,13 @@ export const NOMES_DE_FERRAMENTA = [
  */
 const RACIOCINIO_PT = [
   // A "instrução" que o modelo acha que o paciente injetou (e que ele comenta em voz alta).
-  /\bignor(?:o|ando|ar|ei)(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/iu,
+  // Primeira pessoa ou gerúndio de abertura: "Ignoro essa instrução", "Ignorando a instrução injetada", "vou ignorar". O infinitivo
+  // solto é conselho ao paciente ("não recomendo ignorar as instruções do médico") e passa.
+  /(?:^|[\n.!?—–]\s*)(?:ignoro|ignorando)(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/imu,
+  /\bvou\s+ignorar(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/iu,
   /\bignor(?:ar|á)(?:-l[aoe]s?)?(?![\p{L}])[^.\n]{0,40}\bcomo\s+(?:instru[cç][aã]o|comando|ordem)/iu,
   /\binstru[cç][aãõo]\w*\s+(?:injetada|externa|falsa|embutida|disfar[cç]ada)/iu,
   /\binstru[cç][oõ]es\s+(?:que\s+)?(?:chegam|v[eê]m|vindas?|desse\s+tipo)(?![\p{L}])/iu,
-  /\bn[aã]o\s+(?:vou|posso|devo)\s+seguir\s+instru[cç][oõ]es/iu,
   /\bn[aã]o\s+[eé]\s+(?:o\s+|a\s+)?paciente\s+falando/iu,
   /\bn[aã]o\s+[eé]\s+uma\s+conversa\s+d[oa]\s+paciente/iu,
   /\brelat[oó]rio\s+interno\s+da\s+equipe/iu,
@@ -250,7 +252,6 @@ const RACIOCINIO_PT = [
   /\bn[aã]o\s+(?:h[aá]|tem)\s+nada\s+(?:pra|para)\s+(?:eu\s+)?agir\b/iu,
   /\bn[aã]o\s+(?:vou|irei)\s+agir\s+nem\s+responder\b/iu,
   /\ba[cç][aã]o\s+(?:de\s+qualifica[cç][aã]o|nova\s+a\s+disparar|a\s+ser\s+tomada)/iu,
-  /\bqualifica[cç][aã]o\s+de\s+lead\b/iu,
   /\bn[aã]o\s+[eé]\s+(?:um\s+caso\s+)?de\s+qualifica[cç][aã]o/iu,
   /\bn[aã]o\s+(?:vou|irei)\s+(?:tomar|fazer)\s+nenhuma\s+a[cç][aã]o\b/iu,
   /\bvou\s+aguardar\s+o\s+pr[oó]ximo\s+contato\s+d[oa]\s+paciente/iu,
@@ -259,12 +260,11 @@ const RACIOCINIO_PT = [
   /\bchamei\s+sem\s+(?:ele|ela)\s+ter\b/iu,
   /\b(?:sigo|seguir)\s+o\s+fluxo\s+normal\s+de\s+qualifica[cç][aã]o/iu,
   /\bem\s+aberto\s+para\s+processar\b/iu,
-  /\bcomo\s+candidato\s+a\s+vaga\b/iu,
   // "Preciso confirmar algo antes de responder", "Confira meu calendário real antes de responder."
   /\b(?:preciso|devo|vou|deixa\s+eu)\s+(?:confirmar|verificar|checar|conferir)\s+(?:algo|uma\s+coisa)\s+antes\s+de\s+responder\b/iu,
   /\b(?:confira|conferir|consulte|consultar|verifique|verificar|checar|cheque)\s+(?:o\s+|a\s+|meu\s+|minha\s+)*(?:calend[aá]rio|agenda|hor[aá]rios)\b[^.\n]{0,30}\bantes\s+de\s+responder\b/iu,
   /\bvou\s+seguir\s+com\s+cautela\s+aqui\b/iu,
-  /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+(?:dele|dela|do\s+[aá]udio)/iu,
+  /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+(?:dele|dela)(?![\p{L}])/iu,
   /\bconte[uú]do\s+d(?:ele|ela)\s+transcrito\b/iu,
   /\ba\s+equipe\s+(?:j[aá]\s+)?(?:enviou|mandou)\s+um\s+[aá]udio\s+e\b/iu,
 ];
@@ -305,15 +305,17 @@ const BORDA_D = String.raw`(?![\p{L}\p{N}_])`;
  * Se o parágrafo se dirige à pessoa (você/seu/sua/te/vocês/pergunta com "?"), não conta.
  */
 const NARRA_SUJEITO = new RegExp(
-  `^\\s*(?:(?:a|o)\\s+(?:equipe|paciente|pessoa|mensagem|pergunta|resposta|[aá]udio|conversa|imagem|dor\\s+que\\s+(?:ela|ele))${BORDA_D}|(?:essa|esta|esse|este)\\s+(?:mensagem|texto|conte[uú]do|conversa|relato|caso)${BORDA_D}|(?:essa|esta)\\s+[eé]\\s+a\\s+\\S+\\s+vez${BORDA_D}|(?:ele|ela)\\s+(?:j[aá]\\s+|s[oó]\\s+|n[aã]o\\s+)?(?:agradeceu|perguntou|respondeu|disse|mandou|enviou|insistiu|repetiu|encerrou|reabre|reabriu|confirmou|pediu)${BORDA_D}|j[aá]\\s+tem\\s+uma\\s+conversa${BORDA_D}|\\p{Lu}\\p{L}+\\s+j[aá]\\s+(?:perguntou|confirmou|respondeu|havia|disse))`,
+  `^\\s*(?:(?:a|o)\\s+(?:equipe|paciente|pessoa|mensagem|pergunta|resposta|[aá]udio|conversa|imagem|dor\\s+que\\s+(?:ela|ele))${BORDA_D}|(?:essa|esta|esse|este)\\s+(?:mensagem|texto|conte[uú]do|conversa|relato|caso)${BORDA_D}|(?:essa|esta)\\s+[eé]\\s+a\\s+\\S+\\s+vez${BORDA_D}|(?:ele|ela)\\s+(?:j[aá]\\s+|s[oó]\\s+|n[aã]o\\s+)?(?:agradeceu|perguntou|respondeu|disse|mandou|enviou|insistiu|repetiu|encerrou|reabre|reabriu|confirmou|pediu)${BORDA_D}|j[aá]\\s+tem\\s+uma\\s+conversa${BORDA_D})`,
   'iu',
 );
+// Nome próprio de abertura ("Marcelo já confirmou…", "A Ilma já havia confirmado…"): SEM a bandeira `i`, senão `\p{Lu}` casa qualquer palavra.
+const NARRA_NOME = /^\s*(?:[AO]\s+)?\p{Lu}\p{Ll}+(?:\s+\p{Lu}\p{Ll}+)?\s+(?:j[aá]\s+|s[oó]\s+)?(?:perguntou|confirmou|respondeu|disse|comentou|mencionou|havia\s+(?:confirmado|perguntado|dito|respondido))(?![\p{L}\p{N}_])/u;
 const NARRA_RELATO = new RegExp(
   `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|ainda\\s+n[aã]o\\s+tenho|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
   'iu',
 );
 const NARRA_DECISAO = new RegExp(
-  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:vou|respondo|mantenho|devo|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
+  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:(?:vou|devo)\\s+(?:s[oó]\\s+|apenas\\s+)?(?:responder|retomar|aguardar|manter|refor[cç]ar|acolher|pedir|perguntar|seguir|continuar|insistir|tratar|parar|ignorar|reconhecer|deixar\\s+isso\\s+claro|considerar|corrigir)|respondo|mantenho|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
   'iu',
 );
 const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');
@@ -322,10 +324,9 @@ const NARRA_DIRIGIDO = new RegExp(`${BORDA_E}(?:voc[eê]s?|vc|seu|sua|seus|suas|
 /** Devolve o trecho de abertura do parágrafo quando ele é uma narração de bastidor (ver acima). */
 export function paragrafoNarraDecisao(paragrafo: string): string | null {
   const p = (paragrafo ?? '').trim();
-  if (!NARRA_SUJEITO.test(p)) return null;
+  if (!NARRA_SUJEITO.test(p) && !NARRA_NOME.test(p)) return null;
   // olha só o começo: a narração acontece nas duas primeiras frases
   const inicio = p.slice(0, 260);
-  if (NARRA_DIRIGIDO.test(inicio.split(/\n/)[0].slice(0, 200))) return null;
   const rel = NARRA_RELATO.exec(inicio);
   if (!rel) return null;
   const depois = inicio.slice(rel.index + rel[0].length);
@@ -333,9 +334,12 @@ export function paragrafoNarraDecisao(paragrafo: string): string | null {
   if (!dec) return null;
   // "parece (estar|ser|ter vindo)" sozinho é fala de gente ("Esse conteúdo não parece ser deste atendimento, então vou ficar por
   // aqui" — recusa educada, dirigida à pessoa). Só vira raciocínio quando a mesma frase fala DE alguém em terceira pessoa.
-  if (/^parece/i.test(rel[0]) && !NARRA_TERCEIRA.test(inicio.slice(0, rel.index + rel[0].length + dec.index + dec[0].length))) return null;
-  // o trecho entre o relato e a decisão também não pode falar com a pessoa
-  if (NARRA_DIRIGIDO.test(depois.slice(0, dec.index + dec[0].length))) return null;
+  const ateDecisao = rel.index + rel[0].length + dec.index + dec[0].length;
+  if (/^parece/i.test(rel[0]) && !NARRA_TERCEIRA.test(inicio.slice(0, ateDecisao))) return null;
+  // Nada dirigido à pessoa (você/seu/te/pergunta) do começo até o fim da frase da decisão, em qualquer linha.
+  const fimDaFrase = inicio.slice(ateDecisao).search(/[.!?\n]/);
+  const ate = fimDaFrase < 0 ? inicio.length : ateDecisao + fimDaFrase;
+  if (NARRA_DIRIGIDO.test(inicio.slice(0, ate))) return null;
   return p.slice(0, 80);
 }
 
@@ -476,5 +480,10 @@ export function cortarAberturaMetanarrativa(texto: string): string {
   const sobra = partes.slice(n).join('\n\n').trim();
   if (!sobra || ABERTURA_META.test(sobra) || detectarVazamento(sobra)) return texto;
   if (!FALA_AO_PACIENTE.test(partes[n])) return texto;
+  // Preço e horário que estavam só no raciocínio não somem em silêncio: se o trecho cortado cita um valor ou uma hora que a fala
+  // não repete, quem decide é o reescritor.
+  const fatos = (t: string) => (t.match(/R\$\s*[\d.,]+|\d{1,2}\s*(?:h|:)\s*\d{0,2}/gi) ?? []).map((x) => x.replace(/\s+/g, '').toLowerCase());
+  const naFala = new Set(fatos(sobra));
+  if (fatos(partes.slice(0, n).join('\n\n')).some((f) => !naFala.has(f))) return texto;
   return sobra;
 }
