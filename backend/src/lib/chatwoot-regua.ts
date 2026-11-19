@@ -20,6 +20,7 @@ import { SEMENTE_PARAUAPEBAS, ehUsuarioCelular } from './chatwoot-unidades.js';
 // `unit_chatwoot`); os nomes e o formato antigos continuam aqui para quem já importava deles daqui.
 export { CAIXAS_REGUA, CAIXAS_CLOUD, CAIXAS_HISTORICO, GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
 import { padraoMin } from './robos-tempo.js';
+import { ehMensagemDeEspera } from './crm-demora/marca.js';
 
 export const ID_REGUA = 'chatwoot-regua';
 /** O idioma em que os 33 templates `parau_*` foram criados na Meta (o mesmo das outras unidades). */
@@ -829,7 +830,9 @@ export function resumoDaMensagem(m: any): MensagemResumo | null {
   if (!m || ![0, 1, 3].includes(tipo)) return null;
   return {
     saida: tipo === 1 || tipo === 3,
-    privada: m.private === true,
+    // a nossa mensagem de espera (crm-demora) vale como NOTA para a régua: não é conversa. Sem isto o «sem-resposta-24h» contaria do último «nosso»
+    // e marcaria como «Não interagiu» o paciente que a equipe deixou sem resposta; a última pública de verdade é buscada por `precisaUltimaPublica`
+    privada: m.private === true || ehMensagemDeEspera(m),
     autorId: Number.isInteger(Number(m?.sender?.id)) && m?.sender?.id !== null ? Number(m.sender.id) : null,
     autorTipo: typeof m?.sender?.type === 'string' ? m.sender.type.toLowerCase() : null,
     criadaEm: new Date(Number(m.created_at) * 1000 || 0),

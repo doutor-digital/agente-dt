@@ -6,6 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { estadoDaPausa, ETIQUETA_PAUSA, eventoDePausa, eventoDeReativacao, pausar, reativar, type ConversaDaPausa, type PortaDaPausa } from './chatwoot-pausa.js';
 import { motivoDeNaoResponder } from './chatwoot-sofia.js';
+import { textoDaEspera } from './crm-demora/marca.js';
 
 const CAIXAS = { 3: 'doutor-hernia-parauapebas' };
 const base = { event: 'message_created', message_type: 'outgoing', private: false, conversation: { id: 50, inbox_id: 3 }, content_attributes: {} };
@@ -88,4 +89,14 @@ test('estado para o painel e a Sofia calada com a etiqueta', () => {
   const lida = { id: 1, nome: 'Maria', telefone: '+5594', attrs: {}, etiquetas: [ETIQUETA_PAUSA], grupo: false, interno: false };
   assert.equal(motivoDeNaoResponder(lida), 'ia-pausada');
   assert.equal(motivoDeNaoResponder({ ...lida, etiquetas: [] }), null);
+});
+
+test('pausa: a mensagem de espera da demora («recebemos sua mensagem») NUNCA pausa a Sofia, venha de qual usuário vier', () => {
+  const espera = { ...base, content: textoDaEspera('Maria') };
+  assert.equal(eventoDePausa({ ...espera, sender: { id: 2, type: 'user', name: 'Conector Claude' } }, CAIXAS), null);
+  // o conector de OUTRA conta pode não ser o usuário 2: sem a marca ele pausaria a Sofia e tiraria o «sofia-atendendo»
+  assert.equal(eventoDePausa({ ...espera, sender: { id: 31, type: 'user', name: 'Conector' } }, CAIXAS), null);
+  assert.equal(eventoDePausa({ ...base, content: 'qualquer', content_attributes: { demora_espera: true }, sender: { id: 31, type: 'user' } }, CAIXAS), null);
+  // e a resposta de gente, de verdade, continua pausando
+  assert.ok(eventoDePausa({ ...base, content: 'Oi Maria, posso ajudar?', sender: { id: 31, type: 'user', name: 'Lorena' } }, CAIXAS));
 });

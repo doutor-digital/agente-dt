@@ -111,3 +111,12 @@ test('meta do dia: soma a meta das caixas da lista (Parauapebas = 5); caixa sem 
   assert.equal(montarHoje([{ id: 1, inbox_id: 1 }], AG, new Set()).meta, null);
   assert.equal(montarHoje([], AG, new Set()).meta, null);
 });
+
+test('a mensagem de espera da demora não conta como «a equipe respondeu» (responderam hoje, não interagiram)', async () => {
+  const { textoDaEspera } = await import('./crm-demora/marca.js');
+  const nossa = { message_type: 1, private: false, content: textoDaEspera('Maria'), created_at: s('2026-11-12T14:30:00Z') };
+  const h = montarHoje([conv(1, { last_non_activity_message: nossa })], AGORA, new Set());
+  assert.equal(h.porUsuario.find((u) => u.nome === 'Cleia')!.responderamHoje, 0);
+  const feita = montarHoje([conv(1, { last_non_activity_message: { ...nossa, content: 'Oi, tudo bem?' } })], AGORA, new Set());
+  assert.equal(feita.porUsuario.find((u) => u.nome === 'Cleia')!.responderamHoje, 1);
+});
