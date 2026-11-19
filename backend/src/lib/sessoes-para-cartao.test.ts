@@ -154,7 +154,8 @@ test('o contador velho é corrigido (a franquia vence)', () => {
 });
 
 test('sem sessão por vir, a "próxima" que ficou no passado é LIMPA; cartão sem ela não gera escrita', () => {
-  const semFutura = AGENDA.filter((s) => s.idStatus !== SPINE_STATUS.AGENDADO && s.idStatus !== SPINE_STATUS.CONFIRMADO);
+  // (REMARCADO por vir também é sessão que vai acontecer: sai junto)
+  const semFutura = AGENDA.filter((s) => s.idStatus !== SPINE_STATUS.AGENDADO && s.idStatus !== SPINE_STATUS.CONFIRMADO && s.idStatus !== SPINE_STATUS.REMARCADO);
   const velha = conta({ [CAMPOS_SESSOES.PROXIMA]: String(Date.parse('2026-09-28T13:00:00Z') / 1000) });
   const limpa = acha(escritasDeSessoes({ schedules: semFutura, tratamento: TRATAMENTO, agoraEpoch: AGORA, campo: velha }), CAMPOS_SESSOES.PROXIMA);
   assert.equal(limpa?.limpar, true);
@@ -341,4 +342,97 @@ test('REGRA EM ABERTO (pergunta ao João): sessão no dia da avaliação, ANTES 
   const r = resumirSessoes(hist, LOMB, HOJE, '2026-09-29T19:17:03.000Z')!;
   assert.equal(r.realizadas, 1);
   assert.equal(resumirSessoes(hist, LOMB, HOJE, null)!.realizadas, 2);
+});
+
+// --- dois tratamentos em horários seguidos (Timbó, 16/11/2026; Petrópolis, 17/11/2026) ---
+//
+// O cartão fica ligado a UM tratamento (o segundo da fila) e a ◷ Próxima sessão saía só com as sessões dele:
+// o paciente recebia o lembrete do horário de TRÁS. Agora a próxima é a primeira sessão do PACIENTE; os
+// contadores continuam por tratamento.
+
+const FICHA_TIMBO: TratamentoDaFicha[] = [
+  { idTreatment: 132399, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' },
+  { idTreatment: 132400, typeName: 'PROTOCOLO 03 MESES, CERVICAL, CRÔNICO' },
+];
+const HOJE_TIMBO = Date.parse('2026-11-19T09:00:00Z') / 1000; // 06:00 em Timbó
+/** sessão de Timbó (UTC-3): hora local `hh:mm` do `dia`, no tratamento `id` */
+const sessaoTimbo = (dia: string, hhmm: string, id: number, over: Partial<SpineSchedule> = {}) => {
+  const [h, m] = hhmm.split(':').map(Number);
+  const utc = new Date(Date.parse(`${dia}T00:00:00Z`) + ((h! + 3) * 60 + m!) * 60_000).toISOString();
+  return sessao({ dia, idTreatment: id, idStatus: SPINE_STATUS.AGENDADO, dateAttendanceUtc: utc, dateAttendanceLocal: `${dia}T${hhmm}:00`, timeLocal: hhmm, ...over });
+};
+const epochTimbo = (dia: string, hhmm: string) => Date.parse(`${dia}T${hhmm}:00-03:00`) / 1000;
+const trat = (id: number) => ({ idTreatment: id, local: 'LOMBAR', degree: 'CRÔNICO', statusName: 'EM ANDAMENTO', created: null as string | null });
+const proximaGravada = (schedules: SpineSchedule[], idDoCartao: number, tratamentos = FICHA_TIMBO) =>
+  (acha(escritasDeSessoes({ schedules, tratamento: trat(idDoCartao), tratamentosDoPaciente: tratamentos, agoraEpoch: HOJE_TIMBO, campo: conta() }), CAMPOS_SESSOES.PROXIMA) as { valor: number } | undefined)?.valor;
+
+test('dois tratamentos seguidos: o cartão do SEGUNDO mostra a próxima do PRIMEIRO (Maria 09:00/09:30)', () => {
+  const maria = [sessaoTimbo('2026-11-19', '09:00', 132399), sessaoTimbo('2026-11-19', '09:30', 132400)];
+  assert.equal(proximaGravada(maria, 132400), epochTimbo('2026-11-19', '09:00'));
+  // e o cartão do primeiro, o mesmo
+  assert.equal(proximaGravada(maria, 132399), epochTimbo('2026-11-19', '09:00'));
+});
+
+test('os outros dois casos medidos: Elke 13:00/13:30 e Ivani 14:00/14:30 (23/11)', () => {
+  const elke = [sessaoTimbo('2026-11-23', '13:00', 132657), sessaoTimbo('2026-11-23', '13:30', 132658)];
+  const fichaElke = [{ idTreatment: 132657, typeName: 'PROTOCOLO 02 MESES, LOMBAR, CRÔNICO' }, { idTreatment: 132658, typeName: 'PROTOCOLO 02 MESES, JOELHO, CRÔNICO' }];
+  assert.equal(proximaGravada(elke, 132658, fichaElke), epochTimbo('2026-11-23', '13:00'));
+  const ivani = [sessaoTimbo('2026-11-23', '14:00', 132422), sessaoTimbo('2026-11-23', '14:30', 132423)];
+  const fichaIvani = [{ idTreatment: 132422, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }, { idTreatment: 132423, typeName: 'PROTOCOLO 03 MESES, OMBRO, CRÔNICO' }];
+  assert.equal(proximaGravada(ivani, 132423, fichaIvani), epochTimbo('2026-11-23', '14:00'));
+});
+
+test('a ficha manda as sessões SEM idTreatment: a próxima do paciente é a mesma (e o rótulo ainda separa os contadores)', () => {
+  const daFicha = [
+    sessaoTimbo('2026-11-19', '09:00', 132399, { idTreatment: null, categoryName: 'PROTOCOLO 03 MESES - LOMBAR' }),
+    sessaoTimbo('2026-11-19', '09:30', 132400, { idTreatment: null, categoryName: 'PROTOCOLO 03 MESES - CERVICAL' }),
+  ];
+  const w = escritasDeSessoes({ schedules: daFicha, tratamento: trat(132400), tratamentosDoPaciente: FICHA_TIMBO, agoraEpoch: HOJE_TIMBO, campo: conta() });
+  assert.equal((acha(w, CAMPOS_SESSOES.PROXIMA) as { valor: number }).valor, epochTimbo('2026-11-19', '09:00'));
+  assert.equal((acha(w, CAMPOS_SESSOES.MARCADAS) as { valor: number }).valor, 1, 'contador continua só deste tratamento');
+});
+
+test('os contadores seguem POR tratamento: só a próxima olha o paciente inteiro', () => {
+  const maria = [
+    sessaoTimbo('2026-11-19', '09:00', 132399),
+    sessaoTimbo('2026-11-19', '09:30', 132400),
+    sessaoTimbo('2026-11-12', '09:30', 132400, { idStatus: SPINE_STATUS.ATENDIDO }),
+    sessaoTimbo('2026-11-12', '09:00', 132399, { idStatus: SPINE_STATUS.NAO_COMPARECEU }),
+  ];
+  const w = escritasDeSessoes({ schedules: maria, tratamento: trat(132400), tratamentosDoPaciente: FICHA_TIMBO, agoraEpoch: HOJE_TIMBO, campo: conta() });
+  const v = (c: string) => (acha(w, c) as { valor: number }).valor;
+  assert.equal(v(CAMPOS_SESSOES.REALIZADAS), 1);
+  assert.equal(v(CAMPOS_SESSOES.FALTAS), 0, 'a falta é do outro tratamento');
+  assert.equal(v(CAMPOS_SESSOES.MARCADAS), 1);
+  assert.equal(v(CAMPOS_SESSOES.PREVISTAS), 2);
+});
+
+test('paciente com UM tratamento: a próxima é a mesma de sempre', () => {
+  const unico = [sessaoTimbo('2026-11-19', '09:30', 132400), sessaoTimbo('2026-11-26', '09:30', 132400)];
+  assert.equal(proximaGravada(unico, 132400, [{ idTreatment: 132400, typeName: 'PROTOCOLO 03 MESES, LOMBAR, CRÔNICO' }]), epochTimbo('2026-11-19', '09:30'));
+});
+
+test('a sessão do OUTRO tratamento em outro dia só vira próxima se vier antes', () => {
+  const doOutroDepois = [sessaoTimbo('2026-11-19', '09:30', 132400), sessaoTimbo('2026-11-24', '09:00', 132399)];
+  assert.equal(proximaGravada(doOutroDepois, 132400), epochTimbo('2026-11-19', '09:30'));
+  const doOutroAntes = [sessaoTimbo('2026-11-23', '09:30', 132400), sessaoTimbo('2026-11-20', '09:00', 132399)];
+  assert.equal(proximaGravada(doOutroAntes, 132400), epochTimbo('2026-11-20', '09:00'));
+});
+
+test('próxima do paciente: REMARCADO conta; desmarcada, atendida, falta e avaliação nunca', () => {
+  const lista = [
+    sessaoTimbo('2026-11-19', '08:00', 132399, { idStatus: SPINE_STATUS.DESMARCADO }),
+    sessaoTimbo('2026-11-19', '08:30', 132399, { idStatus: SPINE_STATUS.ATENDIDO }),
+    sessaoTimbo('2026-11-19', '08:40', 132399, { idStatus: SPINE_STATUS.NAO_COMPARECEU }),
+    sessaoTimbo('2026-11-19', '08:50', 132399, { categoryName: 'AVALIAÇÃO' }),
+    sessaoTimbo('2026-11-19', '09:30', 132400),
+    sessaoTimbo('2026-11-20', '10:00', 132399, { idStatus: SPINE_STATUS.REMARCADO }),
+  ];
+  assert.equal(proximaGravada(lista, 132400), epochTimbo('2026-11-19', '09:30'));
+  assert.equal(proximaGravada(lista.filter((s) => s.timeLocal !== '09:30'), 132399), epochTimbo('2026-11-20', '10:00'));
+});
+
+test('sem sessão do tratamento do cartão na lista continua sem gravar nada (não afirma)', () => {
+  const soDoOutro = [sessaoTimbo('2026-11-19', '09:00', 132399)];
+  assert.equal(proximaGravada(soDoOutro, 132400), undefined);
 });

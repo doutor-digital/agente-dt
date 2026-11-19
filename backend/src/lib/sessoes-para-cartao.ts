@@ -19,7 +19,11 @@
  *  - marcadas = AGENDADO ou CONFIRMADO ainda por vir;
  *  - previstas = realizadas + faltas + marcadas (desmarcada e remarcada não entram — é arrumação
  *    de agenda, e contá-las faria o tratamento parecer maior do que é);
- *  - próxima = a primeira sessão marcada por vir; última = a última ATENDIDA.
+ *  - última = a última ATENDIDA (deste tratamento);
+ *  - próxima = a primeira sessão por vir DO PACIENTE, de qualquer tratamento dele (AGENDADO, CONFIRMADO ou
+ *    REMARCADO — a mesma regra de `services/proxima-sessao.ts`). É a única exceção ao "por tratamento": quem
+ *    faz dois tratamentos em horários consecutivos (Timbó, 16/11/2026: 9h00 e 9h30) vem UMA vez, e o lembrete
+ *    do robô lê esta data — com a do tratamento do cartão, o paciente recebia só o horário de trás.
  *  Sessão agendada com data já passada e sem desfecho na franquia não conta em nada: ninguém sabe
  *  se foi atendida, e chutar aqui seria inventar dado.
  *
@@ -27,6 +31,7 @@
  */
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { ehConsulta, normalizar } from './franquia-sync.js';
+import { proximaSessao } from '../services/proxima-sessao.js';
 
 export const CAMPOS_SESSOES = {
   PREVISTAS: '# Sessões no histórico',
@@ -122,7 +127,7 @@ export interface ResumoDeSessoes {
   faltas: number;
   marcadas: number;
   previstas: number;
-  /** epoch (s) da primeira sessão marcada por vir */
+  /** epoch (s) da primeira sessão por vir do PACIENTE (qualquer tratamento) — ver o cabeçalho */
   proxima: number | null;
   /** última sessão atendida: epoch (s) e o dia no fuso da clínica (AAAA-MM-DD) */
   ultima: { epoch: number; dia: string | null } | null;
@@ -166,10 +171,17 @@ export function resumirSessoes(
   });
   if (sessoes.length === 0) return null;
 
+  // A próxima olha o paciente inteiro: sem o filtro de tratamento e sem o `desde` (sessão futura não é do ciclo antigo).
+  const proxima = epochDe(
+    proximaSessao(
+      schedules.filter((s) => !ehConsulta(s) && !!s.dateAttendanceUtc),
+      agoraEpoch * 1000,
+    )?.dateAttendanceUtc,
+  );
+
   let realizadas = 0;
   let faltas = 0;
   let marcadas = 0;
-  let proxima: number | null = null;
   let ultima: ResumoDeSessoes['ultima'] = null;
   for (const s of sessoes) {
     const epoch = epochDe(s.dateAttendanceUtc);
@@ -181,7 +193,6 @@ export function resumirSessoes(
       faltas++;
     } else if ((s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO) && epoch > agoraEpoch) {
       marcadas++;
-      if (proxima === null || epoch < proxima) proxima = epoch;
     }
   }
   return { realizadas, faltas, marcadas, previstas: realizadas + faltas + marcadas, proxima, ultima };
