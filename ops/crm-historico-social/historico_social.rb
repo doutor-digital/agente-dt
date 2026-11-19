@@ -8,9 +8,12 @@
 require 'json'
 require 'net/http'
 require 'openssl'
+require 'set'
 require 'time'
+require 'tempfile'
 require 'timeout'
 require 'uri'
+require 'zlib'
 
 module HistoricoSocial
   NOME_PADRAO = 'John Doe' # o nome que o Chatwoot põe quando a Meta nega o perfil (falta «Business Asset User Profile Access»)
@@ -89,46 +92,77 @@ module HistoricoSocial
     end
   end
 
-  # Texto que vai para o CRM + os tipos achados (para a contagem do resumo). `nil` no texto = nada a gravar (mensagem vazia/apagada).
-  # Mensagem com botões (modelo da própria página) leva o título do modelo, que é texto da clínica.
-  def conteudo(msg)
+  TIPOS_BAIXAVEIS = %i[imagem figurinha audio video arquivo].freeze
+
+  def hash_ou_vazio(x)
+    x.is_a?(Hash) ? x : {}
+  end
+
+  # Mídia que a Meta ACABOU de entregar (a URL vale por pouco tempo): tipo, URL (só em memória — nunca vai para log), mime/nome/tamanho
+  # que a Graph informa. `url` nil = a Meta não mandou link: fica o rótulo.
+  def midia_do_anexo(anexo, tipo)
+    url = [hash_ou_vazio(anexo['image_data'])['url'], hash_ou_vazio(anexo['video_data'])['url'], hash_ou_vazio(anexo['audio_data'])['url'], anexo['file_url']]
+          .find { |u| u.is_a?(String) && !u.empty? }
+    { tipo: tipo, url: url, mime: anexo['mime_type'].to_s, nome: limpar(anexo['name'])[0, 200], tamanho: anexo['size'].is_a?(Numeric) ? anexo['size'].to_i : nil }
+  end
+
+  # A mensagem em PARTES, na ordem: [{ rotulo:, midia: nil|{...}, texto: true|false }], mais os tipos (para a contagem do resumo).
+  # `rotulo` é o texto da parte («oi», «[imagem]», título de modelo…); parte com `midia` e URL pode virar anexo de verdade e então perde o rótulo.
+  def partes_da_mensagem(msg)
     partes = []
     tipos = []
     texto = limpar(msg['message'])
-    partes << texto unless texto.empty?
+    partes << { rotulo: texto, midia: nil, texto: true } unless texto.empty?
     anexos = msg.dig('attachments', 'data')
     (anexos.is_a?(Array) ? anexos : []).each do |a|
       next unless a.is_a?(Hash)
 
       t = tipo_do_anexo(a)
       tipos << t
-      partes << (t == :modelo ? modelo_em_texto(a) : ROTULOS.fetch(t))
+      if t == :modelo
+        partes << { rotulo: modelo_em_texto(a), midia: nil, texto: false }
+      else
+        partes << { rotulo: ROTULOS.fetch(t), midia: TIPOS_BAIXAVEIS.include?(t) ? midia_do_anexo(a, t) : nil, texto: false }
+      end
     end
     if msg['sticker'] && !tipos.include?(:figurinha)
       tipos << :figurinha
-      partes << ROTULOS[:figurinha]
+      partes << { rotulo: ROTULOS[:figurinha], midia: { tipo: :figurinha, url: msg['sticker'].is_a?(String) && !msg['sticker'].empty? ? msg['sticker'] : nil, mime: '', nome: '', tamanho: nil }, texto: false }
     end
     compartilhamentos = msg.dig('shares', 'data')
     (compartilhamentos.is_a?(Array) ? compartilhamentos : []).each do
       tipos << :compartilhamento
-      partes << ROTULOS[:compartilhamento]
+      partes << { rotulo: ROTULOS[:compartilhamento], midia: nil, texto: false }
     end
     story = msg['story']
     if story.is_a?(Hash)
       if story['mention']
         tipos << :story_mencao
-        partes << ROTULOS[:story_mencao]
+        partes << { rotulo: ROTULOS[:story_mencao], midia: nil, texto: false }
       end
       if story['reply_to']
         tipos << :story_resposta
-        partes << ROTULOS[:story_resposta]
+        partes << { rotulo: ROTULOS[:story_resposta], midia: nil, texto: false }
       end
     end
     if partes.empty? && msg['is_unsupported'] == true
       tipos << :nao_suportada
-      partes << ROTULOS[:nao_suportada]
+      partes << { rotulo: ROTULOS[:nao_suportada], midia: nil, texto: false }
     end
-    [partes.empty? ? nil : partes.join("\n"), tipos]
+    [partes, tipos]
+  end
+
+  # Texto final da mensagem: todos os rótulos, menos os das partes que viraram anexo (`anexadas` = índices). nil = só mídia, sem texto.
+  def compor(partes, anexadas = [])
+    t = partes.each_with_index.reject { |_, i| anexadas.include?(i) }.map { |p, _| p[:rotulo] }.join("\n")
+    t.empty? ? nil : t
+  end
+
+  # Texto que vai para o CRM + os tipos achados (para a contagem do resumo). `nil` no texto = nada a gravar (mensagem vazia/apagada).
+  # Mensagem com botões (modelo da própria página) leva o título do modelo, que é texto da clínica.
+  def conteudo(msg)
+    partes, tipos = partes_da_mensagem(msg)
+    [partes.empty? ? nil : compor(partes), tipos]
   end
 
   def modelo_em_texto(anexo)
@@ -137,6 +171,7 @@ module HistoricoSocial
   end
 
   # Mensagem crua da Meta -> hash pronto. Devolve [hash, nil] ou [nil, :motivo] (:vazia, :sem_remetente, :sem_id, :sem_hora).
+  # `partes` mantém a estrutura (para anexar mídia depois); `midias` = [{ idx:, tipo:, url:, mime:, nome:, tamanho: }] só das baixáveis.
   def normalizar(msg, lado_pagina:)
     return [nil, :sem_id] if msg['id'].to_s.empty?
 
@@ -146,10 +181,11 @@ module HistoricoSocial
     de = msg.dig('from', 'id').to_s
     return [nil, :sem_remetente] if de.empty?
 
-    texto, tipos = conteudo(msg)
-    return [nil, :vazia] unless texto
+    partes, tipos = partes_da_mensagem(msg)
+    return [nil, :vazia] if partes.empty?
 
-    [{ mid: msg['id'].to_s, ts: ts, entrada: de != lado_pagina.to_s, texto: texto, tipos: tipos }, nil]
+    midias = partes.each_with_index.select { |p, _| p[:midia] }.map { |p, i| p[:midia].merge(idx: i) }
+    [{ mid: msg['id'].to_s, ts: ts, entrada: de != lado_pagina.to_s, texto: compor(partes), partes: partes, midias: midias, tipos: tipos }, nil]
   end
 
   # A Meta devolve da mais nova para a mais velha; o CRM quer a mais velha primeiro. Empate de segundo mantém a ordem real.
@@ -209,7 +245,7 @@ module HistoricoSocial
     USO_PAUSAR_EM = 60  # % da cota (maior dos contadores da Meta): daqui para cima, espera antes da próxima chamada
     USO_PARAR_EM = 80   # % da cota: para a rodada ANTES de estourar (o token é o mesmo do atendimento ao vivo)
 
-    attr_reader :uso_maximo
+    attr_reader :uso_maximo, :cabecalhos_de_uso
 
     def initialize(base:, token:, ritmo: 0.7, http: nil, dorme: nil, tentativas: 3, falhas_seguidas_max: 5, espera_limite: 90, pausa_por_uso: 60)
       @base = base.chomp('/')
@@ -222,6 +258,7 @@ module HistoricoSocial
       @espera_limite = espera_limite
       @pausa_por_uso = pausa_por_uso
       @uso_maximo = 0
+      @cabecalhos_de_uso = Set.new
       @pausas_seguidas = 0
       @falhas_seguidas = 0
       @chamadas = 0
@@ -302,14 +339,18 @@ module HistoricoSocial
       CODIGOS_DE_LIMITE.include?(codigo)
     end
 
-    # Maior contador de uso (%) nos cabeçalhos da Meta. IG (login do Instagram): x-app-usage {call_volume, cpu_time}; Messenger:
-    # x-business-use-case-usage {id: [{call_count, total_cputime, total_time}]}. Passou de USO_PARAR_EM: para ANTES de estourar.
+    # Maior contador de uso (%) nos cabeçalhos «*usage*» da Meta: x-app-usage {call_volume, cpu_time}, x-business-use-case-usage
+    # {id: [{call_count, total_cputime, total_time}]} e x-page-usage {call_count, total_cputime, total_time}. O Instagram (login do Instagram)
+    # mediu 0% em tudo: `cabecalhos_de_uso` guarda QUAIS cabeçalhos vieram, para o resumo mostrar se algum veio. Passou de USO_PARAR_EM: para ANTES de estourar.
     def controlar_uso!(cab)
       return unless cab.is_a?(Hash)
 
       usos = []
-      [cab['x-app-usage'], cab['x-business-use-case-usage']].each do |h|
-        j = ler(h)
+      cab.each do |nome, valor|
+        next unless nome.to_s.downcase.include?('usage') && !valor.to_s.empty?
+
+        @cabecalhos_de_uso << nome.to_s.downcase
+        j = ler(valor)
         next unless j.is_a?(Hash)
 
         j.each_value do |v|
@@ -344,9 +385,173 @@ module HistoricoSocial
     def http_real(uri)
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) do |h|
         r = h.request(Net::HTTP::Get.new(uri))
-        [r.code.to_i, r.body, { 'x-app-usage' => r['x-app-usage'], 'x-business-use-case-usage' => r['x-business-use-case-usage'] }]
+        [r.code.to_i, r.body, r.each_header.select { |nome, _| nome.to_s.downcase.include?('usage') }.to_h]
       end
     end
+  end
+
+  # ─── Mídia ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+  class ErroMidia < StandardError # só o MOTIVO (nunca a URL, que tem token da CDN)
+    attr_reader :motivo
+
+    def initialize(motivo)
+      @motivo = motivo
+      super("mídia: #{motivo}")
+    end
+  end
+
+  EXTENSOES = {
+    'image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp', 'image/heic' => 'heic',
+    'video/mp4' => 'mp4', 'video/quicktime' => 'mov', 'video/webm' => 'webm', 'audio/mpeg' => 'mp3', 'audio/mp4' => 'm4a',
+    'audio/aac' => 'aac', 'audio/ogg' => 'ogg', 'audio/wav' => 'wav', 'audio/webm' => 'webm', 'application/pdf' => 'pdf'
+  }.freeze
+  TIPOS_RECUSADOS = %w[text/html application/json application/xhtml+xml].freeze
+  TIPOS_GENERICOS = ['', 'application/octet-stream', 'binary/octet-stream'].freeze # «não sei»: vale o mime que a Graph informou
+
+  # Baixa a mídia NA HORA (a URL da Meta acabou de ser gerada). Teto de tamanho por arquivo, prazo total por download, só https e só
+  # hosts da Meta (a URL vem de fora: não é para o importador ir buscar o que não é da Meta). Falha = ErroMidia(motivo), nunca derruba a rodada.
+  class Baixador
+    HOSTS_DA_META = %w[fbcdn.net fbsbx.com cdninstagram.com facebook.com instagram.com].freeze
+
+    # `permitir`: lambda(uri) -> true libera o host (SÓ nos testes locais; em produção vale a lista da Meta)
+    def initialize(max_bytes:, prazo: 60, abrir: 10, ler: 30, permitir: nil)
+      @max = max_bytes
+      @prazo = prazo
+      @abrir = abrir
+      @ler = ler
+      @permitir = permitir
+    end
+
+    def host_permitido?(uri)
+      return true if @permitir&.call(uri)
+
+      uri.is_a?(URI::HTTPS) && HOSTS_DA_META.any? { |h| uri.host == h || uri.host.to_s.end_with?(".#{h}") }
+    end
+
+    # O tipo que a CDN respondeu tem de bater com o que a Graph disse (página de erro/HTML nunca vira «imagem»). Octet-stream/vazio usa o mime da Graph.
+    def tipo_efetivo(ct, mime_graph)
+      ct = ct.to_s.split(';').first.to_s.strip.downcase
+      ct = mime_graph.to_s.split(';').first.to_s.strip.downcase if TIPOS_GENERICOS.include?(ct)
+      ct
+    end
+
+    def tipo_confere?(ct, tipo)
+      return false if TIPOS_RECUSADOS.include?(ct)
+      return tipo == :arquivo if TIPOS_GENERICOS.include?(ct) # arquivo sem tipo conhecido vale (nome/extensão); imagem/áudio/vídeo sem tipo não
+
+      case tipo
+      when :imagem, :figurinha then ct.start_with?('image/')
+      when :video then ct.start_with?('video/')
+      when :audio then ct.start_with?('audio/') || ct.start_with?('video/')
+      else true
+      end
+    end
+
+    # => { arquivo: Tempfile (posicionado no início; quem chama fecha), content_type:, bytes: }
+    def baixar(url, tipo:, mime_graph: '')
+      uri = alvo(url)
+      limite = Time.now + @prazo
+      tmp = Tempfile.new(['hs-midia', '.bin'])
+      tmp.binmode
+      redirecionamentos = 0
+      loop do
+        proximo = nil
+        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', open_timeout: @abrir, read_timeout: @ler) do |h|
+          h.request(Net::HTTP::Get.new(uri)) do |r|
+            case r
+            when Net::HTTPRedirection
+              proximo = r['location']
+            when Net::HTTPSuccess
+              ct = tipo_efetivo(r['content-type'], mime_graph)
+              raise ErroMidia, :tipo unless tipo_confere?(ct, tipo)
+              raise ErroMidia, :tamanho if r['content-length'].to_i > @max
+
+              total = 0
+              r.read_body do |pedaco|
+                total += pedaco.bytesize
+                raise ErroMidia, :tamanho if total > @max
+                raise ErroMidia, :tempo if Time.now > limite
+
+                tmp.write(pedaco)
+              end
+              raise ErroMidia, :vazio if total.zero? # URL vencida costuma responder 200/204 sem corpo: anexo de 0 byte não vale
+              tmp.flush
+              tmp.rewind
+              return { arquivo: tmp, content_type: ct, bytes: total }
+            else
+              raise ErroMidia, :http
+            end
+          end
+        end
+        redirecionamentos += 1
+        raise ErroMidia, :http if proximo.to_s.empty? || redirecionamentos > 3
+
+        uri = alvo(URI.join(uri, proximo).to_s)
+      end
+    rescue ErroMidia
+      tmp&.close!
+      raise
+    rescue Timeout::Error, Net::OpenTimeout, Net::ReadTimeout
+      tmp&.close!
+      raise ErroMidia, :tempo
+    rescue Errno::ENOSPC
+      tmp&.close!
+      raise ErroMidia, :disco # o disco do servidor encheu: motivo próprio (não é falha de rede)
+    rescue SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::ProtocolError, URI::Error, Zlib::Error
+      tmp&.close!
+      raise ErroMidia, :rede
+    end
+
+    # Tamanho (bytes) pelo cabeçalho, SEM baixar — para a estimativa do seco. nil se não souber.
+    def medir(url)
+      uri = alvo(url)
+      4.times do
+        proximo = nil
+        tamanho = nil
+        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https', open_timeout: @abrir, read_timeout: @ler) do |h|
+          r = h.request(Net::HTTP::Head.new(uri))
+          case r
+          when Net::HTTPRedirection then proximo = r['location']
+          when Net::HTTPSuccess then tamanho = r['content-length']&.to_i
+          end
+        end
+        return tamanho unless proximo
+
+        uri = alvo(URI.join(uri, proximo).to_s)
+      end
+      nil
+    rescue ErroMidia, Timeout::Error, SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError, Net::ProtocolError, URI::Error
+      nil
+    end
+
+    private
+
+    def alvo(url)
+      uri = URI.parse(url.to_s)
+      raise ErroMidia, :host unless uri.host && host_permitido?(uri)
+
+      uri
+    end
+  end
+
+  # tipo do Attachment do Chatwoot (image/audio/video/file) pelo que a CDN respondeu; áudio da Meta que vem como video/mp4 continua áudio.
+  def tipo_do_chatwoot(ct, tipo)
+    return :audio if tipo == :audio
+    return :image if tipo == :figurinha || ct.start_with?('image/')
+    return :audio if ct.start_with?('audio/')
+    return :video if ct.start_with?('video/')
+
+    :file
+  end
+
+  # Nome do arquivo no CRM (o `name` da Graph pode ter nome do paciente: fica só no banco da VPS).
+  def nome_do_arquivo(nome, ct, tipo, idx)
+    base = File.basename(nome.to_s).gsub(/[^[:alnum:]_. -]/, '_')[0, 100].to_s.strip
+    ext = EXTENSOES[ct]
+    base = "#{tipo}-#{idx + 1}" if base.empty?
+    base += ".#{ext}" if ext && File.extname(base).empty?
+    base
   end
 
   # ─── Fontes (de onde vêm as conversas) ───────────────────────────────────────────────────────────────────────────

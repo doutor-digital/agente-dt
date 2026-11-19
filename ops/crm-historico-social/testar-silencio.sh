@@ -29,7 +29,9 @@ ENABLE_ACCOUNT_SIGNUP=false
 INSTALLATION_ENV=docker
 DISABLE_DATABASE_ENVIRONMENT_CHECK=1
 ENV
-rodar() { docker run --rm --network "$NET" --env-file "$TRAB/env" -v "$AQUI":/t:ro -v "$TRAB":/work "$@"; }
+mkdir -p "$TRAB/storage"
+# /app/storage (arquivos do ActiveStorage) persiste entre as fases, como o volume do Chatwoot de verdade
+rodar() { docker run --rm --network "$NET" --env-file "$TRAB/env" -v "$AQUI":/t:ro -v "$TRAB":/work -v "$TRAB/storage":/app/storage "$@"; }
 echo "1/7 criando o banco vazio (schema do Chatwoot)"
 rodar "$IMG" bundle exec rails db:schema:load 2>&1 | grep -v -E "^\s*$|^[WIDE], \[" | tail -3
 FALHOU=0

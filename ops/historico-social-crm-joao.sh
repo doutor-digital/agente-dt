@@ -10,6 +10,11 @@
 #   opções: --caixa=7 | --caixa=8 (padrão: as duas)   --corte=AAAA-MM-DDTHH:MM:SSZ (padrão: a hora em que CADA caixa foi criada; mensagem
 #           a partir do corte é «viva» e fica para o webhook; a opção é recusada se passar de início − 15 min)
 #           --ritmo=0.7 (segundos entre chamadas à Meta)
+#   MÍDIA: o importador baixa NA HORA (a URL da Meta acabou de ser gerada) e anexa imagem, figurinha, áudio, vídeo e arquivo, do Instagram e do
+#   Messenger, como anexo de verdade do CRM (arquivo no armazenamento do Chatwoot, sem URL em log). Teto de 25 MB por arquivo, 60 s por download,
+#   2 GB por rodada, e para se o disco tiver menos de 3 GB livres; o que falhar fica com o rótulo («[imagem]») e entra na contagem. Rodar de novo
+#   COMPLETA a mídia das mensagens já importadas (pelo source_id, sem duplicar). O --so-conferir mostra quantas mídias por tipo e quantos MB.
+#           --sem-midia (não baixa)   --midia-max-mb=25   --midia-total-mb=2048
 #   COTA DA META: o Instagram usa o MESMO token do atendimento ao vivo (~2.000 chamadas na rodada inteira). O importador lê o uso da cota
 #   nos cabeçalhos da Meta, desacelera a partir de 60% e PARA a 80% (o log traz uso_maximo_da_cota_pct). Rode de preferência à NOITE.
 #
@@ -30,7 +35,7 @@ PASTA="$AQUI/crm-historico-social"
 [ -r "$CHAVE" ] || { echo "RECUSO: não achei a chave ssh em $CHAVE. Este comando roda no computador do João (que tem a chave da VPS), não aqui."; exit 1; }
 [ -f "$PASTA/importar-historico-social.rb" ] || { echo "RECUSO: não achei $PASTA (rode de dentro do repositório)"; exit 1; }
 
-SECO=0; CAIXAS="7,8"; LIMITE=""; CORTE=""; RITMO=""; DESFAZER=""; CONFIRMO=0; ACOMPANHAR=""
+SECO=0; CAIXAS="7,8"; LIMITE=""; CORTE=""; RITMO=""; DESFAZER=""; CONFIRMO=0; ACOMPANHAR=""; SEM_MIDIA=0; MIDIA_MAX=""; MIDIA_TOTAL=""
 for a in "$@"; do
   case "$a" in
     --so-conferir) SECO=1 ;;
@@ -39,9 +44,12 @@ for a in "$@"; do
     --corte=*) [[ "$a" =~ ^--corte=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "opção inválida: $a (use --corte=2026-11-19T14:00:00Z)"; exit 2; }; CORTE="${a#--corte=}" ;;
     --ritmo=*) [[ "$a" =~ ^--ritmo=[0-9](\.[0-9]+)?$ ]] || { echo "opção inválida: $a"; exit 2; }; RITMO="${a#--ritmo=}" ;;
     --desfazer=*) [[ "$a" =~ ^--desfazer=historico-social-[0-9]{8}-[0-9]{6}-gravar\.txt$ ]] || { echo "opção inválida: $a (nome do arquivo de log de uma rodada que GRAVOU, ex.: historico-social-20261119-153000-gravar.txt)"; exit 2; }; DESFAZER="${a#--desfazer=}" ;;
+    --sem-midia) SEM_MIDIA=1 ;;
+    --midia-max-mb=*) [[ "$a" =~ ^--midia-max-mb=[1-9][0-9]*$ ]] || { echo "opção inválida: $a"; exit 2; }; MIDIA_MAX="${a#--midia-max-mb=}" ;;
+    --midia-total-mb=*) [[ "$a" =~ ^--midia-total-mb=[1-9][0-9]*$ ]] || { echo "opção inválida: $a"; exit 2; }; MIDIA_TOTAL="${a#--midia-total-mb=}" ;;
     --confirmo-apagar) CONFIRMO=1 ;;
     --acompanhar=*) [[ "$a" =~ ^--acompanhar=historico-social-[0-9]{8}-[0-9]{6}-[a-z]+\.txt$ ]] || { echo "opção inválida: $a"; exit 2; }; ACOMPANHAR="${a#--acompanhar=}" ;;
-    *) echo "opção inválida: $a (use --so-conferir, --limite=N, --caixa=7|8, --corte=..., --ritmo=..., --desfazer=ARQ [--confirmo-apagar], --acompanhar=ARQ)"; exit 2 ;;
+    *) echo "opção inválida: $a (use --so-conferir, --limite=N, --caixa=7|8, --corte=..., --ritmo=..., --sem-midia, --midia-max-mb=N, --midia-total-mb=N, --desfazer=ARQ [--confirmo-apagar], --acompanhar=ARQ)"; exit 2 ;;
   esac
 done
 
@@ -84,6 +92,9 @@ else
   [ -n "$LIMITE" ] && ENVS="$ENVS LIMITE_CONVERSAS=$LIMITE"
   [ -n "$CORTE" ] && ENVS="$ENVS CORTE=$CORTE"
   [ -n "$RITMO" ] && ENVS="$ENVS RITMO=$RITMO"
+  [ "$SEM_MIDIA" = 1 ] && ENVS="$ENVS MIDIA=0"
+  [ -n "$MIDIA_MAX" ] && ENVS="$ENVS MIDIA_MAX_MB=$MIDIA_MAX"
+  [ -n "$MIDIA_TOTAL" ] && ENVS="$ENVS MIDIA_TOTAL_MB=$MIDIA_TOTAL"
   echo "$([ "$SECO" = 1 ] && echo 'CONFERÊNCIA EM SECO (só lê, não grava nada)' || echo 'GRAVANDO no CRM') — caixas $CAIXAS${LIMITE:+, limite $LIMITE conversas por caixa}"
   REMOTO="setsid nohup /root/kit/crm-historico-social/rodar-na-vps.sh /root/kit/logs/$LOGNOME importar-historico-social.rb $GR $ENVS > /dev/null 2>&1 < /dev/null &"
 fi
