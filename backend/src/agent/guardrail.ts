@@ -138,9 +138,14 @@ function corrigirValores(
    * deixava "R$ 150 garantindo com sinal de R$ 50 (R$ 50 + R$ 200 no dia)" — ver total-com-sinal.ts.
    */
   totalComSinal?: PrecosComSinal,
+  /**
+   * Valores que o texto TEM mas estão escondidos da trava (o R$ que a Sofia nega — "…e não R$ 350 no dia" — e o que o paciente mandou). Contam como "já no texto":
+   * sem isto o 350 negado voltava a ser candidato a substituto e saía "fica R$ 350, e não R$ 350 no dia".
+   */
+  escondidosNoTexto: Iterable<number> = [],
 ): { texto: string; trocas: string[] } | null {
   const jaNoTexto = new Set(
-    [...parseAmounts(text)].filter((v) => amountApproved(v, aprovados)),
+    [...parseAmounts(text), ...escondidosNoTexto].filter((v) => amountApproved(v, aprovados)),
   );
   const alvo = new Set(foraDoCatalogo);
   const trocas: string[] = [];
@@ -368,6 +373,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // Também escondidos: o R$ que o PACIENTE pagou/mandou ("o comprovante mostra R$ 50,00") — dado dele, não slot de preço; ver valor-do-paciente.ts.
   // Quem esconde é a posição do valor, então o preço da unidade na MESMA mensagem ("…mas o antecipado é R$ 200,00") continua conferido.
   // E o R$ que a Sofia NEGA ("…fica R$ 250 no total — não R$ 450"): é o valor que o paciente citou e que ela está dizendo que não vale.
+  const presentesEscondidos = new Set<number>();
   const escondeOferta = (t: string): string => {
     const doPaciente = posicoesDeValorDoPaciente(t);
     for (const pos of posicoesDeValorNegado(t)) doPaciente.add(pos);
@@ -376,6 +382,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
       const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
       const daOferta = exatosDaOferta.has(valor) && !catalogo.has(Math.trunc(valor));
       if (!daOferta && !doPaciente.has(posicao)) return m;
+      if (doPaciente.has(posicao)) presentesEscondidos.add(Math.trunc(valor));
       escondidos.push(m);
       // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
       return `R$ ⟦${escondidos.length - 1}⟧`;
@@ -452,6 +459,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
         foraDoCatalogo,
         catalogo,
         p && sinal ? { antecipado: p.antecipado, restoNoDia: sinal.restoNoDia, sinal: sinal.sinal, noDia: p.noDia } : undefined,
+        presentesEscondidos,
       );
       if (corrigido) {
         triggered.push('preco_corrigido:' + corrigido.trocas.join('/'));

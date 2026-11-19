@@ -377,6 +377,14 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
   { n: 'r8.01', unit: BALSAS, entra: 'O comprovante mostra R$ 250, que é o valor da consulta antecipada.', sai: 'O comprovante mostra R$ 250, que é o valor da consulta antecipada.' },
   { n: 'r8.02', unit: ARAGUAINA, entra: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.', sai: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.' },
   { n: 'r8.03', unit: SERRA_COM_PLANO, entra: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?', sai: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?' },
+  // ── 9. /code-review obrigatório: o R$ negado/escondido continua "já no texto" (não vira substituto) e "seria" não nega (esperado = main) ──
+  { n: 'r9.01', unit: ARAGUAINA, entra: 'No dia o valor é R$ 400, não R$ 350.', sai: 'No dia o valor é R$ 250, não R$ 350.' },
+  { n: 'r9.02', unit: ARAGUAINA, entra: 'Pagando antecipado fica R$ 300, e não R$ 350 no dia.', sai: 'Pagando antecipado fica R$ 250, e não R$ 350 no dia.' },
+  { n: 'r9.03', unit: ARAGUAINA, entra: 'Pagando antecipado fica R$ 300, e não R$ 350 no dia.', sai: 'Pagando antecipado fica R$ 250, e não R$ 350 no dia.' },
+  { n: 'r9.04', unit: SERRA_COM_PLANO, entra: 'Pagando antes fica R$ 300, não R$ 350.', sai: 'Pagando antes fica R$ 280, não R$ 350.' },
+  { n: 'r9.05', unit: ARAGUAINA, entra: 'R$ 380 no dia, mas pagando antes você garante com sinal de R$ 50.', sai: 'R$ 250 no dia, mas pagando antes você garante com sinal de R$ 50.' },
+  { n: 'r9.06', unit: ARAGUAINA, entra: 'Não seria R$ 400 no total, né? Fica R$ 250.', sai: 'Não seria R$ 350 no total, né? Fica R$ 250.' },
+  { n: 'r9.07 "fica R$ 200 + R$ 50 de sinal agora": o 200 é parcela de uma soma, não o antecipado (melhor que o main, que trocava o preço do dia)', unit: ARAGUAINA, entra: 'São R$ 350 no dia, ou pagando antecipado fica R$ 200 + R$ 50 de sinal agora.', sai: 'São R$ 350 no dia, ou pagando antecipado fica R$ 200 + R$ 50 de sinal agora.' },
 ];
 
 for (const c of CASOS) {
@@ -556,6 +564,7 @@ test('posicoesDeValorNegado: só "não/nem" colado ao valor', () => {
   assert.deepEqual(pos('Antecipado R$ 280, se não R$ 380 no dia.'), []); // "senão" mal escrito
   assert.deepEqual(pos('Se não é R$ 380 no dia.'), []); // "se não é" = senão
   assert.deepEqual(pos('Pagando antes R$ 280, se não fica R$ 380 no dia.'), []); // "se não fica" = senão
+  assert.deepEqual(pos('Não seria R$ 400 no total, né? Fica R$ 250.'), []); // "seria" é sugestão, não negação
   assert.deepEqual(pos('Não seria R$ 400 no total?'), []); // pergunta (o "?" fecha o valor) não nega nada
   assert.deepEqual(pos('Não fica R$ 400 no total?'), []);
   assert.deepEqual(pos('Não é R$ 450, viu?'), ['R$ 450']); // real (Boa Vista): vírgula antes do "?" = negação

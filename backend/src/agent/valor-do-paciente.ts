@@ -152,13 +152,13 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
  * valor pelo "aprovado mais próximo" e saía "— não R$ 50", afirmando o contrário do que a Sofia disse. Esconde da mesma forma que o valor do
  * paciente: só a posição do R$ negado, o resto da mensagem segue conferido.
  *
- * Só o "não/nem" COLADO ao valor (no máximo um "é/seria/fica/são/de" no meio) e só valor redondo (sem centavos: o paciente cita "R$ 450", não "R$ 150,99"). "ao invés de R$ 380" e "em vez de R$ 380" ficam de fora de propósito:
+ * Só o "não/nem" COLADO ao valor (no máximo um "é/fica/são/de" no meio; "seria/será" é sugestão, não negação) e só valor redondo (sem centavos: o paciente cita "R$ 450", não "R$ 150,99"). "ao invés de R$ 380" e "em vez de R$ 380" ficam de fora de propósito:
  * é como a Sofia escreve o preço "normal" errado ("R$ 200 ao invés de R$ 380" → R$ 350, caso real de Imperatriz), e esse SIM é conferido.
  */
-const NEGA_O_VALOR = /(?:^|[\s,;:—–(-])(?:n[aã]o|nem)\s+(?:(?:é|seria|ser[aá]|são|fica|ficam|de)\s+){0,2}$/i;
+const NEGA_O_VALOR = /(?:^|[\s,;:—–(-])(?:n[aã]o|nem)\s+(?:(?:é|são|fica|ficam|de)\s+){0,2}$/i;
 
 /** "se não R$ 380" / "se não é R$ 380" / "se não fica R$ 380" é o "senão" mal escrito ("antecipado R$ 280, se não fica R$ 380 no dia"), não negação. */
-const SE_NAO = /\bse\s+n[aã]o\s+(?:(?:é|seria|ser[aá]|são|fica|ficam|de)\s+){0,2}$/i;
+const SE_NAO = /\bse\s+n[aã]o\s+(?:(?:é|são|fica|ficam|de)\s+){0,2}$/i;
 
 /**
  * Posição (índice do "R$") de cada valor que o texto nega com "não R$ …" / "nem R$ …".

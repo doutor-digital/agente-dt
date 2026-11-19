@@ -36,7 +36,7 @@
  *    Com a marca há dois lugares de R$: X (antes dela) e Y (o que a marca traz logo depois, numa gramática fechada: "pagando antes [por Pix], fica [em] R$ Y",
  *    "antecipado de R$ Y", "antecipado: R$ Y"). A ordem das regras, da mais forte para a mais fraca:
  *      a. X COLADO na marca (só o modo de pagar entre os dois: "R$ 350 pagando antecipado, fica R$ 250") É o antecipado: conferido como sempre, nunca pulado;
- *      b. Y não conta se for o `noDia`, o `sinal`, "agora", "de sinal / entrada / reserva", "mais barato" ou vier seguido de "no dia / na clínica";
+ *      b. Y não conta se for o `noDia`, o `sinal`, "agora", "+ R$ …" (parcela de uma soma), "de sinal / entrada / reserva", "mais barato" ou vier seguido de "no dia / na clínica";
  *      c. X igual ao `noDia` e existe Y: X é a outra opção e Y é conferido (vira o antecipado);
  *      d. a frase diz "no dia" (não "no dia 21") entre X e a marca e existe Y: X é pulado (se estiver errado, o catálogo corta; nunca vira o antecipado), Y não é mexido;
  *      e. X igual ao `noDia` e a frase diz "no dia", sem Y: nada a trocar.
@@ -61,7 +61,7 @@ const VALOR_DA_MARCA = new RegExp(
   'iu',
 );
 /** Esse R$ não é o antecipado: vem seguido de "no dia" (não "no dia 21") / "na clínica" (preço do dia) ou de "agora / de sinal / de entrada / de reserva" (o sinal). */
-const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:no\s+dia\b(?!\s+\d)|na\s+cl[ií]nica\b|agora\b|mais\s+(?:barato|em\s+conta)\b|de\s+(?:desconto|economia)\b|(?:de\s+)?(?:sinal|entrada|reserva)\b)/i;
+const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:no\s+dia\b(?!\s+\d)|na\s+cl[ií]nica\b|agora\b|\+|mais\s+(?:barato|em\s+conta)\b|de\s+(?:desconto|economia)\b|(?:de\s+)?(?:sinal|entrada|reserva)\b)/i;
 /** O que pode vir entre o R$ e a marca sem deixar de ser "R$ colado na marca": só o modo de pagar ("R$ 350 pagando antecipado", "R$ 350 com pagamento antecipado", "R$ 350 pelo Pix antecipado"). */
 const MODO_DE_PAGAR_ANTES = /\b(?:pagando|pagar|paga|pagamento|com|no|pelo|por|via|pix|p[ií]x|link)\b/gi;
 /** "no dia" como jeito de pagar, não data ("no dia 21"). */
