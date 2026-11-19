@@ -301,6 +301,28 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
     entra: 'Antecipado R$ 280, se não R$ 380 no dia.',
     sai: 'Antecipado R$ 280, se não R$ 350 no dia.',
   },
+  // ── 6. rodada 2 do sênior (21 frases): o esperado é o que o MAIN faz — o R$ depois da marca é o preço do dia / data / lugar, ou colado sem contraste ──
+  { n: 'r6.01', unit: ARAGUAINA, entra: 'Fica R$ 250 com desconto antecipado de R$ 100.', sai: 'Fica R$ 250 com desconto antecipado de R$ 100.' },
+  { n: 'r6.02', unit: SERRA_COM_PLANO, entra: 'R$ 300 com desconto antecipado de R$ 70.', sai: 'R$ 280 com desconto antecipado de R$ 70.' },
+  { n: 'r6.03', unit: ARAGUAINA, entra: 'R$ 250, mas só pagando antes, que na hora fica R$ 350.', sai: 'R$ 250, mas só pagando antes, que na hora fica R$ 350.' },
+  { n: 'r6.04', unit: ARAGUAINA, entra: 'R$ 250, mas só pagando antes, pagando lá fica R$ 350.', sai: 'R$ 250, mas só pagando antes, pagando lá fica R$ 350.' },
+  { n: 'r6.05', unit: ARAGUAINA, entra: 'A consulta sai R$ 250, mas só pagando antes, já que o valor cheio fica R$ 350.', sai: 'A consulta sai R$ 250, mas só pagando antes, já que o valor cheio fica R$ 350.' },
+  { n: 'r6.06', unit: ARAGUAINA, entra: 'R$ 250, mas só pagando antes, que o normal é R$ 350.', sai: 'R$ 250, mas só pagando antes, que o normal é R$ 350.' },
+  { n: 'r6.07', unit: SERRA_COM_PLANO, entra: 'A consulta sai R$ 280, mas só pagando antes, porque na hora fica R$ 350.', sai: 'A consulta sai R$ 280, mas só pagando antes, porque na hora fica R$ 350.' },
+  { n: 'r6.08', unit: BALSAS, entra: 'R$ 200, mas só se pagar antes, que depois fica R$ 350.', sai: 'R$ 200, mas só se pagar antes, que depois fica R$ 350.' },
+  { n: 'r6.09', unit: SERRA_COM_PLANO, entra: 'A consulta sai R$ 250, mas só pagando antes, que na hora fica R$ 350.', sai: 'A consulta sai R$ 280, mas só pagando antes, que na hora fica R$ 350.' },
+  { n: 'r6.10', unit: ARAGUAINA, entra: 'Fica R$ 300, mas só se pagar antes, do contrário sai R$ 350.', sai: 'Fica R$ 250, mas só se pagar antes, do contrário sai R$ 350.' },
+  { n: 'r6.11', unit: ARAGUAINA, entra: 'Fica R$ 250, mas só se pagar antes, do contrário sai R$ 350.', sai: 'Fica R$ 250, mas só se pagar antes, do contrário sai R$ 350.' },
+  { n: 'r6.12', unit: SERRA_COM_PLANO, entra: 'Fica R$ 280, mas só pagando antes, quem paga presencialmente fica R$ 350.', sai: 'Fica R$ 280, mas só pagando antes, quem paga presencialmente fica R$ 350.' },
+  { n: 'r6.13', unit: ARAGUAINA, entra: 'Fica R$ 300 para o atendimento no dia 21, pagando antecipado.', sai: 'Fica R$ 250 para o atendimento no dia 21, pagando antecipado.' },
+  { n: 'r6.14', unit: ARAGUAINA, entra: 'A consulta fica R$ 300 aqui na clínica com pagamento antecipado.', sai: 'A consulta fica R$ 250 aqui na clínica com pagamento antecipado.' },
+  { n: 'r6.15', unit: SERRA_COM_PLANO, entra: 'Fica R$ 250 pra sua consulta no dia 21, pagando antes pelo Pix.', sai: 'Fica R$ 280 pra sua consulta no dia 21, pagando antes pelo Pix.' },
+  { n: 'r6.16', unit: ARAGUAINA, entra: 'Não seria R$ 400 no total?', sai: 'Não seria R$ 350 no total?' },
+  { n: 'r6.17', unit: SERRA_COM_PLANO, entra: 'A consulta é R$ 300 no dia 25, com pagamento antecipado por Pix.', sai: 'A consulta é R$ 280 no dia 25, com pagamento antecipado por Pix.' },
+  { n: 'r6.18', unit: ARAGUAINA, entra: 'Te espero no dia 21! A consulta fica R$ 300 pagando antecipado.', sai: 'Te espero no dia 21! A consulta fica R$ 250 pagando antecipado.' },
+  { n: 'r6.19', unit: ARAGUAINA, entra: 'Te espero no dia 21, a consulta fica R$ 300 pagando antecipado.', sai: 'Te espero no dia 21, a consulta fica R$ 250 pagando antecipado.' },
+  { n: 'r6.20', unit: ARAGUAINA, entra: 'Consulta no dia 21 às 14h: R$ 300 pagando antecipado.', sai: 'Consulta no dia 21 às 14h: R$ 250 pagando antecipado.' },
+  { n: 'r6.21', unit: ARAGUAINA, entra: 'Consulta R$ 300 no dia 21 às 14h, pagando antecipado.', sai: 'Consulta R$ 250 no dia 21 às 14h, pagando antecipado.' },
   // ── 4. valor-do-paciente.ts ──
   {
     n: '4a Balsas: "A consulta fica R$ 300, chegou a ver os horários?" — o preço errado não sai',
@@ -396,7 +418,7 @@ test('preço do dia contraposto: nada reescrito, nada registrado', () => {
 
 // ── funções ──
 test('corrigirValorAntecipado: o preço do dia contraposto não é o slot', () => {
-  const A = { antecipado: 250 };
+  const A = { antecipado: 250, noDia: 350 };
   for (const t of [
     'R$ 350 no dia, mas se pagar antes, no Pix, fica R$ 250.',
     'R$ 350 na clínica, mas pagando antes fica R$ 250.',
@@ -411,7 +433,7 @@ test('corrigirValorAntecipado: o preço do dia contraposto não é o slot', () =
 });
 
 test('corrigirValorAntecipado: pulou o preço do dia, mas o valor que a marca traz é conferido', () => {
-  const S = { antecipado: 280 };
+  const S = { antecipado: 280, noDia: 350 };
   assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 250.', S), { texto: 'R$ 350 no dia, mas pagando antes fica R$ 280.', corrigiu: [250] });
   assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica em R$ 250.', S), { texto: 'R$ 350 no dia, mas pagando antes fica em R$ 280.', corrigiu: [250] });
   assert.deepEqual(corrigirValorAntecipado('No dia é R$ 350 (o Pix antecipado de R$ 250 é só pra quem paga antes).', S), {
@@ -425,11 +447,12 @@ test('corrigirValorAntecipado: pulou o preço do dia, mas o valor que a marca tr
     texto: 'Fica R$ 250, mas só pagando antes, e a vaga custa R$ 50 de sinal.',
     corrigiu: [200],
   });
-  assert.deepEqual(corrigirValorAntecipado('R$ 250 no dia, mas pagando antes fica R$ 350 na clínica.', S).corrigiu, []);
+  // o R$ depois da marca é o preço do dia (noDia): não é o antecipado, então o R$ de antes segue sendo o slot, como no main
+  assert.deepEqual(corrigirValorAntecipado('R$ 250 no dia, mas pagando antes fica R$ 350 na clínica.', S).corrigiu, [250]);
 });
 
 test('corrigirValorAntecipado: verbo "é" também traz o antecipado; "de vir" não é "de R$"', () => {
-  const S = { antecipado: 280 };
+  const S = { antecipado: 280, noDia: 350 };
   assert.deepEqual(corrigirValorAntecipado('R$ 350, mas pagando antes é R$ 250.', S), { texto: 'R$ 350, mas pagando antes é R$ 280.', corrigiu: [250] });
   assert.deepEqual(corrigirValorAntecipado('R$ 250 pagando antes de vir, e no dia fica R$ 350.', S), { texto: 'R$ 280 pagando antes de vir, e no dia fica R$ 350.', corrigiu: [250] });
   // o que a marca traz é o retorno / o restante: outro item, não o antecipado da consulta
@@ -437,21 +460,41 @@ test('corrigirValorAntecipado: verbo "é" também traz o antecipado; "de vir" n�
 });
 
 test('corrigirValorAntecipado: com "no dia" e sem verbo, o ":" colado à marca traz o antecipado e é conferido', () => {
-  const S = { antecipado: 280 };
+  const S = { antecipado: 280, noDia: 350 };
   assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, Pix antecipado: R$ 250.', S), { texto: 'R$ 350 no dia, Pix antecipado: R$ 280.', corrigiu: [250] });
   // sem "no dia" o ":" é rótulo do total ("Com sinal: R$ 250 antecipado (R$ 50 + R$ 200)") e não pula nada
   assert.deepEqual(corrigirValorAntecipado('R$ 250 antecipado: R$ 50 de sinal.', { antecipado: 280, valoresLegitimos: [50] }), { texto: 'R$ 280 antecipado: R$ 50 de sinal.', corrigiu: [250] });
 });
 
 test('corrigirValorAntecipado: "na hora / no ato" só pulam o R$ de antes quando o antecipado vem conferido depois da marca', () => {
-  const S = { antecipado: 280 };
+  const S = { antecipado: 280, noDia: 350 };
   assert.deepEqual(corrigirValorAntecipado('R$ 350 na hora e pagando antes fica R$ 250.', S), { texto: 'R$ 350 na hora e pagando antes fica R$ 280.', corrigiu: [250] });
   // sem R$ depois da marca nada pula: como no main, o R$ de antes é o slot
   assert.deepEqual(corrigirValorAntecipado('R$ 250 na hora de reservar, pagando antes.', S), { texto: 'R$ 280 na hora de reservar, pagando antes.', corrigiu: [250] });
 });
 
+test('corrigirValorAntecipado: decide por NÚMERO (noDia), não por palavra', () => {
+  const U = { antecipado: 200, noDia: 250 };
+  // "no dia" + Y que já é o antecipado certo: o R$ de antes é o preço do dia (mesmo diferente do noDia da ficha) e nada é trocado
+  assert.deepEqual(corrigirValorAntecipado('A consulta custa R$ 220 no dia, mas se puder pagar por Pix antes, fica R$ 200.', U), {
+    texto: 'A consulta custa R$ 220 no dia, mas se puder pagar por Pix antes, fica R$ 200.',
+    corrigiu: [],
+  });
+  // "no dia" sozinho, com Y errado e X que não é o noDia: segue como no main (nada é inventado)
+  assert.deepEqual(corrigirValorAntecipado('R$ 280 no dia, mas pagando antes fica R$ 230.', U).corrigiu, [280]);
+  // Y é o sinal ("agora"): não vira o antecipado; o R$ de antes é o slot, como no main
+  assert.deepEqual(corrigirValorAntecipado('R$ 250, mas pagando antes fica R$ 50 agora.', { ...U, noDia: 300 }), {
+    texto: 'R$ 200, mas pagando antes fica R$ 50 agora.',
+    corrigiu: [250],
+  });
+  // "no dia 21" é data, não preço do dia
+  assert.deepEqual(corrigirValorAntecipado('Fica R$ 250 no dia 21, pagando antes.', U), { texto: 'Fica R$ 200 no dia 21, pagando antes.', corrigiu: [250] });
+  // sem noDia (chamador antigo): tudo como no main
+  assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 250.', { antecipado: 280 }).corrigiu, [350]);
+});
+
 test('corrigirValorAntecipado: sem sinal de preço do dia o slot segue corrigido', () => {
-  const A = { antecipado: 250 };
+  const A = { antecipado: 250, noDia: 350 };
   assert.equal(corrigirValorAntecipado('Fica R$ 200 se pagar antes por PIX.', A).texto, 'Fica R$ 250 se pagar antes por PIX.');
   assert.equal(corrigirValorAntecipado('Fica R$ 200, mas só pagando antes.', A).texto, 'Fica R$ 250, mas só pagando antes.');
   assert.equal(corrigirValorAntecipado('Dá R$ 200 antecipado, mas só até sexta.', A).texto, 'Dá R$ 250 antecipado, mas só até sexta.');
@@ -495,7 +538,10 @@ test('posicoesDeValorNegado: só "não/nem" colado ao valor', () => {
   assert.deepEqual(pos('R$ 200 ao invés de R$ 380'), []);
   assert.deepEqual(pos('R$ 200'), []);
   assert.deepEqual(pos('Antecipado R$ 280, se não R$ 380 no dia.'), []); // "senão" mal escrito
-  assert.deepEqual(pos('Se não é R$ 450, qual é o valor?'), ['R$ 450']); // "se não é R$" continua negação
+  assert.deepEqual(pos('Se não é R$ 450, é R$ 350.'), ['R$ 450']); // "se não é R$" continua negação
+  assert.deepEqual(pos('Não seria R$ 400 no total?'), []); // pergunta não nega nada
+  assert.deepEqual(pos('Fica R$ 250 no total, e não R$ 450, tudo bem?'), ['R$ 450']); // negação seguida de pergunta de fechamento continua negação
+  assert.deepEqual(pos('Não é R$ 450, quer agendar?'), ['R$ 450']);
 });
 
 test('valor-do-paciente: "R$ 250, veio pelo anúncio?" e "o total R$ 300" não são valor do paciente', () => {

@@ -180,6 +180,8 @@ export function posicoesDeValorNegado(texto: string): Set<number> {
     // Valor com centavos ("R$ 150,99") não é número redondo que o paciente cita: segue sob as travas (oferta-da-campanha.test.ts).
     if (/,(?!00\b)\d{2}/.test(m[0])) continue;
     const antes = texto.slice(Math.max(0, ini - 24), ini);
+    // "Não seria / não será R$ 400 no total?" é PERGUNTA (o "?" logo depois do valor), não nega nada: o valor segue conferido. "…e não R$ 450, tudo bem?" nega.
+    if (/\b(?:seria|ser[aá])\s+$/i.test(antes) && /^[^.!?\n]{0,25}\?/.test(texto.slice(ini + m[0].length))) continue;
     if (NEGA_O_VALOR.test(antes) && !SE_NAO_COLADO.test(antes)) posicoes.add(ini);
   }
   return posicoes;

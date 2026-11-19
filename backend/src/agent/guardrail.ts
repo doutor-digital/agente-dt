@@ -422,6 +422,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
       // Só o SINAL (R$ 50) é legítimo ao lado de "antecipado": o resto (R$ 200) se paga no dia, então "sinal de R$ 200
       // antecipado" continua errado e é corrigido. Sem sinal (nem flag, nem ficha) a lista é vazia (nada muda).
       valoresLegitimos: sinal ? [...doSinal].filter((v) => v === sinal.sinal) : [],
+      noDia: p.noDia,
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);
