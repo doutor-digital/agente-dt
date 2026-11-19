@@ -10,6 +10,7 @@
  */
 import { LOGO_DD_PNG } from './marca-dd.js';
 import { comContaNaPagina } from './conta-no-navegador.js';
+import { comSalvarNaPagina } from './tarefas-salvar-na-pagina.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -148,7 +149,7 @@ details[open]>summary{margin-bottom:8px}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
-  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], D = null, ABA = 'hoje', QUEM = 'minhas', CONV = null, SO_CONV = true, FORM = null, tPoll = null, CARREGANDO = false, PAINEL = null;
+  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], D = null, ABA = 'hoje', QUEM = 'minhas', CONV = null, SO_CONV = true, FORM = null, tPoll = null, CARREGANDO = null, PAINEL = null;
   var MENU = /[?&]menu=1/.test(location.search);
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -161,11 +162,13 @@ details[open]>summary{margin-bottom:8px}
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
   /*__CONTA_JS__*/
+  /*__SALVAR_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
-  async function api(method, path, body){
-    var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
-    var j = await r.json().catch(function(){ return {}; });
+  async function api(method, path, body, ms){
+    // a rede que cai ou demora vira erro SEM status (o servidor pode ter gravado) e sem o «Failed to fetch» cru do navegador (ver buscar)
+    var url = comConta(path), opcoes = { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) };
+    var x = await buscar(fetch, url, opcoes, ms || TEMPO_DA_ESCRITA_MS), r = x.r, j = x.j || {};
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.corpo = j; er.status = r.status; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
   }
@@ -351,17 +354,20 @@ details[open]>summary{margin-bottom:8px}
   }
   async function acao(bt, caminho, corpo, ok){
     bt.disabled = true;
-    try { var c = corpo; c.slug = U.slug; await api('POST', caminho, c); toast(ok); PAINEL = null; await carregar(); }
-    catch (e) { toast(e.message, true); bt.disabled = false; }
+    try {
+      var c = corpo; c.slug = U.slug;
+      var x = await gravarEAtualizar(function(){ return api('POST', caminho, c); }, function(){ PAINEL = null; return carregar(true); });
+      toast(ok + (x.atualizou ? '' : ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.'));
+    } catch (e) { toast(e.message, true); bt.disabled = false; if (e.semResposta) carregar(true).catch(function(){}); }
   }
   function painelDoResultado(t){
     var p = el('div', 'painel'); p.appendChild(el('h3', null, 'Como foi a ligação?'));
     var l = el('div', 'linha');
     function enviar(resultado, proxima, bt){
       bt.disabled = true;
-      api('POST', '/api/public/tarefas/' + enc(t.id) + '/resultado', { slug: U.slug, resultado: resultado, proximaLocal: proxima || null })
-        .then(function(){ toast(proxima ? 'Resultado registrado e a próxima ligação marcada.' : 'Resultado registrado.'); PAINEL = null; return carregar(); })
-        .catch(function(e){ toast(e.message, true); bt.disabled = false; });
+      gravarEAtualizar(function(){ return api('POST', '/api/public/tarefas/' + enc(t.id) + '/resultado', { slug: U.slug, resultado: resultado, proximaLocal: proxima || null }); }, function(){ PAINEL = null; return carregar(true); })
+        .then(function(x){ toast((proxima ? 'Resultado registrado e a próxima ligação marcada.' : 'Resultado registrado.') + (x.atualizou ? '' : ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.')); })
+        .catch(function(e){ toast(e.message, true); bt.disabled = false; if (e.semResposta) carregar(true).catch(function(){}); });
     }
     var b1 = el('button', 'bt sec peq', 'Atendeu'); b1.type = 'button'; b1.addEventListener('click', function(){ enviar('atendeu', null, b1); });
     var b2 = el('button', 'bt sec peq', 'Não atendeu'); b2.type = 'button';
@@ -442,7 +448,7 @@ details[open]>summary{margin-bottom:8px}
   function primeiroNome(n){ return String(n || '').trim().split(/\s+/)[0] || ''; }
   async function abrirForm(modo, base){
     PAINEL = null;
-    FORM = { modo: modo, id: modo === 'editar' && base ? base.id : null, tipo: base ? base.tipo : 'mensagem', alvo: null, quandoLocal: base && modo === 'editar' ? base.quandoLocal : localDoDia(1, 9), resp: base ? base.responsavel.id : D.eu.id, texto: base ? base.texto : '', modeloSel: null, fontes: [], fixo: [], ctxAlvo: null, modelos: null, via: 'texto' };
+    FORM = { modo: modo, id: modo === 'editar' && base ? base.id : null, tipo: base ? base.tipo : 'mensagem', alvo: null, quandoLocal: base && modo === 'editar' ? base.quandoLocal : localDoDia(1, 9), resp: base ? base.responsavel.id : D.eu.id, texto: base ? base.texto : '', original: modo === 'editar' && base ? { quandoLocal: base.quandoLocal, texto: base.texto, resp: base.responsavel.id } : null, modeloSel: null, fontes: [], fixo: [], ctxAlvo: null, modelos: null, via: 'texto' };
     if (base) FORM.alvo = { conversaId: base.conversaId, nome: base.contato };
     else if (CONV) FORM.alvo = { conversaId: CONV.conversaId, nome: CONV.nome };
     if (modo !== 'novo' && base && base.modelo) FORM.modeloGuardado = base.modelo;
@@ -649,15 +655,41 @@ details[open]>summary{margin-bottom:8px}
     }
     if (F.modo === 'editar') corpo.id = F.id; else if (F.alvo.conversaId) corpo.conversaId = F.alvo.conversaId; else corpo.contatoId = F.alvo.contatoId;
     bt.disabled = true; var texto0 = bt.textContent; bt.textContent = 'Salvando…';
+    var url = F.modo === 'editar' ? '/api/public/tarefas/' + enc(F.id) + '/editar' : '/api/public/tarefas';
+    var o = F.original, eu = D && D.eu ? D.eu : {};
+    var pedido = {
+      id: F.modo === 'editar' ? F.id : null,
+      // editar: só dá para conferir pela lista o que ela mostra (hora, texto, responsável) e só se algo disso mudou
+      verificavel: !!o && (o.quandoLocal !== F.quandoLocal || o.texto !== corpo.texto || (!!corpo.responsavelId && corpo.responsavelId !== o.resp)),
+      conversaId: corpo.conversaId || null, tipo: F.tipo, quandoLocal: F.quandoLocal, texto: corpo.texto, responsavelId: corpo.responsavelId || null, criadoPor: eu.criador || null
+    };
     try {
-      var r = await api('POST', F.modo === 'editar' ? '/api/public/tarefas/' + enc(F.id) + '/editar' : '/api/public/tarefas', corpo);
-      toast(r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.'));
-      var quando = paraUtcAprox(F.quandoLocal), hoje = agoraDoServidor();
-      ABA = quando && diaNum(partes(quando)) === diaNum(partes(hoje)) ? 'hoje' : 'proximas';
-      fecharForm(); await carregar();
+      var res = await salvarTarefa({
+        enviar: function(){ return api('POST', url, corpo); },
+        // a conferência lê as tarefas que mudaram há pouco (sem os cortes da lista de verdade)
+        listar: function(){ return api('GET', '/api/public/tarefas/recentes?slug=' + enc(U.slug), null, TEMPO_DA_LEITURA_MS); },
+        confere: function(d){ return tarefaPedida(d, pedido); },
+        espera: function(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); },
+        // só roda depois de a tarefa existir; se a lista não atualizar, isso NÃO é erro do agendamento
+        atualizar: function(){
+          var quando = paraUtcAprox(F.quandoLocal), hoje = agoraDoServidor();
+          ABA = quando && diaNum(partes(quando)) === diaNum(partes(hoje)) ? 'hoje' : 'proximas';
+          fecharForm();
+          return carregar(true);
+        }
+      });
+      var r = res.resposta || {};
+      var msg = res.conferida ? 'Tarefa agendada. A conexão oscilou, mas conferi: ela está lá.' : r.repetida ? (r.estado === 'feita' ? 'Uma tarefa idêntica já foi feita há pouco: nada novo foi agendado.' : 'Esta tarefa já estava agendada.' + (r.aviso ? ' ' + r.aviso : '')) : r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.');
+      if (!res.atualizou) {
+        msg += ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.';
+        setTimeout(function(){ carregar(true).catch(function(){}); }, 4000);
+      }
+      toast(msg);
     } catch (e) {
       toast(e.message, true); bt.disabled = false; bt.textContent = texto0;
       if (e.corpo && e.corpo.exigeModelo) desenharForm();
+      // sem resposta: pode ter gravado — mostra a lista para a atendente ver antes de tentar de novo
+      if (e.incerto) carregar(true).catch(function(){});
     }
   }
 
@@ -674,13 +706,17 @@ details[open]>summary{margin-bottom:8px}
       s.addEventListener('click', function(){
         if (!inp.value.trim()) { toast('Digite o número com DDD.', true); return; }
         s.disabled = true;
-        api('POST', '/api/public/tarefas/zap', { slug: U.slug, agenteId: p.id, telefone: inp.value.trim() }).then(function(){ toast('Número de ' + p.nome + ' salvo.'); return carregar(); }).catch(function(e){ toast(e.message, true); }).then(function(){ s.disabled = false; });
+        gravarEAtualizar(function(){ return api('POST', '/api/public/tarefas/zap', { slug: U.slug, agenteId: p.id, telefone: inp.value.trim() }); }, function(){ return carregar(true); })
+          .then(function(x){ toast('Número de ' + p.nome + ' salvo.' + (x.atualizou ? '' : ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.')); })
+          .catch(function(e){ toast(e.message, true); }).then(function(){ s.disabled = false; });
       });
       l.appendChild(s);
       var r = el('button', 'bt perigo peq', 'Remover'); r.type = 'button'; r.disabled = !p.temZap;
       r.addEventListener('click', function(){
         r.disabled = true;
-        api('POST', '/api/public/tarefas/zap', { slug: U.slug, agenteId: p.id, telefone: null }).then(function(){ toast('Número removido.'); return carregar(); }).catch(function(e){ toast(e.message, true); r.disabled = false; });
+        gravarEAtualizar(function(){ return api('POST', '/api/public/tarefas/zap', { slug: U.slug, agenteId: p.id, telefone: null }); }, function(){ return carregar(true); })
+          .then(function(x){ toast('Número removido.' + (x.atualizou ? '' : ' Não consegui atualizar a lista agora; ela aparece sozinha em instantes.')); })
+          .catch(function(e){ toast(e.message, true); r.disabled = false; });
       });
       l.appendChild(r); cx.appendChild(l);
     });
@@ -688,15 +724,21 @@ details[open]>summary{margin-bottom:8px}
   }
 
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
-  async function carregar(){
-    if (CARREGANDO) return D;
-    CARREGANDO = true;
-    try {
-      var d = await api('GET', '/api/public/tarefas?slug=' + enc(U.slug));
-      d.lidoEm = Date.now(); D = d;
-      cabecalho(); faixaDoModo(); faixaDoZap(); faixaDoLimite(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
-      return D;
-    } finally { CARREGANDO = false; }
+  // uma leitura por vez: quem pede enquanto outra voa divide a mesma; com forcar, espera a que voa e lê DE NOVO (depois de salvar, a lista tem de trazer a tarefa nova)
+  function carregar(forcar){
+    if (CARREGANDO && !forcar) return CARREGANDO;
+    var anterior = CARREGANDO;
+    var p = (async function(){
+      if (anterior) { try { await anterior; } catch (e) {} }
+      try {
+        var d = await api('GET', '/api/public/tarefas?slug=' + enc(U.slug));
+        d.lidoEm = Date.now(); D = d;
+        cabecalho(); faixaDoModo(); faixaDoZap(); faixaDoLimite(); faixaDaConversa(); desenharFiltro(); desenhar(); desenharZap();
+        return D;
+      } finally { if (CARREGANDO === p) CARREGANDO = null; }
+    })();
+    CARREGANDO = p;
+    return p;
   }
   async function escolherUnidade(u){
     U = u; guardar('tarefas:unidade', u.slug); $('unidadeNome').textContent = u.nome;
@@ -764,5 +806,5 @@ details[open]>summary{margin-bottom:8px}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDasTarefas(origemChatwoot: string): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__LOGO_DD__').join(LOGO_DD_PNG));
+  return comSalvarNaPagina(comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__LOGO_DD__').join(LOGO_DD_PNG)));
 }

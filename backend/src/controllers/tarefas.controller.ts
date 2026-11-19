@@ -189,6 +189,8 @@ function paraATela(t: CrmTarefa, agora: Date, fuso: string, comZap: Set<number>,
     resultado: t.resultado,
     resultadoPor: t.resultadoPor,
     criadoPor: t.criadoPor,
+    /** quando foi criada: a tela confere com isto se a tarefa que acabou de pedir (e ficou sem resposta) entrou */
+    criadaEm: t.criadoEm instanceof Date ? t.criadoEm.toISOString() : null,
   };
 }
 
@@ -229,7 +231,7 @@ export async function tarefasHandler(req: Request, res: Response): Promise<void>
       modo: modoDasTarefas(r.unit.slug),
       janela: { inicio: j.inicio, fim: j.fim },
       atrasoMaxMin: Math.round(atrasoMaximoDaMensagemMs() / 60_000),
-      eu: { id: r.id, nome: r.nome },
+      eu: { id: r.id, nome: r.nome, criador: (r.email ?? r.nome).slice(0, 120) },
       papel: r.a.papel ?? null,
       podeCadastrarZap: ehAdministradorDD(r.email),
       atendentes: atendentes.map((a) => ({ ...a, temZap: comZap.has(a.id), zap: ehAdministradorDD(r.email) ? telefoneMascarado(zaps.find((z) => z.agenteId === a.id)?.telefone ?? '') || null : null })),
@@ -238,6 +240,28 @@ export async function tarefasHandler(req: Request, res: Response): Promise<void>
     });
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'tarefas: a unidade falhou');
+    res.status(502).json({ error: 'não consegui ler as tarefas agora' });
+  }
+}
+
+/**
+ * As tarefas que mudaram nos últimos minutos (criadas OU editadas), sem os limites da lista: é com elas que a tela confere se a tarefa que acabou de pedir entrou
+ * quando a resposta do POST se perdeu. A lista de verdade corta as futuras (`LIMITE_FUTURAS`) — uma tarefa para daqui a semanas podia não aparecer nela.
+ */
+export async function tarefasRecentesHandler(req: Request, res: Response): Promise<void> {
+  const r = await resolver(req, res, slugDe(req.query.slug));
+  if (!r) return;
+  try {
+    const agora = new Date();
+    const j = janelaDeEnvio();
+    const [recentes, zaps] = await Promise.all([
+      prisma.crmTarefa.findMany({ where: { unitId: r.unit.id, conta: r.conta, atualizadoEm: { gte: new Date(agora.getTime() - 15 * 60_000) } }, orderBy: { atualizadoEm: 'desc' }, take: 100 }),
+      prisma.crmTarefaZap.findMany({ where: { conta: r.conta }, select: { agenteId: true } }),
+    ]);
+    const comZap = new Set(zaps.map((z) => z.agenteId));
+    res.set('Cache-Control', 'no-store').json({ agora: agora.toISOString(), tarefas: recentes.map((t) => paraATela(t, agora, r.fuso, comZap, j)) });
+  } catch (e) {
+    logger.warn({ err: String(e), unit: r.unit.slug }, 'tarefas: as recentes falharam');
     res.status(502).json({ error: 'não consegui ler as tarefas agora' });
   }
 }
@@ -497,6 +521,8 @@ async function prepararDados(r: Resolvida, c: Campos, alvo: Alvo, agora: Date): 
 }
 
 const MAX_ABERTAS_POR_CONVERSA = 20;
+/** Pedido idêntico a uma tarefa criada há menos que isto e já FEITA é repetição, não tarefa nova. */
+const REPETIDA_EM_MS = 15 * 60_000;
 
 export async function tarefasCriarHandler(req: Request, res: Response): Promise<void> {
   const r = await resolver(req, res, slugDe((req.body as { slug?: unknown } | undefined)?.slug));
@@ -517,13 +543,15 @@ export async function tarefasCriarHandler(req: Request, res: Response): Promise<
     res.status(d.status).json({ error: d.erro, ...(d.extra ?? {}) });
     return;
   }
-  // o mesmo pedido duas vezes (toque duplo, rede lenta) não vira duas tarefas
-  const igual = await prisma.crmTarefa.findFirst({
-    where: { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, tipo: p.data.tipo, estado: { in: [...ESTADOS_ABERTOS] }, quando: d.quando, texto: d.texto, modeloNome: d.modeloNome, responsavelId: d.responsavelId },
-    select: { id: true },
-  });
+  // o mesmo pedido duas vezes (toque duplo, rede lenta, a conexão que caiu depois de gravar e a atendente que tenta de novo) não vira duas tarefas: vale a que está
+  // aberta e também a idêntica criada há pouco que já foi FEITA (a mensagem agendada para daqui a 5 min já saiu quando a atendente tenta de novo). Falhou/barrada/
+  // cancelada não entram: aí tentar de novo é pedido novo de verdade
+  const igualA = { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, tipo: p.data.tipo, quando: d.quando, texto: d.texto, modeloNome: d.modeloNome, responsavelId: d.responsavelId };
+  const igual =
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: { in: [...ESTADOS_ABERTOS] } }, select: { id: true, estado: true } })) ??
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: 'feita', criadoEm: { gte: new Date(agora.getTime() - REPETIDA_EM_MS) } }, select: { id: true, estado: true } }));
   if (igual) {
-    res.json({ ok: true, id: igual.id, repetida: true, aviso: d.aviso });
+    res.json({ ok: true, id: igual.id, repetida: true, estado: igual.estado, aviso: d.aviso });
     return;
   }
   const abertas = await prisma.crmTarefa.count({ where: { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, estado: { in: [...ESTADOS_ABERTOS] } } });
