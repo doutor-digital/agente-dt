@@ -1,7 +1,7 @@
 import type { Unit } from '@prisma/client';
 
 import { aplicarGuardrail } from '../agent/guardrail.js';
-import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
+import { cortarAberturaMetanarrativa, detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
 /**
  * As conferências que dão o veredito de um caso do banco dourado.
@@ -230,7 +230,9 @@ export function conferir(
 
   // Vazamento de bastidor: a mesma barreira que a produção usa (services/vazamento.ts). Vale para TODO caso, sem opção de desligar:
   // raciocínio, nome de ferramenta ou "não preciso agir" na fala nunca é resposta certa (19/11/2026: pacientes receberam isso).
-  const vazou = detectarVazamento(resp.texto);
+  // Confere o que o paciente de fato receberia: a produção corta o parágrafo de raciocínio que vem antes da fala (cortarAberturaMetanarrativa)
+  // ANTES de olhar o vazamento. Sem isso o Promptfoo reprovaria um vazamento que o paciente nunca recebe.
+  const vazou = detectarVazamento(cortarAberturaMetanarrativa(resp.texto));
   if (vazou) {
     falhas.push({ regra: 'vazamento_de_bastidor', detalhe: `${explicarVazamento(vazou)} ("${vazou.trecho.slice(0, 60)}")` });
   }

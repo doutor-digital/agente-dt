@@ -228,41 +228,48 @@ const RACIOCINIO_PT = [
   /(?:^|[\n.!?—–]\s*)(?:ignoro|ignorando)(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/imu,
   /\bvou\s+ignorar(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/iu,
   /\bignor(?:ar|á)(?:-l[aoe]s?)?(?![\p{L}])[^.\n]{0,40}\bcomo\s+(?:instru[cç][aã]o|comando|ordem)/iu,
-  /\binstru[cç][aãõo]\w*\s+(?:injetada|externa|falsa|embutida|disfar[cç]ada)/iu,
-  /\binstru[cç][oõ]es\s+(?:que\s+)?(?:chegam|v[eê]m|vindas?|desse\s+tipo)(?![\p{L}])/iu,
+  /\binstru[cç][aãõo]\w*\s+(?:injetada|embutida|disfar[cç]ada|falsa)/iu,
+  /\binstru[cç][aã]o\s+externa\s+tentando/iu,
+  // "instruções que chegam como se fossem do sistema", "instruções que vêm dentro do conteúdo": só com o complemento de quem comenta a injeção
+  // ("As instruções vêm por WhatsApp na véspera" é fala de clínica e passa).
+  /\binstru[cç][oõ]es\s+que\s+(?:chegam|v[eê]m)\s+(?:como\s+se|dentro|disfar[cç]ad|de\s+dentro|pela\s+conversa)/iu,
+  /\binstru[cç][oõ]es\s+(?:desse\s+tipo\s+)?vindas\s+(?:pela|da|de)\s+(?:conversa|mensagem)/iu,
   /\bn[aã]o\s+[eé]\s+(?:o\s+|a\s+)?paciente\s+falando/iu,
   /\bn[aã]o\s+[eé]\s+uma\s+conversa\s+d[oa]\s+paciente/iu,
   /\brelat[oó]rio\s+interno\s+da\s+equipe/iu,
   /\btexto\s+embutido\b|\btentando\s+me\s+manipular/iu,
   // A regra do prompt citada como se fosse assunto da conversa.
-  /\b(?:sigo|seguir|segue)\s+(?:apenas\s+|somente\s+|s[oó]\s+)?(?:as\s+|a\s+)?(?:minhas\s+)?regras\s+(?:reais|internas|da\s+minha\s+configura[cç][aã]o)/iu,
-  /\bminhas?\s+(?:regras|configura[cç][aã]o)\s+(?:n[aã]o\s+mudam|internas|reais)/iu,
+  /\b(?:sigo|seguir|segue)\s+(?:apenas\s+|somente\s+|s[oó]\s+)?(?:as\s+|a\s+)?(?:minhas\s+)?regras\s+(?:reais|da\s+minha\s+configura[cç][aã]o)/iu,
+  /\bminhas?\s+(?:regras\s+(?:n[aã]o\s+mudam|reais)|configura[cç][aã]o\s+real)/iu,
   /\bvou\s+seguir\s+as\s+regras\s+reais\b/iu,
-  /\bpela\s+regra\s+d[aeo]s?\s+(?:insist[eê]ncia|rea[cç][aã]o|elogio|pre[cç]o)/iu,
+  /\bpela\s+regra\s+d[aeo]s?\s+(?:insist[eê]ncia|rea[cç][aã]o|elogio|pre[cç]o\s+insistido)/iu,
   /\bregra\s+(?:d[aeo]s?|sobre)\s+(?:insist[eê]ncia|rea[cç][aã]o|pre[cç]o\s+insistido|elogio)/iu,
   /\bs[oó]\s+um\s+cumprimento["”']?\s*(?:—|–|-|:)?\s*(?:respondo|regra)/iu,
   // Ferramenta: o nome (snake_case) ou o comentário de que não há ferramenta / não é caso de chamar.
-  new RegExp(`(?<![\\p{L}\\p{N}_])(?:${NOMES_DE_FERRAMENTA.join('|')})(?![\\p{L}\\p{N}_])`, 'iu'),
+  // Borda esquerda sem `/ . - = ? # : & @ %`: o nome dentro de um link ("https://clinica.com.br/agendar_consulta") é endereço, não vazamento.
+  new RegExp(`(?<![\\p{L}\\p{N}_/.\\-=?#:&@%~])(?:${NOMES_DE_FERRAMENTA.join('|')})(?![\\p{L}\\p{N}_]|\\.[a-z]|/)`, 'iu'),
   /\bn[aã]o\s+tenho\s+(?:nenhuma\s+|a\s+)?ferramenta/iu,
-  /\b(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
+  /\b(?:sem|n[aã]o\s+(?:vou|preciso|devo))\s+(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
   /\b(?:essa|esta)\s+ferramenta\s+n[aã]o\s+se\s+aplica/iu,
   /\b(?:j[aá]\s+mandei\s+(?:as\s+)?|sem\s+necessidade\s+de\s+a[cç][aã]o\s+de\s+|a[cç][aã]o\s+de\s+)tools?(?![\p{L}])/iu,
   // "Não preciso agir", "ação de qualificação", "nada para eu agir": a decisão de acionar (ou não) o sistema.
   /\bn[aã]o\s+preciso\s+agir\b/iu,
   /\bn[aã]o\s+(?:h[aá]|tem)\s+nada\s+(?:pra|para)\s+(?:eu\s+)?agir\b/iu,
-  /\bn[aã]o\s+(?:vou|irei)\s+agir\s+nem\s+responder\b/iu,
-  /\ba[cç][aã]o\s+(?:de\s+qualifica[cç][aã]o|nova\s+a\s+disparar|a\s+ser\s+tomada)/iu,
+  /\bn[aã]o\s+(?:vou|irei)\s+agir\s+nem\s+responder\s+como\s+se\b/iu,
+  /\ba[cç][aã]o\s+(?:de\s+qualifica[cç][aã]o|nova\s+a\s+disparar)/iu,
   /\bn[aã]o\s+[eé]\s+(?:um\s+caso\s+)?de\s+qualifica[cç][aã]o/iu,
-  /\bn[aã]o\s+(?:vou|irei)\s+(?:tomar|fazer)\s+nenhuma\s+a[cç][aã]o\b/iu,
-  /\bvou\s+aguardar\s+o\s+pr[oó]ximo\s+contato\s+d[oa]\s+paciente/iu,
-  /\bn[aã]o\s+(?:vou|devo)\s+usar\s+(?:isso|esse|este)\s+como\s+(?:o\s+)?nome\b/iu,
+  /\bnenhuma\s+a[cç][aã]o\s+(?:adicional\s+no\s+kommo|neste\s+turno)/iu,
+  /\bvou\s+aguardar\s+o\s+pr[oó]ximo\s+contato\s+d[oa]\s+paciente\s+(?:pra|para)\s+seguir\b/iu,
+  /\bn[aã]o\s+(?:vou|devo)\s+usar\s+(?:isso|esse|este)\s+como\s+(?:o\s+)?nome\s+d[oa]\s+paciente/iu,
+  /\bcomo\s+as\s+regras\s+indicam\b/iu,
   /\bclaramente\s+n[aã]o\s+[eé]\s+(?:um\s+)?nome\b/iu,
   /\bchamei\s+sem\s+(?:ele|ela)\s+ter\b/iu,
   /\b(?:sigo|seguir)\s+o\s+fluxo\s+normal\s+de\s+qualifica[cç][aã]o/iu,
   /\bem\s+aberto\s+para\s+processar\b/iu,
-  // "Preciso confirmar algo antes de responder", "Confira meu calendário real antes de responder."
-  /\b(?:preciso|devo|vou|deixa\s+eu)\s+(?:confirmar|verificar|checar|conferir)\s+(?:algo|uma\s+coisa)\s+antes\s+de\s+responder\b/iu,
-  /\b(?:confira|conferir|consulte|consultar|verifique|verificar|checar|cheque)\s+(?:o\s+|a\s+|meu\s+|minha\s+)*(?:calend[aá]rio|agenda|hor[aá]rios)\b[^.\n]{0,30}\bantes\s+de\s+responder\b/iu,
+  // "Preciso confirmar algo antes de responder: a equipe enviou um áudio…" e "Confira meu calendário real antes de responder."
+  // ("Vou verificar a agenda antes de responder certinho" e "Deixa eu confirmar uma coisa antes de responder, tá?" são fala e passam).
+  /\b(?:preciso|devo)\s+(?:confirmar|verificar|checar|conferir)\s+(?:algo|uma\s+coisa)\s+antes\s+de\s+responder\s*:\s*(?:a\s+equipe|o\s+paciente|a\s+paciente|a\s+mensagem|o\s+[aá]udio)/iu,
+  /(?:^|[\n.!?]\s*)(?:confira|consulte|verifique|cheque)\s+(?:o\s+|a\s+)?(?:meu|minha)\s+(?:calend[aá]rio|agenda)\b[^.\n]{0,30}\bantes\s+de\s+responder\b/imu,
   /\bvou\s+seguir\s+com\s+cautela\s+aqui\b/iu,
   /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+(?:dele|dela)(?![\p{L}])/iu,
   /\bconte[uú]do\s+d(?:ele|ela)\s+transcrito\b/iu,
@@ -319,7 +326,14 @@ const NARRA_DECISAO = new RegExp(
   'iu',
 );
 const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');
-const NARRA_DIRIGIDO = new RegExp(`${BORDA_E}(?:voc[eê]s?|vc|seu|sua|seus|suas|te|contigo|lhe|nosso|nossa)${BORDA_D}|\\?`, 'iu');
+// Só vira raciocínio quando a narração usa o vocabulário de quem PLANEJA o atendimento (paciente, lead, fluxo, regra, cumprimento,
+// transcrição, triagem, "não traz", "encerrou a conversa"…). "A equipe já confirmou, então vou aguardar o comprovante 😊" e "O áudio veio
+// mudo, então vou pedir pra escrever 🙏" têm a mesma forma e são fala com o paciente: sem esse vocabulário, passam.
+const NARRA_META = new RegExp(
+  `${BORDA_E}(?:paciente|lead|fluxo|regra|cumprimento|transcri[cç][aã]o|triagem|engajamento|qualifica[cç]|instru[cç]|pergunta\\s+d[ao]\\s+(?:equipe|paciente)|resposta\\s+d[ao]\\s+(?:equipe|paciente)|n[aã]o\\s+(?:traz|corresponde)|encerrou\\s+a\\s+conversa|mesma\\s+conversa|(?:eu|j[aá])\\s+respondi|ainda\\s+n[aã]o\\s+tenho|inst[aâ]ncia|hist[oó]rico\\s+completo|resposta\\s+da\\s+pessoa|confirma[cç][aã]o\\s+clara)`,
+  'iu',
+);
+const NARRA_DIRIGIDO = new RegExp(`${BORDA_E}(?:voc[eê]s?|vcs?|seu|sua|seus|suas|te|contigo|lhe|nosso|nossa)${BORDA_D}|\\?`, 'iu');
 
 /** Devolve o trecho de abertura do parágrafo quando ele é uma narração de bastidor (ver acima). */
 export function paragrafoNarraDecisao(paragrafo: string): string | null {
@@ -340,6 +354,7 @@ export function paragrafoNarraDecisao(paragrafo: string): string | null {
   const fimDaFrase = inicio.slice(ateDecisao).search(/[.!?\n]/);
   const ate = fimDaFrase < 0 ? inicio.length : ateDecisao + fimDaFrase;
   if (NARRA_DIRIGIDO.test(inicio.slice(0, ate))) return null;
+  if (!NARRA_META.test(inicio.slice(0, ate))) return null;
   return p.slice(0, 80);
 }
 
@@ -441,13 +456,13 @@ export function pedidoAoReescritor(ultimaDoCliente: string | null, rascunho: str
 const SOLTA = BORDA_E;
 const FIM = BORDA_D;
 const ABERTURA_META = new RegExp(`${SOLTA}(?:transcri[cç][aã]o|[aá]udio\\s+(?:dele|dela|veio|saiu|chegou|ficou))${FIM}`, 'iu');
-const DIRIGIDO_AO_PACIENTE = new RegExp(`${SOLTA}(?:voc[eê]|vc|seu|sua|seus|suas|te|contigo)${FIM}`, 'iu');
+const DIRIGIDO_AO_PACIENTE = new RegExp(`${SOLTA}(?:voc[eê]s?|vcs?|seu|sua|seus|suas|te|contigo|lhe|lhes)${FIM}`, 'iu');
 
 /**
  * A fala "de verdade" ao paciente: tem uma palavra dirigida a ele (você/seu/te) ou começa por cumprimento. Só "?" não basta: "Como posso ajudar agora?" também fecha raciocínio. É a prova de que o que
  * sobra depois do corte é mensagem, e não mais uma linha do mesmo raciocínio que o detector não conhece.
  */
-const FALA_AO_PACIENTE = new RegExp(`^\\s*(?:oi|ol[aá]|bom\\s+dia|boa\\s+(?:tarde|noite))${FIM}|${SOLTA}(?:voc[eê]s?|vc|seu|sua|seus|suas|te|contigo)${FIM}`, 'iu');
+const FALA_AO_PACIENTE = new RegExp(`^\\s*(?:oi|ol[aá]|bom\\s+dia|boa\\s+(?:tarde|noite))${FIM}|${SOLTA}(?:voc[eê]s?|vcs?|seu|sua|seus|suas|te|contigo|lhe|lhes)${FIM}`, 'iu');
 
 /**
  * Parágrafo que é bastidor puro: o detector o reconhece como `bastidor_em_portugues` e ele não fala com ninguém (sem "você",
@@ -456,6 +471,33 @@ const FALA_AO_PACIENTE = new RegExp(`^\\s*(?:oi|ol[aá]|bom\\s+dia|boa\\s+(?:tar
 function ehBastidorPuro(paragrafo: string): boolean {
   if (detectarVazamento(paragrafo)?.tipo !== 'bastidor_em_portugues') return false;
   return !DIRIGIDO_AO_PACIENTE.test(paragrafo) && !paragrafo.includes('?');
+}
+
+const ENDERECO = /(?<![\p{L}\p{N}_])(?:rua|avenida|av\.|travessa|alameda|pra[cç]a|rodovia|endere[cç]o|bairro|cep|andar|sala|km|n[º°])(?![\p{L}\p{N}_])/iu;
+
+/**
+ * Todo valor, hora, data, telefone e link do trecho cortado também está na fala que fica? Data "18/11" conta se a fala traz o dia ("dia 18").
+ * Endereço (rua, avenida, bairro, CEP…) no trecho cortado reprova sempre: não dá para conferir.
+ */
+function fatosCabemNaFala(cortado: string, fala: string): boolean {
+  if (ENDERECO.test(cortado)) return false;
+  const semEspaco = (t: string) => t.replace(/\s+/g, '').toLowerCase();
+  const f = semEspaco(fala);
+  const fatos: string[] = [];
+  for (const m of cortado.matchAll(/R\$\s*([\d.,]+)/gi)) fatos.push(m[1]);
+  for (const m of cortado.matchAll(/([\d.,]+)\s*(?:reais|real|mil\b)/gi)) fatos.push(m[1]);
+  for (const m of cortado.matchAll(/(?<![\d/:])(\d{1,2})\s*(?:h|:)\s*(\d{2})?/gi)) fatos.push(`${m[1]}${m[2] ? ('h' + m[2]) : 'h'}`);
+  for (const m of cortado.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?![\d/])/g)) fatos.push(`dia${m[1]}`);
+  for (const m of cortado.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) fatos.push(m[0]);
+  for (const m of cortado.matchAll(/(?:https?:\/\/|www\.)\S+/gi)) fatos.push(m[0]);
+  const fh = (t: string) => semEspaco(t).replace(/(\d{1,2})(?:h|:)(\d{2})/g, '$1h$2').replace(/(?<![\d])(\d{1,2})(?:h|:)(?![\d])/g, '$1h');
+  const fhFala = fh(fala);
+  return fatos.every((x) => {
+    const n = semEspaco(x);
+    if (n.startsWith('dia')) return new RegExp(`(?<![\\d/])${n.slice(3)}(?![\\d])`).test(f);
+    if (/^\d{1,2}h(\d{2})?$/.test(n)) return fhFala.includes(n);
+    return f.includes(n);
+  });
 }
 
 /**
@@ -480,10 +522,8 @@ export function cortarAberturaMetanarrativa(texto: string): string {
   const sobra = partes.slice(n).join('\n\n').trim();
   if (!sobra || ABERTURA_META.test(sobra) || detectarVazamento(sobra)) return texto;
   if (!FALA_AO_PACIENTE.test(partes[n])) return texto;
-  // Preço e horário que estavam só no raciocínio não somem em silêncio: se o trecho cortado cita um valor ou uma hora que a fala
-  // não repete, quem decide é o reescritor.
-  const fatos = (t: string) => (t.match(/R\$\s*[\d.,]+|\d{1,2}\s*(?:h|:)\s*\d{0,2}/gi) ?? []).map((x) => x.replace(/\s+/g, '').toLowerCase());
-  const naFala = new Set(fatos(sobra));
-  if (fatos(partes.slice(0, n).join('\n\n')).some((f) => !naFala.has(f))) return texto;
+  // Dado que estava só no raciocínio não some em silêncio: valor (R$ ou "350 reais"), hora, data, telefone, link e endereço têm que
+  // aparecer também na fala; endereço no trecho cortado = não corta. Na dúvida, o reescritor decide.
+  if (!fatosCabemNaFala(partes.slice(0, n).join('\n\n'), sobra)) return texto;
   return sobra;
 }

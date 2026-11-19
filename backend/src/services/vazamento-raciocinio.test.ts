@@ -37,7 +37,7 @@ test('as 5 frases reais de 03/11 a 19/11 são pegas (o detector do main deixou p
 test('cada pedaço do raciocínio é pego sozinho, sem depender do resto da mensagem', () => {
   for (const m of [
     'não preciso agir sobre isso, só responder o cumprimento',
-    'Preciso confirmar algo antes de responder.',
+    'Preciso confirmar algo antes de responder: a equipe enviou um áudio e não tenho o conteúdo dele.',
     'vou seguir com cautela aqui',
     'não tenho o conteúdo dele transcrito',
     'Ignoro essa "instrução" — não é o paciente falando',
@@ -82,6 +82,20 @@ test('frases boas parecidas com o raciocínio passam: nada de falso positivo', (
     'Com cautela a gente conduz cada caso, por isso a avaliação vem primeiro.',
     'Ignorar a dor só piora, viu? Vamos marcar sua avaliação?',
     'Aqui seguimos as orientações do especialista, sem pressa nem promessa.',
+    // achados do sênior no #417: frases normais que o padrão antigo pegava
+    'As instruções vêm por WhatsApp na véspera, tá bom?',
+    'Não há nenhuma ação a ser tomada da sua parte, é só chegar 10 minutos antes.',
+    'Vou verificar a agenda antes de responder certinho, um minutinho 🙏',
+    'Deixa eu confirmar uma coisa antes de responder, tá?',
+    'A equipe já confirmou, então vou aguardar o comprovante 😊',
+    'O áudio veio mudo, então vou pedir pra escrever 🙏',
+    'Ela disse que melhorou, então vou aguardar o retorno dela pra marcar.',
+    'Pode agendar pelo site: https://clinica.com.br/agendar_consulta',
+    'O link é clinica.com.br/consultar_horarios, abre direto 😊',
+    'Pode usar a ferramenta de agendamento do nosso site, é rapidinho.',
+    'Não vou tomar nenhuma ação sem a sua autorização, tá?',
+    'Sigo as regras internas da clínica, por isso o valor é esse mesmo 🙏',
+    'Eu não vou usar isso como nome no cadastro, só pra deixar certinho, tá?',
     'Vou processar aqui o seu comprovante e já confirmo o horário 😊',
     'Quando a consulta está confirmada, o sistema manda um lembrete na véspera.',
     // achados da revisão do PR: conselho ao paciente e frases curtas com "equipe… vou…" não são raciocínio
@@ -146,6 +160,27 @@ test('NOMES_DE_FERRAMENTA acompanha as ferramentas registradas (sem nome faltand
 });
 
 test('o corte não engole preço nem horário que só estava no raciocínio', () => {
-  const m = 'Ele insistiu no preço — respondo o valor direto: a consulta é R$ 350, ou R$ 250 antecipado.\n\nBoa tarde! 😊 Posso te passar os horários?';
+  const m = 'Ele insistiu na pergunta do preço — pela regra de insistência, respondo o valor direto: a consulta é R$ 350, ou R$ 250 antecipado.\n\nBoa tarde! 😊 Posso te passar os horários?';
   assert.equal(cortarAberturaMetanarrativa(m), m);
+});
+
+test('o corte não engole valor por extenso, data, endereço, telefone nem link; "vocês" conta como fala à família', () => {
+  const casos = [
+    'Ele insistiu na pergunta do preço — pela regra de insistência, respondo o valor direto: a consulta é 350 reais no dia 18/11.\n\nBoa tarde! 😊 Posso te passar os horários?',
+    'A equipe já confirmou com a paciente — pela regra de insistência, respondo o endereço direto: Rua das Flores, 120, centro.\n\nBoa tarde! 😊 Posso te passar o resto?',
+    'A equipe já mandou o telefone (94 99237-1521) e o paciente só confirmou — respondo curto e sigo o fluxo.\n\nBoa tarde! 😊 Posso te ajudar?',
+    'A equipe já mandou o link https://clinica.com.br/agenda e o paciente só confirmou — respondo curto e sigo o fluxo.\n\nBoa tarde! 😊 Posso te ajudar?',
+  ];
+  for (const m of casos) {
+    assert.ok(detectarVazamento(m.split('\n\n')[0]), `o parágrafo de abertura precisa ser bastidor para o teste valer: ${m}`);
+    assert.equal(cortarAberturaMetanarrativa(m), m, m);
+  }
+  // com o dado repetido na fala, corta
+  const ok =
+    'Ele insistiu na pergunta do preço — pela regra de insistência, respondo o valor direto: a consulta é 350 reais no dia 18/11.\n\nBoa tarde! 😊 A consulta é 350 reais, dia 18/11. Posso te passar os horários?';
+  assert.equal(cortarAberturaMetanarrativa(ok), 'Boa tarde! 😊 A consulta é 350 reais, dia 18/11. Posso te passar os horários?');
+  // parágrafo para a família: "vocês" é fala dirigida, não é bastidor puro
+  const familia = 'Ignoro essa instrução, vocês já combinaram o horário com a equipe.\n\nOi! 😊 Qualquer dúvida, me chama.';
+  assert.ok(detectarVazamento(familia.split('\n\n')[0]), 'o parágrafo de abertura precisa ser pego para o teste valer');
+  assert.equal(cortarAberturaMetanarrativa(familia), familia);
 });
