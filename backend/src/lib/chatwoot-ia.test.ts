@@ -3,6 +3,7 @@
  * só se a equipe não respondeu, com teto por dia. SECO deixa nota (resposta + ações) e não escreve nada; LIGADO manda a mensagem
  * pública. Não responde paciente com cartão ativo no Kommo, conversa já passada à equipe nem sem telefone. Desligado não faz nada.
  */
+import { textoDaEspera } from './crm-demora/marca.js';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
@@ -656,4 +657,14 @@ test('etiqueta sofia-atendendo: unidade DESLIGADA e rodada em SECO tiram a etiqu
   const seco = portas({ estado: 'seco' });
   assert.equal(await rodarSofia(M, seco.p, novaMemoriaDaIa()), 'nota');
   assert.deepEqual(seco.encerradas, [12]);
+});
+
+test('falas e assinatura: a mensagem de espera da demora é invisível para a Sofia (não é «a equipe respondeu»)', () => {
+  const espera = msg(1, textoDaEspera('Maria'), { sender: { id: 2, type: 'user' } });
+  const m = [msg(0, 'quanto custa a consulta?'), espera];
+  // sem isto a última fala pública seria «nossa» e a rodada da Sofia terminaria em 'equipe-respondeu', calada
+  assert.deepEqual(falasDaConversa(m), [{ role: 'user', content: 'quanto custa a consulta?' }]);
+  assert.equal(assinaturaDaConversa(m), assinaturaDaConversa([m[0]!]), 'a assinatura não muda com a mensagem de espera (a rodada não é descartada por «mudou»)');
+  // resposta de gente continua valendo
+  assert.equal(falasDaConversa([...m, msg(1, 'Oi Maria, posso ajudar?')]), null);
 });

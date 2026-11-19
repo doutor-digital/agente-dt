@@ -922,3 +922,12 @@ test('trocar o modelo na tela Robôs não faz o texto perder a data do envio (va
   assert.match(s2.texto!, /18\/11 às 10:00/);
   assert.doesNotMatch(s2.texto!, /01\/09/);
 });
+
+test('resumoDaMensagem: a mensagem de espera da demora vale como NOTA para a régua (não é conversa: não inicia «sem resposta 24 h»)', async () => {
+  const { resumoDaMensagem } = await import('./chatwoot-regua.js');
+  const { textoDaEspera } = await import('./crm-demora/marca.js');
+  const nossa = { message_type: 1, private: false, content: textoDaEspera('Maria'), created_at: 1_790_000_000, sender: { id: 2, type: 'user' } };
+  assert.equal(resumoDaMensagem(nossa)?.privada, true);
+  assert.equal(resumoDaMensagem({ ...nossa, content: 'Oi, Maria! Sua consulta é amanhã.' })?.privada, false, 'mensagem nossa de verdade segue como pública');
+  assert.equal(resumoDaMensagem({ ...nossa, message_type: 0 })?.privada, false, 'o paciente repetindo a frase não vira nota');
+});

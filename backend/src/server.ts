@@ -81,6 +81,7 @@ import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tip
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
 import { startCrmTarefasWorker, stopCrmTarefasWorker } from './lib/crm-tarefas-worker.js';
+import { startCrmDemoraWorker, stopCrmDemoraWorker } from './lib/crm-demora-worker.js';
 import { paginaTarefasHandler } from './controllers/tarefas.controller.js';
 import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
 import { startChatwootDuplicadosWorker, stopChatwootDuplicadosWorker } from './lib/chatwoot-duplicados.js';
@@ -313,6 +314,7 @@ async function main(): Promise<void> {
       startBlingRenovacaoWorker();
       startChatwootReguaWorker();
       startCrmTarefasWorker();
+      startCrmDemoraWorker();
       startChatwootAgendaWorker();
       startChatwootDuplicadosWorker();
       startChatwootCapiWorker();
@@ -344,6 +346,7 @@ async function main(): Promise<void> {
       stopBlingRenovacaoWorker();
       stopChatwootReguaWorker();
       stopCrmTarefasWorker();
+      stopCrmDemoraWorker();
       stopChatwootDuplicadosWorker();
       stopChatwootCapiWorker();
       stopFranquiaSyncWorker();

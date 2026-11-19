@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { chaveDoTelefone, mesmoTelefone } from './chatwoot-lida.js';
-import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
+import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, avisoDaGerenteDoBanco, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
@@ -897,4 +897,25 @@ test('se a configuração não puder ser lida, o ciclo NÃO roda (nunca mandar a
   await assert.rejects(cicloDaCaixa(comAjustes(f.armazem, c.chat, quebrado), 2, 'x', 'ligado', U, VESPERA), /banco fora/);
   assert.equal(c.mensagens.length, 0);
   assert.equal(f.vistos.length, 0, 'nem a memória foi tocada');
+});
+
+test('lead quente parado: sem CHATWOOT_GERENTE_WHATSAPP, o número da gerente vem de crm_tarefa_zap — SÓ com a demora LIGADA (em seco nada novo sai)', async () => {
+  const env = { EVOLUTION_ALERT_URL: 'https://evo.exemplo.test/send', EVOLUTION_ALERT_HEADER: 'apikey', EVOLUTION_ALERT_VALUE: 'segredo' };
+  const enviados: Array<{ numero: string; texto: string }> = [];
+  const enviar = async (a: { numero: string; texto: string }) => (enviados.push({ numero: a.numero, texto: a.texto }), true);
+  const consultas: Array<[number, number]> = [];
+  const numero = async (conta: number, caixa: number) => (consultas.push([conta, caixa]), '5594999990001');
+  const com = (modo: string) => avisoDaGerenteDoBanco('doutor-hernia-parauapebas', 3, 1, { modo: () => modo, numero, env, enviar: enviar as never })!;
+  for (const modo of ['seco', 'desligado']) assert.equal(await com(modo)('🔥 Lead QUENTE', 'quente-7'), false, modo);
+  assert.deepEqual([enviados.length, consultas.length], [0, 0], 'em seco/desligado nem consulta o banco');
+  assert.equal(await com('ligado')('🔥 Lead QUENTE parado há 3 h: Maria.', 'quente-7'), true);
+  assert.deepEqual(enviados, [{ numero: '5594999990001', texto: '🔥 Lead QUENTE parado há 3 h: Maria.' }]);
+  assert.deepEqual(consultas, [[1, 3]]);
+  // gerente sem número cadastrado: não sai (e não lança)
+  const semNumero = avisoDaGerenteDoBanco('doutor-hernia-parauapebas', 3, 1, { modo: () => 'ligado', numero: async () => null, env, enviar: enviar as never })!;
+  assert.equal(await semNumero('x', 'k'), false);
+  assert.equal(enviados.length, 1);
+  // sem o canal dos alertas ou sem a conta: nem monta
+  assert.equal(avisoDaGerenteDoBanco('x', 3, 1, { env: {} }), undefined);
+  assert.equal(avisoDaGerenteDoBanco('x', 3, undefined, { env }), undefined);
 });

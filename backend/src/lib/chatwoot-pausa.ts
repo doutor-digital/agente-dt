@@ -17,6 +17,7 @@ import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot, type SessaoDoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { ehUsuarioCelular } from './chatwoot-unidades.js';
+import { ehMensagemDeEspera } from './crm-demora/marca.js';
 
 export const ETIQUETA_PAUSA = 'ia-pausada';
 /** Atributo da conversa que a pausa grava (quem pausou): enquanto existir, a conversa ESTÁ pausada, mesmo que a etiqueta tenha sido desfeita por outra gravação. */
@@ -45,6 +46,9 @@ export function eventoDePausa(corpo: any, caixas: Readonly<Record<number, string
   const tipo = corpo?.message_type;
   if (!(tipo === 'outgoing' || tipo === 1)) return null;
   if (corpo?.private === true) return null;
+  // a nossa mensagem de «recebemos sua mensagem» (crm-demora) não é a equipe respondendo: nunca pausa a Sofia nem tira o «sofia-atendendo»,
+  // venha de qual usuário vier (o conector de outra conta pode não ser o usuário 2)
+  if (ehMensagemDeEspera(corpo)) return null;
   const conversa = numero(corpo?.conversation?.id);
   const caixa = numero(corpo?.conversation?.inbox_id ?? corpo?.inbox?.id);
   const slug = caixa ? caixas[caixa] : undefined;

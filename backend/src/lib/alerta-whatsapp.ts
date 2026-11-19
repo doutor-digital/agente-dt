@@ -45,25 +45,35 @@ export async function avisarJoao(texto: string, chave: string, intervaloMs: numb
   return ok;
 }
 
+export type ResultadoDoEnvio = 'ok' | 'recusado' | 'incerto';
+
 /**
- * O POST de texto na Evolution (…/message/sendText/<instância>), para número ou grupo (`…@g.us`). Texto cortado em 1500,
- * 15 s de prazo. true = enviou; false = falhou (já logado). Nunca lança. Também usado pelo aviso do exame de imagem.
+ * O POST de texto na Evolution (…/message/sendText/<instância>), para número ou grupo (`…@g.us`). Texto cortado em 1500, 15 s de prazo. Nunca lança.
+ *  - `ok`: enviou;
+ *  - `recusado`: a Evolution RESPONDEU com erro (HTTP 4xx/5xx) — não saiu, dá para tentar de novo;
+ *  - `incerto`: sem resposta (estouro dos 15 s, rede) — a mensagem PODE ter saído; quem repetir pode mandar em dobro.
  */
-export async function enviarPelaEvolution(
+export async function enviarPelaEvolutionComResultado(
   a: { url: string; header: string; valor: string; numero: string; texto: string },
   deps: { post?: typeof axios.post } = {},
-): Promise<boolean> {
+): Promise<ResultadoDoEnvio> {
   try {
     await (deps.post ?? axios.post)(
       a.url,
       { number: a.numero, text: a.texto.slice(0, 1500) },
       { headers: { 'Content-Type': 'application/json', [a.header]: a.valor }, timeout: 15_000 },
     );
-    return true;
+    return 'ok';
   } catch (err) {
-    logger.warn({ err: String(err) }, 'evolution: falha ao enviar texto');
-    return false;
+    const status = Number((err as { response?: { status?: unknown } } | null)?.response?.status);
+    logger.warn({ err: String(err), status: Number.isFinite(status) ? status : undefined }, 'evolution: falha ao enviar texto');
+    return Number.isInteger(status) && status >= 400 && status < 600 ? 'recusado' : 'incerto';
   }
+}
+
+/** Como `enviarPelaEvolutionComResultado`, só que true = enviou; false = falhou (recusa ou sem resposta). Também usado pelo aviso do exame de imagem. */
+export async function enviarPelaEvolution(a: Parameters<typeof enviarPelaEvolutionComResultado>[0], deps: { post?: typeof axios.post } = {}): Promise<boolean> {
+  return (await enviarPelaEvolutionComResultado(a, deps)) === 'ok';
 }
 
 /** Só para teste. */

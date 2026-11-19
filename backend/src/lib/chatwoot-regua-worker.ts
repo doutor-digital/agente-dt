@@ -57,6 +57,7 @@ import {
 } from './chatwoot-regua.js';
 import { configDaUnidade, nomeDoModeloNaMeta } from './chatwoot-unidades.js';
 import { textosDoSlug } from './chatwoot-modelos.js';
+import { modoDaDemora, numeroDaGerenteNoBanco } from './crm-demora/gerente.js';
 
 const SWEEP_MS = Number(process.env.CHATWOOT_REGUA_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 150_000;
@@ -129,7 +130,7 @@ export interface DepsDoCiclo {
   pausa: (ms: number) => Promise<void>;
   /** sem ela, a régua não confere o Kommo (unidade sem Kommo) */
   kommo?: CartaoNoKommo;
-  /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot */
+  /** aviso no WhatsApp da gerente (lead quente parado); sem ela, só a atribuição no Chatwoot. Devolve false quando não saiu (sem número, demora não ligada). */
   avisarGerente?: (texto: string, chave: string) => Promise<unknown>;
   /**
    * O que a Gestora configurou na tela «Robôs» para esta unidade: robôs desligados (sem envio, sem nota, sem registro), tempo e modelo.
@@ -155,6 +156,30 @@ export function avisoDaGerente(slug: string): DepsDoCiclo['avisarGerente'] {
   const { EVOLUTION_ALERT_URL: url, EVOLUTION_ALERT_HEADER: header, EVOLUTION_ALERT_VALUE: valor } = process.env;
   if (!numero || !url || !header || !valor) return undefined;
   return (texto) => enviarPelaEvolution({ url, header, valor, numero, texto });
+}
+
+/**
+ * Sem `CHATWOOT_GERENTE_WHATSAPP` (nunca esteve no .env: o «lead quente parado» nunca chegou à gerente), o número dela vem de `crm_tarefa_zap` (tela
+ * Tarefas) — SÓ onde a automação `chatwoot-demora` está LIGADA para a unidade (em seco, nada novo sai). O número é lido na hora do aviso, não no boot.
+ */
+export function avisoDaGerenteDoBanco(
+  slug: string,
+  caixa: number,
+  conta: number | undefined,
+  d: { modo?: (slug: string) => string; numero?: (conta: number, caixa: number) => Promise<string | null>; env?: NodeJS.ProcessEnv; enviar?: typeof enviarPelaEvolution } = {},
+): DepsDoCiclo['avisarGerente'] {
+  const env = d.env ?? process.env;
+  const { EVOLUTION_ALERT_URL: url, EVOLUTION_ALERT_HEADER: header, EVOLUTION_ALERT_VALUE: valor } = env;
+  if (!conta || !url || !header || !valor) return undefined;
+  return async (texto) => {
+    if ((d.modo ?? modoDaDemora)(slug) !== 'ligado') return false;
+    const numero = await (d.numero ?? numeroDaGerenteNoBanco)(conta, caixa);
+    if (!numero) {
+      logger.warn({ slug, caixa }, `${ID_REGUA}: lead quente parado, mas a gerente da caixa não tem WhatsApp em crm_tarefa_zap — o aviso não saiu`);
+      return false;
+    }
+    return (d.enviar ?? enviarPelaEvolution)({ url, header, valor, numero, texto });
+  };
 }
 
 /** status do Kommo que fecham o cartão: 142 = ganho, 143 = perdido */
@@ -671,7 +696,8 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           logger.warn({ slug, caixa: caixaTxt }, `${ID_REGUA}: a caixa ${caixaTxt} não tem conta do Chatwoot válida (unidade desconhecida ou token ausente) — pulo, sem chamar o Chatwoot`);
           continue;
         }
-        await cicloDaCaixa({ ...deps, chat, kommo, avisarGerente: avisoDaGerente(slug) }, Number(caixaTxt), slug, modo, unidade, new Date());
+        const conta = contextoDaCaixa(ctx, Number(caixaTxt))?.conta?.conta;
+        await cicloDaCaixa({ ...deps, chat, kommo, avisarGerente: avisoDaGerente(slug) ?? avisoDaGerenteDoBanco(slug, Number(caixaTxt), conta) }, Number(caixaTxt), slug, modo, unidade, new Date());
       } catch (err) {
         logger.warn({ err: String(err), slug }, `${ID_REGUA}: ciclo falhou — tento no próximo`);
       }

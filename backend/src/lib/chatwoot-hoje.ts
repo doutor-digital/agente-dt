@@ -13,6 +13,7 @@
  *  - Meta do dia: agendamentos por dia de cada caixa (`META_AGENDAMENTOS_POR_CAIXA`), somada nas caixas que a pessoa enxerga.
  */
 import { META_AGENDAMENTOS_POR_CAIXA } from './chatwoot-unidades.js';
+import { ehMensagemDeEspera } from './crm-demora/marca.js';
 
 const DIA = 86_400_000;
 export const DIA_MS = DIA;
@@ -82,7 +83,8 @@ export function semInteracao(c: any, agora: number): boolean {
   const etiquetas: string[] = Array.isArray(c?.labels) ? c.labels.map(String) : [];
   const etapa = str(c?.custom_attributes?.etapa);
   const ultima = c?.last_non_activity_message;
-  const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true;
+  // a nossa mensagem de espera (crm-demora) não é «a equipe respondeu»
+  const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true && !ehMensagemDeEspera(ultima);
   const ultimaEm = Number(ultima?.created_at) * 1000;
   return etiquetas.includes('sem-resposta') || (ETAPAS_QUALIFICACAO.has(etapa) && !!ultimaNossa && agora - ultimaEm > DIA);
 }
@@ -103,9 +105,12 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
     const id = Number(c.id);
     const nome = nomeDe(c);
     const criada = Number(c?.created_at) * 1000;
-    const esperandoDesde = Number(c?.waiting_since) * 1000;
+    // o Chatwoot zera o `waiting_since` com a nossa mensagem de espera (crm-demora), que só sai com o paciente sem resposta há 5 min ou mais:
+    // se ela é a última mensagem, a espera segue e conta daquele instante (menos os 5 min, o mínimo para ela sair)
+    const ultimaEEspera = ehMensagemDeEspera(c?.last_non_activity_message);
+    const esperandoDesde = Number(c?.waiting_since) > 0 ? Number(c?.waiting_since) * 1000 : ultimaEEspera ? Number(c?.last_non_activity_message?.created_at) * 1000 - 5 * 60_000 : NaN;
     const ultima = c?.last_non_activity_message;
-    const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true;
+    const ultimaNossa = ultima && Number(ultima.message_type) === 1 && ultima.private !== true && !ehMensagemDeEspera(ultima);
     const ultimaEm = Number(ultima?.created_at) * 1000;
     const quente = str(a.qualificacao) === 'Quente' || etiquetas.includes('quente');
     const responsavel = str(c?.meta?.assignee?.name) || 'Sem responsável';

@@ -34,6 +34,7 @@ import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anunc
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
+import { ehMensagemDeEspera } from './crm-demora/marca.js';
 import { atendimentoLigado, comecarAtendimento, conferirAtendimento, encerrarAtendimento, eventoDeAtendimento, portaDoAtendimento } from './chatwoot-sofia-atendendo.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
@@ -114,6 +115,8 @@ export function falasDaConversa(mensagens: any[], max = MAX_MENSAGENS_LIDAS): Fa
   mensagens.forEach((m, i) => {
     const tipo = Number(m?.message_type);
     if (m?.private === true || (tipo !== 0 && tipo !== 1)) return;
+    // a nossa mensagem de espera (crm-demora) é invisível para a Sofia: não é a equipe respondendo
+    if (ehMensagemDeEspera(m)) return;
     let texto = typeof m?.content === 'string' ? m.content.trim() : '';
     if (!texto && temAudio(m)) texto = transcricoes.get(i) ?? '[áudio]';
     if (!texto && Array.isArray(m?.attachments) && m.attachments.length) texto = '[anexo]';
@@ -407,7 +410,7 @@ export type Desfecho =
  * Mudou entre o começo e o fim da rodada = o paciente escreveu, a equipe respondeu ou outra cópia do servidor já respondeu.
  */
 export function assinaturaDaConversa(mensagens: any[]): string {
-  const publicas = mensagens.filter((m) => m?.private !== true && (Number(m?.message_type) === 0 || Number(m?.message_type) === 1));
+  const publicas = mensagens.filter((m) => m?.private !== true && (Number(m?.message_type) === 0 || Number(m?.message_type) === 1) && !ehMensagemDeEspera(m));
   const ultima = publicas.at(-1);
   return `${publicas.length}|${ultima?.id ?? ultima?.content ?? ''}`;
 }
