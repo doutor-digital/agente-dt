@@ -83,12 +83,42 @@ test('prompt único escrito à mão: a hora também vai no bloco do turno, não 
   assert.match(tarde.dynamic, /Agora: quinta-feira 19\/11, 14:44/);
 });
 
-test('caminho de um texto só (modelo que não é Anthropic): a hora entra com a chave e só com ela', () => {
-  assert.match(composeSystemPrompt({ unit: tatui(), leadId: 1, horaNoTurno: true, agora: TARDE }), /<agora>\nAgora: quinta-feira 19\/11, 14:44/);
-  assert.doesNotMatch(composeSystemPrompt({ unit: tatui(), leadId: 1, agora: TARDE }), /Agora:/);
+test('caminho de um texto só (modelo que não é Anthropic): a hora entra com a chave, só com ela, e SÓ no fim do texto', () => {
+  const ligado = composeSystemPrompt({ unit: tatui(), leadId: 1, horaNoTurno: true, agora: TARDE });
+  const desligado = composeSystemPrompt({ unit: tatui(), leadId: 1, agora: TARDE });
+  assert.match(ligado, /<agora>\nAgora: quinta-feira 19\/11, 14:44/);
+  assert.doesNotMatch(desligado, /Agora:/);
+  // o texto ligado = o desligado + o bloco: tirando o bloco, sobra o desligado byte a byte, e ele está no FIM (o prefixo que o
+  // cache da OpenAI reaproveita é todo o resto)
+  const SEM_BLOCO = /\n\n<agora>[\s\S]*?<\/agora>(?=\n\n|$)/;
+  assert.equal(ligado.replace(SEM_BLOCO, ''), desligado);
+  assert.ok(ligado.indexOf('<agora>') > ligado.length * 0.95, 'no fim do texto, não no meio');
+  // e duas horas diferentes só diferem dentro do bloco
+  const outra = composeSystemPrompt({ unit: tatui(), leadId: 1, horaNoTurno: true, agora: MANHA });
+  assert.equal(outra.slice(0, outra.indexOf('<agora>')), ligado.slice(0, ligado.indexOf('<agora>')));
+
   const u = tatui({ singlePromptMode: true, systemPrompt: 'Você é a Sofia.' } as Partial<Unit>);
-  assert.match(composeSystemPrompt({ unit: u, leadId: 1, horaNoTurno: true, agora: TARDE }), /Agora: quinta-feira 19\/11, 14:44/);
-  assert.doesNotMatch(composeSystemPrompt({ unit: u, leadId: 1, agora: TARDE }), /Agora:/);
+  const uLigado = composeSystemPrompt({ unit: u, leadId: 1, horaNoTurno: true, agora: TARDE });
+  const uDesligado = composeSystemPrompt({ unit: u, leadId: 1, agora: TARDE });
+  assert.match(uLigado, /Agora: quinta-feira 19\/11, 14:44/);
+  assert.doesNotMatch(uDesligado, /Agora:/);
+  assert.equal(uLigado.replace(SEM_BLOCO, ''), uDesligado, 'prompt único: só difere pelo bloco, e ele está no fim');
+  assert.ok(uLigado.indexOf('<agora>') > uLigado.length * 0.5);
+});
+
+test('a regra do texto: nome pelo turno em que a conversa COMEÇOU, cumprimento sempre pela hora de agora', () => {
+  const { dynamic } = composeSystemPromptParts({ unit: tatui(), leadId: 1, horaNoTurno: true, agora: TARDE });
+  assert.match(dynamic, /O NOME da atendente segue o turno em que a conversa COMEÇOU/);
+  assert.match(dynamic, /O CUMPRIMENTO \(bom dia, boa tarde, boa noite\) é sempre pela hora de agora/);
+  assert.doesNotMatch(dynamic, /o jeito que usou/);
+});
+
+test('um relógio só: o calendário e o resto do prompt leem o instante do turno, não o relógio da parede', () => {
+  // 20/11 02:30 UTC ainda é quinta 19/11 em São Paulo; o calendário do prompt tem que partir de 19/11 mesmo com agora = outro dia
+  const { cacheable } = composeSystemPromptParts({ unit: tatui(), leadId: 1, agora: new Date('2026-03-04T15:00:00Z') });
+  assert.match(cacheable, /Hoje é quarta-feira, 04\/03\/2026/);
+  const texto = composeSystemPrompt({ unit: tatui(), leadId: 1, agora: new Date('2026-03-04T15:00:00Z') });
+  assert.match(texto, /Hoje é quarta-feira, 04\/03\/2026/);
 });
 
 test('a chave nasce desligada na rede toda e liga por unidade (HORA_NO_TURNO_SLUGS)', () => {
