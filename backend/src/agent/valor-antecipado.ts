@@ -35,8 +35,8 @@
  *    a marca traz logo depois dela, numa gramática fechada: "pagando antes [por Pix], fica [em] R$ Y" / "antecipado de R$ Y" / "antecipado: R$ Y").
  *    X é o preço do DIA da unidade quando é igual ao `noDia`. Se existe Y, X NÃO é o slot (é a outra opção) e Y é conferido (vira o antecipado). A frase
  *    dizer "no dia" (não "no dia 21") entre X e a marca também faz X ser pulado quando há Y (X errado, "R$ 400 no dia, mas pagando antes fica R$ 200", é cortado
- *    pelo catálogo, nunca vira o antecipado), mas aí Y não é mexido. Sem Y, X só é pulado se for o `noDia` E a frase disser "no dia". Em todo outro caso nada muda: a frase segue como no main. Y nunca é conferido se for o `noDia`, o sinal
- *    ("agora", "de sinal") ou vier seguido de "no dia".
+ *    pelo catálogo, nunca vira o antecipado), mas aí Y não é mexido. Sem Y, X só é pulado se for o `noDia` E a frase disser "no dia". Em todo outro caso nada muda: a frase segue como no main. X colado na marca (nada entre os dois) nunca é pulado. Y nunca é conferido se for o `noDia`, o
+ *    sinal da unidade (`sinal`), "agora", "de sinal" ou vier seguido de "no dia".
  */
 
 /** Marcadores de que o R$ anterior é o valor do pagamento antecipado. */
@@ -57,7 +57,9 @@ const VALOR_DA_MARCA = new RegExp(
   'iu',
 );
 /** Esse R$ não é o antecipado: vem seguido de "no dia" (não "no dia 21") / "na clínica" (preço do dia) ou de "agora / de sinal / de entrada / de reserva" (o sinal). */
-const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:no\s+dia\b(?!\s+\d)|na\s+cl[ií]nica\b|agora\b|(?:de\s+)?(?:sinal|entrada|reserva)\b)/i;
+const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:no\s+dia\b(?!\s+\d)|na\s+cl[ií]nica\b|agora\b|mais\s+(?:barato|em\s+conta)\b|de\s+(?:desconto|economia)\b|(?:de\s+)?(?:sinal|entrada|reserva)\b)/i;
+/** O que pode vir entre o R$ e a marca sem deixar de ser "R$ colado na marca": só o modo de pagar ("R$ 350 pagando antecipado", "R$ 350 com pagamento antecipado", "R$ 350 pelo Pix antecipado"). */
+const MODO_DE_PAGAR_ANTES = /\b(?:pagando|pagar|paga|pagamento|com|no|na|pelo|pela|por|via|em|o|a|de|pix|p[ií]x|link|valor)\b/gi;
 /** "no dia" como jeito de pagar, não data ("no dia 21"). */
 const NO_DIA = /\bno\s+dia\b(?!\s+\d)/i;
 
@@ -78,6 +80,8 @@ export interface OpcoesAntecipado {
   valoresLegitimos?: readonly number[];
   /** O preço do dia da unidade (`precosDaConsulta().noDia`): o R$ igual a ele é o "outro" preço da frase, não o slot do antecipado. Sem ele, nada é pulado por esse motivo. */
   noDia?: number;
+  /** O sinal da unidade (R$ 50): um R$ igual a ele depois da marca ("antecipado de R$ 50", "fica R$ 50 + R$ 200") é o sinal, não o antecipado. */
+  sinal?: number;
 }
 
 const fmt = (v: number) => (Number.isInteger(v) ? String(v) : v.toFixed(2).replace('.', ','));
@@ -85,7 +89,7 @@ const paraNumero = (s: string) => Number(s.replace(/\./g, '').replace(',', '.'))
 
 export function corrigirValorAntecipado(
   texto: string,
-  { antecipado, taxaDeReserva = false, valoresLegitimos = [], noDia }: OpcoesAntecipado,
+  { antecipado, taxaDeReserva = false, valoresLegitimos = [], noDia, sinal }: OpcoesAntecipado,
 ): { texto: string; corrigiu: number[] } {
   if (!texto || !Number.isFinite(antecipado) || antecipado <= 0) return { texto, corrigiu: [] };
   if (taxaDeReserva) return { texto, corrigiu: [] };
@@ -124,14 +128,16 @@ export function corrigirValorAntecipado(
     // X é o preço do DIA da unidade quando é o número que ela cobra no dia (`noDia`). A palavra "no dia" (não "no dia 21") sozinha NÃO basta: só junto de um Y já certo.
     const xEhNoDia = noDia != null && paraNumero(valor) === noDia;
     const xDizNoDia = NO_DIA.test(entre);
-    if (xEhNoDia || xDizNoDia) {
+    // X COLADO na marca (só o modo de pagar entre os dois: "R$ 350 pagando antecipado, fica R$ 250") É o antecipado e é conferido: não é a "outra opção".
+    const xColado = !/[,;:()—–-]/.test(entre) && !/[\p{L}\d]/u.test(entre.replace(MODO_DE_PAGAR_ANTES, ''));
+    if (!xColado && (xEhNoDia || xDizNoDia)) {
       // Y: o R$ que a marca traz depois dela (nota 3 no topo). Não é o antecipado se for o preço do dia, o sinal ou vier seguido de "no dia".
       const depois = texto.slice(posicao + todo.length);
       const d = VALOR_DA_MARCA.exec(depois);
       const yIni = d ? posicao + todo.length + d[1]!.length : -1;
       const yFim = d ? yIni + d[2]!.length : -1;
       const yV = d ? paraNumero(d[3]!) : NaN;
-      const temY = !!d && yV !== noDia && !NAO_E_O_ANTECIPADO_DEPOIS.test(texto.slice(yFim));
+      const temY = !!d && yV !== noDia && yV !== sinal && !NAO_E_O_ANTECIPADO_DEPOIS.test(texto.slice(yFim));
       // X é o preço do dia (é o noDia, ou a frase diz "no dia") e há Y: X é a outra opção, nunca vira o antecipado (se estiver errado, quem corta é o catálogo).
       // Y é conferido só quando X é o noDia da unidade. X é o noDia e diz "no dia", sem Y: nada a trocar. Em todo outro caso a frase segue como no main.
       if (temY || (xEhNoDia && xDizNoDia)) {
@@ -172,9 +178,13 @@ const VALOR_DO_SINAL = /R\$\s?(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;
 /** O "antecipado" que a frase cola ao sinal logo depois do valor: "sinal de R$ 250 antecipado", "sinal de R$ 250 no Pix antecipado". */
 const ANTECIPADO_LOGO_DEPOIS = new RegExp(`^(?:(?!R\\$)[^\\n.;)]){0,15}?${MARCA_ANTECIPADO}`, 'i');
 
+/** O texto (já cortado antes do valor) cita `v` como R$? */
+const valorAntes = (antes: string, v: number): boolean =>
+  [...antes.matchAll(VALOR_DO_SINAL)].some((m) => paraNumero(m[0].replace(/^R\$\s?/i, '')) === v);
+
 export function corrigirSinalErrado(
   texto: string,
-  { sinal, taxaDeReserva = false }: { sinal: number; taxaDeReserva?: boolean },
+  { sinal, taxaDeReserva = false, antecipado }: { sinal: number; taxaDeReserva?: boolean; antecipado?: number },
 ): { texto: string; corrigiu: number[] } {
   if (!texto || !Number.isFinite(sinal) || sinal <= 0 || taxaDeReserva) return { texto, corrigiu: [] };
   if (FALA_DE_PLANO.test(texto)) return { texto, corrigiu: [] };
@@ -188,6 +198,9 @@ export function corrigirSinalErrado(
     if (RELATA_O_QUE_O_PACIENTE_FEZ.test(frase)) return todo;
     const v = paraNumero(todo.replace(/^R\$\s?/i, ''));
     if (!Number.isFinite(v) || v === sinal) return todo;
+    // "O valor com sinal de R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)": o R$ é o antecipado da unidade e é a PRIMEIRA vez que a mensagem o diz — é o total com sinal
+    // mal rotulado, não o sinal repetido. O erro de verdade repete o total ("R$ 250 garantindo com sinal de R$ 250 antecipado"): aí já havia um R$ antecipado antes.
+    if (antecipado != null && v === antecipado && !valorAntes(texto.slice(0, posicao), antecipado)) return todo;
     corrigiu.push(v);
     return `R$ ${fmt(sinal)}`;
   });

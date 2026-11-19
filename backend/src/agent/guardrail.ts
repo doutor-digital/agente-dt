@@ -391,7 +391,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   // "sinal de R$ 250 antecipado": o valor depois de "sinal de" é o sinal da unidade (R$ 50) — nem o do modelo, nem o antecipado. Antes do `doSinal`,
   // que lê o texto já corrigido.
   if (sinal) {
-    const ss = corrigirSinalErrado(texto, { sinal: sinal.sinal, taxaDeReserva: unit.spineBookingRequiresPayment ?? false });
+    const ss = corrigirSinalErrado(texto, { sinal: sinal.sinal, taxaDeReserva: unit.spineBookingRequiresPayment ?? false, antecipado: p?.antecipado });
     if (ss.corrigiu.length > 0) {
       triggered.push(`sinal_corrigido:${ss.corrigiu.join('/')}->${sinal.sinal}`);
       texto = ss.texto;
@@ -423,6 +423,7 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
       // antecipado" continua errado e é corrigido. Sem sinal (nem flag, nem ficha) a lista é vazia (nada muda).
       valoresLegitimos: sinal ? [...doSinal].filter((v) => v === sinal.sinal) : [],
       noDia: p.noDia,
+      sinal: sinal?.sinal,
     });
     if (va.corrigiu.length > 0) {
       triggered.push(`antecipado_corrigido:${va.corrigiu.join('/')}->${p.antecipado}`);

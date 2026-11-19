@@ -52,16 +52,11 @@ const ANTES_DO_PACIENTE: RegExp[] = [
   // "O comprovante é da nossa clínica, mas o valor de R$ 50 não bate" / "…, mas o valor de R$ 200 ficou abaixo"
   /comprovante\b[^]{0,60}?\bmas\b[^,;—–-]{0,20}?\bvalor\s+(?:de\s+)?$/i,
   // "você pagou", "você já enviou o Pix de"
-  // (sem vírgula/dois-pontos/travessão e sem valor/preço/fica/é/total/restante no meio: "Você enviou tudo, o valor fica R$ 250" e "Você transferiu e o total R$ 300 fica
-  // certo" são o preço; "o Pix de R$" passa)
-  new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b(?:(?!\bvalor\b|\bpre[çc]o\b|\bfica\w*|\bé\b|\bs[aã]o\b|\btotal\b|\brestante\b|\bresto\b)[^,;:—–-]){0,25}$`, 'i'),
+  // (sem vírgula/dois-pontos/travessão e sem valor/preço/fica/é no meio: "Você enviou tudo, o valor fica R$ 250" é o preço; "o Pix de R$" passa)
+  new RegExp(String.raw`\b(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b(?:(?!\bvalor\b|\bpre[çc]o\b|\bfica\w*|\bé\b|\bs[aã]o\b)[^,;:—–-]){0,25}$`, 'i'),
   // "o valor que veio/caiu/chegou/consta/aparece/mostrado …", "o valor mostrado foi de"
   // (só o verbo e, no máximo, "foi/é/era [de]": "o valor mostrado no site é R$ 250" não relata o que o paciente mandou)
-  // "consta" e "aparece" são presente: "o valor que consta é R$ 300" é o preço da tabela, então sem o comprovante na frase só valem com o passado ("o valor que
-  // consta foi/era") ou sem copula. Com "comprovante" antes ("No comprovante, o valor que aparece é R$ 40") o assunto é o que o paciente mandou.
-  /\bvalor\s+(?:que\s+)?(?:veio|caiu|chegou|mostrad[oa]|identificad[oa]|leu)\s+(?:(?:foi|é|era)\s+)?(?:de\s+)?$/i,
-  /\bvalor\s+(?:que\s+)?(?:consta|aparece)\s+(?:(?:foi|era)\s+)?(?:de\s+)?$/i,
-  /\bcomprovante\b[^]*?\bvalor\s+(?:que\s+)?(?:consta|aparece)\s+(?:(?:foi|é|era)\s+)?(?:de\s+)?$/i,
+  /\bvalor\s+(?:que\s+)?(?:veio|caiu|chegou|consta|aparece|mostrad[oa]|identificad[oa]|leu)\s+(?:(?:foi|é|era)\s+)?(?:de\s+)?$/i,
   // "o valor foi de", "o pagamento foi", "o Pix foi de" — passado: o preço da unidade se diz no presente ("é")
   /\b(?:valor|pagamento|pix|dep[oó]sito|transfer[eê]ncia)\s+foi\s+(?:de\s+)?$/i,
 ];
@@ -69,10 +64,7 @@ const ANTES_DO_PACIENTE: RegExp[] = [
 /** Trecho, depois do valor, que o mostra como coisa do paciente. Começa logo depois do valor. */
 const DEPOIS_DO_PACIENTE: RegExp[] = [
   new RegExp(String.raw`^\s*,?\s*(?:que\s+)?(?:voc[eê]|vc)\s+(?:j[aá]\s+)?${FEZ}\b`, 'i'), // "R$ 50 que você pagou"
-  // "R$ 50 que recebi", "R$ 50, que caiu": com o "que". Sem ele só o que não pode ser outra coisa, colado ao valor e sem vírgula ("Seu Pix de R$ 30 caiu aqui");
-  // "Fica R$ 250, veio pelo anúncio?" e "A consulta fica R$ 300, chegou a ver os horários?" são perguntas, e o R$ ali é o preço.
-  /^\s*,?\s*que\s+(?:recebi|caiu|chegou|veio|apareceu)\b/i,
-  /^\s+(?:caiu(?!\s+(?:pra|para|por)\b)|apareceu|chegou(?!\s+a\b))\b/i,
+  /^\s*,?\s*(?:que\s+)?(?:recebi|caiu|chegou|veio|apareceu)\b/i, // "R$ 50 que recebi"
   /^\s*(?:ainda\s+)?n[aã]o\s+(?:bate|confere|corresponde|fecha)\b/i, // "R$ 50 não bate", "R$ 50 ainda não bate" (e NÃO "R$ 200 — então não bate": ali é o preço)
 ];
 /** Só vale com "comprovante" antes, na mesma frase: o comprovante é o assunto, e o valor dele ficou abaixo/acima do esperado. */
@@ -166,8 +158,8 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
  */
 const NEGA_O_VALOR = /(?:^|[\s,;:—–(-])(?:n[aã]o|nem)\s+(?:(?:é|seria|ser[aá]|são|fica|ficam|de)\s+){0,2}$/i;
 
-/** "se não R$ 380" (R$ logo depois, sem verbo) é o "senão" mal escrito: "antecipado R$ 280, se não R$ 380 no dia". "Se não é R$ 350" continua negação. */
-const SE_NAO_COLADO = /\bse\s+n[aã]o\s+$/i;
+/** "se não R$ 380" / "se não é R$ 380" / "se não fica R$ 380" é o "senão" mal escrito ("antecipado R$ 280, se não fica R$ 380 no dia"), não negação. */
+const SE_NAO = /\bse\s+n[aã]o\s+(?:(?:é|seria|ser[aá]|são|fica|ficam|de)\s+){0,2}$/i;
 
 /**
  * Posição (índice do "R$") de cada valor que o texto nega com "não R$ …" / "nem R$ …".
@@ -180,9 +172,10 @@ export function posicoesDeValorNegado(texto: string): Set<number> {
     // Valor com centavos ("R$ 150,99") não é número redondo que o paciente cita: segue sob as travas (oferta-da-campanha.test.ts).
     if (/,(?!00\b)\d{2}/.test(m[0])) continue;
     const antes = texto.slice(Math.max(0, ini - 24), ini);
-    // "Não seria / não será R$ 400 no total?" é PERGUNTA (o "?" logo depois do valor), não nega nada: o valor segue conferido. "…e não R$ 450, tudo bem?" nega.
-    if (/\b(?:seria|ser[aá])\s+$/i.test(antes) && /^[^.!?\n]{0,25}\?/.test(texto.slice(ini + m[0].length))) continue;
-    if (NEGA_O_VALOR.test(antes) && !SE_NAO_COLADO.test(antes)) posicoes.add(ini);
+    // "Não seria R$ 400 no total?" / "Não fica R$ 400 no total?" é PERGUNTA (o "?" fecha o valor, sem vírgula no meio): não nega nada e o valor segue conferido.
+    // "Não é R$ 450, viu?" e "…e não R$ 450, tudo bem?" têm vírgula: continuam negação.
+    if (/^[^.!?,\n]{0,25}\?/.test(texto.slice(ini + m[0].length))) continue;
+    if (NEGA_O_VALOR.test(antes) && !SE_NAO.test(antes)) posicoes.add(ini);
   }
   return posicoes;
 }

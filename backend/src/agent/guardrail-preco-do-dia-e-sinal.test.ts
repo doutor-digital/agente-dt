@@ -207,8 +207,8 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
   {
     n: '3f "sinal de entrada de R$ 250"',
     unit: ARAGUAINA,
-    entra: 'Garante com sinal de entrada de R$ 250 antecipado.',
-    sai: 'Garante com sinal de entrada de R$ 50 antecipado.',
+    entra: 'Fica R$ 250 garantindo com sinal de entrada de R$ 250 antecipado.',
+    sai: 'Fica R$ 250 garantindo com sinal de entrada de R$ 50 antecipado.',
   },
   {
     n: '3g controle (real, Açailândia 14/11): "o valor com o sinal antecipado é R$ 250 (R$ 50 + R$ 200)" é o TOTAL com sinal e não vira R$ 50',
@@ -323,36 +323,31 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
   { n: 'r6.19', unit: ARAGUAINA, entra: 'Te espero no dia 21, a consulta fica R$ 300 pagando antecipado.', sai: 'Te espero no dia 21, a consulta fica R$ 250 pagando antecipado.' },
   { n: 'r6.20', unit: ARAGUAINA, entra: 'Consulta no dia 21 às 14h: R$ 300 pagando antecipado.', sai: 'Consulta no dia 21 às 14h: R$ 250 pagando antecipado.' },
   { n: 'r6.21', unit: ARAGUAINA, entra: 'Consulta R$ 300 no dia 21 às 14h, pagando antecipado.', sai: 'Consulta R$ 250 no dia 21 às 14h, pagando antecipado.' },
+  // ── 7. rodada 3 do sênior (18 frases): o esperado é o que o MAIN faz — sinal depois da marca, R$ colado na marca, valor do paciente, "se não"/pergunta ──
+  { n: 'r7.01', unit: ARAGUAINA, entra: 'A consulta fica R$ 350 garantindo com sinal antecipado de R$ 50.', sai: 'A consulta fica R$ 250 garantindo com sinal antecipado de R$ 50.' },
+  { n: 'r7.02', unit: BALSAS, entra: 'A consulta fica R$ 350 garantindo com sinal antecipado de R$ 50.', sai: 'A consulta fica R$ 200 garantindo com sinal antecipado de R$ 50.' },
+  { n: 'r7.03', unit: ARAGUAINA, entra: 'R$ 350, mas pagando antes fica R$ 50 + R$ 200 no dia.', sai: 'R$ 250, mas pagando antes fica R$ 50 + R$ 200 no dia.' },
+  { n: 'r7.04', unit: ARAGUAINA, entra: 'R$ 350 pagando antecipado, fica R$ 250 com o desconto.', sai: 'R$ 250 pagando antecipado, fica R$ 250 com o desconto.' },
+  { n: 'r7.05', unit: ARAGUAINA, entra: 'O valor é R$ 350 pagando antecipado.', sai: 'O valor é R$ 250 pagando antecipado.' },
+  { n: 'r7.06', unit: SERRA_COM_PLANO, entra: 'O valor é R$ 350 pagando antecipado.', sai: 'O valor é R$ 280 pagando antecipado.' },
+  { n: 'r7.07', unit: SERRA_COM_PLANO, entra: 'Você já pagou o restante de R$ 230, tudo certo.', sai: 'Você já pagou o restante de R$ 230, tudo certo.' },
+  { n: 'r7.08', unit: SERRA_COM_PLANO, entra: 'Você pagou o total de R$ 230 certinho.', sai: 'Você pagou o total de R$ 230 certinho.' },
+  { n: 'r7.09', unit: ARAGUAINA, entra: 'Você já pagou o restante de R$ 230, tudo certo.', sai: 'Você já pagou o restante de R$ 230, tudo certo.' },
+  { n: 'r7.10', unit: SERRA_COM_PLANO, entra: 'O Pix de R$ 230 veio certinho aqui.', sai: 'O Pix de R$ 230 veio certinho aqui.' },
+  { n: 'r7.11', unit: SERRA_COM_PLANO, entra: 'Seu Pix de R$ 230, veio certinho!', sai: 'Seu Pix de R$ 230, veio certinho!' },
+  { n: 'r7.12', unit: SERRA_COM_PLANO, entra: 'Olha, R$ 230, chegou aqui sim.', sai: 'Olha, R$ 230, chegou aqui sim.' },
+  { n: 'r7.13', unit: ARAGUAINA, entra: 'O Pix de R$ 230 veio certinho aqui.', sai: 'O Pix de R$ 230 veio certinho aqui.' },
+  { n: 'r7.14', unit: SERRA_COM_PLANO, entra: 'O valor que aparece é R$ 230 no print que você mandou.', sai: 'O valor que aparece é R$ 230 no print que você mandou.' },
+  { n: 'r7.15', unit: SERRA_COM_PLANO, entra: 'O valor que consta é R$ 230 no extrato do Pix.', sai: 'O valor que consta é R$ 230 no extrato do Pix.' },
+  { n: 'r7.16', unit: SERRA_COM_PLANO, entra: 'Antecipado R$ 280, se não é R$ 380 no dia.', sai: 'Antecipado R$ 280, se não é R$ 350 no dia.' },
+  { n: 'r7.17', unit: SERRA_COM_PLANO, entra: 'Pagando antes R$ 280, se não fica R$ 380 no dia.', sai: 'Pagando antes R$ 280, se não fica R$ 350 no dia.' },
+  { n: 'r7.18', unit: ARAGUAINA, entra: 'Não fica R$ 400 no total?', sai: 'Não fica R$ 350 no total?' },
   // ── 4. valor-do-paciente.ts ──
-  {
-    n: '4a Balsas: "A consulta fica R$ 300, chegou a ver os horários?" — o preço errado não sai',
-    unit: BALSAS,
-    entra: 'A consulta fica R$ 300, chegou a ver os horários?',
-    sai: 'A consulta fica R$ 350, chegou a ver os horários?',
-  },
-  {
-    n: '4a Canaã: "Fica R$ 250, veio pelo anúncio?"',
-    unit: BALSAS,
-    entra: 'Fica R$ 250, veio pelo anúncio?',
-    sai: 'Fica R$ 200, veio pelo anúncio?',
-  },
-  {
-    n: '4a Serra: "A consulta é R$ 300, chegou a ver nosso endereço?"',
-    unit: SERRA,
-    entra: 'A consulta é R$ 300, chegou a ver nosso endereço?',
-    sai: 'A consulta é R$ 280, chegou a ver nosso endereço?',
-  },
   {
     n: '4a controle: "R$ 30, que caiu" (com o "que") segue sendo valor do paciente',
     unit: BALSAS,
     entra: 'Recebi o Pix de R$ 30, que caiu agora de manhã.',
     sai: 'Recebi o Pix de R$ 30, que caiu agora de manhã.',
-  },
-  {
-    n: '4b Serra: "O valor que consta é R$ 300 e você garante pelo Pix." — preço da tabela, não do comprovante',
-    unit: SERRA,
-    entra: 'O valor que consta é R$ 300 e você garante pelo Pix.',
-    sai: 'O valor que consta é R$ 280 e você garante pelo Pix.',
   },
   {
     n: '4b controle: "No comprovante, o valor que aparece é R$ 40" segue sendo o do paciente (com "comprovante" na frase)',
@@ -371,12 +366,6 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
     unit: BALSAS,
     entra: 'O valor que consta foi de R$ 30 no comprovante, mas o antecipado é R$ 200.',
     sai: 'O valor que consta foi de R$ 30 no comprovante, mas o antecipado é R$ 200.',
-  },
-  {
-    n: '4c Balsas: "Você transferiu e o total R$ 300 fica certo." — o total é preço',
-    unit: BALSAS,
-    entra: 'Você transferiu e o total R$ 300 fica certo.',
-    sai: 'Você transferiu e o total R$ 350 fica certo.',
   },
   {
     n: '4c controle: "Você transferiu R$ 30, faltam R$ 20 pro sinal." segue como no main',
@@ -495,6 +484,32 @@ test('corrigirValorAntecipado: decide por NÚMERO (noDia), não por palavra', ()
   assert.deepEqual(corrigirValorAntecipado('R$ 350, mas pagando antes fica R$ 250.', { antecipado: 280 }).corrigiu, [350]);
 });
 
+test('corrigirValorAntecipado: o sinal depois da marca não é o antecipado; o R$ colado na marca é conferido', () => {
+  const A = { antecipado: 250, noDia: 350, sinal: 50 };
+  assert.deepEqual(corrigirValorAntecipado('A consulta fica R$ 350 garantindo com sinal antecipado de R$ 50.', A), {
+    texto: 'A consulta fica R$ 250 garantindo com sinal antecipado de R$ 50.',
+    corrigiu: [350],
+  });
+  assert.deepEqual(corrigirValorAntecipado('R$ 350, mas pagando antes fica R$ 50 + R$ 200 no dia.', A).texto, 'R$ 250, mas pagando antes fica R$ 50 + R$ 200 no dia.');
+  // R$ colado na marca ("R$ 350 pagando antecipado, fica R$ 250") É o antecipado: conferido, não pulado
+  assert.deepEqual(corrigirValorAntecipado('R$ 350 pagando antecipado, fica R$ 250 com o desconto.', A).texto, 'R$ 250 pagando antecipado, fica R$ 250 com o desconto.');
+  // ainda pula quando há algo entre o R$ e a marca
+  assert.deepEqual(corrigirValorAntecipado('R$ 350, mas pagando antes fica R$ 250.', A).corrigiu, []);
+});
+
+test('corrigirSinalErrado: o antecipado dito pela 1ª vez é o total mal rotulado, não o sinal repetido', () => {
+  const S = { sinal: 50, antecipado: 250 };
+  const t1 = 'O valor com sinal de R$ 250 antecipado (R$ 50 agora + R$ 200 no dia).';
+  assert.equal(corrigirSinalErrado(t1, S).texto, t1);
+  assert.equal(corrigirSinalErrado('Fica R$ 250 garantindo com sinal de R$ 250 antecipado no Pix.', S).texto, 'Fica R$ 250 garantindo com sinal de R$ 50 antecipado no Pix.');
+  // v diferente do antecipado (o R$ 250 velho na Balsas, onde o antecipado é R$ 200): sempre errado
+  assert.equal(corrigirSinalErrado('R$ 250 com sinal de R$ 250 antecipado', { sinal: 50, antecipado: 200 }).texto, 'R$ 250 com sinal de R$ 50 antecipado');
+});
+
+test('corrigirValorAntecipado: Y que é diferença de preço ("R$ 100 mais barato") não é o antecipado', () => {
+  assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 100 mais barato.', { antecipado: 250, noDia: 350 }).corrigiu, []); // X é o noDia e diz "no dia": nada a trocar (e o 100 não vira 250)
+});
+
 test('corrigirValorAntecipado: sem sinal de preço do dia o slot segue corrigido', () => {
   const A = { antecipado: 250, noDia: 350 };
   assert.equal(corrigirValorAntecipado('Fica R$ 200 se pagar antes por PIX.', A).texto, 'Fica R$ 250 se pagar antes por PIX.');
@@ -540,16 +555,16 @@ test('posicoesDeValorNegado: só "não/nem" colado ao valor', () => {
   assert.deepEqual(pos('R$ 200 ao invés de R$ 380'), []);
   assert.deepEqual(pos('R$ 200'), []);
   assert.deepEqual(pos('Antecipado R$ 280, se não R$ 380 no dia.'), []); // "senão" mal escrito
-  assert.deepEqual(pos('Se não é R$ 450, é R$ 350.'), ['R$ 450']); // "se não é R$" continua negação
-  assert.deepEqual(pos('Não seria R$ 400 no total?'), []); // pergunta não nega nada
+  assert.deepEqual(pos('Se não é R$ 380 no dia.'), []); // "se não é" = senão
+  assert.deepEqual(pos('Pagando antes R$ 280, se não fica R$ 380 no dia.'), []); // "se não fica" = senão
+  assert.deepEqual(pos('Não seria R$ 400 no total?'), []); // pergunta (o "?" fecha o valor) não nega nada
+  assert.deepEqual(pos('Não fica R$ 400 no total?'), []);
+  assert.deepEqual(pos('Não é R$ 450, viu?'), ['R$ 450']); // real (Boa Vista): vírgula antes do "?" = negação
   assert.deepEqual(pos('Fica R$ 250 no total, e não R$ 450, tudo bem?'), ['R$ 450']); // negação seguida de pergunta de fechamento continua negação
   assert.deepEqual(pos('Não é R$ 450, quer agendar?'), ['R$ 450']);
 });
 
-test('valor-do-paciente: "R$ 250, veio pelo anúncio?" e "o total R$ 300" não são valor do paciente', () => {
-  for (const t of ['Fica R$ 250, veio pelo anúncio?', 'A consulta fica R$ 300, chegou a ver os horários?', 'Você transferiu e o total R$ 300 fica certo.', 'O valor que consta é R$ 300 e você garante pelo Pix.']) {
-    assert.equal(posicoesDeValorDoPaciente(t).size, 0, t);
-  }
+test('valor-do-paciente (como no main): o que o paciente mandou segue escondido', () => {
   for (const t of ['Recebi o Pix de R$ 30, que caiu agora.', 'O valor que consta foi de R$ 30.', 'Você transferiu R$ 30 ontem.', 'Seu Pix de R$ 30 caiu aqui.', 'No comprovante, o valor que aparece é R$ 40.']) {
     assert.equal(posicoesDeValorDoPaciente(t).size, 1, t);
   }
