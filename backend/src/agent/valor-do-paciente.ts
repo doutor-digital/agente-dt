@@ -145,3 +145,36 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
   }
   return posicoes;
 }
+
+/**
+ * O R$ que a Sofia está NEGANDO: "fica R$ 250 no total — não R$ 450", "e não R$ 450", "nem R$ 450", "não é R$ 450". É o valor que o paciente
+ * citou (Araguaína 11/11: o paciente achava que o sinal somava R$ 450) e a frase existe para dizer que NÃO vale. O guardrail trocava esse
+ * valor pelo "aprovado mais próximo" e saía "— não R$ 50", afirmando o contrário do que a Sofia disse. Esconde da mesma forma que o valor do
+ * paciente: só a posição do R$ negado, o resto da mensagem segue conferido.
+ *
+ * Só o "não/nem" COLADO ao valor (no máximo um "é/fica/são/de" no meio; "seria/será" é sugestão, não negação) e só valor redondo (sem centavos: o paciente cita "R$ 450", não "R$ 150,99"). "ao invés de R$ 380" e "em vez de R$ 380" ficam de fora de propósito:
+ * é como a Sofia escreve o preço "normal" errado ("R$ 200 ao invés de R$ 380" → R$ 350, caso real de Imperatriz), e esse SIM é conferido.
+ */
+const NEGA_O_VALOR = /(?:^|[\s,;:—–(-])(?:n[aã]o|nem)\s+(?:(?:é|são|fica|ficam|de)\s+){0,2}$/i;
+
+/** "se não R$ 380" / "se não é R$ 380" / "se não fica R$ 380" é o "senão" mal escrito ("antecipado R$ 280, se não fica R$ 380 no dia"), não negação. */
+const SE_NAO = /\bse\s+n[aã]o\s+(?:(?:é|são|fica|ficam|de)\s+){0,2}$/i;
+
+/**
+ * Posição (índice do "R$") de cada valor que o texto nega com "não R$ …" / "nem R$ …".
+ */
+export function posicoesDeValorNegado(texto: string): Set<number> {
+  const posicoes = new Set<number>();
+  if (!texto || !/R\$/i.test(texto) || !/\b(?:n[aã]o|nem)\b/i.test(texto)) return posicoes;
+  for (const m of texto.matchAll(VALOR)) {
+    const ini = m.index ?? 0;
+    // Valor com centavos ("R$ 150,99") não é número redondo que o paciente cita: segue sob as travas (oferta-da-campanha.test.ts).
+    if (/,(?!00\b)\d{2}/.test(m[0])) continue;
+    const antes = texto.slice(Math.max(0, ini - 24), ini);
+    // "Não seria R$ 400 no total?" / "Não fica R$ 400 no total?" é PERGUNTA (o "?" fecha o valor, sem vírgula no meio): não nega nada e o valor segue conferido.
+    // "Não é R$ 450, viu?" e "…e não R$ 450, tudo bem?" têm vírgula: continuam negação.
+    if (/^[^.!?,\n]{0,25}\?/.test(texto.slice(ini + m[0].length))) continue;
+    if (NEGA_O_VALOR.test(antes) && !SE_NAO.test(antes)) posicoes.add(ini);
+  }
+  return posicoes;
+}
