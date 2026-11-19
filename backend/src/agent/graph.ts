@@ -1018,15 +1018,16 @@ export async function buildAgentGraph(
       // com a correção de preço/lacuna. Se a segunda tentativa vier com tool call ou vazia, fica a original.
       let textoFinal = text;
 
-      // Antes do detector: a abertura que pensa alto sobre a transcrição do áudio ("a transcrição veio genérica… vou pedir pra
-      // ele") sai SEM chamada de modelo quando o resto da resposta já fala com o paciente (Caxias, 13/11/2026).
+      // Antes do detector: o parágrafo de abertura que pensa alto ("a transcrição veio genérica… vou pedir pra ele"; "a equipe já
+      // confirmou… não preciso agir, só responder o cumprimento") sai SEM chamada de modelo quando o resto da resposta já fala com
+      // o paciente (Caxias, 13/11/2026; 16/11 e 03/11/2026). Se não der para cortar com segurança, o detector abaixo manda reescrever.
       const semAbertura = cortarAberturaMetanarrativa(text);
       if (semAbertura !== text) {
         textoFinal = semAbertura;
         response.content = semAbertura;
         await recorder.step({
           kind: 'THINKING',
-          title: '🙈 Abertura sobre a transcrição do áudio cortada — ficou só a fala para o paciente',
+          title: '🙈 Abertura de bastidor cortada (raciocínio antes da fala) — ficou só a fala para o paciente',
           payload: { original: text, final: semAbertura },
         });
       }
