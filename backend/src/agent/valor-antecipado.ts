@@ -31,12 +31,15 @@
  * 3. O PREÇO DO DIA NÃO É O SLOT DO ANTECIPADO (19/11/2026). A janela "R$ X … marca" tem até 45 caracteres e achava o preço do
  *    dia quando a frase o CONTRAPÕE ao antecipado — "R$ 350 no dia, mas se pagar antes, no Pix, fica R$ 200" virava "R$ 200 no dia,
  *    mas… fica R$ 200" (Açailândia, Balsas, Canaã, Mossoró: 9 vezes em 30 dias). Três sinais dizem que o R$ é o do dia:
- *    (a) "no dia / na clínica / na hora / no ato" entre o valor e a marca;
+ *    (a) "no dia" / "na clínica" entre o valor e a marca ("na hora", "no ato" e "ao chegar" só valem se o antecipado vem conferido logo depois da marca);
  *    (b) "mas / porém / só que" entre o valor e a marca E um verbo de preço + outro R$ logo depois da marca ("…, mas pagando antes fica R$ 200");
- *    (c) a marca já traz o seu próprio valor ("o Pix antecipado de R$ 200").
+ *    (c) a marca já traz o seu próprio valor COLADO nela ("o Pix antecipado de R$ 200").
  *    Sem um desses sinais nada muda ("R$ 250 se pagar antes" continua sendo o slot do antecipado).
- *    O R$ que VEM DEPOIS da marca nesses três casos (o "fica R$ 200") passa a ser o slot conferido: pular o preço do dia não pode deixar um
- *    antecipado errado ("…mas pagando antes fica R$ 250" na Serra, onde é R$ 280) sem ninguém olhar.
+ *    O R$ que VEM DEPOIS da marca nesses casos (o "fica R$ 200") passa a ser o slot conferido: pular o preço do dia não pode deixar um
+ *    antecipado errado ("…mas pagando antes fica R$ 250" na Serra, onde é R$ 280) sem ninguém olhar. Esse R$ não vale se for o preço do dia
+ *    ("senão fica R$ 350 no dia") nem o sinal ("R$ 50 de sinal"); aí o R$ de antes segue sendo o slot, como no main.
+ *    Ficam de fora de propósito (a 1ª versão errava, reprovação do sênior 19/11): "à vista" (Pix à vista é o antecipado), "presencial" ("R$ 250 a consulta
+ *    presencial com pagamento antecipado" é o antecipado errado) e o ":" colado ("R$ 250 antecipado: R$ 50 de sinal e R$ 200 no dia").
  */
 
 /** Marcadores de que o R$ anterior é o valor do pagamento antecipado. */
@@ -44,20 +47,33 @@ const MARCA_ANTECIPADO =
   '(?:antecipad[ao]|pagando\\s+antes|pagar\\s+antes|paga\\s+antes|antes\\s+por\\s+(?:pix|p[ií]x)|por\\s+pix\\s+antes|com\\s+anteced[êe]ncia)';
 
 /**
- * (a) O R$ vem seguido do jeito de pagar NO DIA: é o preço do dia, não o antecipado. "à vista" fica de fora de propósito: "R$ 250 à vista no Pix
- * antecipado" é o antecipado (Araguaína 23/10) — o "à vista" só pesa junto de uma contraposição, que é o sinal (b).
+ * (a) O R$ vem seguido do jeito de pagar NO DIA: é o preço do dia, não o antecipado. Só "no dia" e "na clínica" (os dois que aparecem nas frases reais).
+ * Ficam de fora de propósito: "à vista" ("R$ 250 à vista no Pix antecipado" é o antecipado, Araguaína 23/10) e "presencial" ("R$ 250 a consulta presencial
+ * com pagamento antecipado" é o antecipado errado de verdade, Serra).
  */
-const MARCA_DO_DIA = /\b(?:no\s+dia|na\s+cl[ií]nica|na\s+hora|no\s+ato|ao\s+chegar|presencial)\b/i;
+const MARCA_DO_DIA = /\b(?:no\s+dia|na\s+cl[ií]nica)\b/i;
+/** Fraca: só pula o R$ de antes se o antecipado vem conferido depois da marca (sem ele a frase segue pelo caminho do main). */
+const MARCA_DO_DIA_FRACA = /\b(?:na\s+hora|no\s+ato|ao\s+chegar)\b/i;
 /** (b) Contraposição entre o valor e a marca ("R$ 350, mas se pagar antes…"): o valor é a OUTRA opção. */
 const CONTRAPOE = /\b(?:mas|por[eé]m|s[oó]\s+que|contudo|todavia)\b/i;
 /**
- * O R$ que a PRÓPRIA marca traz, logo depois dela: "…pagando antes por PIX fica em R$ 250" (verbo de preço, até 30 caracteres sem pontuação de fim de
- * frase) ou "o Pix antecipado de R$ 200" / "antecipado: R$ 200". É ele o antecipado nessas frases; o R$ que veio antes é a outra opção.
+ * O R$ que a PRÓPRIA marca traz, logo depois dela. Duas formas, e só estas:
+ *  - com verbo de preço: "…pagando antes por PIX fica em R$ 250" (até 30 caracteres sem R$, sem fim de frase, sem "no dia / na clínica / não / senão" nem outro item ("o restante", "o retorno", "a sessão"…)
+ *    no meio: "pagando antes de vir, e no dia fica R$ 350" e "só pagando antes, senão fica R$ 350" falam do preço do DIA);
+ *  - COLADO à marca: "o Pix antecipado de R$ 200".
+ * Grupo 1 = o que vem antes do "R$"; grupo 2 = o "R$ 250"; grupo 3 = o número.
  */
-const VALOR_DA_MARCA =
-  /^(?:\s*(?:de|:)|(?:(?!R\$)[^\n.;)]){0,30}?\b(?:fica(?:m)?|sai(?:m)?|custa|passa|é|são)\s+(?:(?:em|por|de|só|apenas|a)\s+)*)\s*R\$\s?(\d{2,4}(?:[.,]\d{2})?)/i;
-/** Depois do valor da marca vem "no dia / na clínica…": então ele é o preço do dia, não o antecipado. */
-const DIA_LOGO_DEPOIS = /^\s*(?:no\s+dia|na\s+cl[ií]nica|presencial|na\s+hora|no\s+ato)\b/i;
+const NAO_E_DO_DIA_NEM_NEGADO = String.raw`(?!R\$|\bno\s+dia\b|\bna\s+cl[ií]nica\b|\bsen[aã]o\b|\bn[aã]o\b|\b(?:restante|resto|retorno|sess[ãõa]\w*|pacote|exame|raio|entrada|sinal)\b)`;
+const VALOR = String.raw`(R\$\s?(\d{2,4}(?:[.,]\d{2})?))`;
+const VALOR_POR_VERBO = new RegExp(
+  String.raw`^((?:${NAO_E_DO_DIA_NEM_NEGADO}[^\n.;)]){0,30}?(?<![\p{L}\d])(?:fica(?:m)?|sai(?:m)?|custa|passa|é|são)\s+(?:(?:em|por|de|só|apenas|a)\s+)*)${VALOR}`,
+  'iu',
+);
+const VALOR_COLADO = new RegExp(String.raw`^(\s*\bde\s*)${VALOR}`, 'iu');
+/** "Pix antecipado: R$ 250": só vale (para conferir o antecipado) quando o R$ de antes já é do dia — com "no dia" é o preço certo; sem, "Com sinal: R$ 250 antecipado" é o rótulo do total. */
+const VALOR_DOIS_PONTOS = new RegExp(String.raw`^(\s*:\s*)${VALOR}`, 'u');
+/** Esse R$ não é o antecipado: vem seguido de "no dia / na clínica" (preço do dia) ou de "de sinal / de entrada / agora" (o sinal). */
+const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:(?:no\s+dia|na\s+cl[ií]nica|na\s+hora|no\s+ato)\b|(?:de\s+)?(?:sinal|entrada|reserva|agora)\b)/i;
 
 const MARCA_NO_FIM = new RegExp(`${MARCA_ANTECIPADO}$`, 'i');
 
@@ -118,15 +134,24 @@ export function corrigirValorAntecipado(
     const marca = MARCA_NO_FIM.exec(meio);
     const entre = marca ? meio.slice(0, marca.index) : meio;
     const depois = texto.slice(posicao + todo.length);
-    const daMarca = VALOR_DA_MARCA.exec(depois);
+    // O R$ que a marca traz depois dela (o "fica R$ 200"), se for mesmo um antecipado: não pode ser o preço do dia nem o sinal.
+    const valorDaMarca = (padrao: RegExp) => {
+      const d = padrao.exec(depois);
+      if (!d) return null;
+      const ini = posicao + todo.length + d[1]!.length;
+      const fim = ini + d[2]!.length;
+      return NAO_E_O_ANTECIPADO_DEPOIS.test(texto.slice(fim)) ? null : { ini, fim, v: paraNumero(d[3]!) };
+    };
+    const colado = valorDaMarca(VALOR_COLADO);
+    const porVerbo = valorDaMarca(VALOR_POR_VERBO);
     // Preço do dia contraposto ao antecipado: o R$ de antes não é o slot (nota 3 no topo). O que a marca traz depois dela é.
-    const ehDoDia = MARCA_DO_DIA.test(entre) || (!!daMarca && (CONTRAPOE.test(entre) || /^\s*(?:de|:)/.test(depois)));
+    const doDia = MARCA_DO_DIA.test(entre);
+    const y = colado ?? porVerbo ?? (doDia ? valorDaMarca(VALOR_DOIS_PONTOS) : null);
+    const ehDoDia = doDia || !!colado || (!!porVerbo && CONTRAPOE.test(entre)) || (!!y && MARCA_DO_DIA_FRACA.test(entre));
     if (ehDoDia) {
-      if (daMarca) {
-        const fimDoValor = posicao + todo.length + daMarca[0].length;
-        const iniDoValor = posicao + todo.length + daMarca[0].lastIndexOf('R$');
-        tratados.add(iniDoValor);
-        if (!DIA_LOGO_DEPOIS.test(texto.slice(fimDoValor))) trocar(paraNumero(daMarca[1]!), iniDoValor, fimDoValor);
+      if (y) {
+        tratados.add(y.ini);
+        trocar(y.v, y.ini, y.fim);
       }
       continue;
     }
@@ -146,14 +171,14 @@ export function corrigirValorAntecipado(
  * acontecia em Balsas ("sinal de R$ 200 antecipado", 3 vezes em 30 dias) e o que NÃO acontecia nas outras unidades, onde R$ 250 é o
  * antecipado e a frase saía como o modelo escreveu (22 vezes em 30 dias em Araguaína, Imperatriz e Marabá, já enviadas ao paciente).
  *
- * Só vale o que está escrito como "sinal de R$ X" / "sinal no valor de R$ X" / "sinal: R$ X" / "sinal de entrada de R$ X" SEGUIDO de "antecipado" (o slot do
- * antecipado; "O sinal de R$ 100 garante a vaga" continua pelo corte de catálogo), com o R$ visível. "O sinal é R$ X"
- * e "sinal antecipado é R$ X" ficam de fora de propósito: é como a Sofia escreve o TOTAL com sinal ("o valor com o sinal antecipado é R$ 250 (R$ 50 + R$ 200)"),
+ * Só vale o que está escrito como "sinal de R$ X" / "sinal no valor de R$ X" / "sinal de entrada de R$ X" SEGUIDO de "antecipado" (o slot do
+ * antecipado; "O sinal de R$ 100 garante a vaga" continua pelo corte de catálogo), com o R$ visível. "O sinal é R$ X",
+ * "sinal antecipado é R$ X" e "Com sinal: R$ X" ficam de fora de propósito: é como a Sofia escreve o TOTAL com sinal ("o valor com o sinal antecipado é R$ 250 (R$ 50 + R$ 200)"),
  * e esse número é conferido pelo caminho do total, não trocado pelo sinal. Fora de frase,
  * em que o PACIENTE pagou/mandou/transferiu ("Você enviou o sinal de R$ 30, faltam R$ 20" relata o que ele fez). O R$ que o texto
  * diz claramente ser do paciente chega aqui escondido pelo guardrail (`R$ ⟦n⟧`).
  */
-const ANTES_DO_SINAL = /\bsinal\s*(?:(?:de\s+entrada|do\s+pix|da\s+reserva)\s+)?(?:de\s+|no\s+valor\s+de\s+|:\s*)$/i;
+const ANTES_DO_SINAL = /\bsinal\s*(?:(?:de\s+entrada|do\s+pix|da\s+reserva)\s+)?(?:de\s+|no\s+valor\s+de\s+)$/i;
 /** O paciente é quem pagou/mandou: "Você enviou o sinal de R$ 30" relata o que ELE fez, não é o sinal da unidade. */
 const RELATA_O_QUE_O_PACIENTE_FEZ = /\b(?:pagou|enviou|mandou|transferiu|depositou|recebi|recebemos|comprovante|caiu|chegou|veio)\b/i;
 const VALOR_DO_SINAL = /R\$\s?(\d{1,3}(?:\.\d{3})+|\d+)(?:,\d{2})?/gi;

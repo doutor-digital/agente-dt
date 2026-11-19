@@ -166,7 +166,12 @@ export function posicoesDeValorDoPaciente(texto: string): Set<number> {
  */
 const NEGA_O_VALOR = /(?:^|[\s,;:—–(-])(?:n[aã]o|nem)\s+(?:(?:é|seria|ser[aá]|são|fica|ficam|de)\s+){0,2}$/i;
 
-/** Posição (índice do "R$") de cada valor que o texto nega com "não R$ …" / "nem R$ …". */
+/** "se não R$ 380" (R$ logo depois, sem verbo) é o "senão" mal escrito: "antecipado R$ 280, se não R$ 380 no dia". "Se não é R$ 350" continua negação. */
+const SE_NAO_COLADO = /\bse\s+n[aã]o\s+$/i;
+
+/**
+ * Posição (índice do "R$") de cada valor que o texto nega com "não R$ …" / "nem R$ …".
+ */
 export function posicoesDeValorNegado(texto: string): Set<number> {
   const posicoes = new Set<number>();
   if (!texto || !/R\$/i.test(texto) || !/\b(?:n[aã]o|nem)\b/i.test(texto)) return posicoes;
@@ -174,7 +179,8 @@ export function posicoesDeValorNegado(texto: string): Set<number> {
     const ini = m.index ?? 0;
     // Valor com centavos ("R$ 150,99") não é número redondo que o paciente cita: segue sob as travas (oferta-da-campanha.test.ts).
     if (/,(?!00\b)\d{2}/.test(m[0])) continue;
-    if (NEGA_O_VALOR.test(texto.slice(Math.max(0, ini - 24), ini))) posicoes.add(ini);
+    const antes = texto.slice(Math.max(0, ini - 24), ini);
+    if (NEGA_O_VALOR.test(antes) && !SE_NAO_COLADO.test(antes)) posicoes.add(ini);
   }
   return posicoes;
 }
