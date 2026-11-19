@@ -262,7 +262,12 @@ export const BANCO: Caso[] = [
     espera: {
       // O playbook da unidade é explícito: "Paciente escolheu: NÃO agende
       // ainda. Segure o horário na conversa e explique como garantir".
-      contemAlgum: ['comprovante', 'reserva', 'garantir'],
+      // A resposta tem de falar da TAXA ou do comprovante. "reserva"/"garantir" ficaram de fora de propósito: "Pra eu deixar reservado,
+      // me confirma seu nome completo" e "pra eu garantir esse horário, preciso do seu nome" (o erro de 19/11/2026) contêm as duas
+      // palavras e passavam sem dizer nada da taxa.
+      contemAlgum: ['comprovante', 'taxa', 'pix'],
+      // O pedido de nome e telefone vem DEPOIS do comprovante (prompt-composer: sequenciaDepoisDoHorario).
+      naoContem: ['nome completo', 'telefone com ddd', 'seu telefone'],
       naoChamaFerramenta: ['agendar_consulta'],
       naoTransfere: true,
       precoDoCatalogo: true,
