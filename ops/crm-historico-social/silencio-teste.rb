@@ -312,5 +312,36 @@ if FASE == 4
   confere('NOVA: o histórico continua resolvido e intocado', hist.reload.status == 'resolved' && hist.messages.count == 5)
 end
 
+if FASE == 5
+  # desfazer: com o registro de ids das fases 1 e 2 (e depois da fase 4, em que a pessoa já escreveu de novo)
+  ENV['MODO'] = 'desfazer'
+  ENV['REGISTRO'] = File.join(TRAB, 'registro.jsonl')
+  ENV.delete('GRAVAR')
+  contagem = -> { [Contact.count, ContactInbox.count, Conversation.count, Message.count, ActsAsTaggableOn::Tagging.count] }
+  antes = contagem.call
+  hist_antes = Conversation.where('COALESCE(jsonb_exists(additional_attributes, ?), false)', 'meta_conversation_id').count
+  confere('há 5 conversas de histórico antes de desfazer', hist_antes == 5, hist_antes.to_s)
+  begin
+    load File.join(DIR, 'importar-historico-social.rb')
+  rescue SystemExit
+    nil
+  end
+  confere('DESFAZER em seco não apagou nada', contagem.call == antes)
+  ENV['GRAVAR'] = '1'
+  %i[GRAVAR CAIXAS CORTE LIMITE RITMO INICIO FIXTURES].each { |k| Object.send(:remove_const, k) if Object.const_defined?(k) }
+  begin
+    load File.join(DIR, 'importar-historico-social.rb')
+  rescue SystemExit
+    nil
+  end
+  confere('DESFAZER: nenhuma conversa de histórico sobrou', Conversation.where('COALESCE(jsonb_exists(additional_attributes, ?), false)', 'meta_conversation_id').none?)
+  confere('DESFAZER: mensagens importadas saíram', Message.where(source_id: %w[ig_m1 ig_m2 ig_m3 ig_m4 ig_m0 ig_v1 ig_v2 fbn_1 fbj_1 fbe_1]).none?)
+  confere('DESFAZER: mensagens VIVAS ficaram (a velha da semeadura e a que chegou na fase 4)', Message.where(source_id: %w[mid_live mid_nova_1]).count == 2)
+  confere('DESFAZER: contato criado SEM conversa viva saiu (Messenger novo)', Contact.where(name: 'Maria do Messenger').none?)
+  confere('DESFAZER: contato que já tem conversa viva ficou (Instagram novo que voltou a escrever)', Contact.where(name: 'Paciente A Nome Real').count == 1)
+  confere('DESFAZER: nome corrigido do John Doe fica (nome certo não volta a John Doe)', Contact.where(name: 'Joana Nome Real').count == 1)
+  confere('DESFAZER: sobraram etiquetas historico em conversas? nenhuma', ActsAsTaggableOn::Tagging.joins(:tag).where(tags: { name: 'historico' }, taggable_type: 'Conversation').none?)
+end
+
 puts "RESULTADO FASE #{FASE}: #{$falhas.zero? ? 'TUDO PASSOU' : "#{$falhas} FALHA(S)"}"
 exit($falhas.zero? ? 0 : 1)

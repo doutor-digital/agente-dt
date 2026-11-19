@@ -32,6 +32,11 @@ module HistoricoSocial
     n.strip.empty? || n == NOME_PADRAO
   end
 
+  # Condição SQL «nome ainda é o padrão»: espelha nome_padrao? (John Doe exato, ou só espaço/tab/quebra de linha).
+  def sql_nome_padrao(coluna)
+    "(#{coluna} = '#{NOME_PADRAO}' OR btrim(#{coluna}, E' \\t\\r\\n') = '')"
+  end
+
   def limpar(texto)
     texto.to_s.delete("\u0000").strip[0, LIMITE_TEXTO]
   end
@@ -202,13 +207,13 @@ module HistoricoSocial
         status, corpo = chamar(uri)
         json = ler(corpo)
         erro = json.is_a?(Hash) ? json['error'] : nil
-        if erro.nil? && status.to_i < 400
+        if erro.nil? && status.to_i < 400 && json.is_a?(Hash)
           @falhas_seguidas = 0
           return json
         end
         codigo = erro.is_a?(Hash) ? erro['code'] : nil
         sub = erro.is_a?(Hash) ? erro['error_subcode'] : nil
-        classificar!(codigo, sub, status)
+        classificar!(codigo, sub, status, ilegivel: json.nil?)
         # transitório (ou 5xx/timeout) e limite de chamadas: tenta de novo com espera crescente (o limite espera MUITO mais: minutos);
         # esgotou as tentativas, conta uma falha seguida — e falhas seguidas demais param a rodada inteira
         if tent >= @tentativas
@@ -264,8 +269,8 @@ module HistoricoSocial
       CODIGOS_DE_LIMITE.include?(codigo)
     end
 
-    def classificar!(codigo, _sub, status)
-      return if CODIGOS_TRANSITORIOS.include?(codigo) || limite?(codigo) || status.to_i >= 500
+    def classificar!(codigo, _sub, status, ilegivel: false)
+      return if ilegivel || CODIGOS_TRANSITORIOS.include?(codigo) || limite?(codigo) || status.to_i >= 500 # corpo que não é JSON (proxy/CDN): repete
       raise Parar, "token da Meta recusado (código #{codigo})" if CODIGOS_DE_TOKEN.include?(codigo)
       raise Parar, "permissão da Meta negada (código #{codigo})" if CODIGOS_DE_PERMISSAO.include?(codigo)
       raise ErroDaMeta.new(codigo, nil, status) # pedido inválido/objeto sumiu: não adianta repetir, o chamador pula essa conversa
@@ -280,6 +285,8 @@ module HistoricoSocial
   end
 
   # ─── Fontes (de onde vêm as conversas) ───────────────────────────────────────────────────────────────────────────
+
+  MAX_PAGINAS_DE_MENSAGENS = 200 # 20 mil mensagens numa conversa: acima disso a conversa é marcada como possivelmente truncada
 
   CAMPOS_MENSAGEM = {
     messenger: 'id,created_time,from,message,attachments,sticker,shares,is_unsupported',
@@ -325,13 +332,14 @@ module HistoricoSocial
       # chamadas e não é) — NÃO se segue. No Messenger segue-se até o fim.
       prox = @canal == :messenger ? bloco.dig('paging', 'next') : nil
       paginas = 1
-      while prox.to_s != '' && paginas < 200 # as páginas seguintes já vêm como lista {data, paging}
+      while prox.to_s != '' && paginas < MAX_PAGINAS_DE_MENSAGENS # as páginas seguintes já vêm como lista {data, paging}
         bloco = @graph.get(prox)
         todas.concat(bloco['data'] || [])
         prox = bloco.dig('paging', 'next')
         paginas += 1
       end
-      [todas, @canal == :instagram && todas.size >= 20]
+      truncada = @canal == :instagram ? todas.size >= 20 : prox.to_s != '' # Messenger: ainda sobrou página depois do teto
+      [todas, truncada]
     end
 
     # Nome (e @usuário) de UMA pessoa na caixa: Messenger por user_id (PSID); serve à rotina dos «John Doe».

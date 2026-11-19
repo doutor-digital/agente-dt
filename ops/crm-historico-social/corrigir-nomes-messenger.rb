@@ -38,7 +38,7 @@ begin
   raise "a caixa #{CAIXA} não é Messenger" unless inbox.channel_type == 'Channel::FacebookPage'
 
   escopo = Contact.joins(:contact_inboxes).where(contact_inboxes: { inbox_id: inbox.id })
-                  .where("contacts.name = ? OR btrim(contacts.name) = ''", S::NOME_PADRAO)
+                  .where(S.sql_nome_padrao('contacts.name'))
   janela = HORAS.positive? ? HORAS * 3600 : DIAS * 86_400
   escopo = escopo.where('contacts.created_at > ?', Time.now.utc - janela) if janela.positive?
   c[:candidatos] = escopo.count
@@ -55,7 +55,7 @@ begin
     fonte = S::FonteFixture.new(JSON.parse(File.read(ENV['FIXTURES'])).fetch('messenger'), lado_pagina: ch.page_id)
   end
 
-  escopo.order('contacts.id').limit(MAXIMO).pluck('contacts.id', 'contact_inboxes.source_id').each do |contato_id, psid|
+  escopo.order('contacts.id DESC').limit(MAXIMO).pluck('contacts.id', 'contact_inboxes.source_id').each do |contato_id, psid|
     c[:consultados] += 1
     begin
       externo = fonte.participante_por_usuario(psid)
@@ -67,8 +67,12 @@ begin
       c[:nomes_a_corrigir] += 1
       next unless GRAVAR
 
-      c[:corrigidos] += 1 if Contact.where(id: contato_id).where("name = ? OR btrim(name) = ''", S::NOME_PADRAO).update_all(name: nome).positive?
-      puts "REG #{{ tipo: 'nomes', caixa: inbox.id, ids: [contato_id] }.to_json}"
+      if Contact.where(id: contato_id).where(S.sql_nome_padrao('name')).update_all(name: nome).positive?
+        c[:corrigidos] += 1
+        puts "REG #{{ tipo: 'nomes', caixa: inbox.id, ids: [contato_id] }.to_json}"
+      else
+        c[:editado_no_meio] += 1 # a equipe mexeu no nome entre a leitura e a gravação: nada sobrescrito
+      end
     rescue S::ErroDaMeta => e
       c[:erros_da_meta] += 1
       log "erro da Meta em um contato (#{e.message})"

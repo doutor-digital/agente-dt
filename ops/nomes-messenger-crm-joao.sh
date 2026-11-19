@@ -33,7 +33,7 @@ case "$1" in
     ;;
   --ligar)
     levar
-    "${SSH[@]}" "printf '%s\n' '# Corrige os John Doe do Messenger (CRM Doutor Digital). Código: /root/kit/crm-historico-social. Parar sem desinstalar: touch /root/kit/crm-historico-social/PARAR' '*/10 * * * * root /usr/bin/flock -n /var/lock/crm-nomes-messenger.lock /root/kit/crm-historico-social/nomes-messenger-cron.sh >> /root/kit/logs/nomes-messenger.log 2>&1' > $CRON && chmod 644 $CRON && echo 'cron ligado:' && cat $CRON"
+    "${SSH[@]}" "printf '%s\n' '# Corrige os John Doe do Messenger (CRM Doutor Digital). Código: /root/kit/crm-historico-social. Parar sem desinstalar: touch /root/kit/crm-historico-social/PARAR' '*/10 * * * * root /usr/bin/flock -n /var/lock/crm-historico-social.lock /root/kit/crm-historico-social/nomes-messenger-cron.sh >> /root/kit/logs/nomes-messenger.log 2>&1' > $CRON && chmod 644 $CRON && echo 'cron ligado:' && cat $CRON"
     echo "Acompanhe: bash ops/nomes-messenger-crm-joao.sh --status  (a 1ª linha aparece em até 10 min)"
     ;;
   --desligar)

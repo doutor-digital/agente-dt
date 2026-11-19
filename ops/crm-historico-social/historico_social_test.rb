@@ -204,6 +204,17 @@ class HistoricoSocialTest < Minitest::Test
     assert_equal 3, g.chamadas
   end
 
+  def test_sql_nome_padrao
+    sql = S.sql_nome_padrao('contacts.name')
+    assert_includes sql, "contacts.name = 'John Doe'"
+    assert_includes sql, 'btrim(contacts.name'
+  end
+
+  def test_graph_corpo_ilegivel_com_200_repete_em_vez_de_devolver_nil
+    g, = graph([[200, '<html>proxy</html>'], [200, ''], ok('ok' => 1)])
+    assert_equal({ 'ok' => 1 }, g.get('/x'))
+  end
+
   def test_graph_erro_de_rede_conta_como_transitorio
     g, = graph([Timeout::Error, ok('ok' => 1)])
     assert_equal({ 'ok' => 1 }, g.get('/x'))
@@ -285,6 +296,17 @@ class HistoricoSocialTest < Minitest::Test
     assert truncada
     assert_includes URI.decode_www_form_component(http.urls[0]), 'limit(20)'
     assert_equal 1, http.urls.size, 'Instagram: paging.next devolve erro 4/1349210 — não se segue'
+  end
+
+  def test_fonte_messenger_marca_truncada_quando_estoura_o_teto_de_paginas
+    paginas = Array.new(S::MAX_PAGINAS_DE_MENSAGENS) { |i| ok('data' => [{ 'id' => "m#{i}" }], 'paging' => { 'next' => 'https://graph.exemplo/v22.0/p?access_token=T' }) }
+    g, = graph(paginas)
+    f = S::FonteMeta.new(canal: :messenger, graph: g, lado_pagina: PAGINA)
+    # a 1ª resposta traz `messages` aninhado
+    paginas[0] = ok('id' => 't', 'messages' => { 'data' => [{ 'id' => 'm0' }], 'paging' => { 'next' => 'https://graph.exemplo/v22.0/p?access_token=T' } })
+    lista, truncada = f.mensagens('t')
+    assert_equal S::MAX_PAGINAS_DE_MENSAGENS, lista.size
+    assert truncada, 'sobrou página depois do teto: não pode parecer completa'
   end
 
   def test_fonte_lista_conversas_com_limite

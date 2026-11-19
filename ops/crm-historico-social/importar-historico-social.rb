@@ -44,11 +44,14 @@ def reg(tipo, caixa, ids)
   ids.each_slice(2000) { |s| puts "REG #{{ tipo: tipo, caixa: caixa, ids: s }.to_json}" } unless ids.empty?
 end
 
+# Erro NOSSO, com texto fixo (sem dado de paciente): a mensagem é impressa para o João saber o que consertar.
+class ErroNosso < StandardError; end
+
 # Erro sem texto de paciente: o PG imprime a LINHA inteira num NOT NULL; então só classe e SQLSTATE.
 def erro_seguro(e)
   causa = e.respond_to?(:cause) ? e.cause : nil
   estado = causa.respond_to?(:result) && causa.result ? causa.result.error_field(PG::PG_DIAG_SQLSTATE) : nil
-  base = e.is_a?(S::ErroDaMeta) || e.is_a?(S::Parar) ? e.message : e.class.name
+  base = e.is_a?(S::ErroDaMeta) || e.is_a?(S::Parar) || e.is_a?(ErroNosso) ? e.message : e.class.name
   [base, causa && causa.class.name, estado && "sqlstate #{estado}"].compact.join(' / ')
 end
 
@@ -59,7 +62,7 @@ end
 # ─── desfazer ───────────────────────────────────────────────────────────────────────────────────────────────────────
 def desfazer!
   arq = ENV['REGISTRO'].to_s
-  raise 'MODO=desfazer exige REGISTRO=arquivo' if arq.empty? || !File.file?(arq)
+  raise ErroNosso, 'MODO=desfazer exige REGISTRO=arquivo' if arq.empty? || !File.file?(arq)
 
   tudo = Hash.new { |h, k| h[k] = [] }
   File.foreach(arq) do |l|
@@ -69,26 +72,35 @@ def desfazer!
     tudo[j['tipo']].concat(j['ids']) if j['ids']
   end
   convs = tudo['conversas'].uniq
-  # só desfaz conversa em que NINGUÉM mais escreveu depois (mensagem fora do registro = a equipe/paciente já usou)
   mensagens_registro = tudo['mensagens'].uniq
-  intocadas = convs.select { |c| Message.where(conversation_id: c).where.not(id: mensagens_registro).none? }
+  # conversa CRIADA pela rodada só sai inteira se NINGUÉM mais escreveu nela depois (mensagem fora do registro = a equipe/paciente já usou)
+  # (e que continua como foi criada: resolvida, sem responsável, só com a etiqueta historico — etiqueta/atribuição da equipe = mexeram nela)
+  intocadas = convs.select do |c|
+    cv = Conversation.find_by(id: c)
+    cv && cv.status == 'resolved' && cv.assignee_id.nil? && cv.cached_label_list.to_s == S::ETIQUETA &&
+      Message.where(conversation_id: c).where.not(id: mensagens_registro).none?
+  end
   mexidas = convs - intocadas
-  log "desfazer: conversas no registro=#{convs.size} intocadas=#{intocadas.size} com mensagem de fora (ficam)=#{mexidas.size} " \
-      "mensagens=#{mensagens_registro.size} contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size}"
+  # mensagens que a rodada acrescentou a uma conversa de histórico que JÁ existia (2ª rodada em diante): saem só elas, a conversa fica
+  acrescimos = Message.where(id: mensagens_registro).where.not(conversation_id: convs)
+                      .where(conversation_id: Conversation.where('COALESCE(jsonb_exists(additional_attributes, ?), false)', S::MARCA_CONVERSA).select(:id)).pluck(:id)
+  log "desfazer: conversas criadas=#{convs.size} (intocadas=#{intocadas.size}; as #{mexidas.size} que a equipe já usou — mensagem, etiqueta ou responsável — ficam) " \
+      "mensagens do registro=#{mensagens_registro.size} (acréscimos em conversa antiga=#{acrescimos.size}) " \
+      "contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size}"
   unless GRAVAR
-    log 'SECO: nada foi apagado. Rode com GRAVAR=1 para desfazer.'
+    log 'SECO: nada foi apagado. Rode com GRAVAR=1 (e --confirmo-apagar) para desfazer.'
     return
   end
   ActiveRecord::Base.transaction do
-    msgs = Message.where(conversation_id: intocadas, id: mensagens_registro).delete_all
-    tags = ActsAsTaggableOn::Tagging.where(taggable_type: 'Conversation', taggable_id: intocadas).delete_all
+    msgs = Message.where(conversation_id: intocadas, id: mensagens_registro).delete_all + Message.where(id: acrescimos).delete_all
+    tags = ActsAsTaggableOn::Tagging.where(id: tudo['taggings'].uniq, taggable_type: 'Conversation', taggable_id: intocadas).delete_all
     cs = Conversation.where(id: intocadas).delete_all
     # contato/contact_inbox criados pela rodada só saem se não ficou nenhuma conversa ou mensagem presa a eles
     cis = tudo['contact_inboxes'].uniq.select { |ci| !Conversation.where(contact_inbox_id: ci).exists? }
     ContactInbox.where(id: cis).delete_all
     cts = tudo['contatos'].uniq.select { |c| !ContactInbox.where(contact_id: c).exists? && !Conversation.where(contact_id: c).exists? }
     Contact.where(id: cts).delete_all
-    # nomes corrigidos (REG 'nomes') NÃO voltam a «John Doe»: o nome certo fica
+    # nomes corrigidos (REG 'nomes') NÃO voltam a «John Doe» (o nome certo fica); datas de conversa antiga que recebeu acréscimo não são recuadas
     log "desfeito: mensagens=#{msgs} taggings=#{tags} conversas=#{cs} contact_inboxes=#{cis.size} contatos=#{cts.size}"
   end
 end
@@ -98,7 +110,7 @@ def fonte_da_caixa(inbox)
   canal = case inbox.channel_type
           when 'Channel::Instagram' then :instagram
           when 'Channel::FacebookPage' then :messenger
-          else raise "a caixa #{inbox.id} não é Instagram nem Messenger (#{inbox.channel_type})"
+          else raise ErroNosso, "a caixa #{inbox.id} não é Instagram nem Messenger (#{inbox.channel_type})"
           end
   ch = inbox.channel
   lado = canal == :instagram ? ch.instagram_id : ch.page_id
@@ -108,7 +120,7 @@ def fonte_da_caixa(inbox)
 
   # `ch[:access_token]` (e não `ch.access_token`): este último pode RENOVAR o token do Instagram e gravar no canal; a conferência não escreve.
   token = canal == :instagram ? ch[:access_token] : ch.page_access_token
-  raise "a caixa #{inbox.id} está sem token válido" if token.to_s.empty? || (canal == :instagram && ch.expires_at && ch.expires_at < Time.now.utc)
+  raise ErroNosso, "a caixa #{inbox.id} está sem token válido" if token.to_s.empty? || (canal == :instagram && ch.expires_at && ch.expires_at < Time.now.utc)
 
   base = canal == :instagram ? "https://graph.instagram.com/#{GlobalConfigService.load('INSTAGRAM_API_VERSION', 'v22.0')}" : 'https://graph.facebook.com/v22.0'
   [canal, S::FonteMeta.new(canal: canal, graph: S::Graph.new(base: base, token: token, ritmo: RITMO), lado_pagina: lado)]
@@ -137,10 +149,12 @@ def nome_do_contato(canal, externo, perfil)
 end
 
 def importar_caixa!(inbox, tag, resumo)
+  c = nil
+  fonte = nil
+  tipos = Hash.new(0)
   canal, fonte = fonte_da_caixa(inbox)
   c = resumo[inbox.id] = zerar
-  tipos = Hash.new(0)
-  ids = { contatos: [], contact_inboxes: [], conversas: [], mensagens: [], taggings: [] }
+  seguidos = 0 # erros seguidos (qualquer conversa bem-sucedida zera): muitos seguidos = algo quebrado, para a rodada
   log "caixa #{inbox.id} (#{canal}): lendo conversas da Meta#{LIMITE.positive? ? " (limite #{LIMITE})" : ''}"
 
   fonte.conversas(limite: LIMITE.positive? ? LIMITE : nil) do |conv|
@@ -177,7 +191,7 @@ def importar_caixa!(inbox, tag, resumo)
         atual = Contact.where(id: contato_id).pick(:name)
         if S.nome_padrao?(atual) && externo[1] != S::NOME_PADRAO
           c[:nomes_a_corrigir] += 1
-          if GRAVAR && Contact.where(id: contato_id).where("name = ? OR btrim(name) = ''", S::NOME_PADRAO).update_all(name: externo[1]).positive?
+          if GRAVAR && Contact.where(id: contato_id).where(S.sql_nome_padrao('name')).update_all(name: externo[1]).positive?
             c[:nomes_corrigidos] += 1
             reg('nomes', inbox.id, [contato_id])
           end
@@ -203,22 +217,36 @@ def importar_caixa!(inbox, tag, resumo)
       next unless GRAVAR
 
       perfil = (canal == :instagram && situacao == :novo) ? fonte.perfil_instagram(externo_id) : nil
-      gravar_conversa!(inbox, canal, conv, externo, perfil, situacao, contato_id, ci_id, conversa_existente, novas, tag, ids, c)
+      gravar_conversa!(inbox, canal, conv, externo, perfil, contato_id, ci_id, conversa_existente, novas, tag, c)
+      seguidos = 0
     rescue S::Parar
       raise
+    rescue S::ErroDaMeta => e # conversa que a Meta não entrega (apagada, id inválido): pula só ela
+      c[:erros_da_meta] += 1
+      seguidos += 1
+      log "caixa #{inbox.id}: a Meta recusou uma conversa (#{erro_seguro(e)})"
+      raise S::Parar, '10 erros seguidos — paro' if seguidos >= 10
     rescue StandardError => e
-      c[:erros] += 1
+      c[:erros_no_banco] += 1
+      seguidos += 1
       log "caixa #{inbox.id}: erro em uma conversa (#{erro_seguro(e)})"
-      raise S::Parar, 'erros demais seguidos no banco — paro' if c[:erros] >= 20
+      raise S::Parar, '10 erros seguidos — paro' if seguidos >= 10
     end
   end
-
-  c[:chamadas_a_meta] = fonte.graph.chamadas if fonte.respond_to?(:graph) && fonte.graph
-  tipos.sort_by { |k, _| k.to_s }.each { |k, v| c["anexo_#{k}".to_sym] = v }
-  ids.each { |tipo, lista| reg(tipo.to_s, inbox.id, lista.uniq) }
+rescue S::ErroDaMeta => e # a própria LISTA de conversas falhou (página inteira): encerra esta caixa, o resumo e o registro seguem valendo
+  c[:lista_interrompida] = 1
+  log "caixa #{inbox.id}: a lista de conversas da Meta foi interrompida (#{erro_seguro(e)}) — rode de novo para o resto"
+ensure
+  if c
+    c[:chamadas_a_meta] = fonte.graph.chamadas if fonte.respond_to?(:graph) && fonte.graph
+    tipos.sort_by { |k, _| k.to_s }.each { |k, v| c["anexo_#{k}".to_sym] = v }
+  end
 end
 
-def gravar_conversa!(inbox, canal, conv, externo, perfil, situacao, contato_id, ci_id, conversa_existente, novas, tag, ids, c)
+# Grava UMA conversa de histórico numa transação e, só DEPOIS do commit, imprime o registro de ids (REG) dela — assim uma rodada
+# interrompida no meio já deixou o registro de tudo o que foi confirmado.
+def gravar_conversa!(inbox, canal, conv, externo, perfil, contato_id, ci_id, conversa_existente, novas, tag, c)
+  ids = { contatos: [], contact_inboxes: [], conversas: [], taggings: [], mensagens: [] }
   primeira = novas.first[:ts]
   ultima = novas.last[:ts]
   agora = Time.now.utc
@@ -268,8 +296,9 @@ def gravar_conversa!(inbox, canal, conv, externo, perfil, situacao, contato_id, 
       end
       ids[:mensagens].concat(Message.insert_all!(linhas, returning: %w[id]).rows.flatten)
     end
-    c[:mensagens_gravadas] += novas.size
   end
+  c[:mensagens_gravadas] += novas.size
+  ids.each { |tipo, lista| reg(tipo.to_s, inbox.id, lista.uniq) }
 end
 
 def contar_pendentes_de_vida(inbox_ids)
@@ -287,10 +316,10 @@ begin
   end
 
   tag = ActsAsTaggableOn::Tag.find_by(name: S::ETIQUETA)
-  raise "a etiqueta '#{S::ETIQUETA}' não existe (crie-a no CRM antes)" if tag.nil?
+  raise ErroNosso, "a etiqueta '#{S::ETIQUETA}' não existe (crie-a no CRM antes)" if tag.nil?
 
   inboxes = Inbox.where(id: CAIXAS).order(:id).to_a
-  raise "caixa(s) não encontrada(s): #{CAIXAS - inboxes.map(&:id)}" if inboxes.size != CAIXAS.size
+  raise ErroNosso, "caixa(s) não encontrada(s): #{CAIXAS - inboxes.map(&:id)}" if inboxes.size != CAIXAS.size
 
   vivas_antes = contar_pendentes_de_vida(CAIXAS)
   resumo = {}
