@@ -148,6 +148,12 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
     sai: 'Pode ficar tranquilo: não é R$ 450, é R$ 200 pagando antes.',
   },
   {
+    n: '2e controle: o valor AFIRMADO ao lado do negado segue conferido — "não é R$ 450, é R$ 380" vira "é R$ 350"',
+    unit: SEM_SINAL,
+    entra: 'A consulta não é R$ 450, é R$ 380.',
+    sai: 'A consulta não é R$ 450, é R$ 350.',
+  },
+  {
     n: '2x controle: "ao invés de R$ 380" (preço normal errado, não negação) continua virando R$ 350',
     unit: SEM_SINAL,
     entra: 'Pagando por Pix antes do dia da consulta, o valor fica R$ 200 ao invés de R$ 380 — e isso já garante sua vaga.',
@@ -338,6 +344,7 @@ test('corrigirValorAntecipado: o preço do dia contraposto não é o slot', () =
 test('corrigirValorAntecipado: pulou o preço do dia, mas o valor que a marca traz é conferido', () => {
   const S = { antecipado: 280 };
   assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica R$ 250.', S), { texto: 'R$ 350 no dia, mas pagando antes fica R$ 280.', corrigiu: [250] });
+  assert.deepEqual(corrigirValorAntecipado('R$ 350 no dia, mas pagando antes fica em R$ 250.', S), { texto: 'R$ 350 no dia, mas pagando antes fica em R$ 280.', corrigiu: [250] });
   assert.deepEqual(corrigirValorAntecipado('No dia é R$ 350 (o Pix antecipado de R$ 250 é só pra quem paga antes).', S), {
     texto: 'No dia é R$ 350 (o Pix antecipado de R$ 280 é só pra quem paga antes).',
     corrigiu: [250],
