@@ -811,8 +811,9 @@ const HORA_CONCRETA = /\b(\d{1,2})(?::{1,2}(\d{2})|h(\d{2})?|\s?horas?)(?!\d)/g;
 /** «sim», «ok», «pode ser», «beleza»… — o aceite curto, INTEIRO (sem mais nada na fala). «quero» não é aceite. */
 const ACEITE_CURTO =
   /^(?:sim|ok|okay|pode|pode ser|beleza|combinado|isso|certo|fechado|ta|ta bom|ta certo|ta otimo|perfeito|otimo|show|vamos|bora|isso mesmo|pode sim|pode ser sim|tudo bem|tranquilo)$/;
-/** Recusa ou pedido de outra coisa: nunca é a escolha de um horário oferecido. */
-const RECUSA_OU_PEDIDO = /\b(?:nao|nem|sem|outr[oa]s?|depois|antes|mais (?:cedo|tarde)|tem|teria|consegue|seria possivel)\b|\?/;
+/** Recusa, pedido de outra coisa ou dúvida («acho que às 9h», «talvez 9h», «se der»): nunca é a escolha firme de um horário oferecido. */
+const RECUSA_OU_PEDIDO =
+  /\b(?:nao|nem|sem|outr[oa]s?|depois|antes|mais (?:cedo|tarde)|tem|teria|consegue|seria possivel|acho|achar|talvez|quem sabe|depende|se der|se puder|vou ver|vou pensar|preciso (?:ver|conferir|confirmar)|pode ser que)\b|\?/;
 
 /** As horas («H:MM») escritas no texto normalizado, sem repetir. */
 function horasDoTexto(n: string): string[] {

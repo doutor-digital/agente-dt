@@ -131,6 +131,14 @@ test('recusa ou pedido de outro horário não é escolha', () => {
   assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('às 9 não consigo')), false);
 });
 
+test('menção hesitante a uma hora oferecida não é escolha firme', () => {
+  for (const fala of ['acho que às 9h', 'talvez 9h', 'se der às 9h', 'vou ver se consigo às 9h', 'às 9h, depende do trabalho', 'pode ser que às 9h']) {
+    assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx(fala)), false, fala);
+  }
+  // «pode ser 09:00» e «às 9h» firmes continuam sendo escolha
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('pode ser 09:00')), true);
+});
+
 test('número solto não é hora: «sinto dor a 3 meses» depois de uma oferta', () => {
   assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('sinto dor a 3 meses')), false);
   assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('sinto dor a 3 meses', 'Tenho quarta às 3h ou às 11:00.')), false);
