@@ -20,7 +20,7 @@ import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
 import { falasDoTurno, fraseDoPasse, soFalaDoPaciente } from './sinal-de-alerta.js';
-import { evidenciaDoNome as juntarEvidenciaDoNome } from './titulo-ancorado.js';
+import { evidenciaDoNome as juntarEvidenciaDoNome, falasDoPacienteNoPrompt } from './titulo-ancorado.js';
 import { confirmouConsultaNoTurno } from './venda-em-alerta.js';
 import { pacienteFalouDePs } from './sem-pronto-socorro.js';
 import { SLUG_MAGALHAES } from '../lib/magalhaes.js';
@@ -571,7 +571,10 @@ export async function buildAgentGraph(
 
   // O que a IA viu e prova um nome de paciente (falas dele + cadastro). O agentNode renova a cada volta; atualizar_titulo_lead lê.
   let mensagensDoTurnoParaNome: BaseMessage[] = [];
-  const evidenciaDoNome = { obter: () => evidenciaDoNomeDoTurno(mensagensDoTurnoParaNome) };
+  let promptDoTurnoParaNome = '';
+  const evidenciaDoNome = {
+    obter: () => [...evidenciaDoNomeDoTurno(mensagensDoTurnoParaNome), ...falasDoPacienteNoPrompt(promptDoTurnoParaNome)],
+  };
   const allTools = kommoClient
     ? buildTools({
         recorder,
@@ -763,6 +766,7 @@ export async function buildAgentGraph(
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
+    promptDoTurnoParaNome = promptDoTurno;
     const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
     // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.
