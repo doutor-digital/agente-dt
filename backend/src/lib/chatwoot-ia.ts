@@ -34,6 +34,7 @@ import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anunc
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
 import { portaDoRobo, tokenDoRobo } from './chatwoot-sofia-bot.js';
+import { atendimentoLigado, comecarAtendimento, conferirAtendimento, encerrarAtendimento, eventoDeAtendimento, portaDoAtendimento } from './chatwoot-sofia-atendendo.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
@@ -47,6 +48,8 @@ export type { Fala };
 export const ID_IA = 'chatwoot-ia';
 export const ESPERA_SOFIA_MS = 60_000;
 export const TETO_SOFIA_POR_DIA = 300;
+/** quanto o «Sofia atendendo» espera o anúncio da mesma mensagem terminar de gravar a etiqueta dele */
+export const ESPERA_DO_ANUNCIO_MS = 8_000;
 /** quantas mensagens públicas da conversa a Sofia lê */
 export const MAX_MENSAGENS_LIDAS = 24;
 const MAX_TEXTO_ACAO = 160;
@@ -187,6 +190,15 @@ export interface PortasDaIa {
   hoje(): string;
   /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
   abrirParaEquipe?(conversa: number): Promise<void>;
+  /**
+   * Só com o robô ligado e `CHATWOOT_SOFIA_ATENDENDO` != 0 (chatwoot-sofia-atendendo.ts): o paciente escreveu e a Sofia vai atender →
+   * a conversa vai para «Abertas» e ganha a etiqueta `sofia-atendendo`.
+   */
+  comecarAtendimento?(conversa: number): Promise<void>;
+  /** tira a etiqueta `sofia-atendendo` (a equipe respondeu, a Sofia passou para a equipe, a rodada não pôde responder) */
+  encerrarAtendimento?(conversa: number): Promise<void>;
+  /** tira a etiqueta se a conversa mostra que a Sofia saiu (resolvida, pausada, esperando humano): vem do webhook */
+  conferirAtendimento?(conversa: number): Promise<void>;
 }
 
 /** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
@@ -196,6 +208,8 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
   const tokenRobo = opcoes.tokenRobo === undefined ? tokenDoRobo() : opcoes.tokenRobo;
   const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
   if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
+  // «Sofia atendendo» (chatwoot-sofia-atendendo.ts): só onde há robô — é ele que faz a conversa nascer em «Pendentes»
+  const atendimento = robo && atendimentoLigado() ? portaDoAtendimento(ctx, (conversa) => robo.abrirParaEquipe(conversa)) : null;
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -232,6 +246,9 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     },
     // robô ligado: conversa em que a Sofia NÃO respondeu vai para «Abertas» (senão ficaria escondida em «Pendentes»)
     abrirParaEquipe: robo ? (conversa) => robo.abrirParaEquipe(conversa) : undefined,
+    comecarAtendimento: atendimento ? async (conversa) => void (await comecarAtendimento(conversa, atendimento)) : undefined,
+    encerrarAtendimento: atendimento ? async (conversa) => void (await encerrarAtendimento(conversa, atendimento)) : undefined,
+    conferirAtendimento: atendimento ? async (conversa) => void (await conferirAtendimento(conversa, atendimento)) : undefined,
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
@@ -278,8 +295,12 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
 
-/** Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala). */
-export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<void> {
+/**
+ * Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala).
+ * `depoisDe`: algo que mexe nas ETIQUETAS da mesma conversa e roda junto (o anúncio) — o «Sofia atendendo» espera por isso, porque o Chatwoot
+ * substitui a lista inteira e duas gravações simultâneas perdem uma etiqueta.
+ */
+export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, depoisDe: Promise<unknown> = Promise.resolve()): Promise<void> {
   if (p.estado(m.slug) === 'desligado') {
     // aba Registro: «por que ela não respondeu?» — uma linha por conversa por hora, sem tocar em mais nada
     const antes = mem.registrosDeDesligada.get(m.conversa) ?? 0;
@@ -290,6 +311,13 @@ export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: Memori
     }
     if (p.abrirParaEquipe) await p.abrirParaEquipe(m.conversa).catch(() => undefined);
     return;
+  }
+  // «Abertas» + etiqueta `sofia-atendendo` já na 1ª mensagem (só no LIGADO: no seco a Sofia não responde e a etiqueta mentiria)
+  const comecar = p.comecarAtendimento;
+  if (comecar && p.estado(m.slug) === 'ligado') {
+    void depoisDe
+      .then(() => comecar(m.conversa))
+      .catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa / pôr a etiqueta sofia-atendendo`));
   }
   if (m.audios.length) {
     const unit = await p.unidade(m.slug);
@@ -363,6 +391,11 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
     if (p.abrirParaEquipe && desfecho !== 'enviada' && desfecho !== 'ocupada') {
       await p.abrirParaEquipe(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe`));
     }
+    // a Sofia não vai mais responder nesta conversa (por ora): a etiqueta `sofia-atendendo` sai. Desfecho que ela vai tentar de novo
+    // (`mudou`: o paciente escreveu outra vez; `ocupada`) ou que é da pausa (`equipe-respondeu`) não mexe aqui.
+    if (p.encerrarAtendimento && DESFECHOS_QUE_ENCERRAM.has(desfecho)) {
+      await p.encerrarAtendimento(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
+    }
     // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
     if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {
       await p
@@ -371,6 +404,20 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
     }
   }
 }
+
+/** Desfechos em que a Sofia NÃO respondeu e não vai tentar de novo sozinha: a equipe é quem precisa olhar (a etiqueta «Sofia atendendo» sai). */
+export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
+  'sem-texto',
+  'teto',
+  'sem-unidade',
+  'falhou',
+  'desligado',
+  'calada',
+  'sem-telefone',
+  'horario-divergente',
+  'cartao-no-kommo',
+  'kommo-indisponivel',
+]);
 
 /** O que a rodada conta para o Registro além do desfecho (ex.: por que ficou calada). */
 interface InfoDaRodada {
@@ -486,7 +533,11 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   }
   // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
   if (r.agendou) await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
-  if (r.passouParaEquipe) await evento('equipe');
+  if (r.passouParaEquipe) {
+    await evento('equipe');
+    // a Sofia passou a conversa: a etiqueta sai (o webhook da etiqueta `esperando-humano` também conferiria, isto é só mais cedo)
+    await p.encerrarAtendimento?.(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
+  }
 
   // ligado: o paciente pode ter escrito de novo (ou a equipe respondido, ou outra cópia do servidor) enquanto a Sofia pensava
   const gravou = r.acoes.some((a) => FERRAMENTAS_QUE_GRAVAM.has(a.tool));
@@ -692,10 +743,14 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   if (pausa) {
     const e = estadoDoReceptor(conta);
     if (e) {
-      void pausar(pausa.conversa, pausa.autor, e.pausa)
+      void (async () => {
+        const falhou = (o: string) => (err: unknown) => logger.warn({ err: String(err), conversa: pausa.conversa }, `chatwoot-pausa: não consegui ${o}`);
+        await pausar(pausa.conversa, pausa.autor, e.pausa).catch(falhou('pausar'));
+        // cada passo é independente: pausar falhar (atribuição, nota) não deixa a conversa em «Pendentes» nem com «Sofia atendendo»
         // robô ligado: quem respondeu (inclusive pelo celular) está atendendo — a conversa sai de «Pendentes»
-        .then(() => e.portas.abrirParaEquipe?.(pausa.conversa))
-        .catch((err) => logger.warn({ err: String(err), conversa: pausa.conversa }, 'chatwoot-pausa: não consegui pausar'));
+        await e.portas.abrirParaEquipe?.(pausa.conversa).catch(falhou('abrir a conversa'));
+        await e.portas.encerrarAtendimento?.(pausa.conversa).catch(falhou('tirar a etiqueta sofia-atendendo'));
+      })();
     }
     return;
   }
@@ -710,6 +765,12 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
     const e = estadoDoReceptor(conta);
     if (e) void aplicarResolucao(resol, e.resolver).catch((err) => logger.warn({ err: String(err), conversa: resol.conversa }, 'chatwoot-resolver: falhou'));
   }
+  // etiqueta `sofia-atendendo` numa conversa que já mostra que a Sofia saiu (resolvida, pausada, passada à equipe) → tira (chatwoot-sofia-atendendo.ts)
+  const atend = eventoDeAtendimento(req.body);
+  if (atend) {
+    const e = estadoDoReceptor(conta);
+    if (e?.portas.conferirAtendimento) void e.portas.conferirAtendimento(atend.conversa).catch((err) => logger.warn({ err: String(err), conversa: atend.conversa }, `${ID_IA}: não consegui conferir a etiqueta sofia-atendendo`));
+  }
   // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão (chatwoot-etiquetas.ts)
   const etq = eventoDeEtiqueta(req.body);
   if (etq) {
@@ -719,9 +780,10 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   }
   // o código do anúncio: o referral que o Chatwoot já traz na mensagem, ou (sem ele) o que o Kapso diz — guarda e aplica (kapso-referral.ts)
   const consultar = mensagemParaConsultar(req.body);
+  let anuncioPronto: Promise<unknown> = Promise.resolve();
   if (consultar) {
     const r = estadoDoReceptor(conta);
-    void aplicarReferralDoKapso(consultar, {
+    anuncioPronto = aplicarReferralDoKapso(consultar, {
       aoAchar: aoAcharReferral(r),
     }).catch(() => undefined);
   }
@@ -729,5 +791,6 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   if (!m) return;
   const e = estadoDoReceptor(conta);
   if (!e) return;
-  void aoChegar(m, e.portas, e.mem).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
+  // o «Sofia atendendo» espera o anúncio gravar a etiqueta `anuncio` (no máximo 8 s): as duas regravam a lista de etiquetas da conversa
+  void aoChegar(m, e.portas, e.mem, Promise.race([anuncioPronto, new Promise((ok) => setTimeout(ok, ESPERA_DO_ANUNCIO_MS).unref())])).catch((err) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: evento falhou`));
 }
