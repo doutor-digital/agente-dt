@@ -19,7 +19,8 @@ require 'json'
 require File.join(ENV['HS_DIR'] || File.dirname(File.expand_path(__FILE__)), 'historico_social')
 
 S = HistoricoSocial unless defined?(S)
-$stdout.sync = true
+# STDOUT (e não $stdout): sob `rails runner` o $stdout é bufferizado e o acompanhamento só veria o log no fim da rodada
+STDOUT.sync = true
 
 GRAVAR = ENV['GRAVAR'] == '1'
 CAIXA = (ENV['CAIXA'] || '8').to_i
@@ -29,7 +30,8 @@ MAXIMO = (ENV['MAXIMO'] || '30').to_i
 RITMO = (ENV['RITMO'] || '0.7').to_f
 
 def log(texto)
-  puts "LOG #{Time.now.utc.strftime('%Y-%m-%d %H:%M:%S')} nomes-messenger: #{texto}"
+  STDOUT.puts "LOG #{Time.now.utc.strftime('%Y-%m-%d %H:%M:%S')} nomes-messenger: #{texto}"
+  STDOUT.flush
 end
 
 c = Hash.new(0)
@@ -71,7 +73,7 @@ begin
 
       if Contact.where(id: contato_id).where(S.sql_nome_padrao('name')).update_all(name: nome).positive?
         c[:corrigidos] += 1
-        puts "REG #{{ tipo: 'nomes', caixa: inbox.id, ids: [contato_id] }.to_json}"
+        STDOUT.puts "REG #{{ tipo: 'nomes', caixa: inbox.id, ids: [contato_id] }.to_json}"
       else
         c[:editado_no_meio] += 1 # a equipe mexeu no nome entre a leitura e a gravação: nada sobrescrito
       end

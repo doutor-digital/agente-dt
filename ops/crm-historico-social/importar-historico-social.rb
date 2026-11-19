@@ -26,7 +26,8 @@ require 'set'
 require File.join(ENV['HS_DIR'] || File.dirname(File.expand_path(__FILE__)), 'historico_social')
 
 S = HistoricoSocial unless defined?(S)
-$stdout.sync = true
+# STDOUT (e não $stdout): sob `rails runner` o $stdout é bufferizado e o acompanhamento só veria o log no fim da rodada
+STDOUT.sync = true
 
 GRAVAR = ENV['GRAVAR'] == '1'
 CAIXAS = (ENV['CAIXAS'] || '7,8').split(',').map { |x| x.strip.to_i }.reject(&:zero?)
@@ -56,12 +57,13 @@ RECENTE_72H = INICIO - (72 * 3600)
 FIXTURES = ENV['FIXTURES'].to_s.empty? ? nil : ENV['FIXTURES']
 
 def log(texto)
-  puts "LOG #{Time.now.utc.strftime('%H:%M:%S')} #{texto}"
+  STDOUT.puts "LOG #{Time.now.utc.strftime('%H:%M:%S')} #{texto}"
+  STDOUT.flush
 end
 
 # Registro para desfazer: só ids. Linha `REG {...}` (o ops/*.sh guarda a saída em /root/kit/logs).
 def reg(tipo, caixa, ids)
-  ids.each_slice(2000) { |s| puts "REG #{{ tipo: tipo, caixa: caixa, ids: s }.to_json}" } unless ids.empty?
+  ids.each_slice(2000) { |s| STDOUT.puts "REG #{{ tipo: tipo, caixa: caixa, ids: s }.to_json}" } unless ids.empty?
 end
 
 # Erro NOSSO, com texto fixo (sem dado de paciente): a mensagem é impressa para o João saber o que consertar.
