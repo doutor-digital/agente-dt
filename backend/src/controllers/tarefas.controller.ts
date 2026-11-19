@@ -189,6 +189,8 @@ function paraATela(t: CrmTarefa, agora: Date, fuso: string, comZap: Set<number>,
     resultado: t.resultado,
     resultadoPor: t.resultadoPor,
     criadoPor: t.criadoPor,
+    /** quando foi criada: a tela confere com isto se a tarefa que acabou de pedir (e ficou sem resposta) entrou */
+    criadaEm: t.criadoEm instanceof Date ? t.criadoEm.toISOString() : null,
   };
 }
 
@@ -497,6 +499,8 @@ async function prepararDados(r: Resolvida, c: Campos, alvo: Alvo, agora: Date): 
 }
 
 const MAX_ABERTAS_POR_CONVERSA = 20;
+/** Pedido idêntico a uma tarefa criada há menos que isto (mesmo já tendo andado) é repetição, não tarefa nova. */
+const REPETIDA_EM_MS = 15 * 60_000;
 
 export async function tarefasCriarHandler(req: Request, res: Response): Promise<void> {
   const r = await resolver(req, res, slugDe((req.body as { slug?: unknown } | undefined)?.slug));
@@ -517,11 +521,12 @@ export async function tarefasCriarHandler(req: Request, res: Response): Promise<
     res.status(d.status).json({ error: d.erro, ...(d.extra ?? {}) });
     return;
   }
-  // o mesmo pedido duas vezes (toque duplo, rede lenta) não vira duas tarefas
-  const igual = await prisma.crmTarefa.findFirst({
-    where: { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, tipo: p.data.tipo, estado: { in: [...ESTADOS_ABERTOS] }, quando: d.quando, texto: d.texto, modeloNome: d.modeloNome, responsavelId: d.responsavelId },
-    select: { id: true },
-  });
+  // o mesmo pedido duas vezes (toque duplo, rede lenta, a conexão que caiu depois de gravar e a atendente que tenta de novo) não vira duas tarefas: vale a que está
+  // aberta e também a idêntica criada há pouco que já andou (a mensagem agendada para daqui a 5 min já saiu quando a atendente tenta de novo)
+  const igualA = { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, tipo: p.data.tipo, quando: d.quando, texto: d.texto, modeloNome: d.modeloNome, responsavelId: d.responsavelId };
+  const igual =
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: { in: [...ESTADOS_ABERTOS] } }, select: { id: true } })) ??
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: { notIn: [...ESTADOS_ABERTOS, 'cancelada'] }, criadoEm: { gte: new Date(agora.getTime() - REPETIDA_EM_MS) } }, select: { id: true } }));
   if (igual) {
     res.json({ ok: true, id: igual.id, repetida: true, aviso: d.aviso });
     return;

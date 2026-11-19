@@ -356,6 +356,46 @@ test('criar pelo CONTATO escolhe a conversa mais recente DA UNIDADE (ignora outr
   nada_de_post();
 });
 
+test('o mesmo pedido de novo (a atendente tenta outra vez depois de a conexão cair) não duplica nem se a primeira já andou; tarefa velha ou cancelada não conta', async () => {
+  preparar();
+  const corpo = { slug: PARAU, tipo: 'lembrete', conversaId: 40, quandoLocal: local(5 * HORA), texto: 'ver o exame' };
+  const a = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.equal(a.status, 200, JSON.stringify(a.corpo));
+  // a primeira já andou (feita/falhou/barrada) há pouco: o pedido igual é repetição
+  tarefas[0]!.estado = 'feita';
+  const b = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.deepEqual([b.corpo.repetida, b.corpo.id], [true, a.corpo.id]);
+  assert.equal(tarefas.length, 1);
+  // criada há mais de 15 min e já terminada: é um pedido novo
+  tarefas[0]!.criadoEm = new Date(Date.now() - 16 * 60_000);
+  const c = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.equal(c.corpo.repetida, undefined);
+  assert.equal(tarefas.length, 2);
+  // a CANCELADA de propósito não impede de criar a mesma de novo
+  tarefas[1]!.estado = 'cancelada';
+  const d = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.equal(d.corpo.repetida, undefined);
+  assert.equal(tarefas.length, 3);
+});
+
+test('a lista traz quando cada tarefa foi criada (a tela confere com isso a tarefa que acabou de pedir)', async () => {
+  preparar();
+  const corpo = { slug: PARAU, tipo: 'lembrete', conversaId: 40, quandoLocal: local(2 * HORA), texto: 'ver' };
+  await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  const l = await pedir('GET', `/public/tarefas?slug=${PARAU}`, 'tok-agente');
+  assert.equal(l.status, 200);
+  const t = l.corpo.tarefas[0];
+  assert.ok(typeof t.criadaEm === 'string' && Math.abs(Date.now() - new Date(t.criadaEm).getTime()) < 60_000);
+});
+
+test('a tela salva pelo salvarTarefa (conferindo a lista quando o POST fica sem resposta), a releitura não fica no mesmo try do POST e a rede que cai não vira «Failed to fetch» cru', () => {
+  const js = scriptDaPagina();
+  assert.ok(js.includes('await salvarTarefa({') && js.includes('tarefaPedida(d, pedido)'), 'o salvar passa pela conferência');
+  const salvarForm = js.slice(js.indexOf('async function salvarForm'), js.indexOf('// ── WhatsApp das meninas'));
+  assert.ok(!/await carregar\(\)/.test(salvarForm), 'a releitura da lista não está no try do agendamento (é o `atualizar` do salvarTarefa)');
+  assert.ok(js.includes('AbortController') && js.includes('semResposta = true') && js.includes('Sem resposta do servidor'), 'rede que cai ou demora vira erro SEM status, com texto de gente');
+});
+
 test('limite de tarefas abertas por conversa', async () => {
   preparar();
   for (let i = 0; i < 20; i++) tarefas.push({ id: `x${i}-abcdefgh`, unitId: 'u1', conta: 1, conversaId: 40, estado: 'pendente' });

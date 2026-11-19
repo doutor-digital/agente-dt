@@ -10,6 +10,7 @@
  */
 import { LOGO_DD_PNG } from './marca-dd.js';
 import { comContaNaPagina } from './conta-no-navegador.js';
+import { comSalvarNaPagina } from './tarefas-salvar-na-pagina.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -161,10 +162,17 @@ details[open]>summary{margin-bottom:8px}
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
   /*__CONTA_JS__*/
+  /*__SALVAR_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   async function api(method, path, body){
-    var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
+    // rede que cai ou demora demais: erro SEM status (não se sabe se o servidor chegou a gravar) e sem o «Failed to fetch» cru do navegador
+    var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    var corte = ctl ? setTimeout(function(){ ctl.abort(); }, 45000) : null;
+    var r;
+    try { r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}), signal: ctl ? ctl.signal : undefined }); }
+    catch (e0) { var er0 = new Error('Sem resposta do servidor (a conexão caiu ou demorou demais).'); er0.semResposta = true; throw er0; }
+    finally { if (corte) clearTimeout(corte); }
     var j = await r.json().catch(function(){ return {}; });
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.corpo = j; er.status = r.status; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
     return j;
@@ -649,15 +657,30 @@ details[open]>summary{margin-bottom:8px}
     }
     if (F.modo === 'editar') corpo.id = F.id; else if (F.alvo.conversaId) corpo.conversaId = F.alvo.conversaId; else corpo.contatoId = F.alvo.contatoId;
     bt.disabled = true; var texto0 = bt.textContent; bt.textContent = 'Salvando…';
+    var url = F.modo === 'editar' ? '/api/public/tarefas/' + enc(F.id) + '/editar' : '/api/public/tarefas';
+    var pedido = { id: F.modo === 'editar' ? F.id : null, conversaId: corpo.conversaId || null, tipo: F.tipo, quandoLocal: F.quandoLocal, texto: corpo.texto, responsavelId: corpo.responsavelId || null };
     try {
-      var r = await api('POST', F.modo === 'editar' ? '/api/public/tarefas/' + enc(F.id) + '/editar' : '/api/public/tarefas', corpo);
-      toast(r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.'));
-      var quando = paraUtcAprox(F.quandoLocal), hoje = agoraDoServidor();
-      ABA = quando && diaNum(partes(quando)) === diaNum(partes(hoje)) ? 'hoje' : 'proximas';
-      fecharForm(); await carregar();
+      var res = await salvarTarefa({
+        enviar: function(){ return api('POST', url, corpo); },
+        listar: function(){ return api('GET', '/api/public/tarefas?slug=' + enc(U.slug)); },
+        confere: function(d){ return tarefaPedida(d, pedido); },
+        espera: function(ms){ return new Promise(function(ok){ setTimeout(ok, ms); }); },
+        // só roda depois de a tarefa existir; se a lista não atualizar, isso NÃO é erro do agendamento
+        atualizar: function(){
+          var quando = paraUtcAprox(F.quandoLocal), hoje = agoraDoServidor();
+          ABA = quando && diaNum(partes(quando)) === diaNum(partes(hoje)) ? 'hoje' : 'proximas';
+          fecharForm();
+          return carregar();
+        }
+      });
+      var r = res.resposta || {};
+      toast(res.conferida ? 'Tarefa agendada. A conexão oscilou, mas conferi na lista: está lá.' : r.repetida ? 'Esta tarefa já estava agendada.' : r.aviso ? 'Agendada. ' + r.aviso : (F.modo === 'editar' ? 'Tarefa atualizada.' : 'Tarefa agendada.'));
+      if (!res.atualizou) { aviso('Tarefa salva. Não consegui atualizar a lista agora: ela aparece sozinha em instantes.', false); setTimeout(function(){ carregar().then(function(){ aviso(''); }).catch(function(){}); }, 4000); }
     } catch (e) {
       toast(e.message, true); bt.disabled = false; bt.textContent = texto0;
       if (e.corpo && e.corpo.exigeModelo) desenharForm();
+      // sem resposta: pode ter gravado — mostra a lista para a atendente ver antes de tentar de novo
+      if (e.incerto) carregar().catch(function(){});
     }
   }
 
@@ -764,5 +787,5 @@ details[open]>summary{margin-bottom:8px}
 
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDasTarefas(origemChatwoot: string): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__LOGO_DD__').join(LOGO_DD_PNG));
+  return comSalvarNaPagina(comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__LOGO_DD__').join(LOGO_DD_PNG)));
 }
