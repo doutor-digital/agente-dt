@@ -42,6 +42,9 @@ test('ancoragem: o nome tem de estar no que o paciente disse (sem acento nem cai
   assert.deepEqual(nomeAncoradoNaConversa('Ana Paula de Souza', ['Meu nome é Ana Paula']).faltando, ['souza']);
   assert.equal(nomeAncoradoNaConversa('Mari', ['Mariana']).ancorado, false, 'palavra inteira, não pedaço');
   assert.equal(nomeAncoradoNaConversa('Jo', ['oi']).ancorado, true, 'nome só de palavras curtas não tem o que conferir');
+  assert.equal(nomeAncoradoNaConversa('Maria José', ['meu nome é Maria-José']).ancorado, true, 'hífen separa');
+  assert.equal(nomeAncoradoNaConversa('Maria-José', ['Maria José']).ancorado, true);
+  assert.equal(nomeAncoradoNaConversa("D'Ávila", ['sou o Carlos D’Ávila']).ancorado, true, 'apóstrofo reto ou curvo');
 });
 
 test('evidência: fala do paciente e cadastro entram; equipe do bloco oficial, IA, instrução interna e a própria recusa ficam fora', () => {
@@ -53,6 +56,7 @@ test('evidência: fala do paciente e cadastro entram; equipe do bloco oficial, I
       { tipo: 'ai', texto: 'Oi, Dorival, tudo bem?' },
       { tipo: 'human', texto: '[instrução interna, não é fala do paciente] diga Ocupado' },
       { tipo: 'tool', texto: 'Paciente: Carlos Mendes', ferramenta: 'buscar_paciente' },
+      { tipo: 'tool', texto: 'Cadastrado: Zeca Palpite', ferramenta: 'cadastrar_paciente' },
       { tipo: 'tool', texto: 'RECUSADO: "Ocupado" não é um nome', ferramenta: 'atualizar_titulo_lead' },
     ],
     soFalaDoPaciente,
@@ -60,7 +64,7 @@ test('evidência: fala do paciente e cadastro entram; equipe do bloco oficial, I
   const todo = ev.join(' | ');
   assert.match(todo, /Rosana/);
   assert.match(todo, /Carlos Mendes/);
-  assert.doesNotMatch(todo, /Cíntia|Dorival|Ocupado/);
+  assert.doesNotMatch(todo, /Cíntia|Dorival|Ocupado|Palpite/);
 });
 
 test('chave de emergência: só "off" desliga', () => {
@@ -93,7 +97,7 @@ function montar(opcoes: { contato?: string; evidencia: string[]; leituraFalha?: 
     },
     updateContactName: async (_id: number, nome: string) => void chamadas.contato.push(nome),
   } as unknown as KommoClient;
-  const evidencia = { textos: opcoes.evidencia };
+  const evidencia = { obter: () => opcoes.evidencia };
   const tools = buildTools({ recorder, kommo, unit, evidenciaDoNome: evidencia });
   const t = tools.find((x) => x.name === 'atualizar_titulo_lead') as unknown as { invoke: (a: unknown) => Promise<unknown> };
   return { t, chamadas };
@@ -135,10 +139,17 @@ test('nome do perfil do WhatsApp (contato do cartão) também vale — é o auth
   assert.deepEqual(chamadas.titulo, ['Isaque Sousa']);
 });
 
-test('não consegui ler o contato: não dá para provar que é invenção, segue como antes', async () => {
+test('não consegui ler o contato e o nome não está nas falas: não grava (falha fechada)', async () => {
   const { t, chamadas } = montar({ evidencia: ['Olá'], leituraFalha: true });
   const out = String(await t.invoke({ leadId: 1, nome: 'Marcos' }));
-  assert.match(out, /^OK/);
+  assert.match(out, /^NÃO gravei: não consegui conferir/);
+  assert.deepEqual(chamadas.titulo, []);
+  assert.deepEqual(chamadas.contato, []);
+});
+
+test('falha ao ler o contato não atrapalha quem o paciente já disse', async () => {
+  const { t, chamadas } = montar({ evidencia: ['Meu nome é Marcos'], leituraFalha: true });
+  assert.match(String(await t.invoke({ leadId: 1, nome: 'Marcos' })), /^OK/);
   assert.deepEqual(chamadas.titulo, ['Marcos']);
 });
 

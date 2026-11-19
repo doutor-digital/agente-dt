@@ -570,7 +570,8 @@ export async function buildAgentGraph(
   const leadFieldRules = await listEnabledLeadFieldRules(unit.id, unit.slug);
 
   // O que a IA viu e prova um nome de paciente (falas dele + cadastro). O agentNode renova a cada volta; atualizar_titulo_lead lê.
-  const evidenciaDoNome: { textos: string[] } = { textos: [] };
+  let mensagensDoTurnoParaNome: BaseMessage[] = [];
+  const evidenciaDoNome = { obter: () => evidenciaDoNomeDoTurno(mensagensDoTurnoParaNome) };
   const allTools = kommoClient
     ? buildTools({
         recorder,
@@ -670,7 +671,7 @@ export async function buildAgentGraph(
     });
 
     const nonSystemMessages = state.messages.filter((m) => m.getType() !== 'system');
-    evidenciaDoNome.textos = evidenciaDoNomeDoTurno(nonSystemMessages);
+    mensagensDoTurnoParaNome = nonSystemMessages;
     // O que o PACIENTE disse neste turno (sem as linhas da equipe do <conversa_oficial>): de onde saem a rede de
     // segurança do sinal de alerta e a exceção do pronto-socorro.
     const mensagensDoPaciente = falasDoTurno(nonSystemMessages.map((m) => ({ tipo: m.getType(), texto: aiTextFromContent(m.content) })));

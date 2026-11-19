@@ -41,7 +41,7 @@ test('o parágrafo da autocorreção sai sozinho e fica só a saudação (sem ch
 
 test('autocorreção no meio do parágrafo continua sendo detectada (o reescritor resolve)', () => {
   assert.ok(detectarVazamento('Oi! Isso não deveria ter sido feito, desculpa. Como posso te chamar?'));
-  assert.ok(detectarVazamento('Oi, tudo bem? Não devia ter feito isso, perdão! Onde dói?'));
+  assert.ok(detectarVazamento('Oi, tudo bem? Perdão, não devia ter feito isso. Onde dói?'));
 });
 
 test('empatia e pedido de desculpa legítimos passam', () => {
@@ -52,6 +52,7 @@ test('empatia e pedido de desculpa legítimos passam', () => {
     'Ah, entendi, obrigada por corrigir! 😊 Ele sente dormência na perna?',
     'Ah, só corrigindo: ainda não ficou nada marcado, viu, Marlise? Combinado?',
     'A cirurgia não precisa ser feita agora, o tratamento conservador resolve muitos casos. Quer conhecer?',
+    'Aaah, obrigada pela lembrança! Não precisava ter feito isso 😊 Posso te ajudar com o horário?',
     'Isso não devia ser feito sem orientação: não puxe a perna sozinho. Onde sente a dor?',
   ]) {
     assert.equal(detectarVazamento(ok), null, `barrou fala legítima: ${ok}`);

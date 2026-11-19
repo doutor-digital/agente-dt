@@ -134,7 +134,7 @@ export interface BuildToolsArgs {
    * O que a IA viu neste turno e prova um nome (falas do paciente + cadastro), preenchido pelo grafo a cada volta. Sem ele
    * (eval, aquecimento de cache) `atualizar_titulo_lead` não confere de onde o nome veio.
    */
-  evidenciaDoNome?: { textos: string[] };
+  evidenciaDoNome?: { obter: () => string[] };
 }
 
 /**
@@ -852,7 +852,8 @@ export function buildTools({
       // Nome de onde? Tatuí 19/11/2026: o paciente disse "Olá" e a IA gravou "Ocupado" no cartão e no contato. Só grava o que
       // o paciente escreveu, o cadastro devolveu ou o perfil do WhatsApp (contato do cartão) já tinha. Ver titulo-ancorado.ts.
       if (evidenciaDoNome && ancoraDoNomeLigada()) {
-        let ancora = nomeAncoradoNaConversa(nome, evidenciaDoNome.textos);
+        const textosDaConversa = evidenciaDoNome.obter();
+        let ancora = nomeAncoradoNaConversa(nome, textosDaConversa);
         let contatoLido = '';
         if (!ancora.ancorado) {
           try {
@@ -860,11 +861,18 @@ export function buildTools({
             const contatos = lead._embedded?.contacts ?? [];
             const contatoId = (contatos.find((c) => c.is_main) ?? contatos[0])?.id ?? null;
             if (contatoId) contatoLido = await kommo.getContactNome(contatoId);
-            ancora = nomeAncoradoNaConversa(nome, [...evidenciaDoNome.textos, contatoLido]);
+            ancora = nomeAncoradoNaConversa(nome, [...textosDaConversa, contatoLido]);
           } catch (err) {
-            // Sem ler o contato não dá para provar que o nome é inventado: segue como antes (o próprio Kommo fora do ar derruba a gravação).
+            // Sem ler o contato não dá para provar de onde veio o nome. Fica sem gravar (Codex, review do PR): nome errado no contato
+            // estraga o "Olá, {{contact.name}}" dos modelos de WhatsApp; título atrasado um turno não custa nada.
             logger.warn({ err: String(err), leadId }, 'atualizar_titulo_lead: não consegui ler o contato para conferir o nome');
-            ancora = { ancorado: true, faltando: [] };
+            await recorder.step({
+              kind: 'THINKING',
+              title: `"${nome}" não está nas falas do paciente e não consegui ler o contato para conferir — não gravei no card`,
+              payload: { leadId, rejeitado: nome, erro: err instanceof Error ? err.message : String(err) },
+              latencyMs: Math.round(performance.now() - t0),
+            });
+            return `NÃO gravei: não consegui conferir o nome "${nome}" agora. Siga a conversa normalmente, sem mencionar isto ao paciente, e chame esta tool de novo no próximo turno.`;
           }
         }
         if (!ancora.ancorado) {

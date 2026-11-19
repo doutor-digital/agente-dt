@@ -14,13 +14,13 @@
 
 const CONECTORES = new Set(['de', 'da', 'do', 'das', 'dos', 'e', 'del', 'di', 'du']);
 
-/** "José D'Ávila" → ["jose", "d'avila"]: sem acento nem caixa, só letras. */
+/** "José D'Ávila" → ["jose", "d", "avila"], "Maria-José" → ["maria", "jose"]: sem acento nem caixa; hífen e apóstrofo (reto ou curvo) separam. */
 function palavras(texto: string): string[] {
   return (texto ?? '')
     .normalize('NFD')
     .replace(/\p{M}/gu, '')
     .toLowerCase()
-    .split(/[^a-z'\-]+/)
+    .split(/[^a-z]+/)
     .filter(Boolean);
 }
 
@@ -49,8 +49,8 @@ export function nomeAncoradoNaConversa(nome: string, evidencias: ReadonlyArray<s
   return { ancorado: faltando.length === 0, faltando };
 }
 
-/** Ferramentas cujo retorno traz nome de PESSOA vindo do CRM. As demais (inclusive esta, que repete o nome recusado) não provam nada. */
-const FERRAMENTAS_COM_NOME_DO_CADASTRO = new Set(['buscar_paciente', 'cadastrar_paciente']);
+/** Ferramentas cujo retorno traz nome de PESSOA lido do CRM. As demais não provam nada: a recusa desta mesma ferramenta cita o nome recusado e `cadastrar_paciente` devolve o nome que a IA acabou de mandar. */
+const FERRAMENTAS_COM_NOME_DO_CADASTRO = new Set(['buscar_paciente']);
 
 export interface MensagemParaEvidencia {
   tipo: string;
@@ -61,7 +61,7 @@ export interface MensagemParaEvidencia {
 
 /**
  * A evidência de um turno: o que o PACIENTE disse (`falaDoPaciente` tira do HumanMessage o bloco `<conversa_oficial>`, onde
- * a equipe e a própria clínica falam) e o que o cadastro devolveu (buscar_paciente / cadastrar_paciente). Fala da IA, retorno
+ * a equipe e a própria clínica falam) e o que a busca no cadastro devolveu (buscar_paciente). Fala da IA, retorno
  * das outras ferramentas (a recusa desta mesma cita o nome recusado) e prompt do sistema ficam de fora.
  */
 export function evidenciaDoNome(mensagens: ReadonlyArray<MensagemParaEvidencia>, falaDoPaciente: (texto: string) => string): string[] {

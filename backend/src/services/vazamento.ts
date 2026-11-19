@@ -260,7 +260,8 @@ const RACIOCINIO_PT = [
   // (Salto 13/11). O paciente não sabe de ação nenhuma. Medido em 20/10–19/11 nas 32.177 respostas da IA: só estas duas casam.
   // "Isso não deveria ter acontecido com você" (empatia) e "Desculpa, vou corrigir seu cadastro" (o paciente reclamou) passam.
   /\b(?:isso|aquilo)\s+n[aã]o\s+(?:devia|deveria|precisava)\s+(?:ter\s+)?(?:sido\s+)?feit[oa](?![\p{L}])/iu,
-  /\bn[aã]o\s+(?:devia|deveria|precisava)\s+(?:ter\s+)?feito\s+isso(?![\p{L}])/iu,
+  // Só depois de um pedido de desculpa: "Não precisava ter feito isso!" sozinho é o agradecimento educado a um gesto do paciente.
+  /\b(?:desculp\w*|perd[aã]o|foi\s+mal)\b[^.\n]{0,25}\bn[aã]o\s+(?:devia|deveria|precisava)\s+(?:ter\s+)?feito\s+isso(?![\p{L}])/iu,
   // "Não preciso agir", "ação de qualificação", "nada para eu agir": a decisão de acionar (ou não) o sistema.
   /\bn[aã]o\s+preciso\s+agir\b/iu,
   /\bn[aã]o\s+(?:h[aá]|tem)\s+nada\s+(?:pra|para)\s+(?:eu\s+)?agir\b/iu,
