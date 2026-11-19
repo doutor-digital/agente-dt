@@ -31,7 +31,7 @@ import { renderPacienteEncerrou } from './paciente-encerrou.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
-import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderCalendario } from '../lib/feriados.js';
+import { dataLocalISO, dataPorExtenso, ehFeriadoNacional, renderAgoraDoTurno, renderCalendario } from '../lib/feriados.js';
 import { fusoDaUnidade } from '../lib/fuso.js';
 import { semNomeDeProfissional } from '../lib/nome-do-profissional.js';
 import {
@@ -2020,6 +2020,27 @@ export interface ComposeInput {
   historico?: Fala[];
   /** A oferta do disparo de campanha que este paciente recebeu nos últimos dias (null = não recebeu). */
   ofertaDaCampanha?: OfertaVigente | null;
+  /**
+   * A unidade pediu a hora de agora no turno (automação `hora-no-turno`): o papel dela manda escolher saudação ou nome pela hora.
+   * Só vale no bloco do turno (`dynamic`), nunca no prefixo cacheado.
+   */
+  horaNoTurno?: boolean;
+  /** O instante do turno. O grafo fixa um por turno, para a hora não mudar entre as voltas das ferramentas. Padrão: agora. */
+  agora?: Date;
+}
+
+/**
+ * «Agora: quinta-feira 19/11, 14:44 (horário da clínica).» — a hora que o papel da unidade manda usar («bom dia/boa tarde»,
+ * nome da atendente por turno). Muda a cada minuto, então SÓ pode ir no bloco do turno, depois do ponto de cache; o prompt do
+ * sistema cacheado nunca a vê. Vazio quando a unidade não pediu (todas, até alguém ligar `hora-no-turno`).
+ */
+export function renderAgoraNoTurno(input: Pick<ComposeInput, 'unit' | 'horaNoTurno' | 'agora'>): string {
+  if (!input.horaNoTurno) return '';
+  return xmlBlock(
+    'agora',
+    `${renderAgoraDoTurno(input.agora ?? new Date(), fusoDaUnidade(input.unit))}\n` +
+      'Esta é a hora DESTE turno. Se a conversa já começou antes e você já se apresentou, mantenha o nome e o jeito que usou.',
+  );
 }
 
 /**
@@ -2553,6 +2574,8 @@ export function composeSystemPrompt(input: ComposeInput): string {
     // O prompt único é escrito à mão: as chaves de conversa curta entram logo depois dele, para valer mais (conversa-direta.ts).
     const conversaDiretaSingle = renderConversaDiretaDaUnidade(unit);
     if (conversaDiretaSingle) single.push(conversaDiretaSingle);
+    const agoraSingle = renderAgoraNoTurno(input);
+    if (agoraSingle) single.push(agoraSingle);
     const memBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
     if (memBlock) single.push(memBlock);
     const outraBlockSingle = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
@@ -2632,6 +2655,9 @@ export function composeSystemPrompt(input: ComposeInput): string {
     { semPedirNome: doHistorico.semPedirNome, ...jeitoDaConversa(unit) },
   );
   if (lessonsBlock) blocks.push(lessonsBlock);
+  // Depois de tudo que é estável e antes do que muda por paciente: o cache por prefixo (OpenAI) só perde daqui para baixo.
+  const agoraBlock = renderAgoraNoTurno(input);
+  if (agoraBlock) blocks.push(agoraBlock);
   const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit)));
   if (memoryBlock) blocks.push(memoryBlock);
   const outraSofiaBlock = renderConversaComOutraSofia(outraSofia, unit.spineEnabled, relogioDaUnidade(unit));
@@ -2735,6 +2761,9 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (lessonsBlock) porUnidade.push(lessonsBlock);
 
   const dynamic: string[] = [];
+  // A hora do turno: primeiro, porque é o dado mais bruto; o resto do bloco já muda por turno, então não custa cache.
+  const agoraBlock = renderAgoraNoTurno(input);
+  if (agoraBlock) dynamic.push(agoraBlock);
   // Depende da fala DESTE turno, então é dinâmico de verdade: não pode entrar no bloco
   // por unidade, que fica uma hora em cache.
   // A rajada inteira desde a última resposta que ele leu: "dor… boa noite" não é só um cumprimento.
@@ -2876,6 +2905,8 @@ export async function composeSystemPromptForUnit(input: {
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
+  /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
+  agora?: Date;
 }): Promise<string> {
   return composeSystemPrompt(await loadComposeInput(input));
 }
@@ -2892,6 +2923,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
+  /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
+  agora?: Date;
 }): Promise<{ cacheable: string; dynamic: string }> {
   return composeSystemPromptParts(await loadComposeInput(input));
 }
@@ -2908,6 +2941,8 @@ async function loadComposeInput(input: {
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
+  /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
+  agora?: Date;
 }): Promise<ComposeInput> {
   const shouldRunRag =
     !!input.userMessage &&
@@ -3052,6 +3087,8 @@ async function loadComposeInput(input: {
     outraSofia,
     redeDeUnidades,
     ofertaDaCampanha,
+    // Só pergunta; quem escreve o texto é renderAgoraNoTurno, e só no bloco do turno
+    horaNoTurno: automacaoLigada(input.unit.slug, 'hora-no-turno', process.env.HORA_NO_TURNO_SLUGS),
   };
 }
 

@@ -917,6 +917,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/paciente-encerrou.ts',
   },
   {
+    id: 'hora-no-turno',
+    chave: 'HORA_NO_TURNO_SLUGS',
+    nome: 'A IA sabe a hora de agora',
+    oQueFaz:
+      'Põe uma linha com o dia e a hora locais da clínica ("Agora: quinta-feira 19/11, 14:44 (horário da clínica).") no bloco do turno, para a Sofia escolher "bom dia / boa tarde / boa noite" e o nome da atendente pelo turno quando o papel da unidade manda. Sem ela a Sofia não tem relógio e chuta.',
+    pegadinha:
+      'Só serve a unidade cujo papel (Conhecimento > Papel) manda usar a hora: hoje só Tatuí (Sara até 13h29, Cíntia a partir das 13h30). Vai no bloco do turno, DEPOIS do ponto de cache: o prompt cacheado não muda (a hora varia por minuto e derrubaria o cache em toda chamada). Não tem "só no papel": é texto do prompt. A hora é a do turno, não a de quando a conversa começou: a linha avisa a Sofia de manter o nome que já usou. Salto tem o contrário no papel (nunca "bom dia"), então não ligar lá sem reescrever o papel. Ligada em unidade cujo papel não fala de hora, a Sofia pode passar a cumprimentar por hora por conta própria.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/prompt-composer.ts',
+  },
+  {
     id: 'exame-de-imagem-pausa-alerta',
     chave: 'EXAME_DE_IMAGEM_SLUGS',
     nome: 'Exame de imagem no chat: Sofia pausa e avisa a equipe no grupo',

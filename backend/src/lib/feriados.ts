@@ -167,3 +167,26 @@ Regras:
   se o paciente pedir, diga que é feriado e ofereça o próximo dia útil.
 - Dia que não está nesta lista: calcule a partir dela (semana a semana), nunca chute.`;
 }
+
+/**
+ * A hora de AGORA, numa linha: "Agora: quinta-feira 19/11, 14:44 (horário da clínica)."
+ *
+ * Não entra em `renderCalendario` nem em nenhum pedaço cacheado do prompt: a hora muda a cada minuto e
+ * derrubaria o cache do sistema em toda chamada. Quem usa este texto o põe na parte que já muda por turno
+ * (o bloco dinâmico, depois do ponto de cache) e só nas unidades que pedem hora no papel (ver `hora-no-turno`).
+ * Dia da semana e hora saem daqui, em código, porque o modelo erra os dois de cabeça. `tz` inválido cai em
+ * America/Sao_Paulo, como o resto do prompt.
+ */
+export function renderAgoraDoTurno(now: Date, tz: string): string {
+  let fuso = tz;
+  let hm: string;
+  try {
+    hm = new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+  } catch {
+    fuso = 'America/Sao_Paulo';
+    hm = new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+  }
+  const iso = dataLocalISO(now, fuso);
+  const [, m, d] = iso.split('-');
+  return `Agora: ${diaDaSemana(iso)} ${d}/${m}, ${hm} (horário da clínica).`;
+}

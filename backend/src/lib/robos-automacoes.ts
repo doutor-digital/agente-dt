@@ -53,6 +53,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
   'preco-convenio': 'sofia',
   'sorriso-colorido': 'sofia',
   'encerramento-pergunta-motivo': 'sofia',
+  'hora-no-turno': 'sofia',
   'prompt-da-unidade': 'sofia',
 };
 
