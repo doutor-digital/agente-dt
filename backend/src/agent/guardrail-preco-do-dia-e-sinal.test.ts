@@ -373,12 +373,10 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
     entra: 'Você transferiu R$ 30, faltam R$ 20 pro sinal.',
     sai: 'Você transferiu R$ 30, faltam R$ 20 pro sinal.',
   },
-  {
-    n: '4d Canaã: "O comprovante mostra R$ 250, que é o valor da consulta antecipada" — o R$ é o preço, e preço errado é conferido',
-    unit: BALSAS,
-    entra: 'O comprovante mostra R$ 250, que é o valor da consulta antecipada 😊',
-    sai: 'O comprovante mostra R$ 200, que é o valor da consulta antecipada 😊',
-  },
+  // ── 8. rodada 4 do sênior: "que é o valor da consulta antecipada" — o R$ do comprovante é do paciente (esperado = main: valor mantido) ──
+  { n: 'r8.01', unit: BALSAS, entra: 'O comprovante mostra R$ 250, que é o valor da consulta antecipada.', sai: 'O comprovante mostra R$ 250, que é o valor da consulta antecipada.' },
+  { n: 'r8.02', unit: ARAGUAINA, entra: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.', sai: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.' },
+  { n: 'r8.03', unit: SERRA_COM_PLANO, entra: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?', sai: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?' },
 ];
 
 for (const c of CASOS) {
@@ -530,7 +528,6 @@ test('corrigirSinalErrado: só o valor depois de "sinal de", só quando é difer
   assert.equal(corrigirSinalErrado('Com sinal: R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)', S).texto, 'Com sinal: R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)'); // rótulo do total
   assert.equal(corrigirSinalErrado('sinal de entrada de R$ 250 antecipado', S).texto, 'sinal de entrada de R$ 50 antecipado');
   assert.equal(corrigirSinalErrado('O sinal é R$ 250', S).texto, 'O sinal é R$ 250');
-  assert.equal(corrigirSinalErrado('Com sinal: R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)', S).texto, 'Com sinal: R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)');
   assert.equal(corrigirSinalErrado('O sinal de R$ 100 garante a vaga', S).texto, 'O sinal de R$ 100 garante a vaga'); // sem "antecipado": não é o slot
   assert.equal(corrigirSinalErrado('O valor com o sinal antecipado é R$ 250', S).texto, 'O valor com o sinal antecipado é R$ 250');
   assert.equal(corrigirSinalErrado('Você enviou o sinal de R$ 30 antecipado, faltam R$ 20', S).texto, 'Você enviou o sinal de R$ 30 antecipado, faltam R$ 20');

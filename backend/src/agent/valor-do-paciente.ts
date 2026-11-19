@@ -89,8 +89,7 @@ const PRECO_COLADO_DEPOIS = new RegExp(
     // "R$ 300 a consulta", "R$ 300 pra consulta presencial"
     String.raw`|(?:(?:pra|para|por)\s+)?(?:(?:a|essa|primeira|nova|sua)\s+){0,2}consulta\b|(?:pra|para)\s+garant\w*` +
     // "o valor de R$ 250 é o antecipado", "R$ 250 é o valor da consulta"
-    // ("…, que é o valor da consulta antecipada": o comprovante e o preço coincidem, então o R$ é o preço e segue conferido)
-    String.raw`|(?:,?\s*que\s+)?(?:é|são)\s+(?:o|a)\s+(?:valor\s+)?(?:antecipad\w*|d[ao]\s+(?:consulta|sinal|dia))` +
+    String.raw`|(?:é|são)\s+(?:o|a)\s+(?:valor\s+)?(?:antecipad\w*|d[ao]\s+(?:consulta|sinal|dia))` +
     `)`,
   'iu',
 );
