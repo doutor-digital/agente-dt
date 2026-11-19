@@ -144,7 +144,7 @@ export function corrigirValorAntecipado(
  * Unidade que vende sinal (Balsas, Canaã, Araguaína, Imperatriz, Marabá, Açailândia, Porto…): o modelo escreve "R$ 250 garantindo com
  * sinal de R$ 250 antecipado". O "sinal de R$ 250" é errado (o sinal é R$ 50) e trocá-lo pelo antecipado também seria — era o que
  * acontecia em Balsas ("sinal de R$ 200 antecipado", 3 vezes em 30 dias) e o que NÃO acontecia nas outras unidades, onde R$ 250 é o
- * antecipado e a frase saía como o modelo escreveu (23 vezes em Araguaína, Imperatriz e Marabá).
+ * antecipado e a frase saía como o modelo escreveu (22 vezes em 30 dias em Araguaína, Imperatriz e Marabá, já enviadas ao paciente).
  *
  * Só vale o que está escrito como "sinal de R$ X" / "sinal no valor de R$ X" / "sinal: R$ X" / "sinal de entrada de R$ X" SEGUIDO de "antecipado" (o slot do
  * antecipado; "O sinal de R$ 100 garante a vaga" continua pelo corte de catálogo), com o R$ visível. "O sinal é R$ X"
