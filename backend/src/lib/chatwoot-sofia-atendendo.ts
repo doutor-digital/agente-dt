@@ -21,6 +21,7 @@ import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { conversaLidaDoChatwoot, type ConversaLida } from './chatwoot-porta.js';
 import { motivoDeNaoResponder } from './chatwoot-sofia.js';
+import { ATRIBUTO_PAUSADA_POR, ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 
 export const ETIQUETA_SOFIA_ATENDENDO = 'sofia-atendendo';
@@ -57,11 +58,18 @@ const tem = (c: ConversaDoAtendimento) => c.lida.etiquetas.includes(ETIQUETA_SOF
 export type Comeco = 'sem-conversa' | 'etiquetada' | 'ja-etiquetada' | 'sem-etiqueta';
 
 /**
- * Primeira mensagem (ou a seguinte, se a Sofia voltou): abre a conversa que está em «Pendentes» e, se a Sofia pode atender, põe a etiqueta.
- * Falhar ao abrir não impede a etiqueta: cada passo avisa no log. A lista de etiquetas é relida logo ANTES de regravar (o Chatwoot a substitui
- * inteira; abrir e criar a etiqueta na conta demoram, e a equipe pode ter respondido — pausa — nesse meio-tempo). Devolve o que ficou.
+ * Primeira mensagem (ou a seguinte, se a Sofia voltou): abre a conversa que está em «Pendentes» e, se a Sofia VAI atender, põe a etiqueta.
+ * «Vai atender» = pode (sofiaPodeAtender) E o critério da rodada concorda (`criterio`: cartão no Kommo, teto do dia, sem telefone — o mesmo
+ * que faz a rodada desistir). Sem isso a etiqueta entrava a cada mensagem e saía ao fim da rodada (piscava). Se o critério diz que não e a
+ * etiqueta está lá, ela sai.
+ * Falhar ao abrir não impede a etiqueta: cada passo avisa no log. A lista é relida logo ANTES de regravar (o Chatwoot a substitui inteira) e
+ * conferida DEPOIS: se a equipe pausou a IA nesse meio-tempo e a nossa gravação desfez a `ia-pausada`, ela volta.
  */
-export async function comecarAtendimento(conversa: number, p: PortaDoAtendimento): Promise<{ comeco: Comeco; abriu: boolean }> {
+export async function comecarAtendimento(
+  conversa: number,
+  p: PortaDoAtendimento,
+  criterio: (lida: ConversaLida) => Promise<boolean> = async () => true,
+): Promise<{ comeco: Comeco; abriu: boolean }> {
   let c = await p.conversa(conversa);
   if (!c) return { comeco: 'sem-conversa', abriu: false };
   let abriu = false;
@@ -73,13 +81,25 @@ export async function comecarAtendimento(conversa: number, p: PortaDoAtendimento
       logger.warn({ err: String(err), conversa }, 'chatwoot-sofia-atendendo: não consegui abrir a conversa');
     }
   }
-  if (!sofiaPodeAtender(c)) return { comeco: 'sem-etiqueta', abriu };
+  const vai = async (x: ConversaDoAtendimento) => sofiaPodeAtender(x) && (await criterio(x.lida));
+  if (!(await vai(c))) {
+    if (tem(c)) await tirarEtiqueta(conversa, p, () => true);
+    return { comeco: 'sem-etiqueta', abriu };
+  }
   if (tem(c)) return { comeco: 'ja-etiquetada', abriu };
   await p.garantirEtiqueta();
   c = (await p.conversa(conversa)) ?? c;
   if (!sofiaPodeAtender(c)) return { comeco: 'sem-etiqueta', abriu };
   if (tem(c)) return { comeco: 'ja-etiquetada', abriu };
   await p.etiquetas(conversa, [...c.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
+  // corrida rara: a equipe respondeu entre a leitura e a gravação e a pausa gravou a lista dela ao mesmo tempo. A pausa deixa o atributo
+  // `ia_pausada_por`; atributo de pausa SEM a etiqueta = a nossa gravação a desfez → repõe a pausa e tira a nossa etiqueta.
+  const depois = await p.conversa(conversa).catch(() => null);
+  if (depois && depois.lida.attrs[ATRIBUTO_PAUSADA_POR] !== undefined && !depois.lida.etiquetas.includes(ETIQUETA_PAUSA)) {
+    logger.warn({ conversa }, 'chatwoot-sofia-atendendo: a gravação da etiqueta desfez a pausa da IA — pausa reposta');
+    await p.etiquetas(conversa, [...depois.lida.etiquetas.filter((e) => e !== ETIQUETA_SOFIA_ATENDENDO), ETIQUETA_PAUSA]);
+    return { comeco: 'sem-etiqueta', abriu };
+  }
   return { comeco: 'etiquetada', abriu };
 }
 
@@ -99,15 +119,17 @@ export const conferirAtendimento = (conversa: number, p: PortaDoAtendimento): Pr
 
 /**
  * `conversation_updated` de conversa de caixa do mapa que TEM a etiqueta e já mostra que a Sofia saiu (resolvida, pausada, esperando humano,
- * interno) → conferir; senão null. A leitura fresca decide (o aviso pode estar velho); sem a etiqueta no aviso nada é lido.
+ * interno) → conferir; senão null. Com `recolherSempre` (recurso desligado) basta ter a etiqueta. A leitura fresca decide (o aviso pode estar velho); sem a etiqueta no aviso nada é lido.
  */
-export function eventoDeAtendimento(corpo: any, caixas: Readonly<Record<number, string>> = CAIXAS_REGUA): { conversa: number } | null {
+export function eventoDeAtendimento(corpo: any, caixas: Readonly<Record<number, string>> = CAIXAS_REGUA, o: { recolherSempre?: boolean } = {}): { conversa: number } | null {
   if (corpo?.event !== 'conversation_updated' && corpo?.event !== 'conversation_status_changed') return null;
   const conversa = Number(corpo?.id);
   const caixa = Number(corpo?.inbox_id);
   if (!Number.isInteger(conversa) || conversa <= 0 || !caixas[caixa]) return null;
   const etiquetas: string[] = Array.isArray(corpo?.labels) ? corpo.labels.map(String) : [];
   if (!etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO)) return null;
+  // recurso desligado (chave `=0` ou sem robô): a etiqueta não deveria existir — qualquer aviso com ela vale uma leitura para tirá-la
+  if (o.recolherSempre) return { conversa };
   // o Chatwoot manda `conversation_updated` a cada mensagem: só vale a pena ler a conversa quando o AVISO já mostra que a Sofia saiu
   const lida = conversaLidaDoChatwoot(corpo);
   const status = String(corpo?.status ?? '');

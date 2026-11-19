@@ -19,6 +19,7 @@
  * Etapa não é campo: quem já está em Agendado/Confirmado/Compareceu/Pós-consulta/Fechou NÃO muda de etapa por ação da Sofia
  * (a régua lê a etapa; mover quem está em alta dispara mensagem de meses depois). Campo sim, etapa não.
  */
+import { notaComMencao } from './crm-tarefas/regras.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
@@ -99,12 +100,18 @@ export function motivoDeNaoResponder(c: ConversaLida): string | null {
  */
 export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { conversa: number; etapa: string; motivo: string }): Promise<string> {
   let etapa = a.etapa;
+  // já passada antes (etiqueta no lugar): a nota repete, mas a MENÇÃO não — a pessoa não é chamada duas vezes pela mesma passagem
+  const jaPassada = !!(await chat.conversa(a.conversa).catch(() => null))?.etiquetas.includes(ETIQUETA_HUMANO);
   await chat.adicionarEtiquetas(a.conversa, [ETIQUETA_HUMANO]);
   if (!ETAPAS_PROTEGIDAS.has(etapa) && (await chat.valoresDoAtributo('etapa')).includes('Esperando humano')) {
     await chat.gravarAtributos(a.conversa, { etapa: 'Esperando humano' });
     etapa = 'Esperando humano';
   }
-  await chat.nota(a.conversa, `🙋 Sofia passou esta conversa para a equipe: ${a.motivo.slice(0, 300)}`);
+  const motivo = a.motivo.slice(0, 300);
+  // com a conversa já ABERTA desde a 1ª mensagem o Chatwoot não avisa ninguém na passagem: a menção na nota privada avisa quem está com a
+  // conversa (rodízio) ou, sem dono, a gerente da caixa. Falhar em achar a pessoa cai na nota de sempre.
+  const destino = jaPassada || !chat.destinoDaPassagem ? null : await chat.destinoDaPassagem(a.conversa).catch(() => null);
+  await chat.nota(a.conversa, destino ? notaComMencao(destino, `🙋 A Sofia passou esta conversa para você: ${motivo}`) : `🙋 Sofia passou esta conversa para a equipe: ${motivo}`);
   return etapa;
 }
 

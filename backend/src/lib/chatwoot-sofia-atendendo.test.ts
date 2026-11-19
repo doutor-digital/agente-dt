@@ -22,7 +22,7 @@ const CAIXAS = { 3: 'doutor-hernia-parauapebas' };
 // ── a regra pura ─────────────────────────────────────────────────────────────────────────────────
 
 /** Um Chatwoot de mentira com UMA conversa (estado vivo): registra cada chamada. */
-function mundo(c: { status: string; labels?: readonly string[]; attrs?: Record<string, unknown>; assignee?: number | null; falhaAbrir?: boolean; etiquetaNaConta?: boolean }) {
+function mundo(c: { status: string; labels?: readonly string[]; attrs?: Record<string, unknown>; assignee?: number | null; falhaAbrir?: boolean; etiquetaNaConta?: boolean; pausaNoMeio?: boolean }) {
   const conv = { status: c.status, labels: [...(c.labels ?? [])] };
   const log: string[] = [];
   let naConta = c.etiquetaNaConta ?? false;
@@ -36,6 +36,13 @@ function mundo(c: { status: string; labels?: readonly string[]; attrs?: Record<s
     },
     async etiquetas(id, lista) {
       log.push(`LABELS ${id} ${lista.join(',')}`);
+      // corrida: a pausa gravou a lista dela (etiqueta + atributo) entre a nossa leitura e a nossa gravação — a nossa regrava por cima
+      if (c.pausaNoMeio) {
+        c.pausaNoMeio = false;
+        (c.attrs ??= {}).ia_pausada_por = 'Lorena';
+        conv.labels = [...lista];
+        return;
+      }
       conv.labels = [...lista];
     },
     async abrir(id) {
@@ -58,8 +65,8 @@ test('começo: conversa PENDENTE vai para «Abertas» e ganha a etiqueta, sem pe
   assert.equal(m.conv.status, 'open');
   assert.deepEqual(m.conv.labels, ['anuncio', ETQ]);
   assert.ok(m.log.includes('CRIAR-ETIQUETA'), 'a etiqueta é criada na conta (roxa) antes do 1º uso');
-  // a lista é relida DEPOIS de abrir (abrir demora e outra gravação pode ter mudado a lista)
-  assert.deepEqual(m.log.filter((l) => l.startsWith('GET') || l === 'ABRIR 5'), ['GET 5', 'ABRIR 5', 'GET 5']);
+  // a lista é relida logo ANTES de gravar (abrir e criar a etiqueta demoram) e conferida DEPOIS de gravar
+  assert.deepEqual(m.log.filter((l) => l.startsWith('GET') || l === 'ABRIR 5' || l === 'CRIAR-ETIQUETA' || l.startsWith('LABELS')), ['GET 5', 'ABRIR 5', 'CRIAR-ETIQUETA', 'GET 5', 'LABELS 5 anuncio,sofia-atendendo', 'GET 5']);
 });
 
 test('começo: já aberta sem etiqueta → só a etiqueta (sem toggle); já com a etiqueta → não regrava; repetir é seguro', async () => {
@@ -95,6 +102,29 @@ test('começo: se abrir falhar (403), a etiqueta ainda é posta; se a conversa s
   assert.deepEqual(r, { comeco: 'etiquetada', abriu: false });
   assert.deepEqual(m.conv.labels, [ETQ]);
   assert.deepEqual(await A.comecarAtendimento(5, { ...m.p, conversa: async () => null }), { comeco: 'sem-conversa', abriu: false });
+});
+
+test('critério da rodada: onde ela vai desistir (cartão no Kommo, teto, sem telefone) a etiqueta NÃO entra — e sai se já estava', async () => {
+  const m = mundo({ status: 'open' });
+  assert.deepEqual(await A.comecarAtendimento(5, m.p, async () => false), { comeco: 'sem-etiqueta', abriu: false });
+  assert.ok(!m.conv.labels.includes(ETQ));
+  assert.ok(!m.log.includes('CRIAR-ETIQUETA'), 'nem cria a etiqueta na conta à toa');
+  const tinha = mundo({ status: 'open', labels: [ETQ, 'anuncio'] });
+  assert.deepEqual(await A.comecarAtendimento(5, tinha.p, async () => false), { comeco: 'sem-etiqueta', abriu: false });
+  assert.deepEqual(tinha.conv.labels, ['anuncio'], 'a rodada já tinha desistido: não pisca');
+  const ok = mundo({ status: 'open' });
+  assert.equal((await A.comecarAtendimento(5, ok.p, async (lida) => lida.telefone !== null)).comeco, 'etiquetada');
+});
+
+test('CORRIDA com a pausa: se a nossa gravação desfez a `ia-pausada` (atributo de pausa sem a etiqueta), a pausa volta e a nossa etiqueta sai', async () => {
+  const m = mundo({ status: 'open', labels: ['anuncio'], attrs: {}, pausaNoMeio: true });
+  const r = await A.comecarAtendimento(5, m.p);
+  assert.equal(r.comeco, 'sem-etiqueta');
+  assert.deepEqual([...m.conv.labels].sort(), ['anuncio', ETIQUETA_PAUSA]);
+  // sem corrida: nenhuma regravação extra
+  const limpo = mundo({ status: 'open', labels: ['anuncio'] });
+  await A.comecarAtendimento(5, limpo.p);
+  assert.equal(limpo.log.filter((l) => l.startsWith('LABELS')).length, 1);
 });
 
 test('RODÍZIO: ter responsável (distribuição automática da caixa aberta) NÃO tira a Sofia nem a etiqueta', async () => {
@@ -270,57 +300,120 @@ test('RESOLVIDA: a etiqueta sai; conversa aberta atribuída pelo rodízio NÃO m
   }
 });
 
-test('CHAVE CHATWOOT_SOFIA_ATENDENDO=0: nenhuma leitura nem gravação da etiqueta (a abertura pela pausa segue como antes)', async () => {
+const avisoComEtiqueta = (status: string) => ({ event: 'conversation_updated', id: 5, inbox_id: 3, status, labels: [ETQ], custom_attributes: { etapa: 'Novo lead' }, meta: { sender: {} } });
+
+test('CHAVE CHATWOOT_SOFIA_ATENDENDO=0: a etiqueta que já existia é TIRADA (mesmo com a conversa aberta e a Sofia livre); nada é posto; a pausa segue abrindo', async () => {
   Object.assign(process.env, ENV, { CHATWOOT_SOFIA_ATENDENDO: '0' });
-  const w = chatwootVivo({ status: 'resolved', labels: [ETQ] });
+  const w = chatwootVivo({ status: 'open', labels: [ETQ, 'anuncio'] });
   const f = mock.method(globalThis, 'fetch', w.f as never);
   try {
-    await dispararEvento({ event: 'conversation_updated', id: 5, inbox_id: 3, status: 'resolved', labels: [ETQ], custom_attributes: { etapa: 'Novo lead' }, meta: { sender: {} } });
-    assert.equal(w.log.length, 0);
-    await dispararEvento(humana);
-    assert.ok(w.conv.labels.includes(ETQ), 'não tira a etiqueta com a chave desligada (só a pausa grava a lista dela)');
-    assert.ok(w.log.some((l) => l.startsWith('POST conversations/5/toggle_status')), 'a abertura pela pausa segue como antes');
+    await dispararEvento(avisoComEtiqueta('open'));
+    assert.deepEqual(w.conv.labels, ['anuncio'], 'recurso desligado: a etiqueta não pode ficar presa');
     assert.ok(!w.log.some((l) => l === 'GET labels'), 'não mexe nas etiquetas da conta');
+    // sem a etiqueta no aviso: nenhuma leitura
+    w.log.length = 0;
+    await dispararEvento({ ...avisoComEtiqueta('open'), labels: ['anuncio'] });
+    assert.equal(w.log.length, 0);
+    // a equipe responde: abre como antes
+    await dispararEvento(humana);
+    assert.ok(w.log.some((l) => l.startsWith('POST conversations/5/toggle_status')), 'a abertura pela pausa segue como antes');
   } finally {
     f.mock.restore();
   }
 });
 
-test('SEM ROBÔ (sem CHATWOOT_SOFIA_COMO_BOT): nada muda — a Sofia segue como antes', async () => {
+test('SEM ROBÔ (sem CHATWOOT_SOFIA_COMO_BOT): nada é posto, e a etiqueta que existir é tirada', async () => {
   Object.assign(process.env, ENV);
   delete process.env.CHATWOOT_SOFIA_COMO_BOT;
-  const w = chatwootVivo({ status: 'resolved', labels: [ETQ] });
+  const w = chatwootVivo({ status: 'open', labels: [ETQ] });
   const f = mock.method(globalThis, 'fetch', w.f as never);
   try {
-    await dispararEvento({ event: 'conversation_updated', id: 5, inbox_id: 3, status: 'resolved', labels: [ETQ], custom_attributes: { etapa: 'Novo lead' }, meta: { sender: {} } });
-    assert.deepEqual(w.log, []);
+    await dispararEvento(avisoComEtiqueta('open'));
+    assert.deepEqual(w.conv.labels, []);
   } finally {
     f.mock.restore();
   }
 });
 
-test('1ª MENSAGEM do paciente (ligado, robô): abre e etiqueta ANTES da espera de 60 s; no seco e no desligado não faz nada', async () => {
+/** as portas reais de Parauapebas, com o que NÃO é Chatwoot trocado por falsas (unidade, Kommo, relógio) */
+function portasDaConta(w: ReturnType<typeof chatwootVivo>, estado: 'ligado' | 'seco' | 'desligado', o: { cartao?: boolean } = {}) {
+  const ctx = C.criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk-do-ambiente' }, { fetch: w.f });
+  return {
+    ...IA.portasReais(ctx),
+    estado: () => estado,
+    unidade: async () => ({ slug: 'doutor-hernia-parauapebas' }) as never,
+    cartaoNoKommo: async () => (o.cartao ? { leadId: 99 } : null),
+    hoje: () => '2026-11-19',
+    agendar: () => 'timer',
+    cancelar: () => undefined,
+  };
+}
+const MSG = { conversa: 5, caixa: 3, slug: 'doutor-hernia-parauapebas', audios: [] as string[] };
+const assentar = async () => {
+  for (let i = 0; i < 14; i++) await new Promise((r) => setImmediate(r));
+};
+
+test('1ª MENSAGEM do paciente (ligado, robô): abre e etiqueta ANTES da espera de 60 s', async () => {
   Object.assign(process.env, ENV);
-  for (const estado of ['ligado', 'seco', 'desligado'] as const) {
-    const w = chatwootVivo({ status: 'pending', labels: ['anuncio'] });
-    const f = mock.method(globalThis, 'fetch', w.f as never); // o robô usa o fetch global
+  const w = chatwootVivo({ status: 'pending', labels: ['anuncio'] });
+  const f = mock.method(globalThis, 'fetch', w.f as never); // o robô usa o fetch global
+  try {
+    await IA.aoChegar(MSG, portasDaConta(w, 'ligado'), IA.novaMemoriaDaIa());
+    await assentar();
+    assert.equal(w.conv.status, 'open');
+    assert.deepEqual(w.conv.labels, ['anuncio', ETQ]);
+  } finally {
+    f.mock.restore();
+  }
+});
+
+test('SECO e DESLIGADO: não põem a etiqueta e TIRAM a que ficou de quando a unidade estava ligada', async () => {
+  Object.assign(process.env, ENV);
+  for (const estado of ['seco', 'desligado'] as const) {
+    const w = chatwootVivo({ status: 'pending', labels: ['anuncio', ETQ] });
+    const f = mock.method(globalThis, 'fetch', w.f as never);
     try {
-      const ctx = C.criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk-do-ambiente' }, { fetch: w.f });
-      const portas = { ...IA.portasReais(ctx), estado: () => estado, agendar: () => 'timer', cancelar: () => undefined };
-      await IA.aoChegar({ conversa: 5, caixa: 3, slug: 'doutor-hernia-parauapebas', audios: [] }, portas, IA.novaMemoriaDaIa());
-      for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
+      const portas = portasDaConta(w, estado);
+      await IA.aoChegar(MSG, portas, IA.novaMemoriaDaIa());
+      await assentar();
+      if (estado === 'seco') {
+        // no seco a etiqueta sai ao fim da rodada (a Sofia só deixa nota): `rodarSofia` com o desfecho `nota`
+        assert.equal(await IA.rodarSofia(MSG, { ...portas, mensagens: async () => [{ message_type: 0, content: 'oi', private: false }], nota: async () => undefined, sofia: async () => ({ resposta: 'oi', acoes: [], pix: null, cartao: null, passouParaEquipe: false }), agendaReal: async () => [], registrarEvento: async () => undefined }, IA.novaMemoriaDaIa()), 'nota');
+      }
+      await assentar();
+      assert.deepEqual(w.conv.labels, ['anuncio'], estado);
     } finally {
       f.mock.restore();
     }
-    if (estado === 'ligado') {
-      assert.equal(w.conv.status, 'open');
-      assert.deepEqual(w.conv.labels, ['anuncio', ETQ]);
-    } else if (estado === 'seco') {
-      assert.equal(w.conv.status, 'pending', 'no seco a Sofia não responde: nada é gravado agora');
-      assert.deepEqual(w.conv.labels, ['anuncio']);
-    } else {
-      assert.deepEqual(w.conv.labels, ['anuncio'], 'desligado: sem etiqueta (a abertura é a de sempre)');
+  }
+});
+
+test('o critério da rodada vale na ENTRADA: cartão ativo no Kommo → abre mas NÃO etiqueta (não pisca); a resposta vale 30 s (1 ida ao Kommo por rajada)', async () => {
+  Object.assign(process.env, ENV);
+  const w = chatwootVivo({ status: 'pending', labels: [] });
+  const f = mock.method(globalThis, 'fetch', w.f as never);
+  try {
+    let idas = 0;
+    const portas = { ...portasDaConta(w, 'ligado', { cartao: true }), cartaoNoKommo: async () => (idas++, { leadId: 99 }) };
+    const mem = IA.novaMemoriaDaIa();
+    await IA.aoChegar(MSG, portas, mem);
+    await IA.aoChegar(MSG, portas, mem);
+    await assentar();
+    assert.equal(w.conv.status, 'open', 'a equipe precisa ver a conversa');
+    assert.deepEqual(w.conv.labels, []);
+    assert.equal(idas, 1);
+    // Kommo fora do ar: a rodada não responderia → também sem etiqueta
+    const w2 = chatwootVivo({ status: 'open', labels: [] });
+    const f2 = mock.method(globalThis, 'fetch', w2.f as never);
+    try {
+      await IA.aoChegar(MSG, { ...portasDaConta(w2, 'ligado'), cartaoNoKommo: async () => { throw new Error('Kommo 403'); } }, IA.novaMemoriaDaIa());
+      await assentar();
+      assert.deepEqual(w2.conv.labels, []);
+    } finally {
+      f2.mock.restore();
     }
+  } finally {
+    f.mock.restore();
   }
 });
 
@@ -329,17 +422,15 @@ test('1ª MENSAGEM espera o anúncio gravar a etiqueta dele (as duas regravam a 
   const w = chatwootVivo({ status: 'pending', labels: [] });
   const f = mock.method(globalThis, 'fetch', w.f as never);
   try {
-    const ctx = C.criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk-do-ambiente' }, { fetch: w.f });
-    const portas = { ...IA.portasReais(ctx), estado: () => 'ligado' as const, agendar: () => 'timer', cancelar: () => undefined };
     let soltar!: () => void;
     const anuncio = new Promise<void>((ok) => (soltar = ok)).then(() => {
       w.conv.labels = ['anuncio'];
     });
-    await IA.aoChegar({ conversa: 5, caixa: 3, slug: 'doutor-hernia-parauapebas', audios: [] }, portas, IA.novaMemoriaDaIa(), anuncio);
+    await IA.aoChegar(MSG, portasDaConta(w, 'ligado'), IA.novaMemoriaDaIa(), anuncio);
     for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
     assert.deepEqual(w.log, [], 'enquanto o anúncio não terminou, nada é lido nem gravado');
     soltar();
-    for (let i = 0; i < 12; i++) await new Promise((r) => setImmediate(r));
+    await assentar();
     assert.deepEqual(w.conv.labels, ['anuncio', ETQ]);
   } finally {
     f.mock.restore();

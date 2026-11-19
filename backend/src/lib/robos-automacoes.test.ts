@@ -88,7 +88,7 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   assert.equal(padrao['fixa-pausa-celular'], 'sempre');
   assert.equal(padrao['fixa-perdido-motivo'], 'sempre');
   assert.equal(padrao['fixa-avisos-regua'], 'sempre');
-  const desl = await estado({ CHATWOOT_ATALHOS: '0', CHATWOOT_RESOLVER_OBRIGATORIO: '0', CHATWOOT_ETIQUETA_ANUNCIO: '0', CHATWOOT_NOTA_ANUNCIO: '0', CHATWOOT_SOFIA_COMO_BOT: '1' });
+  const desl = await estado({ CHATWOOT_ATALHOS: '0', CHATWOOT_RESOLVER_OBRIGATORIO: '0', CHATWOOT_ETIQUETA_ANUNCIO: '0', CHATWOOT_NOTA_ANUNCIO: '0', CHATWOOT_SOFIA_COMO_BOT: '1', CHATWOOT_SOFIA_BOT_TOKEN: 'token-do-robo-123456' });
   assert.equal(desl['fixa-atalhos'], 'desligado');
   assert.equal(desl['fixa-resolver'], 'desligado');
   assert.equal((await estado({ CHATWOOT_GUIA_ETAPA: '0' }))['fixa-guia-etapa'], 'desligado', '«0» desliga o guia da etapa');
@@ -96,7 +96,8 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   assert.equal(desl['fixa-nota-anuncio'], 'desligado');
   assert.equal(desl['fixa-sofia-robo'], 'ligado');
   assert.equal(desl['fixa-sofia-atendendo'], 'ligado', 'com o robô, vem ligado');
-  assert.equal((await estado({ CHATWOOT_SOFIA_COMO_BOT: '1', CHATWOOT_SOFIA_ATENDENDO: '0' }))['fixa-sofia-atendendo'], 'desligado', '«0» desliga o «Sofia atendendo»');
+  assert.equal((await estado({ CHATWOOT_SOFIA_COMO_BOT: '1', CHATWOOT_SOFIA_BOT_TOKEN: 'token-do-robo-123456', CHATWOOT_SOFIA_ATENDENDO: '0' }))['fixa-sofia-atendendo'], 'desligado', '«0» desliga o «Sofia atendendo»');
+  assert.equal((await estado({ CHATWOOT_SOFIA_COMO_BOT: '1' }))['fixa-sofia-atendendo'], 'desligado', 'COMO_BOT=1 sem token do robô: o código não age, o painel não pode dizer ligado');
   // e as variáveis citadas existem de verdade no código que as lê
   const codigo = ['chatwoot-assistente-ui.ts', 'chatwoot-guia-etapas.ts', 'chatwoot-origem.ts', 'chatwoot-anuncio.ts', 'chatwoot-sofia-bot.ts', 'chatwoot-sofia-atendendo.ts'].map((f) => fonte(`./${f}`)).join('\n');
   for (const f of A.FIXAS.filter((x) => x.variavel)) assert.ok(codigo.includes(f.variavel!), `${f.variavel} não está mais no código`);

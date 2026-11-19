@@ -4,6 +4,7 @@
  * pública e ler as listas vivas (valores dos atributos, etiquetas da conta). Um lugar só: o que muda na API do Chatwoot muda aqui.
  */
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
 
 export interface ConversaLida {
   id: number;
@@ -34,7 +35,15 @@ export interface PortaDoChatwoot {
   valoresDoAtributo(chave: string): Promise<string[]>;
   /** As etiquetas que existem na conta. */
   etiquetasDaConta(): Promise<string[]>;
+  /**
+   * Quem deve ser AVISADO (menção em nota privada) quando a Sofia passa a conversa: o responsável de agora (rodízio) ou, se não houver, a gerente
+   * da caixa. null = ninguém para mencionar. Opcional: portas que não sabem não mencionam.
+   */
+  destinoDaPassagem?(id: number): Promise<{ id: number; nome: string } | null>;
 }
+
+/** O usuário «Conector Claude» (por onde saem Sofia e régua): nunca é quem vai atender. */
+const USUARIO_DA_INTEGRACAO = 2;
 
 const ehSim = (v: unknown): boolean => v === true || v === 1 || (typeof v === 'string' && ['true', 'sim', '1', 'yes'].includes(v.trim().toLowerCase()));
 export const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
@@ -97,6 +106,16 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       const valores = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((v) => String(v).trim()).filter(Boolean) : [];
       listas.set(chave, { em: Date.now(), valores });
       return valores;
+    },
+    async destinoDaPassagem(id) {
+      const raw = (await chamar(ctx, 'GET', `conversations/${id}`)) as { inbox_id?: unknown; meta?: { assignee?: { id?: unknown; name?: unknown } | null } } | null;
+      const dono = Number(raw?.meta?.assignee?.id);
+      if (Number.isInteger(dono) && dono > 0 && dono !== USUARIO_DA_INTEGRACAO) return { id: dono, nome: texto(raw?.meta?.assignee?.name) || 'equipe' };
+      const gerente = GERENTE_DA_CAIXA[Number(raw?.inbox_id)];
+      if (!gerente) return null;
+      const agentes = (await chamar(ctx, 'GET', 'agents').catch(() => null)) as Array<{ id?: unknown; name?: unknown }> | null;
+      const nome = Array.isArray(agentes) ? texto(agentes.find((a) => Number(a?.id) === gerente)?.name) : '';
+      return { id: gerente, nome: nome || 'gerente' };
     },
     async etiquetasDaConta() {
       if (contaEtiquetas && Date.now() - contaEtiquetas.em < VALIDADE_LISTAS_MS) return contaEtiquetas.valores;

@@ -34,7 +34,7 @@ export interface PendenteDaCaixa {
 export interface PortasDoAcerto {
   pendentes(): Promise<{ lista: PendenteDaCaixa[]; truncado: boolean }>;
   atendimento: PortaDoAtendimento;
-  /** a automação `chatwoot-ia` da unidade: a etiqueta só vale se a Sofia está LIGADA */
+  /** pode etiquetar: Sofia LIGADA na unidade E robô configurado E `CHATWOOT_SOFIA_ATENDENDO` != 0 (o que o fluxo ao vivo exige) */
   sofiaLigada: boolean;
 }
 
@@ -61,22 +61,35 @@ export async function acertarPendentes(a: ArgumentosDoAcerto, p: PortasDoAcerto,
       const recente = c.ultimaAtividade !== null && c.ultimaAtividade >= limite;
       // a decisão da etiqueta é a do fluxo ao vivo (pendente conta como viva; resolvida/adiada nesse meio-tempo, não)
       const etiquetar = p.sofiaLigada && recente && sofiaPodeAtender(viva) && !viva.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO);
-      if (viva.status === 'pending') r.abertas++;
+      const abrir = viva.status === 'pending';
+      const porque = !p.sofiaLigada ? 'não etiqueto aqui (Sofia desligada/seco, sem robô ou chave desligada)' : !recente ? `parada há mais de ${a.etiquetarHoras} h` : viva.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO) ? 'já tem' : 'a Sofia está calada aqui';
+      log(`conversa ${c.id}: ${abrir ? 'abrir' : `já ${viva.status}`}${etiquetar ? ' + etiqueta' : ` (sem etiqueta: ${porque})`}`);
+      if (!a.soConferir) {
+        if (abrir) await p.atendimento.abrir(c.id);
+        if (etiquetar) {
+          await p.atendimento.garantirEtiqueta();
+          // relê logo antes de regravar a lista (o Chatwoot a substitui inteira)
+          const fresca = await p.atendimento.conversa(c.id);
+          if (fresca && sofiaPodeAtender(fresca) && !fresca.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO)) await p.atendimento.etiquetas(c.id, [...fresca.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
+        }
+      }
+      // conta só depois de feito (em «só conferir», o que FARIA): uma conversa que falhou no meio não entra como aberta/etiquetada
+      if (abrir) r.abertas++;
       if (etiquetar) r.etiquetadas++;
       else r.semEtiqueta++;
-      log(`conversa ${c.id}: ${viva.status === 'pending' ? 'abrir' : `já ${viva.status}`}${etiquetar ? ' + etiqueta' : ''}${etiquetar ? '' : ` (sem etiqueta: ${!p.sofiaLigada ? 'Sofia não está ligada nesta unidade' : !recente ? `parada há mais de ${a.etiquetarHoras} h` : viva.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO) ? 'já tem' : 'a Sofia está calada aqui'})`}`);
-      if (a.soConferir) continue;
-      if (viva.status === 'pending') await p.atendimento.abrir(c.id);
-      if (etiquetar) {
-        await p.atendimento.garantirEtiqueta();
-        // relê logo antes de regravar a lista (o Chatwoot a substitui inteira)
-        const fresca = await p.atendimento.conversa(c.id);
-        if (fresca && sofiaPodeAtender(fresca) && !fresca.lida.etiquetas.includes(ETIQUETA_SOFIA_ATENDENDO)) await p.atendimento.etiquetas(c.id, [...fresca.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
-      }
     } catch (err) {
       r.falhou++;
       log(`conversa ${c.id}: FALHOU — ${err instanceof Error ? err.message.slice(0, 200) : String(err).slice(0, 200)}`);
     }
   }
   return r;
+}
+
+/**
+ * A etiqueta só entra onde o fluxo ao vivo também a poria: Sofia LIGADA na unidade, robô configurado e a chave não desligada.
+ * `porque` diz o que impede (vazio = pode).
+ */
+export function podeEtiquetar(c: { modo: string; temRobo: boolean; chaveLigada: boolean }): { pode: boolean; porque: string } {
+  const motivos = [c.modo !== 'ligado' ? `a Sofia está «${c.modo}» nesta unidade` : '', !c.temRobo ? 'não há robô configurado neste servidor' : '', !c.chaveLigada ? 'CHATWOOT_SOFIA_ATENDENDO=0' : ''].filter(Boolean);
+  return { pode: motivos.length === 0, porque: motivos.join('; ') };
 }

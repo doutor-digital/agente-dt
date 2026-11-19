@@ -194,11 +194,19 @@ export interface PortasDaIa {
    * Só com o robô ligado e `CHATWOOT_SOFIA_ATENDENDO` != 0 (chatwoot-sofia-atendendo.ts): o paciente escreveu e a Sofia vai atender →
    * a conversa vai para «Abertas» e ganha a etiqueta `sofia-atendendo`.
    */
-  comecarAtendimento?(conversa: number): Promise<void>;
-  /** tira a etiqueta `sofia-atendendo` (a equipe respondeu, a Sofia passou para a equipe, a rodada não pôde responder) */
+  comecarAtendimento?(conversa: number, criterio?: (lida: ConversaLida) => Promise<boolean>): Promise<void>;
+  /**
+   * tira a etiqueta `sofia-atendendo` (a equipe respondeu, a Sofia passou para a equipe, a rodada não pôde responder, unidade desligada/seco).
+   * Existe SEMPRE (mesmo com a chave desligada ou sem robô): quem a pôs antes precisa conseguir tirá-la.
+   */
   encerrarAtendimento?(conversa: number): Promise<void>;
-  /** tira a etiqueta se a conversa mostra que a Sofia saiu (resolvida, pausada, esperando humano): vem do webhook */
+  /**
+   * vem do webhook: com o recurso ligado tira a etiqueta se a conversa mostra que a Sofia saiu (resolvida, pausada, esperando humano);
+   * com o recurso DESLIGADO tira a que existir. Existe sempre.
+   */
   conferirAtendimento?(conversa: number): Promise<void>;
+  /** o recurso está ligado aqui (robô configurado e `CHATWOOT_SOFIA_ATENDENDO` != 0)? Define se o webhook confere ou recolhe. */
+  atendimentoAtivo?: boolean;
 }
 
 /** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
@@ -209,7 +217,9 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
   const robo = tokenRobo ? portaDoRobo(ctx, tokenRobo) : null;
   if (robo) logger.info(`${ID_IA}: a Sofia responde como ROBÔ do Chatwoot`);
   // «Sofia atendendo» (chatwoot-sofia-atendendo.ts): só onde há robô — é ele que faz a conversa nascer em «Pendentes»
-  const atendimento = robo && atendimentoLigado() ? portaDoAtendimento(ctx, (conversa) => robo.abrirParaEquipe(conversa)) : null;
+  const atendimentoAtivo = !!robo && atendimentoLigado();
+  // a porta existe sempre: com o recurso desligado ela só serve para TIRAR a etiqueta que um deploy/ligação anterior deixou (abrir não faz nada)
+  const atendimento = portaDoAtendimento(ctx, (conversa) => (robo ? robo.abrirParaEquipe(conversa) : Promise.resolve()));
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -246,9 +256,10 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     },
     // robô ligado: conversa em que a Sofia NÃO respondeu vai para «Abertas» (senão ficaria escondida em «Pendentes»)
     abrirParaEquipe: robo ? (conversa) => robo.abrirParaEquipe(conversa) : undefined,
-    comecarAtendimento: atendimento ? async (conversa) => void (await comecarAtendimento(conversa, atendimento)) : undefined,
-    encerrarAtendimento: atendimento ? async (conversa) => void (await encerrarAtendimento(conversa, atendimento)) : undefined,
-    conferirAtendimento: atendimento ? async (conversa) => void (await conferirAtendimento(conversa, atendimento)) : undefined,
+    comecarAtendimento: atendimentoAtivo ? async (conversa, criterio) => void (await comecarAtendimento(conversa, atendimento, criterio)) : undefined,
+    encerrarAtendimento: async (conversa) => void (await encerrarAtendimento(conversa, atendimento)),
+    conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
+    atendimentoAtivo,
     async passarParaEquipe(conversa, lida, motivo) {
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
@@ -282,6 +293,8 @@ export interface MemoriaDaIa {
   usuariosDaIntegracao: Set<number>;
   /** conversa → quando o Registro anotou «Sofia desligada nesta unidade» (uma vez por hora por conversa) */
   registrosDeDesligada: Map<number, number>;
+  /** conversa → resposta recente de «a rodada vai atender?» (cartão no Kommo é uma ida à API por mensagem; vale ATENDIMENTO_CONFERIDO_MS) */
+  atendimentoConferido: Map<number, { em: number; vai: Promise<boolean> }>;
 }
 export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   esperas: new Map(),
@@ -291,9 +304,34 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   avisosDeHorario: new Set(),
   usuariosDaIntegracao: new Set(),
   registrosDeDesligada: new Map(),
+  atendimentoConferido: new Map(),
 });
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
 export const REPETE_SE_OCUPADA_MS = 15_000;
+
+/** Quanto tempo a resposta de «a rodada vai atender?» vale (várias mensagens seguidas do paciente não repetem a ida ao Kommo). */
+export const ATENDIMENTO_CONFERIDO_MS = 30_000;
+
+/**
+ * O MESMO critério com que a rodada desiste (teto do dia, sem telefone, cartão ativo no Kommo, Kommo fora do ar), aplicado já na 1ª
+ * mensagem: a etiqueta `sofia-atendendo` só entra onde a rodada vai mesmo conversar — senão piscaria a cada mensagem. Não lança.
+ */
+async function vaiAtender(m: MensagemDoPaciente, lida: ConversaLida, p: PortasDaIa, mem: MemoriaDaIa): Promise<boolean> {
+  const antes = mem.atendimentoConferido.get(m.conversa);
+  if (antes && Date.now() - antes.em < ATENDIMENTO_CONFERIDO_MS) return antes.vai;
+  const decidir = async (): Promise<boolean> => {
+    if ((mem.rodadas.get(`${m.slug}|${p.hoje()}`) ?? 0) >= TETO_SOFIA_POR_DIA) return false;
+    if (!lida.telefone) return false;
+    const unit = await p.unidade(m.slug);
+    if (!unit) return false;
+    return (await p.cartaoNoKommo(unit, lida.telefone)) === null;
+  };
+  // a PROMESSA fica guardada: mensagens que chegam enquanto a primeira ainda consulta o Kommo esperam a mesma resposta
+  const vai = decidir().catch(() => false);
+  if (mem.atendimentoConferido.size > 5000) mem.atendimentoConferido.clear();
+  mem.atendimentoConferido.set(m.conversa, { em: Date.now(), vai });
+  return vai;
+}
 
 /**
  * Uma mensagem do paciente chegou: transcreve o áudio agora; a Sofia, só depois de 60 s quieto (reagenda a cada fala).
@@ -310,13 +348,15 @@ export async function aoChegar(m: MensagemDoPaciente, p: PortasDaIa, mem: Memori
       await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'unidade-pausada' }).catch(() => undefined);
     }
     if (p.abrirParaEquipe) await p.abrirParaEquipe(m.conversa).catch(() => undefined);
+    // unidade desligada: a Sofia não atende — se a conversa ficou com a etiqueta de quando estava ligada, ela sai
+    await p.encerrarAtendimento?.(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
     return;
   }
   // «Abertas» + etiqueta `sofia-atendendo` já na 1ª mensagem (só no LIGADO: no seco a Sofia não responde e a etiqueta mentiria)
   const comecar = p.comecarAtendimento;
   if (comecar && p.estado(m.slug) === 'ligado') {
     void depoisDe
-      .then(() => comecar(m.conversa))
+      .then(() => comecar(m.conversa, (lida) => vaiAtender(m, lida, p, mem)))
       .catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui abrir a conversa / pôr a etiqueta sofia-atendendo`));
   }
   if (m.audios.length) {
@@ -377,7 +417,10 @@ const FERRAMENTAS_QUE_GRAVAM = new Set(['cadastrar_paciente', 'agendar_consulta'
 
 export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa): Promise<Desfecho> {
   const modo = p.estado(m.slug);
-  if (modo === 'desligado') return 'desligado';
+  if (modo === 'desligado') {
+    await p.encerrarAtendimento?.(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
+    return 'desligado';
+  }
   if (mem.emAndamento.has(m.conversa)) return 'ocupada';
   mem.emAndamento.add(m.conversa);
   const info: InfoDaRodada = {};
@@ -407,6 +450,8 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
 
 /** Desfechos em que a Sofia NÃO respondeu e não vai tentar de novo sozinha: a equipe é quem precisa olhar (a etiqueta «Sofia atendendo» sai). */
 export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
+  // `nota` = seco: a Sofia só deixa nota, não atende — a etiqueta de quando a unidade estava ligada não pode ficar
+  'nota',
   'sem-texto',
   'teto',
   'sem-unidade',
@@ -773,7 +818,7 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   // O resolver vai primeiro porque grava a lista que veio no AVISO (+ falta-etapa); as seguintes releem a lista e não a desfazem.
   const resol = eventoDeResolucao(req.body); // resolvida sem os campos obrigatórios → etiqueta falta-etapa; completou depois → tira
   const reativa = eventoDeReativacao(req.body); // resolvida e pausada → reativa a IA
-  const atend = eventoDeAtendimento(req.body); // etiqueta `sofia-atendendo` numa conversa em que a Sofia já saiu → tira
+  const atend = eventoDeAtendimento(req.body, undefined, { recolherSempre: estadoDoReceptor(conta)?.portas.atendimentoAtivo === false }); // etiqueta `sofia-atendendo` numa conversa em que a Sofia já saiu → tira
   const etq = eventoDeEtiqueta(req.body); // botão "Perdido: <motivo>" → etiqueta → etapa + motivo no cartão
   if (resol?.acao || reativa || atend || etq) {
     const e = estadoDoReceptor(conta);

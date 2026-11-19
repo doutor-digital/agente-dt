@@ -19,6 +19,8 @@ import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { ehUsuarioCelular } from './chatwoot-unidades.js';
 
 export const ETIQUETA_PAUSA = 'ia-pausada';
+/** Atributo da conversa que a pausa grava (quem pausou): enquanto existir, a conversa ESTÁ pausada, mesmo que a etiqueta tenha sido desfeita por outra gravação. */
+export const ATRIBUTO_PAUSADA_POR = 'ia_pausada_por';
 /** O usuário "Conector Claude": por ele saem a Sofia e a régua. Mensagem dele NÃO pausa. */
 export const USUARIO_ROBO = 2;
 export const NOTA_PAUSA = '⏸ IA pausada nesta conversa';
@@ -125,7 +127,7 @@ export async function pausar(conversa: number, autor: AutorDaPausa, p: PortaDaPa
   if (!jaPausada) {
     await p.etiquetas(conversa, [...c.etiquetas, ETIQUETA_PAUSA]);
     const por = autor.tipo === 'pessoa' ? autor.nome : 'celular';
-    await p.atributos(conversa, { ...c.attrs, ia_pausada_por: por, ia_pausada_em: p.agora().toISOString() }).catch((err) =>
+    await p.atributos(conversa, { ...c.attrs, [ATRIBUTO_PAUSADA_POR]: por, ia_pausada_em: p.agora().toISOString() }).catch((err) =>
       logger.warn({ err: String(err), conversa }, 'chatwoot-pausa: não consegui gravar quem pausou'),
     );
   }

@@ -13,8 +13,9 @@ import { prepararEstadoDasAutomacoes } from '../lib/chatwoot-referral-retroativo
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { ID_IA, estadoDoReceptor } from '../lib/chatwoot-ia.js';
 import { portaDoRobo, tokenDoRobo } from '../lib/chatwoot-sofia-bot.js';
-import { portaDoAtendimento } from '../lib/chatwoot-sofia-atendendo.js';
-import { acertarPendentes, lerArgumentosDoAcerto, type PendenteDaCaixa } from '../lib/chatwoot-sofia-atendendo-retroativo.js';
+import { atendimentoLigado, portaDoAtendimento } from '../lib/chatwoot-sofia-atendendo.js';
+import { configDaUnidade } from '../lib/chatwoot-unidades.js';
+import { acertarPendentes, lerArgumentosDoAcerto, podeEtiquetar, type PendenteDaCaixa } from '../lib/chatwoot-sofia-atendendo-retroativo.js';
 
 const MAX_PAGINAS = 40;
 
@@ -30,12 +31,15 @@ async function main() {
   if (!estadoDoReceptor(conta)) throw new Error(`a conta ${conta} não tem estado da IA (sem unidade/token): não aplico`);
 
   const modo = estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS);
-  // o robô configurado é o de Parauapebas (conta do ambiente); numa conta própria o token dele não vale, abre-se com o da conta
-  const token = ehContaDoAmbiente(conta) ? tokenDoRobo() : null;
+  // o robô DESTA conta: o do ambiente em Parauapebas, o da própria clínica nas de conta própria (o token de uma nunca vale na outra)
+  const token = ehContaDoAmbiente(conta) ? tokenDoRobo() : tokenDoRobo(process.env, configDaUnidade(slug)?.envSufixo);
   const robo = token ? portaDoRobo(ctx, token) : null;
+  const chaveLigada = atendimentoLigado();
   console.log(`caixa ${a.caixa} (${slug}) — ${a.soConferir ? 'SÓ CONFERIR (nada é gravado)' : 'APLICANDO'}`);
-  console.log(`Sofia (${ID_IA}): ${modo}; robô do Chatwoot: ${robo ? 'configurado' : 'NÃO configurado (abro com o token da conta)'}`);
-  if (modo !== 'ligado') console.log('AVISO  a Sofia não está LIGADA nesta unidade: as conversas serão abertas, mas nenhuma leva a etiqueta.');
+  console.log(`Sofia (${ID_IA}): ${modo}; robô do Chatwoot: ${robo ? 'configurado' : 'NÃO configurado (abro com o token da conta)'}; CHATWOOT_SOFIA_ATENDENDO: ${chaveLigada ? 'ligado' : 'DESLIGADO (=0)'}`);
+  // a etiqueta só entra onde o fluxo ao vivo também a poria: Sofia LIGADA na unidade, robô configurado e a chave não desligada
+  const etiquetar = podeEtiquetar({ modo, temRobo: !!robo, chaveLigada });
+  if (!etiquetar.pode) console.log(`AVISO  NENHUMA conversa levará a etiqueta (${etiquetar.porque}). As pendentes serão abertas.`);
 
   const atendimento = portaDoAtendimento(ctx, async (id) => {
     if (robo) return robo.abrirParaEquipe(id);
@@ -45,7 +49,7 @@ async function main() {
     a,
     {
       atendimento,
-      sofiaLigada: modo === 'ligado',
+      sofiaLigada: etiquetar.pode,
       async pendentes() {
         const lista: PendenteDaCaixa[] = [];
         for (let pagina = 1; pagina <= MAX_PAGINAS; pagina++) {

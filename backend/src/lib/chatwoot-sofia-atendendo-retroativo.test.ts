@@ -102,3 +102,22 @@ test('uma conversa que falha não derruba as outras (e entra na conta)', async (
   assert.ok(linhas.some((l) => /conversa 1: FALHOU — Chatwoot 403/.test(l)));
   assert.ok(m.gravou.includes('abrir 2'));
 });
+
+test('o resumo só conta o que foi feito: conversa que falhou no meio não entra como aberta/etiquetada', async () => {
+  const m = mundo({ 1: { status: 'pending', labels: [] }, 2: { status: 'pending', labels: [] } }, { 1: seg(1), 2: seg(1) });
+  const etiquetas = m.portas.atendimento.etiquetas;
+  m.portas.atendimento.etiquetas = async (id, lista) => {
+    if (id === 1) throw new Error('Chatwoot 500');
+    return etiquetas(id, lista);
+  };
+  const r = await R.acertarPendentes({ soConferir: false, caixa: 3, etiquetarHoras: 24 }, m.portas, AGORA);
+  assert.deepEqual(r, { pendentes: 2, abertas: 1, etiquetadas: 1, semEtiqueta: 0, falhou: 1, truncado: false });
+});
+
+test('podeEtiquetar: só com a Sofia LIGADA, robô configurado e a chave não desligada — e diz o que impede', () => {
+  assert.deepEqual(R.podeEtiquetar({ modo: 'ligado', temRobo: true, chaveLigada: true }), { pode: true, porque: '' });
+  assert.match(R.podeEtiquetar({ modo: 'ligado', temRobo: false, chaveLigada: true }).porque, /não há robô/);
+  assert.match(R.podeEtiquetar({ modo: 'ligado', temRobo: true, chaveLigada: false }).porque, /CHATWOOT_SOFIA_ATENDENDO=0/);
+  assert.match(R.podeEtiquetar({ modo: 'seco', temRobo: true, chaveLigada: true }).porque, /«seco»/);
+  assert.equal(R.podeEtiquetar({ modo: 'desligado', temRobo: false, chaveLigada: false }).pode, false);
+});
