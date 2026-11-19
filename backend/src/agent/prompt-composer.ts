@@ -3089,6 +3089,8 @@ async function loadComposeInput(input: {
     outraSofia,
     redeDeUnidades,
     ofertaDaCampanha,
+    // O instante do turno que o grafo fixou (já vinha no `...input`; explícito para um refactor não perder)
+    agora: input.agora,
     // Só pergunta; quem escreve o texto é renderAgoraNoTurno, e só no bloco do turno
     horaNoTurno: automacaoLigada(input.unit.slug, 'hora-no-turno', process.env.HORA_NO_TURNO_SLUGS),
   };
