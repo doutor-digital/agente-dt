@@ -23,8 +23,8 @@ import { ID_CICLO, novaMemoriaDaDemora, rodarCicloDaDemora, type Armazem, type M
 
 const CICLO_MS = Number(process.env.CRM_DEMORA_CICLO_MS) || 60_000;
 const PRIMEIRO_CICLO_MS = 100_000;
-/** 25 conversas por página; as mais novas primeiro. */
-const MAX_PAGINAS = 8;
+/** 25 conversas por página, as mais novas primeiro; a leitura para na 1ª página inteira mais velha que a janela. 20 páginas = 500 conversas ativas na janela de 200 min (uma caixa não chega nem perto; se chegar, o log avisa). */
+const MAX_PAGINAS = 20;
 const PAGINAS_DE_MENSAGENS = 2;
 
 export { modoDaDemora };
@@ -99,6 +99,7 @@ export function mundoReal(): MundoDaDemora {
           }
           // da mais nova para a mais velha: a página inteira antes do corte = acabou
           if (pagina.every((c) => Number(c?.last_activity_at) < desdeSeg)) break;
+          if (p === MAX_PAGINAS) logger.warn({ caixa, status }, `${ID_CICLO}: a caixa tem mais conversas ativas do que ${MAX_PAGINAS} páginas — as mais antigas da janela não foram lidas neste ciclo`);
         }
       }
       return todas;
