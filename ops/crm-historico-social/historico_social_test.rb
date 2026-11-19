@@ -3,6 +3,7 @@
 # Testes da parte PURA (sem Rails, sem rede, sem banco):  ruby ops/crm-historico-social/historico_social_test.rb
 # (ou ops/crm-historico-social/testar.sh, que roda no contêiner do Chatwoot e não exige Ruby instalado no PC).
 require 'minitest/autorun'
+require 'socket'
 require_relative 'historico_social'
 
 class HistoricoSocialTest < Minitest::Test
@@ -399,5 +400,193 @@ class HistoricoSocialTest < Minitest::Test
     g, = graph([erro(100, 400, 33)])
     f = S::FonteMeta.new(canal: :instagram, graph: g, lado_pagina: '17841')
     assert_nil f.perfil_instagram('123')
+  end
+
+  # ── mídia: partes, anexos, rótulo que sai quando a mídia entra ──
+  def test_partes_e_midias_com_url_so_em_memoria
+    m = msg('message' => 'olha', 'attachments' => { 'data' => [
+      { 'image_data' => { 'url' => 'https://scontent.fbcdn.net/a.jpg' }, 'mime_type' => 'image/jpeg', 'name' => 'foto.jpg', 'size' => 1234 },
+      { 'file_url' => 'https://lookaside.fbsbx.com/b', 'mime_type' => 'audio/mp4' },
+      { 'generic_template' => { 'title' => 'Agende' } }
+    ] })
+    n, = S.normalizar(m, lado_pagina: PAGINA)
+    assert_equal ['olha', '[imagem]', '[áudio]', '[mensagem com botões] Agende'], n[:partes].map { |p| p[:rotulo] }
+    assert_equal [1, 2], n[:midias].map { |x| x[:idx] }
+    assert_equal :imagem, n[:midias][0][:tipo]
+    assert_equal 1234, n[:midias][0][:tamanho]
+    assert_equal 'foto.jpg', n[:midias][0][:nome]
+    assert_equal :audio, n[:midias][1][:tipo]
+    assert_equal "olha\n[imagem]\n[áudio]\n[mensagem com botões] Agende", n[:texto], 'sem baixar nada o texto é o de sempre'
+  end
+
+  def test_compor_tira_so_o_rotulo_de_quem_virou_anexo
+    n, = S.normalizar(msg('message' => 'olha', 'attachments' => { 'data' => [{ 'image_data' => { 'url' => 'https://x' } }, { 'image_data' => { 'url' => 'https://y' } }] }), lado_pagina: PAGINA)
+    assert_equal "olha\n[imagem]", S.compor(n[:partes], [1])
+    assert_equal "olha", S.compor(n[:partes], [1, 2])
+    n2, = S.normalizar(msg('message' => '', 'attachments' => { 'data' => [{ 'image_data' => { 'url' => 'https://x' } }] }), lado_pagina: PAGINA)
+    assert_nil S.compor(n2[:partes], [0]), 'só mídia, sem texto: content nulo (como o Chatwoot grava)'
+  end
+
+  def test_sem_url_nao_e_baixavel_e_story_compartilhamento_nao_sao_midia
+    n, = S.normalizar(msg('message' => '', 'attachments' => { 'data' => [{ 'mime_type' => 'image/jpeg' }] }), lado_pagina: PAGINA)
+    assert_nil n[:midias][0][:url]
+    n, = S.normalizar(msg('message' => '', 'story' => { 'mention' => { 'link' => 'x' } }, 'shares' => { 'data' => [{ 'link' => 'x' }] }, 'is_unsupported' => true), lado_pagina: PAGINA)
+    assert_empty n[:midias]
+    n, = S.normalizar(msg('message' => '', 'sticker' => 'https://cdn/s.png'), lado_pagina: PAGINA)
+    assert_equal :figurinha, n[:midias][0][:tipo]
+  end
+
+  def test_tipo_do_chatwoot_e_nome_do_arquivo
+    assert_equal :image, S.tipo_do_chatwoot('image/png', :imagem)
+    assert_equal :image, S.tipo_do_chatwoot('image/webp', :figurinha)
+    assert_equal :audio, S.tipo_do_chatwoot('video/mp4', :audio), 'áudio da Meta que chega como mp4 continua áudio'
+    assert_equal :video, S.tipo_do_chatwoot('video/mp4', :video)
+    assert_equal :file, S.tipo_do_chatwoot('application/pdf', :arquivo)
+    assert_equal 'foto.jpg', S.nome_do_arquivo('foto.jpg', 'image/jpeg', :imagem, 0)
+    assert_equal 'imagem-1.png', S.nome_do_arquivo('', 'image/png', :imagem, 0)
+    assert_equal 'laudo final.pdf', S.nome_do_arquivo('../../laudo final.pdf', 'application/pdf', :arquivo, 2)
+    assert_equal 'audio-3.m4a', S.nome_do_arquivo(nil, 'audio/mp4', :audio, 2)
+  end
+
+  # ── mídia: Baixador contra um servidor local de verdade ──
+  class Servidor
+    attr_reader :porta
+
+    def initialize(&rotas)
+      @rotas = rotas
+      @srv = TCPServer.new('127.0.0.1', 0)
+      @porta = @srv.addr[1]
+      @fio = Thread.new do
+        loop do
+          c = @srv.accept
+          Thread.new(c) { |s| atender(s) }
+        end
+      rescue IOError
+        nil
+      end
+    end
+
+    def parar
+      @srv.close
+      @fio.kill
+    end
+
+    def url(caminho)
+      "http://127.0.0.1:#{@porta}#{caminho}"
+    end
+
+    def atender(s)
+      linha = s.gets.to_s
+      metodo, caminho = linha.split
+      while (l = s.gets) && l != "\r\n"; end
+      status, cab, corpo = @rotas.call(metodo, caminho)
+      cab = { 'Connection' => 'close' }.merge(cab || {})
+      s.write("HTTP/1.1 #{status} X\r\n" + cab.map { |k, v| "#{k}: #{v}\r\n" }.join + "\r\n")
+      s.write(corpo.to_s) unless metodo == 'HEAD'
+    rescue Errno::EPIPE, Errno::ECONNRESET
+      nil
+    ensure
+      s.close
+    end
+  end
+
+  def com_servidor
+    srv = Servidor.new do |metodo, caminho|
+      case caminho
+      when '/img' then [200, { 'Content-Type' => 'image/png', 'Content-Length' => '8' }, "\x89PNG\r\n\x1a\n".b]
+      when '/octet' then [200, { 'Content-Type' => 'application/octet-stream', 'Content-Length' => '3' }, 'abc']
+      when '/html' then [200, { 'Content-Type' => 'text/html', 'Content-Length' => '5' }, '<html']
+      when '/grande' then [200, { 'Content-Type' => 'image/png', 'Content-Length' => '5000' }, 'x' * 5000]
+      when '/sem-tamanho' then [200, { 'Content-Type' => 'image/png' }, 'x' * 5000]
+      when '/404' then [404, {}, 'nao']
+      when '/vai' then [302, { 'Location' => '/img' }, '']
+      when '/laco' then [302, { 'Location' => '/laco' }, '']
+      when '/fora' then [302, { 'Location' => 'http://example.invalid/x' }, '']
+      when '/lento' then (sleep 3; [200, { 'Content-Type' => 'image/png', 'Content-Length' => '1' }, 'x'])
+      else [500, {}, '']
+      end
+    end
+    yield srv
+  ensure
+    srv&.parar
+  end
+
+  def baixador(max: 1000, **opc)
+    S::Baixador.new(max_bytes: max, permitir: ->(u) { u.host == '127.0.0.1' }, **opc)
+  end
+
+  def motivo
+    yield
+    nil
+  rescue S::ErroMidia => e
+    e.motivo
+  end
+
+  def test_baixa_imagem_de_verdade
+    com_servidor do |srv|
+      r = baixador.baixar(srv.url('/img'), tipo: :imagem)
+      assert_equal 'image/png', r[:content_type]
+      assert_equal 8, r[:bytes]
+      assert_equal "\x89PNG\r\n\x1a\n".b, r[:arquivo].read.b
+      r[:arquivo].close!
+    end
+  end
+
+  def test_recusas_de_midia
+    com_servidor do |srv|
+      b = baixador
+      assert_equal :tipo, motivo { b.baixar(srv.url('/html'), tipo: :imagem) }, 'página de erro nunca vira imagem'
+      assert_equal :tipo, motivo { b.baixar(srv.url('/img'), tipo: :video) }, 'CDN respondeu imagem para um «vídeo»'
+      assert_equal :tamanho, motivo { b.baixar(srv.url('/grande'), tipo: :imagem) }, 'Content-Length acima do teto'
+      assert_equal :tamanho, motivo { b.baixar(srv.url('/sem-tamanho'), tipo: :imagem) }, 'sem Content-Length: corta ao passar do teto'
+      assert_equal :http, motivo { b.baixar(srv.url('/404'), tipo: :imagem) }
+      assert_equal :http, motivo { b.baixar(srv.url('/laco'), tipo: :imagem) }, 'laço de redirecionamento'
+      assert_equal :host, motivo { b.baixar(srv.url('/fora'), tipo: :imagem) }, 'redirecionamento para host fora da lista'
+      assert_equal :tempo, motivo { baixador(ler: 1).baixar(srv.url('/lento'), tipo: :imagem) }
+      assert_equal :rede, motivo { b.baixar('http://127.0.0.1:1/nada', tipo: :imagem) }
+    end
+  end
+
+  def test_redirecionamento_ate_o_arquivo_e_octet_stream_usa_o_mime_da_graph
+    com_servidor do |srv|
+      r = baixador.baixar(srv.url('/vai'), tipo: :imagem)
+      assert_equal 8, r[:bytes]
+      r[:arquivo].close!
+      r = baixador.baixar(srv.url('/octet'), tipo: :imagem, mime_graph: 'image/jpeg')
+      assert_equal 'image/jpeg', r[:content_type]
+      r[:arquivo].close!
+      assert_equal :tipo, motivo { baixador.baixar(srv.url('/octet'), tipo: :imagem) }, 'octet-stream sem mime da Graph: não confere'
+    end
+  end
+
+  def test_so_https_e_so_hosts_da_meta_em_producao
+    b = S::Baixador.new(max_bytes: 10)
+    ok = ->(u) { b.host_permitido?(URI(u)) }
+    assert ok.call('https://scontent.xx.fbcdn.net/v/a.jpg')
+    assert ok.call('https://lookaside.fbsbx.com/ig_messaging_cdn/x')
+    assert ok.call('https://scontent.cdninstagram.com/a')
+    refute ok.call('http://scontent.xx.fbcdn.net/a'), 'http puro não'
+    refute ok.call('https://evil.com/a')
+    refute ok.call('https://fbcdn.net.evil.com/a')
+    refute ok.call('https://notfbcdn.net/a')
+    refute ok.call('https://169.254.169.254/latest/meta-data')
+    assert_equal :host, motivo { b.baixar('https://169.254.169.254/x', tipo: :arquivo) }
+  end
+
+  def test_medir_le_o_tamanho_sem_baixar
+    com_servidor do |srv|
+      assert_equal 8, baixador.medir(srv.url('/img'))
+      assert_equal 8, baixador.medir(srv.url('/vai'))
+      assert_nil baixador.medir(srv.url('/404'))
+      assert_nil baixador.medir('https://evil.com/x')
+    end
+  end
+
+  def test_erro_de_midia_nao_carrega_url
+    com_servidor do |srv|
+      e = assert_raises(S::ErroMidia) { baixador.baixar(srv.url('/404?token=segredo'), tipo: :imagem) }
+      refute_includes e.message, 'segredo'
+      refute_includes e.message, '127.0.0.1'
+    end
   end
 end
