@@ -504,7 +504,10 @@ function fatosDoTexto(t: string): Fatos {
   // hh:mm / hhhmm ("10h30", "15:00horas") e hora cheia ("10h", "10 horas"); "3 hérnias" não é "3h" (letra depois do h)
   for (const m of t.matchAll(/(?<![\d/:.,])(\d{1,2})\s*[h:](\d{2})(?!\d)/gi)) f.horas.add(`${Number(m[1])}:${m[2]}`);
   for (const m of t.matchAll(/(?<![\d/:.,])(\d{1,2})\s*(?:h|horas?)(?![\p{L}\d])/giu)) f.horas.add(`${Number(m[1])}:00`);
-  for (const m of t.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?![\d/])/g)) f.datas.add(`${Number(m[1])}/${Number(m[2])}`);
+  for (const m of t.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?(?![\d/])/g)) {
+    const ano = m[3] ? (m[3].length === 2 ? `20${m[3]}` : m[3]) : '';
+    f.datas.add(`${Number(m[1])}/${Number(m[2])}${ano ? `/${ano}` : ''}`);
+  }
   for (const m of t.matchAll(/(?<![\p{L}])dia\s+(\d{1,2})(?![\d/])/giu)) f.dias.add(String(Number(m[1])));
   for (const m of t.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) {
     const so = m[0].replace(/\D/g, '');
@@ -518,7 +521,7 @@ const ENDERECO = /(?<![\p{L}\p{N}_])(?:rua|avenida|av\.|travessa|alameda|pra[cç
 
 /**
  * Todo valor, hora, data, telefone e link do trecho cortado também está na fala que fica? Comparação por valor INTEIRO: "R$ 50" não
- * está em "R$ 250", "3h" não está em "13h" nem "10h" em "10h30". Data "18/11" conta se a fala traz a mesma data ou "dia 18".
+ * está em "R$ 250", "3h" não está em "13h" nem "10h" em "10h30". Data "18/11" conta se a fala traz a mesma data ou "dia 18"; "18/11/2026" exige a data inteira.
  * Endereço (rua, avenida, bairro, CEP…) no trecho cortado reprova sempre: não dá para conferir.
  */
 function fatosCabemNaFala(cortado: string, fala: string): boolean {
@@ -527,7 +530,11 @@ function fatosCabemNaFala(cortado: string, fala: string): boolean {
   const b = fatosDoTexto(fala);
   const todos = (de: Set<string>, em: Set<string>) => [...de].every((x) => em.has(x));
   if (!todos(a.dinheiro, b.dinheiro) || !todos(a.horas, b.horas) || !todos(a.telefones, b.telefones) || !todos(a.links, b.links)) return false;
-  return [...a.datas].every((d) => b.datas.has(d) || b.dias.has(d.split('/')[0]));
+  // Data com ano exige a MESMA data na fala; sem ano, vale a mesma dd/mm ou "dia dd".
+  return [...a.datas].every((d) => {
+    if (d.split('/').length === 3) return b.datas.has(d);
+    return b.datas.has(d) || [...b.datas].some((x) => x.startsWith(`${d}/`)) || b.dias.has(d.split('/')[0]);
+  });
 }
 
 /**

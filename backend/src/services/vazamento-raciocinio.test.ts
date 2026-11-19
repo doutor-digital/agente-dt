@@ -202,6 +202,7 @@ test('o corte compara número inteiro: R$ 50 não está em R$ 250, 3h não está
     'Não preciso agir, ela vem às 3h da tarde.\n\nOi! Te espero às 13h 😊',
     'Não preciso agir, a consulta é 18/11 às 10h.\n\nOi! Te espero dia 18 às 10h30 😊',
     'Não preciso agir, o valor é R$ 350.\n\nOi! A consulta é R$ 3500, viu? Você quer marcar?',
+    'Não preciso agir, a consulta é 18/11/2026.\n\nOi! Te espero dia 18, viu? Você confirma?',
   ];
   for (const m of casos) {
     assert.ok(detectarVazamento(m.split('\n\n')[0]), `o parágrafo de abertura precisa ser bastidor para o teste valer: ${m}`);
