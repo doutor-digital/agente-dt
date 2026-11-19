@@ -645,6 +645,9 @@ export async function buildAgentGraph(
   // tarde?": no máximo UMA vez por turno cada — a volta da ferramenta passa por aqui de novo.
   let agendaJaReconsultada = false;
   let turnoJaRefeito = false;
+  // A hora do turno, fixada aqui: o nó roda de novo a cada volta de ferramenta, e a hora por minuto mudaria o bloco do turno
+  // (e o cache da conversa que vem depois dele) no meio da resposta. Só entra no prompt de quem ligou `hora-no-turno`.
+  const agoraDoTurno = new Date();
 
   const agentNode = async (state: AgentStateType) => {
     await recorder.step({
@@ -724,6 +727,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        agora: agoraDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
       systemMessage = new SystemMessage({
@@ -741,6 +745,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        agora: agoraDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
