@@ -1,7 +1,7 @@
 import type { Unit } from '@prisma/client';
 import { preencherLacunas } from './lacunas.js';
 import { convenioDaUnidade, corrigirPrecoDoConvenio } from './preco-convenio.js';
-import { corrigirValorAntecipado } from './valor-antecipado.js';
+import { corrigirSinalErrado, corrigirValorAntecipado } from './valor-antecipado.js';
 import { corrigirTomDaSaida } from './tom-da-saida.js';
 import { corrigirLinkDeMapa } from './link-de-mapa.js';
 import { fmtBRL, precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
@@ -10,7 +10,7 @@ import { ehClinicaParaSinalDeAlerta } from './sinal-de-alerta.js';
 import { sobrouVenda } from './venda-em-alerta.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { semOAntecipadoNaSaida } from './sem-antecipado-saida.js';
-import { posicoesDeValorDoPaciente } from './valor-do-paciente.js';
+import { posicoesDeValorDoPaciente, posicoesDeValorNegado } from './valor-do-paciente.js';
 import { corrigirRestoDoSinal, ehTotalComSinal, type PrecosComSinal } from './total-com-sinal.js';
 
 /** O que a trava de saída precisa saber além da resposta. */
@@ -367,8 +367,10 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const escondidos: string[] = [];
   // Também escondidos: o R$ que o PACIENTE pagou/mandou ("o comprovante mostra R$ 50,00") — dado dele, não slot de preço; ver valor-do-paciente.ts.
   // Quem esconde é a posição do valor, então o preço da unidade na MESMA mensagem ("…mas o antecipado é R$ 200,00") continua conferido.
+  // E o R$ que a Sofia NEGA ("…fica R$ 250 no total — não R$ 450"): é o valor que o paciente citou e que ela está dizendo que não vale.
   const escondeOferta = (t: string): string => {
     const doPaciente = posicoesDeValorDoPaciente(t);
+    for (const pos of posicoesDeValorNegado(t)) doPaciente.add(pos);
     if (exatosDaOferta.size === 0 && doPaciente.size === 0) return t;
     return t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi, (m, inteiro: string, centavos: string | undefined, posicao: number) => {
       const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
@@ -386,6 +388,16 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const p = precosDaConsulta(unit);
   // Sinal: o da flag (Sofia 2.0 com Pix) ou, com a flag vazia, o que a ficha declara — ver `sinalDeclaradoNaFicha`.
   const sinal = sinalDaUnidade(unit) ?? sinalDeclaradoNaFicha(unit, p?.antecipado);
+  // "sinal de R$ 250 antecipado": o valor depois de "sinal de" é o sinal da unidade (R$ 50) — nem o do modelo, nem o antecipado. Antes do `doSinal`,
+  // que lê o texto já corrigido.
+  if (sinal) {
+    const ss = corrigirSinalErrado(texto, { sinal: sinal.sinal, taxaDeReserva: unit.spineBookingRequiresPayment ?? false });
+    if (ss.corrigiu.length > 0) {
+      triggered.push(`sinal_corrigido:${ss.corrigiu.join('/')}->${sinal.sinal}`);
+      texto = ss.texto;
+      reescreveu = true;
+    }
+  }
   // R$ 50 e R$ 200 só são "do sinal" quando a MESMA frase fala de sinal / garantir / restante, e só como valor EXATO (sem a tolerância de
   // parcela do catálogo: "R$ 100" e "R$ 67" não são metade nem terço de R$ 200). Solto no texto continua sendo valor inventado.
   const doSinal = sinal ? valoresDoSinalNaFrase(texto, [sinal.sinal, sinal.restoNoDia]) : new Set<number>();
