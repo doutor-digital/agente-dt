@@ -11,7 +11,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { fusoDaUnidade } from './fuso.js';
-import { enviarPelaEvolution } from './alerta-whatsapp.js';
+import { enviarPelaEvolutionComResultado } from './alerta-whatsapp.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, contextoDoAmbiente, ehContaDoAmbiente, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_CLOUD, CAIXAS_REGUA, GERENTE_DA_CAIXA } from './chatwoot-regua.js';
 import { configDaUnidade } from './chatwoot-unidades.js';
@@ -29,6 +29,26 @@ const PAGINAS_DE_MENSAGENS = 2;
 
 export { modoDaDemora };
 
+/** O token do robô da Sofia DESTA conta (a do ambiente usa o global; clínica de conta própria, o dela); null = sem robô. */
+function tokenDoRoboDaConta(conta: number | undefined, slug: string): string | null {
+  return conta !== undefined && ehContaDoAmbiente(conta) ? tokenDoRobo() : tokenDoRobo(process.env, configDaUnidade(slug)?.envSufixo);
+}
+function tokenDoRoboDaUnidade(slug: string, base: ContextoChatwoot | null): string | null {
+  const caixa = Object.entries(CAIXAS_REGUA).find(([, s]) => s === slug)?.[0];
+  const conta = base && caixa ? contextoDaCaixa(base, Number(caixa))?.conta?.conta : undefined;
+  return tokenDoRoboDaConta(conta, slug);
+}
+
+/** A unidade muda raramente: relida a cada 10 min, não a cada minuto. */
+const unidades = new Map<string, { ate: number; unit: Awaited<ReturnType<typeof prisma.unit.findUnique>> }>();
+async function unidadeEmMemoria(slug: string) {
+  const g = unidades.get(slug);
+  if (g && g.ate > Date.now()) return g.unit;
+  const unit = await prisma.unit.findUnique({ where: { slug } });
+  unidades.set(slug, { ate: Date.now() + 10 * 60_000, unit });
+  return unit;
+}
+
 export function armazemDoBanco(): Armazem {
   return {
     async registrar(l) {
@@ -42,6 +62,20 @@ export function armazemDoBanco(): Armazem {
     },
     async desfazer(l) {
       await prisma.chatwootReguaDisparo.deleteMany({ where: { caixa: l.caixa, conversationId: l.conversationId, regra: l.regra, chave: l.chave } });
+    },
+    async ligadoDesde(caixa, agora) {
+      // a «conversa 0» é o marcador da caixa (como a régua faz com CAMPO_PARTIDA): quando a automação foi vista ligada pela primeira vez
+      const onde = { caixa, conversationId: 0, regra: 'demora-ligado-desde', chave: 'v1' };
+      const ja = await prisma.chatwootReguaDisparo.findFirst({ where: onde, select: { criadoEm: true } });
+      if (ja) return ja.criadoEm;
+      try {
+        const c = await prisma.chatwootReguaDisparo.create({ data: { ...onde, modo: 'ligado', texto: `ligado visto pela primeira vez em ${agora.toISOString()}` }, select: { criadoEm: true } });
+        return c.criadoEm;
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'P2002') throw err;
+        const de_novo = await prisma.chatwootReguaDisparo.findFirst({ where: onde, select: { criadoEm: true } });
+        return de_novo?.criadoEm ?? agora;
+      }
     },
     async numeroDoAgente(conta, agenteId) {
       const z = await prisma.crmTarefaZap.findUnique({ where: { conta_agenteId: { conta, agenteId } } });
@@ -65,14 +99,17 @@ export function mundoReal(): MundoDaDemora {
       for (const [slug, caixas] of porSlug) {
         const modo = modoDaDemora(slug);
         if (modo === 'desligado') continue;
-        const unit = await prisma.unit.findUnique({ where: { slug } });
+        const iaLigada = estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS) === 'ligado';
+        const unit = await unidadeEmMemoria(slug);
         if (!unit) continue;
         saida.push({
           slug,
           nome: unit.name,
           fuso: fusoDaUnidade(unit),
           modo,
-          iaLigada: estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS) === 'ligado',
+          iaLigada,
+          // Sofia ligada e SEM o robô do CRM nesta conta: ela fala pelo conector, o mesmo usuário das nossas mensagens
+          conectorEhSofia: iaLigada && !tokenDoRoboDaUnidade(slug, base),
           // o Chatwoot da CONTA da caixa (cada clínica tem a sua); as caixas de uma unidade moram na mesma conta
           ctx: base && caixas[0] !== undefined ? contextoDaCaixa(base, caixas[0]) : null,
           caixas: caixas.map((id) => ({ id, oficial: CAIXAS_CLOUD.has(id), gerente: GERENTE_DA_CAIXA[id] ?? null })),
@@ -130,7 +167,7 @@ export function mundoReal(): MundoDaDemora {
     async mandarEspera(u, ctx, conversaId, texto) {
       // pelo robô da Sofia quando ele existe nesta conta: não é «usuário», então não conta como a 1ª resposta HUMANA nos relatórios de tempo de resposta do CRM
       // (o `waiting_since` é zerado do mesmo jeito por qualquer saída — por isso a espera é contada pelas mensagens, ver regras.ts)
-      const token = ctx.conta && ehContaDoAmbiente(ctx.conta.conta) ? tokenDoRobo() : tokenDoRobo(process.env, configDaUnidade(u.slug)?.envSufixo);
+      const token = tokenDoRoboDaConta(ctx.conta?.conta, u.slug);
       const robo = token ? portaDoRobo(ctx, token) : null;
       if (robo) {
         const r = await robo.publica(conversaId, texto);
@@ -147,8 +184,8 @@ export function mundoReal(): MundoDaDemora {
     },
     async zap(numero, texto) {
       const { EVOLUTION_ALERT_URL: url, EVOLUTION_ALERT_HEADER: header, EVOLUTION_ALERT_VALUE: valor } = process.env;
-      if (!url || !header || !valor) return false;
-      return enviarPelaEvolution({ url, header, valor, numero, texto });
+      if (!url || !header || !valor) return 'recusado'; // canal dos alertas não configurado: não saiu e não vai sair sozinho
+      return enviarPelaEvolutionComResultado({ url, header, valor, numero, texto });
     },
     agora: () => new Date(),
     pausa: (ms) => new Promise((r) => setTimeout(r, ms)),

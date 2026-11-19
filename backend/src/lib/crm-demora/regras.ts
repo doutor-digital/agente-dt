@@ -68,7 +68,7 @@ const atributos = (v: unknown): Record<string, unknown> => {
  * Uma mensagem crua do Chatwoot (`/conversations/:id/messages`) → o papel dela na conversa. `null` = não conta (atividade, nota, a nossa mensagem de espera).
  * Quem responde e não sabemos quem é (saída sem remetente e sem eco) conta como HUMANO: na dúvida, não incomoda ninguém.
  */
-export function classificarMensagem(m: any, robos: ReadonlySet<number> = new Set()): MensagemDaConversa | null {
+export function classificarMensagem(m: any, robos: ReadonlySet<number> = new Set(), conectorEhSofia = false): MensagemDaConversa | null {
   const tipo = Number(m?.message_type);
   const em = new Date(Number(m?.created_at) * 1000);
   if (!Number.isFinite(em.getTime()) || em.getTime() <= 0) return null;
@@ -88,13 +88,18 @@ export function classificarMensagem(m: any, robos: ReadonlySet<number> = new Set
   if (tipoDoRemetente === 'agentbot') return { papel: 'sofia', em };
   const id = Number(m?.sender?.id ?? m?.sender_id);
   // o conector (régua, tarefas, disparos) é o usuário 2 na conta 1; numa clínica de conta própria é outro id (`robos` traz o da conta)
-  if (tipoDoRemetente === 'user' && (id === USUARIO_ROBO || robos.has(id))) return { papel: 'robo', em };
+  if (tipoDoRemetente === 'user' && (id === USUARIO_ROBO || robos.has(id))) {
+    // Sofia SEM o robô do CRM (sem CHATWOOT_SOFIA_COMO_BOT/token da conta) fala pelo MESMO usuário da régua: a fala em texto livre dele é da Sofia (resposta ao paciente);
+    // só o modelo aprovado (template_params) é certamente da régua/tarefas
+    const modelo = !!atributos(m?.additional_attributes).template_params;
+    return { papel: conectorEhSofia && !modelo ? 'sofia' : 'robo', em };
+  }
   // usuário do CRM (inclusive o «📱 Celular da unidade» da caixa Evolution) ou remetente desconhecido: gente
   return { papel: 'humano', em };
 }
 
-export const mensagensDaConversa = (cruas: unknown[], robos: ReadonlySet<number> = new Set()): MensagemDaConversa[] =>
-  cruas.map((m) => classificarMensagem(m, robos)).filter((m): m is MensagemDaConversa => m !== null);
+export const mensagensDaConversa = (cruas: unknown[], robos: ReadonlySet<number> = new Set(), conectorEhSofia = false): MensagemDaConversa[] =>
+  cruas.map((m) => classificarMensagem(m, robos, conectorEhSofia)).filter((m): m is MensagemDaConversa => m !== null);
 
 // ── 2. desde quando a equipe está devendo resposta ───────────────────────────────────────────────────
 
@@ -145,6 +150,8 @@ export interface EntradaDaDecisao {
   iaLigada: boolean;
   /** a conversa é de caixa de WhatsApp oficial (a janela de 24 h vale) */
   caixaOficial: boolean;
+  /** a Sofia está ligada mas SEM o robô do CRM nesta conta: ela fala pelo mesmo usuário das nossas mensagens, então a mensagem de espera não pode sair (não dá para saber se ela está conversando) */
+  conectorEhSofia?: boolean;
 }
 
 const z2 = (n: number) => String(n).padStart(2, '0');
@@ -173,6 +180,28 @@ export function minutosUteis(desde: Date, agora: Date, fuso: string, j: JanelaDe
     if (ate > de) total += ate - de;
   }
   return Math.floor(total / 60_000);
+}
+
+/**
+ * O instante de `minutos` úteis atrás (só as horas de atender contam): a partir dele para cá estão as conversas que ainda podem estar dentro do prazo de um passo.
+ * Às 8h05, 200 min úteis atrás é 16h45 de ontem — a conversa das 20h10 está na leitura.
+ */
+export function recuarMinutosUteis(agora: Date, minutos: number, fuso: string, j: JanelaDeEnvio): Date {
+  let falta = minutos * 60_000;
+  const p0 = partesNoFuso(agora, fuso);
+  const dia0 = Date.UTC(p0.ano, p0.mes - 1, p0.dia);
+  const rotulo = (dd: Date, hora: number) => `${dd.getUTCFullYear()}-${z2(dd.getUTCMonth() + 1)}-${z2(dd.getUTCDate())}T${z2(hora)}:00`;
+  for (let i = 0; i <= 14; i++) {
+    const d = new Date(dia0 - i * 86_400_000);
+    const ini = localParaUtc(rotulo(d, j.inicio), fuso);
+    const fim = j.fim >= 24 ? localParaUtc(rotulo(new Date(d.getTime() + 86_400_000), 0), fuso) : localParaUtc(rotulo(d, j.fim), fuso);
+    if (!ini || !fim) continue;
+    const ate = Math.min(fim.getTime(), agora.getTime());
+    if (ate <= ini.getTime()) continue;
+    if (ate - ini.getTime() >= falta) return new Date(ate - falta);
+    falta -= ate - ini.getTime();
+  }
+  return new Date(agora.getTime() - 14 * 86_400_000);
 }
 
 /** «10 min», «2 h», «14 h 30 min». */
@@ -228,6 +257,7 @@ export function decidirDemora(e: EntradaDaDecisao): Decisao {
     if (passo === 'espera') {
       if (sofiaAtendendo) barra('a Sofia está atendendo (etiqueta sofia-atendendo)');
       else if (tem(etiquetas, ETIQUETA_SEM_FOLLOW_UP)) barra('etiqueta sem-follow-up');
+      else if (e.conectorEhSofia) barra('a Sofia fala pelo mesmo usuário (sem o robô do CRM): não dá para saber se está conversando')
       else if (e.caixaOficial && !janelaDe24hAberta(e.espera.ultimaDoPaciente, e.agora)) barra('janela de 24 h do WhatsApp fechada');
       else if (sofiaPodeResponder && e.espera.ultimaDoPaciente && hora - e.espera.ultimaDoPaciente.getTime() < SOFIA_AINDA_LENDO_MS) barra('a Sofia ainda vai ler a conversa');
       else saida.devidos.push(passo);

@@ -23,15 +23,21 @@ import { conversaLidaDoChatwoot } from '../chatwoot-porta.js';
 import { USUARIO_ROBO } from '../chatwoot-pausa.js';
 import { ETIQUETA_HUMANO } from '../chatwoot-sofia.js';
 import { janelaDeEnvio, nomeCurto, notaComMencao } from '../crm-tarefas/regras.js';
+import type { ResultadoDoEnvio } from '../alerta-whatsapp.js';
 import { primeiroNomeSeguro } from '../disparo/regras.js';
 import { ehMensagemDeEspera, textoDaEspera } from './marca.js';
-import { chaveDoEpisodio, decidirDemora, diaNoFuso, duracaoCurta, esperaDaEquipe, mensagensDaConversa, type EsperaDaEquipe, type Passo } from './regras.js';
+import { chaveDoEpisodio, decidirDemora, diaNoFuso, duracaoCurta, esperaDaEquipe, mensagensDaConversa, recuarMinutosUteis, type EsperaDaEquipe, type Passo } from './regras.js';
 
 export const ID_CICLO = 'crm-demora';
 /** Tudo o que SAI do servidor (mensagem ao paciente, nota no CRM, WhatsApp) conta 1; se um defeito soltar tudo, vaza só isto por ciclo. */
 export const MAX_SAIDAS_POR_CICLO = 12;
-/** Conversas com atividade até este tempo atrás entram na leitura (o maior prazo de um passo + folga). */
-export const JANELA_DE_LEITURA_MS = 200 * 60_000;
+/**
+ * Conversas com atividade até este tanto de tempo ÚTIL atrás entram na leitura (o maior prazo de um passo + folga). Útil, não corrido: os prazos contam só as horas de
+ * atender, então às 8h05 a leitura volta até 16h45 de ontem e pega quem escreveu às 20h10.
+ */
+export const MINUTOS_UTEIS_DE_LEITURA = 200;
+/** Recusa clara do WhatsApp (a Evolution respondeu com erro): tenta de novo UMA vez; a segunda recusa fica registrada e para. */
+export const MAX_RECUSAS_DO_WHATSAPP = 2;
 export const SUFIXO_SECO = '~seco';
 
 
@@ -42,6 +48,8 @@ export interface UnidadeDaDemora {
   modo: Estado;
   /** a Sofia está LIGADA nesta unidade (`chatwoot-ia`) */
   iaLigada: boolean;
+  /** a Sofia está ligada mas a conta NÃO tem o robô dela no CRM: ela fala pelo mesmo usuário (o conector) das nossas mensagens automáticas */
+  conectorEhSofia: boolean;
   /** o Chatwoot da CONTA da unidade (null = sem conta/token válidos) */
   ctx: ContextoChatwoot | null;
   caixas: Array<{ id: number; oficial: boolean; gerente: number | null }>;
@@ -51,6 +59,11 @@ export interface Armazem {
   /** false = já existia (outra cópia do servidor ou ciclo anterior) */
   registrar(l: { caixa: number; conversationId: number; regra: string; chave: string; modo: string; texto: string }): Promise<boolean>;
   desfazer(l: { caixa: number; conversationId: number; regra: string; chave: string }): Promise<void>;
+  /**
+   * O instante em que a automação foi vista LIGADA nesta caixa pela primeira vez (grava agora, uma vez, se ainda não houver). Ao passar de seco para ligado o robô
+   * age só nos episódios de espera abertos DEPOIS dele: nada de rajada sobre a fila antiga que o seco já anotou.
+   */
+  ligadoDesde(caixa: number, agora: Date): Promise<Date>;
   /** o WhatsApp de uma atendente (`crm_tarefa_zap`); null = não cadastrado */
   numeroDoAgente(conta: number, agenteId: number): Promise<{ telefone: string; nome: string } | null>;
 }
@@ -69,7 +82,7 @@ export interface MundoDaDemora {
   /** a mensagem PÚBLICA de espera ao paciente (pelo robô da Sofia quando ele existe nesta conta; senão pelo conector) */
   mandarEspera(u: UnidadeDaDemora, ctx: ContextoChatwoot, conversaId: number, texto: string): Promise<{ id: number | null }>;
   nota(ctx: ContextoChatwoot, conversaId: number, texto: string): Promise<void>;
-  zap(numero: string, texto: string): Promise<boolean>;
+  zap(numero: string, texto: string): Promise<ResultadoDoEnvio>;
   agora(): Date;
   pausa(ms: number): Promise<void>;
   env?: NodeJS.ProcessEnv;
@@ -85,8 +98,12 @@ export interface MemoriaDaDemora {
   adiados: Map<string, number>;
   /** conta → id do conector (só guarda o que deu certo) */
   conectores: Map<number, number>;
+  /** `caixa|conversa|regra|chave` → quantas vezes o WhatsApp foi RECUSADO (a Evolution respondeu com erro) */
+  recusas: Map<string, number>;
+  /** caixa → quando foi vista ligada pela primeira vez */
+  ligadoDesde: Map<number, Date>;
 }
-export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map() });
+export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map(), recusas: new Map(), ligadoDesde: new Map() });
 /** Depois de uma falha (ou de «sem ninguém a avisar»), espera isto para tentar de novo. */
 export const ESPERA_ENTRE_TENTATIVAS_MS = 5 * 60_000;
 const LIMITE_DA_MEMORIA = 20_000;
@@ -104,10 +121,12 @@ export interface ResumoDaDemora {
   barrados: Record<string, number>;
   saidas: number;
   falhas: number;
+  /** WhatsApp sem resposta (estouro de tempo): pode ter saído, NÃO é repetido */
+  incertos: number;
   noTeto: number;
 }
 const zeros = (): Record<Passo, number> => ({ espera: 0, 'aviso-10': 0, 'aviso-30': 0 });
-const resumoVazio = (): ResumoDaDemora => ({ unidades: 0, lidas: 0, esperando: 0, devidos: zeros(), simulados: zeros(), feitos: zeros(), barrados: {}, saidas: 0, falhas: 0, noTeto: 0 });
+const resumoVazio = (): ResumoDaDemora => ({ unidades: 0, lidas: 0, esperando: 0, devidos: zeros(), simulados: zeros(), feitos: zeros(), barrados: {}, saidas: 0, falhas: 0, incertos: 0, noTeto: 0 });
 
 const statusDoErro = (e: unknown): number | undefined => {
   const s = (e as { status?: number } | null)?.status;
@@ -123,6 +142,8 @@ interface Alvo {
   caixa: UnidadeDaDemora['caixas'][number];
   /** ids de usuário do Chatwoot que são o robô nesta conta (o conector) */
   robos: ReadonlySet<number>;
+  /** só no ligado: a espera aberta antes deste instante é da fila antiga e não recebe nada */
+  ligadoDesde: Date | null;
 }
 
 interface Estado1 {
@@ -133,11 +154,11 @@ interface Estado1 {
   mensagens: any[];
 }
 
-function lerConversa(raw: any, mensagens: any[], robos: ReadonlySet<number>): Estado1 | null {
+function lerConversa(raw: any, mensagens: any[], robos: ReadonlySet<number>, conectorEhSofia: boolean): Estado1 | null {
   const lida = conversaLidaDoChatwoot(raw);
   if (!lida) return null;
   const esperandoHumano = lida.etiquetas.includes(ETIQUETA_HUMANO) || String(lida.attrs.etapa ?? '').trim() === 'Esperando humano';
-  return { raw, lida, status: String(raw?.status ?? ''), mensagens, espera: esperaDaEquipe(mensagensDaConversa(mensagens, robos), { esperandoHumano }) };
+  return { raw, lida, status: String(raw?.status ?? ''), mensagens, espera: esperaDaEquipe(mensagensDaConversa(mensagens, robos, conectorEhSofia), { esperandoHumano }) };
 }
 
 const assinatura = (raw: any): string =>
@@ -197,6 +218,34 @@ function passoTratado(c: Ctx, a: Alvo, id: number, passo: Passo, chaveEp: string
   if (passo === 'aviso-30') return resolvido(c, a, id, 'demora-aviso-30', chaveEp);
   return resolvido(c, a, id, 'demora-aviso-10', chaveEp) && (a.u.modo === 'seco' || resolvido(c, a, id, 'demora-aviso-10-nota', chaveEp));
 }
+
+const chaveDaRecusa = (a: Alvo, id: number, base: RegraBase, chave: string): string => chaveDaMemoria(a, id, base, chave);
+
+/**
+ * Depois de mandar o WhatsApp: `ok` conta como feito; `incerto` (estouro de tempo: pode ter saído) NUNCA desfaz a linha — repetir seria mandar em dobro; `recusado`
+ * (a Evolution respondeu com erro) desfaz e adia para UMA nova tentativa, e na segunda recusa a linha fica e a conta fecha.
+ */
+async function aposOZap(c: Ctx, a: Alvo, id: number, base: RegraBase, chave: string, r: ResultadoDoEnvio): Promise<boolean> {
+  if (r === 'ok') return true;
+  c.resumo.falhas++;
+  if (r === 'incerto') {
+    c.resumo.incertos++;
+    logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp sem resposta (pode ter saído) — não repito`);
+    return false;
+  }
+  const k = chaveDaRecusa(a, id, base, chave);
+  const n = (c.deps.memoria.recusas.get(k) ?? 0) + 1;
+  if (c.deps.memoria.recusas.size > LIMITE_DA_MEMORIA) c.deps.memoria.recusas.clear();
+  c.deps.memoria.recusas.set(k, n);
+  if (n < MAX_RECUSAS_DO_WHATSAPP) {
+    await desfazer(c, a, id, base, chave);
+    adiar(c, a, id, base, chave);
+  } else logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp recusado ${n} vezes — desisto deste aviso`);
+  return false;
+}
+
+/** A espera abriu antes de a automação ser ligada? (fila antiga: não recebe nada) */
+const abertaAntesDeLigar = (a: Alvo, e: EsperaDaEquipe | null): boolean => !!e && a.u.modo === 'ligado' && !!a.ligadoDesde && e.desde.getTime() < a.ligadoDesde.getTime();
 
 /** Os usuários que são o robô nesta conta: o 2 de sempre e o conector que o Chatwoot disser (uma clínica de conta própria tem outro id). */
 async function robosDaConta(deps: { mundo: MundoDaDemora; memoria: MemoriaDaDemora }, ctx: ContextoChatwoot): Promise<ReadonlySet<number>> {
@@ -291,14 +340,14 @@ const textoDoAviso = (a: Alvo, nome: string, minutos: number, id: number, extra 
  * Ligado, a nota e o WhatsApp têm cada um a sua linha no banco: o WhatsApp que falha tenta de novo no ciclo seguinte sem repetir a nota que já saiu,
  * e sem ninguém a avisar (nem responsável, nem número) nada é registrado — se o cadastro sair ainda dentro do prazo, o aviso sai.
  */
-async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numeroDo30: string | null): Promise<void> {
+async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numeroDo30: string | null, gerenteDaConversa: () => Promise<Destino>): Promise<void> {
   const { mundo, armazem } = c.deps;
   const { u } = a;
   const id = e.lida.id;
   const chave = chaveDoEpisodio(e.espera!.desde);
   const dono = responsavelDe(e.raw, a.robos);
   const donoZap = dono ? await armazem.numeroDoAgente(a.conta, dono.id) : null;
-  const gerente = !dono || !donoZap ? await destinoDaGerente(c, a) : null;
+  const gerente = !dono || !donoZap ? await gerenteDaConversa() : null;
   const numero = donoZap?.telefone ?? gerente?.numero ?? null;
   // a nota com @menção (o sininho): quem está com a conversa; sem dono, a gerente
   const mencionado = dono ?? gerente?.agente ?? null;
@@ -318,6 +367,9 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
     adiar(c, a, id, 'demora-aviso-10-nota', chave);
     return;
   }
+  // o que não tem para onde ir hoje não é relido a cada minuto (se o cadastro sair ainda dentro do prazo, o adiamento acaba e o aviso sai)
+  if (!numero) adiar(c, a, id, 'demora-aviso-10', chave);
+  if (!mencionado) adiar(c, a, id, 'demora-aviso-10-nota', chave);
   let saiu = false;
   if (mencionado && !jaTratado(c, a, id, 'demora-aviso-10-nota', chave)) {
     if (!cabe(c, 1)) c.resumo.noTeto++;
@@ -343,12 +395,7 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
         // o WhatsApp deste número sai no aviso de 30 min (mesmo destino): aqui só fica a linha dizendo isso, sem contar como enviado
       } else {
         c.resumo.saidas++;
-        if (await mundo.zap(numero, textoDoAviso(a, nome, minutos, id))) saiu = true;
-        else {
-          c.resumo.falhas++;
-          await desfazer(c, a, id, 'demora-aviso-10', chave); // não saiu: tenta de novo daqui a pouco
-          adiar(c, a, id, 'demora-aviso-10', chave);
-        }
+        if (await aposOZap(c, a, id, 'demora-aviso-10', chave, await mundo.zap(numero, textoDoAviso(a, nome, minutos, id)))) saiu = true;
       }
     }
   }
@@ -358,13 +405,13 @@ async function passoAviso10(c: Ctx, a: Alvo, e: Estado1, minutos: number, numero
   }
 }
 
-async function passoAviso30(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promise<void> {
+async function passoAviso30(c: Ctx, a: Alvo, e: Estado1, minutos: number, gerenteDaConversa: () => Promise<Destino>): Promise<void> {
   const { mundo } = c.deps;
   const { u } = a;
   const id = e.lida.id;
   const chave = chaveDoEpisodio(e.espera!.desde);
   if (jaTratado(c, a, id, 'demora-aviso-30', chave)) return;
-  const gerente = await destinoDaGerente(c, a);
+  const gerente = await gerenteDaConversa();
   const dono = responsavelDe(e.raw, a.robos);
   const nome = nomeCurto(e.lida.nome || e.lida.telefone || '');
   const texto = textoDoAviso(a, nome, minutos, id, ` — ${dono ? `com ${dono.nome.split(/\s+/)[0]}` : 'sem responsável'}`);
@@ -386,12 +433,7 @@ async function passoAviso30(c: Ctx, a: Alvo, e: Estado1, minutos: number): Promi
     return;
   }
   c.resumo.saidas++;
-  if (await mundo.zap(gerente.numero!, texto)) c.resumo.feitos['aviso-30']++;
-  else {
-    c.resumo.falhas++;
-    await desfazer(c, a, id, 'demora-aviso-30', chave);
-    adiar(c, a, id, 'demora-aviso-30', chave);
-  }
+  if (await aposOZap(c, a, id, 'demora-aviso-30', chave, await mundo.zap(gerente.numero!, texto))) c.resumo.feitos['aviso-30']++;
 }
 
 // ── uma conversa ─────────────────────────────────────────────────────────────────────────────────
@@ -406,19 +448,26 @@ async function tratarConversa(c: Ctx, a: Alvo, atual: Estado1, devidos: Passo[],
   if (!faltam.length) return;
   // RELÊ a conversa e as mensagens: a equipe pode ter respondido (ou a Sofia assumido) entre a listagem e agora
   const [raw, msgs] = await Promise.all([mundo.conversa(a.ctx, id), mundo.mensagens(a.ctx, id)]);
-  const fresco = lerConversa(raw, msgs, a.robos);
+  const fresco = lerConversa(raw, msgs, a.robos, a.u.conectorEhSofia);
   if (!fresco) return;
   const agora = mundo.agora();
-  const d = decidirDemora({ espera: fresco.espera, agora, fuso: a.u.fuso, janela, status: fresco.status, lida: fresco.lida, iaLigada: a.u.iaLigada, caixaOficial: a.caixa.oficial });
+  const d = decidirDemora({ espera: fresco.espera, agora, fuso: a.u.fuso, janela, status: fresco.status, lida: fresco.lida, iaLigada: a.u.iaLigada, caixaOficial: a.caixa.oficial, conectorEhSofia: a.u.conectorEhSofia });
   for (const b of d.barrados) contar(c.resumo.barrados, `${b.passo}: ${b.motivo}`);
+  if (abertaAntesDeLigar(a, fresco.espera)) {
+    contar(c.resumo.barrados, 'espera aberta antes de ligar (fila antiga)');
+    return;
+  }
   const agir = d.devidos.filter((p) => faltam.includes(p));
   if (!agir.length || !fresco.espera) return;
   c.agora = agora;
   const minutos = d.minutosReais;
   if (agir.includes('espera')) await passoEspera(c, a, fresco, minutos);
-  const numeroDo30 = agir.includes('aviso-30') ? (await destinoDaGerente(c, a)).numero : null;
-  if (agir.includes('aviso-10')) await passoAviso10(c, a, fresco, minutos, numeroDo30);
-  if (agir.includes('aviso-30')) await passoAviso30(c, a, fresco, minutos);
+  // a gerente é consultada UMA vez por conversa neste ciclo
+  let gerenteLida: Promise<Destino> | null = null;
+  const gerenteDaConversa = () => (gerenteLida ??= destinoDaGerente(c, a));
+  const numeroDo30 = agir.includes('aviso-30') ? (await gerenteDaConversa()).numero : null;
+  if (agir.includes('aviso-10')) await passoAviso10(c, a, fresco, minutos, numeroDo30, gerenteDaConversa);
+  if (agir.includes('aviso-30')) await passoAviso30(c, a, fresco, minutos, gerenteDaConversa);
 }
 
 export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoDaDemora; memoria: MemoriaDaDemora }): Promise<ResumoDaDemora> {
@@ -434,10 +483,25 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
     }
     resumo.unidades++;
     for (const caixa of u.caixas) {
-      const a: Alvo = { u, ctx: u.ctx, conta: u.ctx.conta.conta, caixa, robos: await robosDaConta(deps, u.ctx) };
+      let ligadoDesde: Date | null = null;
+      if (u.modo === 'ligado') {
+        ligadoDesde = memoria.ligadoDesde.get(caixa.id) ?? null;
+        if (!ligadoDesde) {
+          try {
+            ligadoDesde = await deps.armazem.ligadoDesde(caixa.id, mundo.agora());
+            memoria.ligadoDesde.set(caixa.id, ligadoDesde);
+          } catch (err) {
+            // sem saber desde quando está ligado, NÃO age (melhor um ciclo a menos que a fila antiga inteira)
+            logger.warn({ unit: u.slug, caixa: caixa.id, err: msgDoErro(err) }, `${ID_CICLO}: não consegui ler desde quando está ligado — não ajo neste ciclo`);
+            resumo.falhas++;
+            continue;
+          }
+        }
+      } else memoria.ligadoDesde.delete(caixa.id);
+      const a: Alvo = { u, ctx: u.ctx, conta: u.ctx.conta.conta, caixa, robos: await robosDaConta(deps, u.ctx), ligadoDesde };
       let lista: any[];
       try {
-        lista = await mundo.listar(a.ctx, caixa.id, Math.floor((mundo.agora().getTime() - JANELA_DE_LEITURA_MS) / 1000));
+        lista = await mundo.listar(a.ctx, caixa.id, Math.floor(recuarMinutosUteis(mundo.agora(), MINUTOS_UTEIS_DE_LEITURA, u.fuso, janela).getTime() / 1000));
       } catch (err) {
         logger.warn({ unit: u.slug, caixa: caixa.id, err: msgDoErro(err) }, `${ID_CICLO}: não consegui listar as conversas — tento no próximo ciclo`);
         resumo.falhas++;
@@ -457,7 +521,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
           let guardada = memoria.esperas.get(chave);
           let estado: Estado1 | null = null;
           if (!guardada || guardada.assinatura !== sig) {
-            estado = lerConversa(raw, await mundo.mensagens(a.ctx, lida.id), a.robos);
+            estado = lerConversa(raw, await mundo.mensagens(a.ctx, lida.id), a.robos, u.conectorEhSofia);
             if (!estado) continue;
             guardada = { assinatura: sig, espera: estado.espera };
             if (memoria.esperas.size > 4000) memoria.esperas.clear();
@@ -466,9 +530,13 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
           if (!guardada.espera) continue;
           resumo.esperando++;
           c.agora = mundo.agora();
-          const d = decidirDemora({ espera: guardada.espera, agora: c.agora, fuso: u.fuso, janela, status: String(raw?.status ?? ''), lida, iaLigada: u.iaLigada, caixaOficial: caixa.oficial });
+          const d = decidirDemora({ espera: guardada.espera, agora: c.agora, fuso: u.fuso, janela, status: String(raw?.status ?? ''), lida, iaLigada: u.iaLigada, caixaOficial: caixa.oficial, conectorEhSofia: u.conectorEhSofia });
           for (const b of d.barrados) contar(resumo.barrados, `${b.passo}: ${b.motivo}`);
           if (!d.devidos.length) continue;
+          if (abertaAntesDeLigar(a, guardada.espera)) {
+            contar(resumo.barrados, 'espera aberta antes de ligar (fila antiga)');
+            continue;
+          }
           const base: Estado1 = estado ?? { raw, lida, status: String(raw?.status ?? ''), espera: guardada.espera, mensagens: [] };
           const antes = resumo.saidas;
           await tratarConversa(c, a, base, d.devidos, janela);

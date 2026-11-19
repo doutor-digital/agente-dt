@@ -76,19 +76,24 @@ interface Saidas {
 let saidas: Saidas;
 let sair: Date | null | 'erro' = null;
 let zapFunciona = true;
+/** como a Evolution responde quando `zapFunciona` é false: respondeu com erro (`recusado`) ou nem respondeu (`incerto`, estouro dos 15 s) */
+let zapFalha: 'recusado' | 'incerto' = 'recusado';
+/** desde quando a automação está ligada nesta caixa (o marcador do banco); por padrão, há muito: a fila de antes de ligar é outro teste */
+let ligadoDesdeDoBanco: Date | null = null;
 let relidas = 0;
 
 /** o usuário do Chatwoot por onde sai a mensagem de espera: o conector da conta 1 é o 2; o de outra conta pode ser qualquer id */
 let conector = 2;
 /** o que a conta diz ser o conector (null = não deu para saber) */
 let conectorDaConta: number | null = null;
-function mundo(modo: Estado, o: { iaLigada?: boolean; gerente?: number | null; aoRelerDepoisDaListagem?: () => void } = {}) {
+function mundo(modo: Estado, o: { iaLigada?: boolean; semRoboDoCrm?: boolean; gerente?: number | null; aoRelerDepoisDaListagem?: () => void } = {}) {
   const u: UnidadeDaDemora = {
     slug: 'doutor-hernia-parauapebas',
     nome: 'Doutor Hérnia Parauapebas',
     fuso: FUSO,
     modo,
     iaLigada: o.iaLigada ?? false,
+    conectorEhSofia: (o.iaLigada ?? false) && (o.semRoboDoCrm ?? false),
     ctx: CTX,
     caixas: [{ id: 3, oficial: true, gerente: o.gerente === undefined ? 4 : o.gerente }],
   };
@@ -96,8 +101,12 @@ function mundo(modo: Estado, o: { iaLigada?: boolean; gerente?: number | null; a
     async unidades() {
       return [u];
     },
-    async listar() {
-      return convs.filter((c) => c.status === 'open' || c.status === 'pending').map(raw);
+    // respeita o corte, como o Chatwoot: só conversa com atividade a partir de `desdeSeg` entra (o mock que ignorava o corte escondia o buraco da noite)
+    async listar(_ctx: unknown, _caixa: number, desdeSeg: number) {
+      return convs
+        .filter((c) => c.status === 'open' || c.status === 'pending')
+        .map(raw)
+        .filter((r) => r.last_activity_at >= desdeSeg);
     },
     async conversa(_: unknown, id: number) {
       relidas++;
@@ -125,7 +134,7 @@ function mundo(modo: Estado, o: { iaLigada?: boolean; gerente?: number | null; a
     },
     async zap(numero: string, texto: string) {
       saidas.zaps.push({ numero, texto });
-      return zapFunciona;
+      return zapFunciona ? ('ok' as const) : zapFalha;
     },
     agora: () => agora,
     pausa: async () => undefined,
@@ -156,6 +165,9 @@ function armazem() {
     async numeroDoAgente(_conta: number, agenteId: number) {
       return zaps[agenteId] ?? null;
     },
+    async ligadoDesde(_caixa: number, agoraDoCiclo: Date) {
+      return (ligadoDesdeDoBanco ??= new Date(agoraDoCiclo.getTime() - 24 * 3600_000));
+    },
   };
 }
 
@@ -172,6 +184,8 @@ beforeEach(() => {
   saidas = { espera: [], notas: [], zaps: [] };
   sair = null;
   zapFunciona = true;
+  zapFalha = 'recusado';
+  ligadoDesdeDoBanco = null;
   relidas = 0;
   memoria = C.novaMemoriaDaDemora();
   conector = 2;
@@ -202,13 +216,32 @@ test('SECO: decide tudo e só anota «mandaria…» (regra ~seco), uma vez — n
   nada();
 });
 
-test('SECO não trava o LIGADO: ao ligar, a mesma espera ainda recebe o aviso de verdade (regra sem o sufixo)', async () => {
-  conv({ mensagens: [P(-12)] });
+test('seco → ligado: age SÓ nas esperas abertas DEPOIS de ligar — a fila antiga que o seco já anotou não vira rajada de WhatsApp', async () => {
+  const velha = conv({ id: 41, mensagens: [P(-45)] }); // esperando há 45 min quando se liga (o seco já anotou 5, 10 e 30 min)
   await ciclo('seco');
   assert.equal(banco.every((l) => l.regra.endsWith('~seco')), true);
+  ligadoDesdeDoBanco = new Date(agora.getTime()); // liga agora
+  const r = await ciclo('ligado');
+  nada();
+  assert.equal(r.barrados['espera aberta antes de ligar (fila antiga)'], 1);
+  // uma espera NOVA (aberta depois de ligar) recebe tudo, no tempo dela; a velha continua quieta
+  avanca(1);
+  velha.mensagens.push(HUMANO(avancado(-0.5)), P(avancado(-0.25)));
+  const nova = conv({ id: 42, mensagens: [P(avancado(0))] });
+  avanca(11);
   await ciclo('ligado');
-  assert.equal(saidas.zaps.length, 1, 'o WhatsApp do aviso de 10 min saiu');
-  assert.ok(regras().includes('demora-aviso-10'));
+  assert.deepEqual(saidas.espera.map((e) => e.conversa).sort(), [41, 42], 'a conversa 41 voltou a escrever DEPOIS de ligar: é espera nova');
+  assert.equal(saidas.zaps.length, 2);
+  assert.ok(nova.id === 42 && regras().includes('demora-aviso-10'));
+});
+
+test('ligado sem poder ler desde quando está ligado: não age (melhor um ciclo a menos que a fila antiga inteira)', async () => {
+  conv({ mensagens: [P(-45)] });
+  const m = armazem();
+  m.ligadoDesde = async () => Promise.reject(new Error('banco fora'));
+  const r = await C.rodarCicloDaDemora({ armazem: m, mundo: mundo('ligado'), memoria });
+  nada();
+  assert.equal(r.falhas, 1);
 });
 
 test('SECO e o portão do «ligado»: unidade desligada não lê nem anota nada', async () => {
@@ -481,4 +514,110 @@ test('conta de clínica: a régua falando pelo conector (usuário 31) NÃO é a 
   await ciclo('ligado');
   assert.equal(saidas.espera.length, 1);
   assert.equal(saidas.zaps.length, 1);
+});
+
+// ── a revisão do sênior ──
+/** os WhatsApp do aviso de 10 min (para quem está com a conversa, a Maria); os de 30 min vão para a gerente */
+const doAviso10 = () => saidas.zaps.filter((z) => z.numero === '5594999990002');
+
+test('a leitura da caixa vai até 200 min ÚTEIS atrás, não corridos: às 8h05 a conversa das 20h10 de ontem está na lista (e a de ontem à tarde, não)', async () => {
+  agora = T.localParaUtc('2026-11-19T08:05', FUSO)!;
+  let corte = 0;
+  const m = mundo('ligado');
+  const listarOriginal = m.listar;
+  m.listar = async (c: unknown, cx: number, desdeSeg: number) => ((corte = desdeSeg), listarOriginal(c, cx, desdeSeg));
+  const msg = (local: string) => ({ id: ++mid, message_type: 0, private: false, content: 'preciso de ajuda', created_at: Math.floor(T.localParaUtc(local, FUSO)!.getTime() / 1000), sender: { type: 'contact', id: 55 } });
+  conv({ id: 50, mensagens: [msg('2026-11-18T20:10')] });
+  conv({ id: 51, mensagens: [msg('2026-11-18T14:00')] }); // tarde de ontem: passou de 3 h úteis
+  await C.rodarCicloDaDemora({ armazem: armazem(), mundo: m, memoria });
+  assert.equal(new Date(corte * 1000).toISOString(), T.localParaUtc('2026-11-18T16:45', FUSO)!.toISOString(), '200 min úteis antes das 8h05 = 16h45 de ontem');
+  assert.deepEqual(saidas.espera.map((e) => e.conversa), [50]);
+});
+
+test('Sofia LIGADA sem o robô do CRM fala pelo conector: a fala dela conta como resposta e a mensagem de espera NÃO sai por cima da conversa', async () => {
+  const falaDela = (min: number) => ({ id: ++mid, message_type: 1, private: false, content: 'Posso te ajudar com o valor?', created_at: em(min), sender: { id: 2, type: 'user' } });
+  // (a) conversando agora: ela respondeu há 2 min — o paciente respondeu a ela há 1 min (espera de 1 min)
+  conv({ id: 60, mensagens: [P(-30), falaDela(-29), P(-6), falaDela(-5)] });
+  await ciclo('ligado', { iaLigada: true, semRoboDoCrm: true });
+  nada();
+  // (b) sem a Sofia no meio o mesmo desenho de mensagens esperaria: só que aqui a fala do conector é DELA
+  convs = [];
+  conv({ id: 61, mensagens: [P(-12)] });
+  const r = await ciclo('ligado', { iaLigada: true, semRoboDoCrm: true });
+  assert.equal(saidas.espera.length, 0, 'sem saber se ela está conversando, a mensagem «alguém te responde» não sai');
+  assert.ok(r.barrados['espera: a Sofia fala pelo mesmo usuário (sem o robô do CRM): não dá para saber se está conversando'] >= 1);
+  assert.equal(saidas.zaps.length, 1, 'mas a equipe é avisada aos 10 min');
+  // com o robô do CRM (agent_bot) a mensagem de espera sai normalmente
+  convs = [];
+  saidas = { espera: [], notas: [], zaps: [] };
+  banco = [];
+  memoria = C.novaMemoriaDaDemora();
+  conv({ id: 62, mensagens: [P(-12)] });
+  await ciclo('ligado', { iaLigada: true, semRoboDoCrm: false });
+  assert.equal(saidas.espera.length, 1);
+});
+
+test('IA desligada: a fala do conector é régua/tarefa (robô), não conta como resposta', async () => {
+  conv({ id: 63, mensagens: [P(-12), { id: ++mid, message_type: 1, private: false, content: 'Lembrete: sua consulta é amanhã', created_at: em(-10), sender: { id: 2, type: 'user' } }] });
+  await ciclo('ligado', { iaLigada: false });
+  assert.equal(saidas.espera.length, 1);
+});
+
+test('dono sem WhatsApp e gerente sem número: nada a mandar → não relê a conversa a cada minuto (adia), e o aviso sai quando o número aparece', async () => {
+  zaps = {};
+  conv({ mensagens: [P(-12)] });
+  await ciclo('ligado');
+  assert.equal(saidas.notas.length, 1, 'a nota com menção sai');
+  const antes = relidas;
+  for (let i = 0; i < 4; i++) await ciclo('ligado');
+  assert.equal(relidas, antes, 'nenhuma releitura nos minutos seguintes');
+  zaps = { 5: { telefone: '5594999990002', nome: 'Maria' } };
+  avanca(6);
+  await ciclo('ligado');
+  assert.deepEqual(saidas.zaps.map((z) => z.numero), ['5594999990002']);
+  assert.equal(saidas.notas.length, 1, 'a nota não repete');
+});
+
+test('WhatsApp SEM RESPOSTA (estouro dos 15 s) pode ter saído: a linha fica e NUNCA repete', async () => {
+  conv({ mensagens: [P(-12)] });
+  zapFunciona = false;
+  zapFalha = 'incerto';
+  const r = await ciclo('ligado');
+  assert.equal(r.incertos, 1);
+  assert.equal(doAviso10().length, 1);
+  zapFunciona = true;
+  for (let i = 0; i < 3; i++) {
+    avanca(6);
+    await ciclo('ligado');
+  }
+  assert.equal(doAviso10().length, 1, 'nem passados 18 min: repetir seria mandar em dobro para a equipe');
+  assert.ok(regras().includes('demora-aviso-10'), 'a linha continua no banco');
+});
+
+test('WhatsApp RECUSADO (a Evolution respondeu com erro): desfaz e tenta UMA vez mais; a segunda recusa fecha a conta', async () => {
+  conv({ mensagens: [P(-12)] });
+  zapFunciona = false;
+  zapFalha = 'recusado';
+  await ciclo('ligado');
+  assert.equal(doAviso10().length, 1);
+  assert.ok(!regras().includes('demora-aviso-10'), 'desfeita: pode tentar de novo');
+  avanca(6);
+  await ciclo('ligado');
+  assert.equal(doAviso10().length, 2, 'a 2ª tentativa');
+  for (let i = 0; i < 3; i++) {
+    avanca(6);
+    await ciclo('ligado');
+  }
+  assert.equal(doAviso10().length, 2, 'e para: no máximo 1 nova tentativa');
+});
+
+test('a gerente é consultada UMA vez por conversa por ciclo (10 e 30 min vencidos juntos, dono sem número)', async () => {
+  zaps = { 4: { telefone: '5594999990001', nome: 'Cleia' } };
+  conv({ mensagens: [P(-32)] });
+  let consultas = 0;
+  const a = armazem();
+  const original = a.numeroDoAgente;
+  a.numeroDoAgente = async (conta: number, id: number) => (id === 4 ? (consultas++, original(conta, id)) : original(conta, id));
+  await C.rodarCicloDaDemora({ armazem: a, mundo: mundo('ligado'), memoria });
+  assert.equal(consultas, 1);
 });

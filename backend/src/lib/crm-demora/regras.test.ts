@@ -250,3 +250,33 @@ test('chaves: o dia no fuso da unidade e o episódio (mesma espera = mesma chave
   assert.equal(R.chaveDoEpisodio(d), R.chaveDoEpisodio(new Date('2026-11-18T18:00:07.100Z')));
   assert.notEqual(R.chaveDoEpisodio(d), R.chaveDoEpisodio(new Date('2026-11-18T18:05:07Z')));
 });
+
+test('recuarMinutosUteis: 200 min úteis atrás pula a noite (às 8h05 é 16h45 de ontem)', () => {
+  const em = (local: string) => T.localParaUtc(local, FUSO)!;
+  const r = (agora: string, min: number) => R.recuarMinutosUteis(em(agora), min, FUSO, JANELA).toISOString();
+  assert.equal(r('2026-11-19T08:05', 200), em('2026-11-18T16:45').toISOString());
+  assert.equal(r('2026-11-18T15:00', 200), em('2026-11-18T11:40').toISOString(), 'no meio do dia é só voltar o relógio');
+  assert.equal(r('2026-11-18T21:00', 60), em('2026-11-18T19:00').toISOString(), 'fora do horário conta do fechamento');
+  assert.equal(R.minutosUteis(em('2026-11-18T16:45'), em('2026-11-19T08:05'), FUSO, JANELA), 200, 'ida e volta');
+});
+
+test('Sofia sem o robô do CRM: a fala em texto livre do conector é da Sofia; o modelo aprovado continua sendo da régua; a mensagem de espera não sai', () => {
+  const texto = ROBO(3, 'Posso te ajudar?');
+  const modelo = { ...ROBO(3), additional_attributes: { template_params: { name: 'parau_lead_reengajamento_48h' } } };
+  assert.equal(R.classificarMensagem(texto)?.papel, 'robo');
+  assert.equal(R.classificarMensagem(texto, new Set(), true)?.papel, 'sofia');
+  assert.equal(R.classificarMensagem(modelo, new Set(), true)?.papel, 'robo');
+  // o paciente que ela respondeu não espera a equipe
+  assert.equal(R.esperaDaEquipe(R.mensagensDaConversa([P(10), ROBO(9, 'Oi!')], new Set(), true), { esperandoHumano: false }), null);
+  assert.deepEqual(decidir(12, { conectorEhSofia: true }).devidos, ['aviso-10']);
+  assert.ok(decidir(12, { conectorEhSofia: true }).barrados.some((b) => b.passo === 'espera' && /mesmo usuário/.test(b.motivo)));
+  assert.deepEqual(decidir(12, { conectorEhSofia: false }).devidos, ['espera', 'aviso-10']);
+});
+
+test('a demora fica DESLIGADA na clínica de demonstração (não em seco), mesmo com a tela ou o .env mandando ligar', async () => {
+  const { modoDaDemora } = await import('./gerente.js');
+  assert.equal(modoDaDemora('clinica-demonstracao'), 'desligado');
+  assert.equal(modoDaDemora('clinica-demonstracao', { CHATWOOT_DEMORA_SLUGS: 'clinica-demonstracao' } as never), 'desligado');
+  assert.equal(modoDaDemora('doutor-hernia-parauapebas', { CHATWOOT_DEMORA_SLUGS: 'doutor-hernia-parauapebas' } as never), 'ligado');
+  assert.equal(modoDaDemora('doutor-hernia-parauapebas', {} as never), 'seco', 'e as demais nascem em seco');
+});
