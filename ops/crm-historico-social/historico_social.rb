@@ -8,10 +8,12 @@
 require 'json'
 require 'net/http'
 require 'openssl'
+require 'set'
 require 'time'
 require 'tempfile'
 require 'timeout'
 require 'uri'
+require 'zlib'
 
 module HistoricoSocial
   NOME_PADRAO = 'John Doe' # o nome que o Chatwoot põe quando a Meta nega o perfil (falta «Business Asset User Profile Access»)
@@ -243,7 +245,7 @@ module HistoricoSocial
     USO_PAUSAR_EM = 60  # % da cota (maior dos contadores da Meta): daqui para cima, espera antes da próxima chamada
     USO_PARAR_EM = 80   # % da cota: para a rodada ANTES de estourar (o token é o mesmo do atendimento ao vivo)
 
-    attr_reader :uso_maximo
+    attr_reader :uso_maximo, :cabecalhos_de_uso
 
     def initialize(base:, token:, ritmo: 0.7, http: nil, dorme: nil, tentativas: 3, falhas_seguidas_max: 5, espera_limite: 90, pausa_por_uso: 60)
       @base = base.chomp('/')
@@ -256,6 +258,7 @@ module HistoricoSocial
       @espera_limite = espera_limite
       @pausa_por_uso = pausa_por_uso
       @uso_maximo = 0
+      @cabecalhos_de_uso = Set.new
       @pausas_seguidas = 0
       @falhas_seguidas = 0
       @chamadas = 0
@@ -336,14 +339,18 @@ module HistoricoSocial
       CODIGOS_DE_LIMITE.include?(codigo)
     end
 
-    # Maior contador de uso (%) nos cabeçalhos da Meta. IG (login do Instagram): x-app-usage {call_volume, cpu_time}; Messenger:
-    # x-business-use-case-usage {id: [{call_count, total_cputime, total_time}]}. Passou de USO_PARAR_EM: para ANTES de estourar.
+    # Maior contador de uso (%) nos cabeçalhos «*usage*» da Meta: x-app-usage {call_volume, cpu_time}, x-business-use-case-usage
+    # {id: [{call_count, total_cputime, total_time}]} e x-page-usage {call_count, total_cputime, total_time}. O Instagram (login do Instagram)
+    # mediu 0% em tudo: `cabecalhos_de_uso` guarda QUAIS cabeçalhos vieram, para o resumo mostrar se algum veio. Passou de USO_PARAR_EM: para ANTES de estourar.
     def controlar_uso!(cab)
       return unless cab.is_a?(Hash)
 
       usos = []
-      [cab['x-app-usage'], cab['x-business-use-case-usage']].each do |h|
-        j = ler(h)
+      cab.each do |nome, valor|
+        next unless nome.to_s.downcase.include?('usage') && !valor.to_s.empty?
+
+        @cabecalhos_de_uso << nome.to_s.downcase
+        j = ler(valor)
         next unless j.is_a?(Hash)
 
         j.each_value do |v|
@@ -378,7 +385,7 @@ module HistoricoSocial
     def http_real(uri)
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) do |h|
         r = h.request(Net::HTTP::Get.new(uri))
-        [r.code.to_i, r.body, { 'x-app-usage' => r['x-app-usage'], 'x-business-use-case-usage' => r['x-business-use-case-usage'] }]
+        [r.code.to_i, r.body, r.each_header.select { |nome, _| nome.to_s.downcase.include?('usage') }.to_h]
       end
     end
   end
@@ -400,6 +407,7 @@ module HistoricoSocial
     'audio/aac' => 'aac', 'audio/ogg' => 'ogg', 'audio/wav' => 'wav', 'audio/webm' => 'webm', 'application/pdf' => 'pdf'
   }.freeze
   TIPOS_RECUSADOS = %w[text/html application/json application/xhtml+xml].freeze
+  TIPOS_GENERICOS = ['', 'application/octet-stream', 'binary/octet-stream'].freeze # «não sei»: vale o mime que a Graph informou
 
   # Baixa a mídia NA HORA (a URL da Meta acabou de ser gerada). Teto de tamanho por arquivo, prazo total por download, só https e só
   # hosts da Meta (a URL vem de fora: não é para o importador ir buscar o que não é da Meta). Falha = ErroMidia(motivo), nunca derruba a rodada.
@@ -424,12 +432,13 @@ module HistoricoSocial
     # O tipo que a CDN respondeu tem de bater com o que a Graph disse (página de erro/HTML nunca vira «imagem»). Octet-stream/vazio usa o mime da Graph.
     def tipo_efetivo(ct, mime_graph)
       ct = ct.to_s.split(';').first.to_s.strip.downcase
-      ct = mime_graph.to_s.split(';').first.to_s.strip.downcase if ct.empty? || ct == 'application/octet-stream'
+      ct = mime_graph.to_s.split(';').first.to_s.strip.downcase if TIPOS_GENERICOS.include?(ct)
       ct
     end
 
     def tipo_confere?(ct, tipo)
-      return false if ct.empty? || TIPOS_RECUSADOS.include?(ct)
+      return false if TIPOS_RECUSADOS.include?(ct)
+      return tipo == :arquivo if TIPOS_GENERICOS.include?(ct) # arquivo sem tipo conhecido vale (nome/extensão); imagem/áudio/vídeo sem tipo não
 
       case tipo
       when :imagem, :figurinha then ct.start_with?('image/')
@@ -466,6 +475,7 @@ module HistoricoSocial
 
                 tmp.write(pedaco)
               end
+              raise ErroMidia, :vazio if total.zero? # URL vencida costuma responder 200/204 sem corpo: anexo de 0 byte não vale
               tmp.flush
               tmp.rewind
               return { arquivo: tmp, content_type: ct, bytes: total }
@@ -485,7 +495,10 @@ module HistoricoSocial
     rescue Timeout::Error, Net::OpenTimeout, Net::ReadTimeout
       tmp&.close!
       raise ErroMidia, :tempo
-    rescue SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::ProtocolError, URI::Error
+    rescue Errno::ENOSPC
+      tmp&.close!
+      raise ErroMidia, :disco # o disco do servidor encheu: motivo próprio (não é falha de rede)
+    rescue SocketError, SystemCallError, IOError, OpenSSL::SSL::SSLError, Net::HTTPBadResponse, Net::ProtocolError, URI::Error, Zlib::Error
       tmp&.close!
       raise ErroMidia, :rede
     end

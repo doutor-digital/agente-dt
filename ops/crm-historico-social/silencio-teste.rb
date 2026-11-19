@@ -95,7 +95,7 @@ ActiveJob::Base.queue_adapter = :inline # se algo disparasse, EXECUTARIA aqui (w
 
 # o importador define constantes ao ser carregado; para carregá-lo de novo no mesmo processo, tira todas
 def limpar_constantes
-  %i[GRAVAR CAIXAS CORTE_INFORMADO LIMITE RITMO INICIO FIXTURES ERROS_DE_PARAMETRO DESDE_14_11 RECENTE_72H].each { |k| Object.send(:remove_const, k) if Object.const_defined?(k) }
+  %i[GRAVAR CAIXAS CORTE_INFORMADO LIMITE RITMO INICIO FIXTURES ERROS_DE_PARAMETRO DESDE_14_11 RECENTE_72H MIDIA_ATIVA MIDIA_MAX_BYTES MIDIA_PRAZO MIDIA_TOTAL_BYTES MIDIA_MIN_LIVRE_MB MIDIA_MEDIR_MAX].each { |k| Object.send(:remove_const, k) if Object.const_defined?(k) }
 end
 
 # «silêncio» = nada disparou. Os downloads de mídia ao servidor local de teste são o trabalho da importação, não uma reação.
@@ -435,6 +435,10 @@ if FASE == 6
   confere('CORTE depois de início − 15 min é recusado e nada é gravado', st == 1 && igual, [st, igual].inspect)
   st, igual = recusa.call('LIMITE_CONVERSAS' => '', 'CORTE' => 'ontem')
   confere('CORTE ilegível é recusado', st == 1 && igual, [st, igual].inspect)
+  frontend = ENV.delete('FRONTEND_URL')
+  st, igual = recusa.call('LIMITE_CONVERSAS' => '', 'CORTE' => '')
+  confere('sem FRONTEND_URL a rodada com mídia é recusada (link da mídia ficaria quebrado) e nada é gravado', st == 1 && igual, [st, igual].inspect)
+  ENV['FRONTEND_URL'] = frontend
 end
 
 if FASE == 4
@@ -467,13 +471,36 @@ if FASE == 5
   # a equipe já usou uma conversa (responsável): o desfazer a mantém, mas tira a mídia e devolve os rótulos
   usada = Conversation.where('additional_attributes @> ?::jsonb', { meta_conversation_id: 'cv_ig_midia' }.to_json).first
   usada.update_columns(assignee_id: User.first.id)
+  # contato que a equipe mexeu (uma nota) NÃO é apagado, senão a nota fica órfã
+  ct_nota = Contact.find_by(name: 'Pessoa da Midia')
+  Note.create!(account_id: ct_nota.account_id, contact: ct_nota, user: User.first, content: 'ligar amanhã')
   begin
     load File.join(DIR, 'importar-historico-social.rb')
   rescue SystemExit
     nil
   end
   confere('DESFAZER em seco não apagou nada (nem mídia)', contagem.call == antes && Attachment.count == 6 && ActiveStorage::Blob.count == 6 && arquivos.call == 6)
+
+  # desfazer PARCIAL (registro só com a imagem da mm1): o pdf da mesma mensagem fica, o texto NÃO volta a ter o rótulo (duplicaria a mídia que ficou);
+  # e um blob citado no registro cujo anexo NÃO está no registro (rodada que morreu entre o commit e o REG) não é apagado
+  m1 = Message.find_by(source_id: 'mm1')
+  a_img, a_pdf = m1.attachments.order(:id).to_a
+  vinc = ->(a) { ActiveStorage::Attachment.find_by(record_type: 'Attachment', record_id: a.id) }
+  File.write(File.join(TRAB, 'parcial.jsonl'), [{ tipo: 'anexos', caixa: 1, ids: [a_img.id] }, { tipo: 'armazenamento', caixa: 1, ids: [vinc.call(a_img).id] },
+                                                { tipo: 'blobs', caixa: 1, ids: [a_img.file.blob.id, a_pdf.file.blob.id] }].map { |h| "REG #{h.to_json}" }.join("\n"))
+  ENV['REGISTRO'] = File.join(TRAB, 'parcial.jsonl')
   ENV['GRAVAR'] = '1'
+  limpar_constantes
+  begin
+    load File.join(DIR, 'importar-historico-social.rb')
+  rescue SystemExit
+    nil
+  end
+  m1.reload
+  confere('PARCIAL: só a imagem saiu (anexo, vínculo, blob e arquivo)', Attachment.count == 5 && ActiveStorage::Blob.count == 5 && arquivos.call == 5 && m1.attachments.count == 1 && m1.attachments.first.id == a_pdf.id)
+  confere('PARCIAL: blob do anexo que NÃO estava no registro ficou, com o arquivo e o vínculo', a_pdf.reload.file.attached? && a_pdf.file.download == '%PDF-1.4 teste')
+  confere('PARCIAL: texto não voltou a ter o rótulo da mídia que ficou (nem perdeu o guardado)', m1.content == 'segue o exame' && m1.additional_attributes.key?('hist_conteudo_original'), m1.content.inspect)
+  ENV['REGISTRO'] = File.join(TRAB, 'registro.jsonl')
   limpar_constantes
   begin
     load File.join(DIR, 'importar-historico-social.rb')
@@ -487,6 +514,7 @@ if FASE == 5
   confere('DESFAZER: mensagens importadas saíram', Message.where(source_id: %w[ig_m1 ig_m2 ig_m3 ig_m4 ig_m0 ig_v1 ig_v2 fbn_1 fbj_1 fbe_1]).none?)
   confere('DESFAZER: mensagens VIVAS ficaram (a velha da semeadura e a que chegou na fase 4)', Message.where(source_id: %w[mid_live mid_nova_1]).count == 2)
   confere('DESFAZER: contato criado SEM conversa viva saiu (Messenger novo)', Contact.where(name: 'Maria do Messenger').none?)
+  confere('DESFAZER: contato com nota da equipe ficou (e a nota não ficou órfã)', Contact.where(name: 'Pessoa da Midia').count == 1 && Note.where(contact_id: ct_nota.id).count == 1)
   confere('DESFAZER: contato que já tem conversa viva ficou (Instagram novo que voltou a escrever)', Contact.where(name: 'Paciente A Nome Real').count == 1)
   confere('DESFAZER: nome corrigido do John Doe fica (nome certo não volta a John Doe)', Contact.where(name: 'Joana Nome Real').count == 1)
   confere('DESFAZER: só a etiqueta da conversa mantida sobrou', ActsAsTaggableOn::Tagging.joins(:tag).where(tags: { name: 'historico' }, taggable_type: 'Conversation').count == 1)

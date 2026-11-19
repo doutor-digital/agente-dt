@@ -363,8 +363,17 @@ class HistoricoSocialTest < Minitest::Test
   end
 
   # ── cota da Meta ──
-  def com_cabecalho(resp, app: nil, biz: nil)
-    [resp[0], resp[1], { 'x-app-usage' => app, 'x-business-use-case-usage' => biz }]
+  def com_cabecalho(resp, app: nil, biz: nil, pagina: nil)
+    [resp[0], resp[1], { 'x-app-usage' => app, 'x-business-use-case-usage' => biz, 'x-page-usage' => pagina }.compact]
+  end
+
+  def test_cota_tambem_le_x_page_usage_e_registra_quais_cabecalhos_vieram
+    g, = graph([com_cabecalho(ok('ok' => 1), pagina: { 'call_count' => 90, 'total_time' => 5 }.to_json)])
+    assert_raises(S::Parar) { g.get('/x') }
+    assert_equal ['x-page-usage'], g.cabecalhos_de_uso.to_a
+    g2, = graph([ok('ok' => 1)])
+    g2.get('/x')
+    assert_empty g2.cabecalhos_de_uso.to_a, 'sem cabeçalho de uso: o resumo mostra que nenhum veio (Instagram)'
   end
 
   def test_cota_para_antes_de_estourar_no_messenger
@@ -579,6 +588,36 @@ class HistoricoSocialTest < Minitest::Test
       assert_equal 8, baixador.medir(srv.url('/vai'))
       assert_nil baixador.medir(srv.url('/404'))
       assert_nil baixador.medir('https://evil.com/x')
+    end
+  end
+
+  def com_servidor_extra
+    srv = Servidor.new do |_m, caminho|
+      case caminho
+      when '/vazio' then [200, { 'Content-Type' => 'image/png', 'Content-Length' => '0' }, '']
+      when '/binario' then [200, { 'Content-Type' => 'binary/octet-stream', 'Content-Length' => '3' }, 'abc']
+      when '/sem-tipo' then [200, { 'Content-Length' => '3' }, 'abc']
+      else [404, {}, '']
+      end
+    end
+    yield srv
+  ensure
+    srv&.parar
+  end
+
+  def test_corpo_vazio_nao_vira_anexo_de_zero_byte
+    com_servidor_extra { |srv| assert_equal :vazio, motivo { baixador.baixar(srv.url('/vazio'), tipo: :imagem) } }
+  end
+
+  def test_binary_octet_stream_e_sem_tipo_usam_o_mime_da_graph_e_arquivo_aceita_sem_tipo
+    com_servidor_extra do |srv|
+      r = baixador.baixar(srv.url('/binario'), tipo: :imagem, mime_graph: 'image/jpeg')
+      assert_equal 'image/jpeg', r[:content_type]
+      r[:arquivo].close!
+      assert_equal :tipo, motivo { baixador.baixar(srv.url('/binario'), tipo: :imagem) }, 'imagem sem tipo nenhum não vale'
+      r = baixador.baixar(srv.url('/sem-tipo'), tipo: :arquivo)
+      assert_equal 3, r[:bytes]
+      r[:arquivo].close!
     end
   end
 

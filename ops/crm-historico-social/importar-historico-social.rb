@@ -65,8 +65,13 @@ MIDIA_MAX_BYTES = ((ENV['MIDIA_MAX_MB'] || '25').to_f * 1_048_576).to_i
 MIDIA_PRAZO = (ENV['MIDIA_PRAZO'] || '60').to_i
 MIDIA_TOTAL_BYTES = ((ENV['MIDIA_TOTAL_MB'] || '2048').to_f * 1_048_576).to_i
 MIDIA_MIN_LIVRE_MB = (ENV['MIDIA_MIN_LIVRE_MB'] || '3000').to_f
+MIDIA_MEDIR_MAX = (ENV['MIDIA_MEDIR_MAX'] || '400').to_i # no SECO: no máximo N «HEAD» para medir tamanho (o resto entra como «sem tamanho»)
+# o link permanente da mídia leva o endereço público do CRM; sem ele o external_url ficaria quebrado para sempre
+ERROS_DE_PARAMETRO << 'FRONTEND_URL ausente no ambiente: o link da mídia ficaria quebrado (rode dentro do contêiner chatwoot_rails, ou use MIDIA=0)' if MIDIA_ATIVA && ENV['FRONTEND_URL'].to_s.empty?
 $midia_bytes = 0
 $midia_baixadas = 0
+$midia_heads = 0
+$midia_parar = nil # nil | :teto | :disco — por que parou de baixar (cada motivo tem a sua contagem)
 
 def log(texto)
   STDOUT.puts "LOG #{Time.now.utc.strftime('%H:%M:%S')} #{texto}"
@@ -99,62 +104,87 @@ def desfazer!
   raise ErroNosso, 'MODO=desfazer exige REGISTRO=arquivo' if arq.empty? || !File.file?(arq)
 
   tudo = Hash.new { |h, k| h[k] = [] }
+  linhas = 0
   File.foreach(arq) do |l|
     next unless l.start_with?('REG ')
 
     j = JSON.parse(l.sub('REG ', ''))
+    linhas += 1
     tudo[j['tipo']].concat(j['ids']) if j['ids']
   end
+  raise ErroNosso, 'o registro não tem nenhuma linha REG (arquivo errado ou rodada que não gravou): nada a desfazer' if linhas.zero?
+
   convs = tudo['conversas'].uniq
   mensagens_registro = tudo['mensagens'].uniq
   # conversa CRIADA pela rodada só sai inteira se NINGUÉM mais escreveu nela depois (mensagem fora do registro = a equipe/paciente já usou)
   # (e que continua como foi criada: resolvida, sem responsável, só com a etiqueta historico — etiqueta/atribuição da equipe = mexeram nela)
-  intocadas = convs.select do |c|
-    cv = Conversation.find_by(id: c)
-    cv && cv.status == 'resolved' && cv.assignee_id.nil? && cv.cached_label_list.to_s == S::ETIQUETA &&
-      Message.where(conversation_id: c).where.not(id: mensagens_registro).none?
-  end
+  # UMA consulta para todas (não uma por conversa)
+  com_mensagem_de_fora = Message.where(conversation_id: convs).where.not(id: mensagens_registro).reorder(nil).distinct.pluck(:conversation_id).to_set # Message tem order padrão: sem reorder o DISTINCT falha
+  intocadas = Conversation.where(id: convs).select do |cv|
+    cv.status == 'resolved' && cv.assignee_id.nil? && cv.cached_label_list.to_s == S::ETIQUETA && !com_mensagem_de_fora.include?(cv.id)
+  end.map(&:id)
   mexidas = convs - intocadas
   # mensagens que a rodada acrescentou a uma conversa de histórico que JÁ existia (2ª rodada em diante): saem só elas, a conversa fica
   acrescimos = Message.where(id: mensagens_registro).where.not(conversation_id: convs)
                       .where(conversation_id: Conversation.where('COALESCE(jsonb_exists(additional_attributes, ?), false)', S::MARCA_CONVERSA).select(:id)).pluck(:id)
-  log "desfazer: conversas criadas=#{convs.size} (intocadas=#{intocadas.size}; as #{mexidas.size} que a equipe já usou — mensagem, etiqueta ou responsável — ficam) " \
-      "mensagens do registro=#{mensagens_registro.size} (acréscimos em conversa antiga=#{acrescimos.size}) " \
-      "contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size}"
   anexos = tudo['anexos'].uniq
   armazenamento = tudo['armazenamento'].uniq
   blobs = tudo['blobs'].uniq
   msgs_com_anexo = Attachment.where(id: anexos).distinct.pluck(:message_id)
+  log "desfazer: conversas criadas=#{convs.size} (intocadas=#{intocadas.size}; as #{mexidas.size} que a equipe já usou — mensagem, etiqueta ou responsável — ficam) " \
+      "mensagens do registro=#{mensagens_registro.size} (acréscimos em conversa antiga=#{acrescimos.size}) " \
+      "contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size}"
   log "desfazer mídia: anexos=#{anexos.size} blobs=#{blobs.size} (#{ActiveStorage::Blob.where(id: blobs).sum(:byte_size) / 1_048_576} MB) em #{msgs_com_anexo.size} mensagens"
   unless GRAVAR
     log 'SECO: nada foi apagado. Rode com GRAVAR=1 (e --confirmo-apagar) para desfazer.'
     return
   end
   ActiveRecord::Base.transaction do
-    # 1º a mídia (anexos e vínculos com o arquivo) e o texto volta com os rótulos («[imagem]») nas mensagens que continuam existindo
+    # 1º a mídia (anexos e vínculos com o arquivo)
     ActiveStorage::Attachment.where(id: armazenamento, record_type: 'Attachment').delete_all
     Attachment.where(id: anexos).delete_all
+    # o texto volta com os rótulos («[imagem]») nas mensagens que continuam existindo e FICARAM SEM anexo; se ainda sobrou anexo de outra
+    # rodada, o texto não se mexe (devolver o rótulo duplicaria a mídia que continua lá)
     restauradas = 0
+    com_anexo_restante = 0
     Message.where(id: msgs_com_anexo).where('COALESCE(jsonb_exists(additional_attributes, ?), false)', 'hist_conteudo_original').find_each do |m|
+      if Attachment.where(message_id: m.id).exists?
+        com_anexo_restante += 1
+        next
+      end
       original = m.additional_attributes['hist_conteudo_original']
       Message.where(id: m.id).update_all(['content = ?, processed_message_content = ?, additional_attributes = additional_attributes - ?::text', original, original, 'hist_conteudo_original'])
       restauradas += 1
     end
-    log "desfeito: anexos=#{anexos.size} textos_restaurados=#{restauradas}"
+    log "desfeito: anexos=#{anexos.size} textos_restaurados=#{restauradas} mensagens_que_ainda_tem_anexo_de_outra_rodada=#{com_anexo_restante}"
     msgs = Message.where(conversation_id: intocadas, id: mensagens_registro).delete_all + Message.where(id: acrescimos).delete_all
     tags = ActsAsTaggableOn::Tagging.where(id: tudo['taggings'].uniq, taggable_type: 'Conversation', taggable_id: intocadas).delete_all
     cs = Conversation.where(id: intocadas).delete_all
     # contato/contact_inbox criados pela rodada só saem se não ficou nenhuma conversa ou mensagem presa a eles
     cis = tudo['contact_inboxes'].uniq.select { |ci| !Conversation.where(contact_inbox_id: ci).exists? }
     ContactInbox.where(id: cis).delete_all
-    cts = tudo['contatos'].uniq.select { |c| !ContactInbox.where(contact_id: c).exists? && !Conversation.where(contact_id: c).exists? }
+    # contato que a EQUIPE mexeu (nota, etiqueta, campo, e-mail/telefone/identificador) NÃO é apagado: delete_all deixaria as notas órfãs
+    cts = []
+    editados = 0
+    Contact.where(id: tudo['contatos'].uniq).find_each do |ct|
+      mexido = Note.where(contact_id: ct.id).exists? || ActsAsTaggableOn::Tagging.where(taggable_type: 'Contact', taggable_id: ct.id).exists? ||
+               ct.custom_attributes.present? || ct.email.present? || ct.phone_number.present? || ct.identifier.present?
+      if mexido
+        editados += 1
+      elsif !ContactInbox.where(contact_id: ct.id).exists? && !Conversation.where(contact_id: ct.id).exists?
+        cts << ct.id
+      end
+    end
     Contact.where(id: cts).delete_all
     # nomes corrigidos (REG 'nomes') NÃO voltam a «John Doe» (o nome certo fica); datas de conversa antiga que recebeu acréscimo não são recuadas
-    log "desfeito: mensagens=#{msgs} taggings=#{tags} conversas=#{cs} contact_inboxes=#{cis.size} contatos=#{cts.size}"
+    log "desfeito: mensagens=#{msgs} taggings=#{tags} conversas=#{cs} contact_inboxes=#{cis.size} contatos=#{cts.size} contatos_mantidos_por_edicao_da_equipe=#{editados}"
   end
-  # o arquivo em disco só sai depois que o banco confirmou (não dá para voltar atrás de um arquivo apagado)
+  # o arquivo em disco só sai depois que o banco confirmou (não dá para voltar atrás de um arquivo apagado); blob que ainda tem vínculo vivo
+  # (anexo que chegou ao banco mas não ao registro, p.ex. rodada morta entre o commit e o REG) NÃO é apagado
+  em_uso = ActiveStorage::Blob.where(id: blobs).where(id: ActiveStorage::Attachment.select(:blob_id)).pluck(:id)
+  log "desfeito: blobs ainda em uso por anexo fora do registro (ficam)=#{em_uso.size}" if em_uso.any?
   purgados = 0
-  ActiveStorage::Blob.where(id: blobs).find_each do |b|
+  ActiveStorage::Blob.where(id: blobs - em_uso).find_each do |b|
     b.purge
     purgados += 1
   rescue StandardError => e
@@ -232,33 +262,37 @@ rescue StandardError
   nil
 end
 
-# SECO: só conta o que SERIA baixado (por tipo) e estima o tamanho (o da Graph, ou o Content-Length de um HEAD — nada é baixado).
+# SECO: só conta o que SERIA baixado (por tipo) e estima o tamanho (o da Graph, ou o Content-Length de um HEAD — nada é baixado; no máximo
+# MIDIA_MEDIR_MAX HEADs na rodada, depois disso entra como «sem tamanho»).
 def contar_midias_seco(midias, c)
   midias.each do |m|
     if m[:url].nil?
       c[:midias_sem_url] += 1
       next
     end
-    unless baixador.host_permitido?(URI.parse(m[:url]))
+    begin
+      unless baixador.host_permitido?(URI.parse(m[:url]))
+        c[:midias_host_nao_permitido] += 1
+        next
+      end
+      c[:"midias_a_baixar_#{m[:tipo]}"] += 1
+      c[:"midias_host_#{sufixo_do_host(m[:url])}"] += 1
+      bytes = m[:tamanho]
+      if bytes.nil? && $midia_heads < MIDIA_MEDIR_MAX
+        $midia_heads += 1
+        sleep 0.05
+        bytes = baixador.medir(m[:url])
+      end
+      if bytes
+        c[:midias_bytes_estimados] += bytes
+        c[:midias_acima_do_teto] += 1 if bytes > MIDIA_MAX_BYTES
+      else
+        c[:midias_sem_tamanho] += 1
+      end
+    rescue URI::Error
       c[:midias_host_nao_permitido] += 1
-      next
-    end
-    c[:"midias_a_baixar_#{m[:tipo]}"] += 1
-    c[:"midias_host_#{sufixo_do_host(m[:url])}"] += 1
-    bytes = m[:tamanho]
-    unless bytes
-      sleep 0.05
-      bytes = baixador.medir(m[:url])
-    end
-    if bytes
-      c[:midias_bytes_estimados] += bytes
-      c[:midias_acima_do_teto] += 1 if bytes > MIDIA_MAX_BYTES
-    else
-      c[:midias_sem_tamanho] += 1
     end
   end
-rescue URI::Error
-  c[:midias_host_nao_permitido] += 1
 end
 
 # GRAVANDO: baixa as mídias de `idxs` da mensagem `n`; devolve [{ idx:, blob:, tipo_cw:, ext: }] só das que deram certo.
@@ -270,12 +304,12 @@ def baixar_midias(inbox, n, idxs, c)
       next
     end
     if $midia_bytes >= MIDIA_TOTAL_BYTES
-      c[:midias_teto_da_rodada] += 1
-      next
+      $midia_parar ||= :teto
+    elsif ($midia_baixadas % 25).zero? && (livre = espaco_livre_mb) && livre < MIDIA_MIN_LIVRE_MB
+      $midia_parar = :disco
     end
-    if ($midia_baixadas % 25).zero? && (livre = espaco_livre_mb) && livre < MIDIA_MIN_LIVRE_MB
-      c[:midias_pouco_espaco_em_disco] += 1
-      $midia_bytes = MIDIA_TOTAL_BYTES # para de baixar; o rótulo fica e a próxima rodada completa
+    if $midia_parar # o rótulo fica e a próxima rodada completa; cada motivo na sua contagem
+      c[$midia_parar == :disco ? :midias_pouco_espaco_em_disco : :midias_teto_da_rodada] += 1
       next
     end
     $midia_baixadas += 1
@@ -313,7 +347,7 @@ end
 # O Chatwoot, para mensagem RECEBIDA numa caixa do Instagram, mostra a mídia pelo `external_url` do anexo (Attachment#instagram_incoming_message?) e
 # não pelo arquivo guardado. Então o external_url recebe o link PERMANENTE do nosso arquivo (id assinado, não vence), nunca o da Meta.
 def url_permanente(blob)
-  base = (ENV['FRONTEND_URL'].presence || 'http://localhost:3000').chomp('/')
+  base = ENV.fetch('FRONTEND_URL').chomp('/')
   "#{base}/rails/active_storage/blobs/redirect/#{blob.signed_id}/#{ERB::Util.url_encode(blob.filename.to_s)}"
 end
 
@@ -437,7 +471,14 @@ def importar_caixa!(inbox, tag, resumo)
       completar = MIDIA_ATIVA ? midias_a_completar(inbox, normais) : []
       c[:mensagens_a_completar_com_midia] += completar.size
       if GRAVAR
-        completar.each { |item| completar_midias!(inbox, item, c) }
+        completar.each do |item|
+          completar_midias!(inbox, item, c)
+        rescue S::Parar
+          raise
+        rescue StandardError => e # a parte opcional (completar mídia) nunca bloqueia a principal (importar o histórico)
+          c[:midias_falha_ao_completar] += 1
+          log "caixa #{inbox.id}: não consegui completar a mídia de uma mensagem (#{erro_seguro(e)})"
+        end
       else
         contar_midias_seco(completar.flat_map { |item| item[:n][:midias].select { |m| item[:faltam].include?(m[:idx]) } }, c)
       end
@@ -485,6 +526,7 @@ ensure
     if fonte.respond_to?(:graph) && fonte.graph
       c[:chamadas_a_meta] = fonte.graph.chamadas
       c[:uso_maximo_da_cota_pct] = fonte.graph.uso_maximo.round
+      c[:cabecalhos_de_uso_recebidos] = fonte.graph.cabecalhos_de_uso.to_a.sort.join('|').then { |t| t.empty? ? 'nenhum' : t }
     end
     tipos.sort_by { |k, _| k.to_s }.each { |k, v| c["anexo_#{k}".to_sym] = v }
     %i[midias_bytes_estimados midias_bytes_gravados].each do |k|
@@ -561,9 +603,10 @@ def gravar_no_banco!(inbox, canal, conv, externo, perfil, contato_id, ci_id, con
           base.merge(message_type: 1, status: 1, sender_type: nil, sender_id: nil, content_attributes: { external_echo: true })
         end
       end
+      por_mid = fatia.to_h { |m| [m[:mid], m] }
       Message.insert_all!(linhas, returning: %w[id source_id]).rows.each do |mid, sid|
         ids[:mensagens] << mid
-        fatia.find { |m| m[:mid] == sid }[:id] = mid
+        por_mid.fetch(sid)[:id] = mid
       end
     end
     novas.each { |m| gravar_anexos!(inbox.account_id, m[:id], m[:prontos], m[:ts], ids) if m[:prontos].any? }

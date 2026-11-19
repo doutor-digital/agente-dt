@@ -7,7 +7,7 @@ Importa o histórico de mensagens das caixas **7 (Instagram)** e **8 (Messenger)
 | João (PC) | `bash ops/historico-social-crm-joao.sh --so-conferir` | conta tudo (Meta e banco, só leitura) |
 | João (PC) | `bash ops/historico-social-crm-joao.sh --limite=5` | piloto: 5 conversas por caixa (repetir completa a mídia do que já foi importado) |
 | João (PC) | `bash ops/historico-social-crm-joao.sh` | o lote inteiro |
-| João (PC) | `bash ops/historico-social-crm-joao.sh --desfazer=<log>` (+ `--confirmo-apagar`) | desfaz uma rodada pelo registro de ids |
+| João (PC) | `bash ops/historico-social-crm-joao.sh --desfazer=<log>` (+ `--confirmo-apagar`) | desfaz uma rodada pelo registro de ids (inclui anexos, vínculos, blobs e arquivos em disco) |
 | João (PC) | `bash ops/nomes-messenger-crm-joao.sh --so-conferir / --ligar / --desligar / --status` | rotina de 10 min dos «John Doe» |
 | qualquer | `bash ops/crm-historico-social/testar.sh` | testes da parte pura (Docker, sem Ruby no PC) |
 | qualquer | `bash ops/crm-historico-social/testar-silencio.sh` | prova de silêncio numa instalação descartável do Chatwoot |
@@ -31,3 +31,7 @@ Tudo é gravado com `insert_all!` / `update_all` — **sem callbacks do Rails**.
 ## Rotina dos «John Doe» (caixa 8)
 
 O Chatwoot pede o perfil à Meta (`get_object(PSID)`), a Meta nega (falta «Business Asset User Profile Access») e o contato nasce «John Doe». O nome vem de `GET /{page}/conversations?platform=messenger&user_id={PSID}&fields=participants`. Mora no **cron da VPS** (`/etc/cron.d/crm-nomes-messenger`, a cada 10 min): `nomes-messenger-cron.sh` pergunta ao Postgres se há candidato (contatos das últimas 2 h; 1×/hora, dos últimos 3 dias) e só então acorda o Rails. Mesmo lock da importação (não rodam juntas). Parar sem desinstalar: `touch /root/kit/crm-historico-social/PARAR`.
+
+## Desfazer — o que ele NÃO apaga (e avisa)
+
+Só mexe no que está no registro. Conversa criada pela rodada só sai se ninguém a usou (resolvida, sem responsável, só com a etiqueta `historico`, sem mensagem de fora). Contato que a equipe mexeu (nota, etiqueta, campo, e-mail/telefone/identificador) fica (`contatos_mantidos_por_edicao_da_equipe`). Blob que ainda tem anexo fora do registro (rodada que morreu entre o commit e o `REG`) fica. Mensagem que ainda tem anexo de OUTRA rodada não recebe de volta o rótulo (duplicaria a mídia). Nomes corrigidos e datas recuadas não voltam atrás.

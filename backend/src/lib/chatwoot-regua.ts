@@ -63,9 +63,10 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
   if (!etiquetas.some((e) => String(e) === ETIQUETA_HISTORICO)) return false;
   // Histórico do Instagram/Messenger (importação de 19/11/2026, ops/crm-historico-social): a conversa importada leva
-  // `additional_attributes.meta_conversation_id`. É SEMPRE arquivo, mesmo com última mensagem depois de 14/11 — a pessoa que escreve de novo
-  // abre outra conversa (a caixa não trava em conversa única), então esta nunca "volta a viver" e não pode aparecer no funil como lead novo.
-  if (typeof raw?.additional_attributes?.meta_conversation_id === 'string' && raw.additional_attributes.meta_conversation_id !== '') return true;
+  // `additional_attributes.meta_conversation_id`. Enquanto estiver RESOLVIDA é SEMPRE arquivo, mesmo com última mensagem depois de 14/11 — a pessoa
+  // que escreve de novo abre outra conversa (a caixa não trava em conversa única), então esta não "volta a viver" e não aparece no funil como lead
+  // novo. Se alguém a REABRIU (status diferente de resolved), é trabalho da equipe: segue a regra de sempre (atividade depois do corte = viva).
+  if (typeof raw?.additional_attributes?.meta_conversation_id === 'string' && raw.additional_attributes.meta_conversation_id !== '' && raw?.status === 'resolved') return true;
   const t = Number(raw?.last_activity_at) * 1000;
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
   const a = raw?.custom_attributes;
