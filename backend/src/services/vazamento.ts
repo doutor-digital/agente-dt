@@ -255,6 +255,12 @@ const RACIOCINIO_PT = [
   /\b(?:sem|n[aã]o\s+(?:vou|preciso|devo))\s+(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
   /\b(?:essa|esta)\s+ferramenta\s+n[aã]o\s+se\s+aplica/iu,
   /\b(?:j[aá]\s+mandei\s+(?:as\s+)?|sem\s+necessidade\s+de\s+a[cç][aã]o\s+de\s+|a[cç][aã]o\s+de\s+)tools?(?![\p{L}])/iu,
+  // A IA comenta a PRÓPRIA ferramenta como se o paciente tivesse visto: "Desculpa, isso não devia ter sido feito, vou corrigir."
+  // (Tatuí 19/11/2026, depois de gravar "Ocupado" no cartão) e "Desculpa, não precisava ter feito isso — vamos ao que importa:"
+  // (Salto 13/11). O paciente não sabe de ação nenhuma. Medido em 20/10–19/11 nas 32.177 respostas da IA: só estas duas casam.
+  // "Isso não deveria ter acontecido com você" (empatia) e "Desculpa, vou corrigir seu cadastro" (o paciente reclamou) passam.
+  /\b(?:isso|aquilo)\s+n[aã]o\s+(?:devia|deveria|precisava)\s+(?:ter\s+)?(?:sido\s+)?feit[oa](?![\p{L}])/iu,
+  /\bn[aã]o\s+(?:devia|deveria|precisava)\s+(?:ter\s+)?feito\s+isso(?![\p{L}])/iu,
   // "Não preciso agir", "ação de qualificação", "nada para eu agir": a decisão de acionar (ou não) o sistema.
   /\bn[aã]o\s+preciso\s+agir\b/iu,
   /\bn[aã]o\s+(?:h[aá]|tem)\s+nada\s+(?:pra|para)\s+(?:eu\s+)?agir\b/iu,

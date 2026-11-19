@@ -63,6 +63,10 @@ const STOPWORDS = new Set([
   // avisos do WhatsApp/Kommo que chegam como mensagem do paciente ("Unable to display this message…",
   // "Flow responses received")
   'unable', 'flow',
+  // Palavras que a IA grava no lugar de um nome quando não tem nenhum (Tatuí 19/11/2026 e Salto 13/11: "Ocupado"; 21/10 e 23/10:
+  // "Cliente"). Ficam no prompt como exemplo de "isso não é nome" — e daí o modelo as copia.
+  'ocupado', 'ocupada', 'cliente', 'clientes', 'loja', 'lead', 'contato', 'usuario', 'usuaria',
+  'desconhecido', 'desconhecida', 'anonimo', 'anonima', 'indisponivel', 'placeholder', 'informado', 'definir',
 ]);
 
 /** "Oiii", "Oie", "Olaaa", "kkkk", "rsrs": cumprimento e risada esticados não cabem numa lista. */
