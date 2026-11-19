@@ -436,3 +436,60 @@ test('sem sessão do tratamento do cartão na lista continua sem gravar nada (n�
   const soDoOutro = [sessaoTimbo('2026-11-19', '09:00', 132399)];
   assert.equal(proximaGravada(soDoOutro, 132400), undefined);
 });
+
+// --- a sessão colada numa que JÁ COMEÇOU não vira a próxima (senão o robô manda um 2º lembrete a quem está na clínica) ---
+
+const proximaEm = (agoraIso: string, schedules: SpineSchedule[], idDoCartao = 132400) => {
+  const agoraEpoch = Date.parse(agoraIso) / 1000;
+  const w = escritasDeSessoes({ schedules, tratamento: trat(idDoCartao), tratamentosDoPaciente: FICHA_TIMBO, agoraEpoch, campo: conta() });
+  return w.find((x) => x.campo === CAMPOS_SESSOES.PROXIMA);
+};
+const MARIA_HOJE = () => [sessaoTimbo('2026-11-19', '09:00', 132399), sessaoTimbo('2026-11-19', '09:30', 132400)];
+
+test('08:59, antes da primeira: a próxima é a das 09:00', () => {
+  const w = proximaEm('2026-11-19T11:59:00Z', [...MARIA_HOJE(), sessaoTimbo('2026-11-20', '09:00', 132399)]);
+  assert.equal((w as { valor: number }).valor, epochTimbo('2026-11-19', '09:00'));
+});
+
+test('09:01 com a das 09:00 começada: a das 09:30 (mesmo dia, colada) NÃO é a próxima — pula para a do dia seguinte', () => {
+  const w = proximaEm('2026-11-19T12:01:00Z', [...MARIA_HOJE(), sessaoTimbo('2026-11-20', '09:00', 132399)]);
+  assert.equal((w as { valor: number }).valor, epochTimbo('2026-11-20', '09:00'));
+});
+
+test('09:01 e nenhuma outra sessão por vir: a próxima velha é LIMPA, nunca vira 09:30', () => {
+  const w = proximaEm('2026-11-19T12:01:00Z', MARIA_HOJE());
+  assert.equal(w, undefined, 'cartão vazio: nada a gravar');
+  const velha = escritasDeSessoes({
+    schedules: MARIA_HOJE(), tratamento: trat(132400), tratamentosDoPaciente: FICHA_TIMBO, agoraEpoch: Date.parse('2026-11-19T12:01:00Z') / 1000,
+    campo: conta({ [CAMPOS_SESSOES.PROXIMA]: String(epochTimbo('2026-11-19', '09:00')) }),
+  });
+  assert.equal(acha(velha, CAMPOS_SESSOES.PROXIMA)?.limpar, true);
+});
+
+test('09:01, outra sessão do mesmo dia mas com intervalo > 60 min: continua valendo como próxima', () => {
+  const lista = [...MARIA_HOJE(), sessaoTimbo('2026-11-19', '11:00', 132399)];
+  assert.equal((proximaEm('2026-11-19T12:01:00Z', lista) as { valor: number }).valor, epochTimbo('2026-11-19', '11:00'));
+});
+
+test('fila de três (09:00, 09:30, 10:00) com a primeira começada: nenhuma das coladas é a próxima; a de 11:30 é', () => {
+  const lista = [...MARIA_HOJE(), sessaoTimbo('2026-11-19', '10:00', 132399), sessaoTimbo('2026-11-19', '11:30', 132399)];
+  assert.equal((proximaEm('2026-11-19T12:01:00Z', lista) as { valor: number }).valor, epochTimbo('2026-11-19', '11:30'));
+});
+
+test('a das 09:00 ATENDIDA ou já com falta também segura a das 09:30; DESMARCADA não segura', () => {
+  const dia = '2026-11-19';
+  const amanha = sessaoTimbo('2026-11-20', '09:00', 132399);
+  for (const idStatus of [SPINE_STATUS.ATENDIDO, SPINE_STATUS.NAO_COMPARECEU]) {
+    const lista = [sessaoTimbo(dia, '09:00', 132399, { idStatus }), sessaoTimbo(dia, '10:00', 132400), amanha];
+    assert.equal((proximaEm('2026-11-19T12:01:00Z', lista) as { valor: number }).valor, epochTimbo('2026-11-20', '09:00'), String(idStatus));
+  }
+  // desmarcada: ninguém está em sessão às 09:00, a das 09:30 segue valendo
+  const lista = [sessaoTimbo(dia, '09:00', 132399, { idStatus: SPINE_STATUS.DESMARCADO }), sessaoTimbo(dia, '09:30', 132400), amanha];
+  assert.equal((proximaEm('2026-11-19T12:01:00Z', lista) as { valor: number }).valor, epochTimbo(dia, '09:30'));
+});
+
+test('paciente de um tratamento só: depois que a de hoje começou, a próxima segue sendo a da semana seguinte', () => {
+  const unico = [sessaoTimbo('2026-11-19', '09:30', 132400), sessaoTimbo('2026-11-26', '09:30', 132400)];
+  const w = proximaEm('2026-11-19T12:35:00Z', unico);
+  assert.equal((w as { valor: number }).valor, epochTimbo('2026-11-26', '09:30'));
+});

@@ -23,7 +23,8 @@
  *  - próxima = a primeira sessão por vir DO PACIENTE, de qualquer tratamento dele (AGENDADO, CONFIRMADO ou
  *    REMARCADO — a mesma regra de `services/proxima-sessao.ts`). É a única exceção ao "por tratamento": quem
  *    faz dois tratamentos em horários consecutivos (Timbó, 16/11/2026: 9h00 e 9h30) vem UMA vez, e o lembrete
- *    do robô lê esta data — com a do tratamento do cartão, o paciente recebia só o horário de trás.
+ *    do robô lê esta data — com a do tratamento do cartão, o paciente recebia só o horário de trás. Depois que a
+ *    primeira COMEÇA, a seguinte (mesmo dia, até 60 min depois) não vira a próxima: ver `proximaDoPaciente`.
  *  Sessão agendada com data já passada e sem desfecho na franquia não conta em nada: ninguém sabe
  *  se foi atendida, e chutar aqui seria inventar dado.
  *
@@ -32,6 +33,7 @@
 import { SPINE_STATUS, type SpineSchedule, type SpineTreatment } from '../services/spine.service.js';
 import { ehConsulta, normalizar } from './franquia-sync.js';
 import { proximaSessao } from '../services/proxima-sessao.js';
+import { epochDaSessao, filaApos } from './sessoes-encadeadas.js';
 
 export const CAMPOS_SESSOES = {
   PREVISTAS: '# Sessões no histórico',
@@ -139,6 +141,27 @@ const epochDe = (iso: string | null | undefined): number | null => {
 };
 
 /**
+ * A próxima sessão do PACIENTE (qualquer tratamento), sem a que vem colada numa que JÁ COMEÇOU. Às 09:01, com a das
+ * 09:00 em curso, a das 09:30 (mesmo dia, até 60 min depois) não é "a próxima": o paciente já está na clínica e o robô
+ * do Kommo mandaria um 2º lembrete. Vale a primeira sessão que não é seguida de uma começada — a de outro horário ou dia.
+ * Sem o filtro de tratamento e sem o `desde`: sessão por vir não é do ciclo antigo.
+ */
+export function proximaDoPaciente(schedules: SpineSchedule[], agoraEpoch: number) {
+  const doPaciente = schedules.filter(
+    (s) => !ehConsulta(s) && !!s.dateAttendanceUtc && s.idStatus !== SPINE_STATUS.DESMARCADO,
+  );
+  const coladas = new Set<SpineSchedule>();
+  for (const comecada of doPaciente) {
+    if (!(epochDaSessao(comecada) <= agoraEpoch)) continue;
+    for (const s of filaApos(comecada, doPaciente)) coladas.add(s);
+  }
+  return proximaSessao(
+    doPaciente.filter((s) => !coladas.has(s)),
+    agoraEpoch * 1000,
+  );
+}
+
+/**
  * Conta as sessões do tratamento `idTreatment`. Devolve null quando não há NENHUMA sessão dele na
  * lista — caso em que gravar zero seria afirmar que o tratamento não tem sessão, quando talvez só
  * não tenhamos a agenda dele em mãos.
@@ -171,13 +194,7 @@ export function resumirSessoes(
   });
   if (sessoes.length === 0) return null;
 
-  // A próxima olha o paciente inteiro: sem o filtro de tratamento e sem o `desde` (sessão futura não é do ciclo antigo).
-  const proxima = epochDe(
-    proximaSessao(
-      schedules.filter((s) => !ehConsulta(s) && !!s.dateAttendanceUtc),
-      agoraEpoch * 1000,
-    )?.dateAttendanceUtc,
-  );
+  const proxima = epochDe(proximaDoPaciente(schedules, agoraEpoch)?.dateAttendanceUtc);
 
   let realizadas = 0;
   let faltas = 0;

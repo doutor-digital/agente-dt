@@ -60,6 +60,7 @@ import { mensagensOficiais, type MensagemOficial } from '../services/kommo-talks
 import { addMessage } from '../services/conversations.service.js';
 import { nomeApresentavel, vocativo } from './nome-apresentavel.js';
 import { VAI_ACONTECER } from '../services/proxima-sessao.js';
+import { ENCADEADA_ATE_S, filaApos } from './sessoes-encadeadas.js';
 
 export type { TipoLembrete } from './lembrete-chaves.js';
 
@@ -319,42 +320,23 @@ export function comoConsultaReconciliada(s: SpineSchedule): ConsultaReconciliada
   return { idSchedule: s.idSchedule, quando, salvo: quando, estado: 'confirmada', mudou: false, especialista: null, idStatus: s.idStatus };
 }
 
-/** Duas sessões do mesmo dia são "seguidas" quando a de trás começa até isto depois do INÍCIO da da frente. */
-export const ENCADEADA_ATE_S = 60 * 60;
 /** Teto da fila: cada seguida é uma chamada à franquia (e, se ela recusar, um alerta) antes de o Kommo reenviar o webhook. */
 export const MAX_ENCADEADAS = 3;
+export { ENCADEADA_ATE_S };
 
 /**
- * PURA: as sessões do MESMO paciente, no MESMO dia, encadeadas à `escolhido` — cada uma começa até 60 min depois
- * do início da anterior (9h00 → 9h30 → 10h00). Quem faz dois tratamentos em horários consecutivos recebe UM
- * lembrete (o do primeiro horário) e o "Confirmar presença" vale para a fila toda. Só olha para frente: o que veio
- * antes da escolhida não é da conta dela. Desmarcada, atendida e falta nunca entram; avaliação/retorno também não.
- * Quem chama passa só agendamentos DO PACIENTE (a ficha, ou a agenda do dia já filtrada pelo nome da franquia).
+ * PURA: as sessões do MESMO paciente, no MESMO dia, encadeadas à `escolhido` (regra em `sessoes-encadeadas.ts`: cada
+ * uma começa até 60 min depois do início da anterior). Quem faz dois tratamentos em horários consecutivos recebe UM
+ * lembrete (o do primeiro horário) e o "Confirmar presença" vale para a fila toda. Só olha para frente. Só entram as
+ * que ainda vão acontecer (agendada, confirmada, remarcada); avaliação/retorno não.
+ * Quem chama passa só agendamentos DO PACIENTE (a ficha, ou a agenda do dia já filtrada pelo ⚙ idTreatment).
  */
 export function sessoesEncadeadas(escolhido: SpineSchedule, schedules: readonly SpineSchedule[]): SpineSchedule[] {
-  const inicio = epochDoAgendamento(escolhido);
-  if (!Number.isFinite(inicio) || !escolhido.dayLocal) return [];
-  const vistos = new Set<number>(escolhido.idSchedule ? [escolhido.idSchedule] : []);
-  const daFila = schedules
-    .filter((s) => {
-      if (!s.idSchedule || vistos.has(s.idSchedule)) return false;
-      if (s.dayLocal !== escolhido.dayLocal || ehConsulta(s)) return false;
-      if (s.idStatus === null || !VAI_ACONTECER.includes(s.idStatus)) return false;
-      const t = epochDoAgendamento(s);
-      if (!Number.isFinite(t) || t < inicio) return false;
-      vistos.add(s.idSchedule);
-      return true;
-    })
-    .sort((a, b) => epochDoAgendamento(a) - epochDoAgendamento(b));
-  const fila: SpineSchedule[] = [];
-  let anterior = inicio;
-  for (const s of daFila) {
-    const t = epochDoAgendamento(s);
-    if (t - anterior > ENCADEADA_ATE_S || fila.length >= MAX_ENCADEADAS) break;
-    fila.push(s);
-    anterior = t;
-  }
-  return fila;
+  return filaApos(
+    escolhido,
+    schedules.filter((s) => !ehConsulta(s) && s.idStatus !== null && VAI_ACONTECER.includes(s.idStatus)),
+    MAX_ENCADEADAS,
+  );
 }
 
 // ── textos ────────────────────────────────────────────────────────────────────────────────────────
