@@ -10,6 +10,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import type { Unit } from '@prisma/client';
 
@@ -94,4 +96,16 @@ test('a chave nasce desligada na rede toda e liga por unidade (HORA_NO_TURNO_SLU
   assert.equal(automacaoLigada('doutor-hernia-tatui', 'hora-no-turno', ''), false);
   assert.equal(automacaoLigada('doutor-hernia-tatui', 'hora-no-turno', 'doutor-hernia-tatui'), true);
   assert.equal(automacaoLigada('doutor-hernia-salto', 'hora-no-turno', 'doutor-hernia-tatui'), false, 'Salto fica de fora');
+});
+
+// O fio entre a chave e o prompt só existe em código que precisa de banco para rodar (loadComposeInput) e no grafo: confere o texto,
+// como faz robos-automacoes.test.ts. Se alguém tirar um dos dois, a hora some do prompt de Tatuí sem nenhum outro teste ficar vermelho.
+const fonte = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.meta.url)), 'utf8');
+
+test('o fio: a chave HORA_NO_TURNO_SLUGS vira horaNoTurno, e o grafo fixa UMA hora por turno nos dois caminhos', () => {
+  const composer = fonte('./prompt-composer.ts');
+  assert.match(composer, /horaNoTurno: automacaoLigada\(input\.unit\.slug, 'hora-no-turno', process\.env\.HORA_NO_TURNO_SLUGS\)/);
+  const grafo = fonte('./graph.ts');
+  assert.match(grafo, /const agoraDoTurno = new Date\(\);\n\n  const agentNode/, 'fixada fora do nó: ele roda de novo a cada volta de ferramenta');
+  assert.equal(grafo.match(/agora: agoraDoTurno,/g)?.length, 2, 'caminho Anthropic e caminho de texto único');
 });

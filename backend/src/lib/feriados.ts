@@ -12,6 +12,8 @@
  * que a recepção marca na agenda da franquia (agenda_blocks).
  */
 
+import { FUSO_PADRAO, fusoValido } from './fuso.js';
+
 export interface Feriado {
   data: string; // YYYY-MM-DD
   nome: string;
@@ -178,14 +180,8 @@ Regras:
  * America/Sao_Paulo, como o resto do prompt.
  */
 export function renderAgoraDoTurno(now: Date, tz: string): string {
-  let fuso = tz;
-  let hm: string;
-  try {
-    hm = new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
-  } catch {
-    fuso = 'America/Sao_Paulo';
-    hm = new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
-  }
+  const fuso = fusoValido(tz) ? tz : FUSO_PADRAO;
+  const hm = new Intl.DateTimeFormat('pt-BR', { timeZone: fuso, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
   const iso = dataLocalISO(now, fuso);
   const [, m, d] = iso.split('-');
   return `Agora: ${diaDaSemana(iso)} ${d}/${m}, ${hm} (horário da clínica).`;

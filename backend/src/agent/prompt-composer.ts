@@ -2761,7 +2761,9 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (lessonsBlock) porUnidade.push(lessonsBlock);
 
   const dynamic: string[] = [];
-  // A hora do turno: primeiro, porque é o dado mais bruto; o resto do bloco já muda por turno, então não custa cache.
+  // A hora do turno. Fica FORA do prefixo cacheado (1 h), então o cache grande não se perde; o que muda a cada minuto é este bloco, e
+  // com ele o cache da CONVERSA (as mensagens depois do sistema, `cache-conversa`) só acerta dentro do mesmo minuto — custo pequeno
+  // (a conversa de Tatuí é curta) e só de quem ligou `hora-no-turno`.
   const agoraBlock = renderAgoraNoTurno(input);
   if (agoraBlock) dynamic.push(agoraBlock);
   // Depende da fala DESTE turno, então é dinâmico de verdade: não pode entrar no bloco
