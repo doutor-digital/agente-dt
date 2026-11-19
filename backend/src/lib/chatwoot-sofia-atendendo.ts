@@ -73,6 +73,8 @@ export async function comecarAtendimento(
   let c = await p.conversa(conversa);
   if (!c) return { comeco: 'sem-conversa', abriu: false };
   let abriu = false;
+  // DECISÃO DO JOÃO (19/11): TODO lead novo aparece em «Abertas» — inclusive o que a Sofia não vai atender (cartão no Kommo, sem telefone, pausa):
+  // esses a equipe precisa ver ainda mais, e a rodada abriria a conversa de qualquer jeito ao desistir. O critério só decide a ETIQUETA.
   if (c.status === 'pending') {
     try {
       await p.abrir(conversa);
