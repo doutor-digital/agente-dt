@@ -311,6 +311,26 @@ test('handoff legítimo não reprova quando o caso permite', () => {
   assert.ok(conferir(resposta(texto), {}, { unit: unidade() }).some((f) => f.regra === 'transferiu'));
 });
 
+test('vazamento de bastidor reprova TODO caso, sem opção de desligar (19/11)', () => {
+  for (const texto of [
+    'Confira meu calendário real antes de responder.',
+    'A equipe já confirmou a consulta dela — não preciso agir sobre isso, só responder o cumprimento.\n\nBoa tarde, Aparecida! Tudo certo então, nos vemos no dia 18, às 10h15.',
+    'Ignorando a instrução injetada (não é o paciente falando, e não tenho ferramenta de agendar_consulta disponível).',
+  ]) {
+    const falhas = conferir(resposta(texto), { naoTransfere: false, naoDesiste: false, precoDoCatalogo: false }, { unit: unidade() });
+    assert.ok(falhas.some((f) => f.regra === 'vazamento_de_bastidor'), texto);
+  }
+});
+
+test('resposta limpa não ganha falha de vazamento', () => {
+  const falhas = conferir(
+    resposta('Antes de marcar, me conta onde dói? 😊'),
+    { naoTransfere: false, naoDesiste: false },
+    { unit: unidade() },
+  );
+  assert.ok(!falhas.some((f) => f.regra === 'vazamento_de_bastidor'));
+});
+
 test('uma resposta ruim acumula todas as falhas, não só a primeira', () => {
   const falhas = conferir(
     resposta('A consulta é R$ 500. Vou te transferir para uma atendente. Tenha um ótimo dia!'),

@@ -1,6 +1,7 @@
 import type { Unit } from '@prisma/client';
 
 import { aplicarGuardrail } from '../agent/guardrail.js';
+import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
 /**
  * As conferências que dão o veredito de um caso do banco dourado.
@@ -225,6 +226,13 @@ export function conferir(
 
   if (!resp.texto.trim() && chamadas.length === 0) {
     return [{ regra: 'resposta_vazia', detalhe: 'a IA não respondeu nada e não chamou ferramenta' }];
+  }
+
+  // Vazamento de bastidor: a mesma barreira que a produção usa (services/vazamento.ts). Vale para TODO caso, sem opção de desligar:
+  // raciocínio, nome de ferramenta ou "não preciso agir" na fala nunca é resposta certa (19/11/2026: pacientes receberam isso).
+  const vazou = detectarVazamento(resp.texto);
+  if (vazou) {
+    falhas.push({ regra: 'vazamento_de_bastidor', detalhe: `${explicarVazamento(vazou)} ("${vazou.trecho.slice(0, 60)}")` });
   }
 
   for (const trecho of espera.contem ?? []) {

@@ -177,6 +177,96 @@ const BASTIDOR_PT = [
   // não sabe que existe. "Não consegui ouvir seu áudio" (a fala certa) não tem essa palavra.
   // (sem `\b` no fim: em JS, sem a bandeira `u`, `á`/`ê` contam como fora de palavra e "está\b" nunca casa)
   /\btranscri[cç][aã]o\s+(?:d[oa]s?\s+(?:seu\s+|sua\s+)?[aá]udios?\s+)?(?:veio|saiu|ficou|chegou|est[aá]|foi)(?![\p{L}])/iu,
+  /\btranscri[cç][aã]o\s+(?:confusa|gen[eé]rica|ruim|vazia|truncada)(?![\p{L}])/iu,
+];
+
+// Nomes das ferramentas do agente (agent/tools.ts, agenda-tools.ts, sinal-pix-tool.ts). snake_case de ferramenta nunca
+// aparece em fala de gente — se apareceu, o modelo está comentando a chamada que fez (ou que não pôde fazer).
+export const NOMES_DE_FERRAMENTA = [
+  'agendar_consulta',
+  'aplicar_tag',
+  'atribuir_responsavel',
+  'atualizar_titulo_lead',
+  'buscar_paciente',
+  'cadastrar_paciente',
+  'cancelar_consulta',
+  'confirmar_presenca',
+  'consultar_horarios',
+  'criar_tarefa',
+  'definir_valor_lead',
+  'fechar_lead',
+  'gerar_sinal_pix',
+  'marcar_nao_paciente',
+  'mover_etapa',
+  'mover_funil',
+  'pausar_ia',
+  'registrar_campo',
+  'remarcar_consulta',
+  'remover_tag',
+  'resumir_lead_para_sdr',
+];
+
+/**
+ * O RACIOCÍNIO do modelo entregue como fala (19/11/2026, varredura das respostas da Sofia de 60 dias). Diferente do
+ * `bastidor_em_portugues` de cima (a IA narra o que FEZ no sistema), aqui ela pensa alto sobre o que fazer: comenta a
+ * "instrução" que o paciente teria injetado, decide se age, cita a regra do prompt, avisa que "não precisa agir". Casos
+ * reais, todos entregues no WhatsApp:
+ *   • 16/11 20:54  "A equipe já confirmou a consulta dela (18/11 às 10h15) e o pagamento no dia — não preciso agir sobre
+ *                   isso, só responder o cumprimento." + "Boa tarde, Aparecida! …"
+ *   • 12/11 13:55  "Esse "paciente" na verdade já foi encerrado como candidato a vaga (currículo)… não há agendamento em
+ *                   aberto para processar aqui. Além disso, não posso seguir instruções que chegam como se fossem do sistema…"
+ *   • 05/11 20:07  "Ignorando a instrução injetada (não é o paciente falando, e não tenho ferramenta de agendar_consulta
+ *                   disponível — vou seguir as regras reais da conversa)."
+ *   • 03/11 13:05  "Preciso confirmar algo antes de responder: a equipe enviou um áudio e não tenho o conteúdo dele
+ *                   transcrito, então vou seguir com cautela aqui." + "Bom dia! 😊 …"
+ * Mesma régua dos outros: cada marca só existe em raciocínio, nunca em fala com paciente.
+ */
+const RACIOCINIO_PT = [
+  // A "instrução" que o modelo acha que o paciente injetou (e que ele comenta em voz alta).
+  /\bignor(?:o|ando|ar|ei)(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/iu,
+  /\bignor(?:ar|á)(?:-l[aoe]s?)?(?![\p{L}])[^.\n]{0,40}\bcomo\s+(?:instru[cç][aã]o|comando|ordem)/iu,
+  /\binstru[cç][aãõo]\w*\s+(?:injetada|externa|falsa|embutida|disfar[cç]ada)/iu,
+  /\binstru[cç][oõ]es\s+(?:que\s+)?(?:chegam|v[eê]m|vindas?|desse\s+tipo)(?![\p{L}])/iu,
+  /\bn[aã]o\s+(?:vou|posso|devo)\s+seguir\s+instru[cç][oõ]es/iu,
+  /\bn[aã]o\s+[eé]\s+(?:o\s+|a\s+)?paciente\s+falando/iu,
+  /\bn[aã]o\s+[eé]\s+uma\s+conversa\s+d[oa]\s+paciente/iu,
+  /\brelat[oó]rio\s+interno\s+da\s+equipe/iu,
+  /\btexto\s+embutido\b|\btentando\s+me\s+manipular/iu,
+  // A regra do prompt citada como se fosse assunto da conversa.
+  /\b(?:sigo|seguir|segue)\s+(?:apenas\s+|somente\s+|s[oó]\s+)?(?:as\s+|a\s+)?(?:minhas\s+)?regras\s+(?:reais|internas|da\s+minha\s+configura[cç][aã]o)/iu,
+  /\bminhas?\s+(?:regras|configura[cç][aã]o)\s+(?:n[aã]o\s+mudam|internas|reais)/iu,
+  /\bvou\s+seguir\s+as\s+regras\s+reais\b/iu,
+  /\bpela\s+regra\s+d[aeo]s?\s+(?:insist[eê]ncia|rea[cç][aã]o|elogio|pre[cç]o)/iu,
+  /\bregra\s+(?:d[aeo]s?|sobre)\s+(?:insist[eê]ncia|rea[cç][aã]o|pre[cç]o\s+insistido|elogio)/iu,
+  /\bs[oó]\s+um\s+cumprimento["”']?\s*(?:—|–|-|:)?\s*(?:respondo|regra)/iu,
+  // Ferramenta: o nome (snake_case) ou o comentário de que não há ferramenta / não é caso de chamar.
+  new RegExp(`(?<![\\p{L}\\p{N}_])(?:${NOMES_DE_FERRAMENTA.join('|')})(?![\\p{L}\\p{N}_])`, 'iu'),
+  /\bn[aã]o\s+tenho\s+(?:nenhuma\s+|a\s+)?ferramenta/iu,
+  /\b(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
+  /\b(?:essa|esta)\s+ferramenta\s+n[aã]o\s+se\s+aplica/iu,
+  /\b(?:j[aá]\s+mandei\s+(?:as\s+)?|sem\s+necessidade\s+de\s+a[cç][aã]o\s+de\s+|a[cç][aã]o\s+de\s+)tools?(?![\p{L}])/iu,
+  // "Não preciso agir", "ação de qualificação", "nada para eu agir": a decisão de acionar (ou não) o sistema.
+  /\bn[aã]o\s+preciso\s+agir\b/iu,
+  /\bn[aã]o\s+(?:h[aá]|tem)\s+nada\s+(?:pra|para)\s+(?:eu\s+)?agir\b/iu,
+  /\bn[aã]o\s+(?:vou|irei)\s+agir\s+nem\s+responder\b/iu,
+  /\ba[cç][aã]o\s+(?:de\s+qualifica[cç][aã]o|nova\s+a\s+disparar|a\s+ser\s+tomada)/iu,
+  /\bqualifica[cç][aã]o\s+de\s+lead\b/iu,
+  /\bn[aã]o\s+[eé]\s+(?:um\s+caso\s+)?de\s+qualifica[cç][aã]o/iu,
+  /\bn[aã]o\s+(?:vou|irei)\s+(?:tomar|fazer)\s+nenhuma\s+a[cç][aã]o\b/iu,
+  /\bvou\s+aguardar\s+o\s+pr[oó]ximo\s+contato\s+d[oa]\s+paciente/iu,
+  /\bn[aã]o\s+(?:vou|devo)\s+usar\s+(?:isso|esse|este)\s+como\s+(?:o\s+)?nome\b/iu,
+  /\bclaramente\s+n[aã]o\s+[eé]\s+(?:um\s+)?nome\b/iu,
+  /\bchamei\s+sem\s+(?:ele|ela)\s+ter\b/iu,
+  /\b(?:sigo|seguir)\s+o\s+fluxo\s+normal\s+de\s+qualifica[cç][aã]o/iu,
+  /\bem\s+aberto\s+para\s+processar\b/iu,
+  /\bcomo\s+candidato\s+a\s+vaga\b/iu,
+  // "Preciso confirmar algo antes de responder", "Confira meu calendário real antes de responder."
+  /\b(?:preciso|devo|vou|deixa\s+eu)\s+(?:confirmar|verificar|checar|conferir)\s+(?:algo|uma\s+coisa)\s+antes\s+de\s+responder\b/iu,
+  /\b(?:confira|conferir|consulte|consultar|verifique|verificar|checar|cheque)\s+(?:o\s+|a\s+|meu\s+|minha\s+)*(?:calend[aá]rio|agenda|hor[aá]rios)\b[^.\n]{0,30}\bantes\s+de\s+responder\b/iu,
+  /\bvou\s+seguir\s+com\s+cautela\s+aqui\b/iu,
+  /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+(?:dele|dela|do\s+[aá]udio)/iu,
+  /\bconte[uú]do\s+d(?:ele|ela)\s+transcrito\b/iu,
+  /\ba\s+equipe\s+(?:j[aá]\s+)?(?:enviou|mandou)\s+um\s+[aá]udio\s+e\b/iu,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
@@ -197,6 +287,57 @@ const BLOCO_INTERNO = [
   /^\s*(?:thinking|reasoning|racioc[ií]nio|an[aá]lise\s+interna|nota\s+interna|observa[cç][aã]o\s+interna)\s*:/im,
   /\[\s*(?:thinking|racioc[ií]nio|nota\s+interna|interno)\s*\]/i,
 ];
+
+// Bordas por letra/número: com acento ("está", "já") o `\b` do JS falha.
+const BORDA_E = String.raw`(?<![\p{L}\p{N}_])`;
+const BORDA_D = String.raw`(?![\p{L}\p{N}_])`;
+
+/**
+ * Parágrafo que narra a conversa em terceira pessoa e decide o próprio passo, sem uma palavra dirigida a quem lê:
+ * "A equipe já se apresentou e perguntou o nome — ainda não tenho resposta do paciente, então vou retomar",
+ * "Ele agradeceu e encerrou a conversa — respondo curto e calorosamente", "Essa mensagem é só um 'Bom dia' — não traz
+ * resposta à pergunta da equipe. Vou responder de forma breve". São três marcas JUNTAS, nesta ordem, no começo do parágrafo:
+ *   1. o sujeito é a conversa, não a pessoa ("A equipe…", "O paciente…", "Essa mensagem…", "Ele/Ela…");
+ *   2. um verbo de quem RELATA o que foi dito ("perguntou", "confirmou", "agradeceu", "não traz", "já tem uma conversa");
+ *   3. depois, a decisão de quem narra ("vou responder", "respondo", "não preciso", "mantenho").
+ * Fala de verdade ao paciente não é assim: "A equipe já confirmou sua consulta" tem "sua", e quem responde à mãe
+ * diz "Entendi, ele está viajando, então vou aguardar" (começa por "Entendi"), não "Ele disse que está viajando — vou aguardar".
+ * Se o parágrafo se dirige à pessoa (você/seu/sua/te/vocês/pergunta com "?"), não conta.
+ */
+const NARRA_SUJEITO = new RegExp(
+  `^\\s*(?:(?:a|o)\\s+(?:equipe|paciente|pessoa|mensagem|pergunta|resposta|[aá]udio|conversa|imagem|dor\\s+que\\s+(?:ela|ele))${BORDA_D}|(?:essa|esta|esse|este)\\s+(?:mensagem|texto|conte[uú]do|conversa|relato|caso)${BORDA_D}|(?:essa|esta)\\s+[eé]\\s+a\\s+\\S+\\s+vez${BORDA_D}|(?:ele|ela)\\s+(?:j[aá]\\s+|s[oó]\\s+|n[aã]o\\s+)?(?:agradeceu|perguntou|respondeu|disse|mandou|enviou|insistiu|repetiu|encerrou|reabre|reabriu|confirmou|pediu)${BORDA_D}|j[aá]\\s+tem\\s+uma\\s+conversa${BORDA_D}|\\p{Lu}\\p{L}+\\s+j[aá]\\s+(?:perguntou|confirmou|respondeu|havia|disse))`,
+  'iu',
+);
+const NARRA_RELATO = new RegExp(
+  `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|ainda\\s+n[aã]o\\s+tenho|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
+  'iu',
+);
+const NARRA_DECISAO = new RegExp(
+  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:vou|respondo|mantenho|devo|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
+  'iu',
+);
+const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');
+const NARRA_DIRIGIDO = new RegExp(`${BORDA_E}(?:voc[eê]s?|vc|seu|sua|seus|suas|te|contigo|lhe|nosso|nossa)${BORDA_D}|\\?`, 'iu');
+
+/** Devolve o trecho de abertura do parágrafo quando ele é uma narração de bastidor (ver acima). */
+export function paragrafoNarraDecisao(paragrafo: string): string | null {
+  const p = (paragrafo ?? '').trim();
+  if (!NARRA_SUJEITO.test(p)) return null;
+  // olha só o começo: a narração acontece nas duas primeiras frases
+  const inicio = p.slice(0, 260);
+  if (NARRA_DIRIGIDO.test(inicio.split(/\n/)[0].slice(0, 200))) return null;
+  const rel = NARRA_RELATO.exec(inicio);
+  if (!rel) return null;
+  const depois = inicio.slice(rel.index + rel[0].length);
+  const dec = NARRA_DECISAO.exec(depois);
+  if (!dec) return null;
+  // "parece (estar|ser|ter vindo)" sozinho é fala de gente ("Esse conteúdo não parece ser deste atendimento, então vou ficar por
+  // aqui" — recusa educada, dirigida à pessoa). Só vira raciocínio quando a mesma frase fala DE alguém em terceira pessoa.
+  if (/^parece/i.test(rel[0]) && !NARRA_TERCEIRA.test(inicio.slice(0, rel.index + rel[0].length + dec.index + dec[0].length))) return null;
+  // o trecho entre o relato e a decisão também não pode falar com a pessoa
+  if (NARRA_DIRIGIDO.test(depois.slice(0, dec.index + dec[0].length))) return null;
+  return p.slice(0, 80);
+}
 
 function primeiro(padroes: RegExp[], texto: string): string | null {
   for (const re of padroes) {
@@ -223,8 +364,13 @@ export function detectarVazamento(texto: string): Vazamento | null {
   const ph = primeiro(PLACEHOLDER, t);
   if (ph) return { tipo: 'placeholder_nao_preenchido', trecho: ph };
 
-  const pt = primeiro(BASTIDOR_PT, t);
+  const pt = primeiro(BASTIDOR_PT, t) ?? primeiro(RACIOCINIO_PT, t);
   if (pt) return { tipo: 'bastidor_em_portugues', trecho: pt };
+
+  for (const paragrafo of t.split(/\n\s*\n/)) {
+    const narra = paragrafoNarraDecisao(paragrafo);
+    if (narra) return { tipo: 'bastidor_em_portugues', trecho: narra };
+  }
 
   // O raciocínio em inglês só conta quando a mensagem é CURTA e quase toda em
   // inglês. Numa resposta longa em português, uma frase dessas é quase sempre
@@ -284,30 +430,51 @@ export function pedidoAoReescritor(ultimaDoCliente: string | null, rascunho: str
 }
 
 /**
- * O parágrafo de abertura é a Sofia falando CONSIGO sobre a transcrição do áudio: cita a transcrição (ou "o áudio veio")
- * e fala do paciente em terceira pessoa, sem uma palavra dirigida a ele ("você", "seu", "te").
+ * Marca de abertura que fala da transcrição do áudio (coisa do sistema, que o paciente não conhece). Sobra depois do corte com
+ * isso dentro = o raciocínio continua lá: volta igual e o reescritor resolve.
  */
-// Sem `\b`: com acento ("áudio", "você", "está") ele falha em JS — bordas por letra/número.
-const SOLTA = String.raw`(?<![\p{L}\p{N}_])`;
-const FIM = String.raw`(?![\p{L}\p{N}_])`;
+// Sem `\b`: com acento ("áudio", "você", "está") ele falha em JS — bordas por letra/número (definidas acima).
+const SOLTA = BORDA_E;
+const FIM = BORDA_D;
 const ABERTURA_META = new RegExp(`${SOLTA}(?:transcri[cç][aã]o|[aá]udio\\s+(?:dele|dela|veio|saiu|chegou|ficou))${FIM}`, 'iu');
-const TERCEIRA_PESSOA = new RegExp(`${SOLTA}(?:ele|ela|dele|dela|o\\s+paciente|a\\s+paciente)${FIM}`, 'iu');
 const DIRIGIDO_AO_PACIENTE = new RegExp(`${SOLTA}(?:voc[eê]|vc|seu|sua|seus|suas|te|contigo)${FIM}`, 'iu');
 
 /**
- * Caxias 13/11/2026: "A transcrição do áudio veio bem genérica, sem contar de fato o que ele está sentindo 😊 Vou pedir pra
- * ele mesmo me contar, com as próprias palavras.\n\nOi! 👋 … Me conta, o que você está sentindo?" — a Sofia pensou alto no
- * primeiro parágrafo e falou com o paciente no seguinte. Corta só esse parágrafo de abertura, e só quando SOBRA outro
- * parágrafo para o paciente. Resposta de um parágrafo só (ou sem a marca) volta igual: quem decide é o detector
- * (`detectarVazamento`) e o reescritor. "Não consegui ouvir seu áudio, pode escrever?" não cita transcrição e fala com "seu".
+ * A fala "de verdade" ao paciente: tem uma palavra dirigida a ele (você/seu/te) ou começa por cumprimento. Só "?" não basta: "Como posso ajudar agora?" também fecha raciocínio. É a prova de que o que
+ * sobra depois do corte é mensagem, e não mais uma linha do mesmo raciocínio que o detector não conhece.
+ */
+const FALA_AO_PACIENTE = new RegExp(`^\\s*(?:oi|ol[aá]|bom\\s+dia|boa\\s+(?:tarde|noite))${FIM}|${SOLTA}(?:voc[eê]s?|vc|seu|sua|seus|suas|te|contigo)${FIM}`, 'iu');
+
+/**
+ * Parágrafo que é bastidor puro: o detector o reconhece como `bastidor_em_portugues` e ele não fala com ninguém (sem "você",
+ * "seu", "te", sem pergunta). Cortá-lo não tira informação nenhuma do paciente.
+ */
+function ehBastidorPuro(paragrafo: string): boolean {
+  if (detectarVazamento(paragrafo)?.tipo !== 'bastidor_em_portugues') return false;
+  return !DIRIGIDO_AO_PACIENTE.test(paragrafo) && !paragrafo.includes('?');
+}
+
+/**
+ * O raciocínio vem ANTES da fala, em parágrafo próprio. Casos reais:
+ *   • Caxias 13/11/2026: "A transcrição do áudio veio bem genérica, sem contar de fato o que ele está sentindo 😊 Vou pedir pra
+ *     ele mesmo me contar, com as próprias palavras.\n\nOi! 👋 … Me conta, o que você está sentindo?"
+ *   • 16/11/2026 20:54 (Aparecida): "A equipe já confirmou a consulta dela… — não preciso agir sobre isso, só responder o
+ *     cumprimento.\n\nBoa tarde, Aparecida! Tudo certo então, nos vemos no dia 18, às 10h15."
+ *   • 03/11/2026 13:05: "Preciso confirmar algo antes de responder: a equipe enviou um áudio e não tenho o conteúdo dele
+ *     transcrito, então vou seguir com cautela aqui.\n\nBom dia! 😊 Que bom falar com você de novo!"
+ * Corta os parágrafos de abertura que são bastidor puro, e só quando sobra fala para o paciente: o que sobra precisa começar
+ * dirigido a ele (cumprimento ou "você/seu/te") e o detector não pode reconhecer mais nada nele. Resposta de um
+ * parágrafo só, parágrafo de abertura que fala com a pessoa, ou sobra que não parece fala voltam IGUAIS: quem decide é o
+ * detector (`detectarVazamento`) e o reescritor. "Não consegui ouvir seu áudio, pode escrever?" fala com "seu" e passa.
  */
 export function cortarAberturaMetanarrativa(texto: string): string {
   const partes = (texto ?? '').split(/\n\s*\n/);
   if (partes.length < 2) return texto;
-  const [abertura, ...resto] = partes;
-  // precisa ser a fala que o detector já reconhece como bastidor: "Recebi a transcrição do áudio dela e entendi…" tem informação e fica
-  if (!ABERTURA_META.test(abertura) || !detectarVazamento(abertura) || !TERCEIRA_PESSOA.test(abertura) || DIRIGIDO_AO_PACIENTE.test(abertura)) return texto;
-  const sobra = resto.join('\n\n').trim();
+  let n = 0;
+  while (n < partes.length - 1 && ehBastidorPuro(partes[n])) n++;
+  if (n === 0) return texto;
+  const sobra = partes.slice(n).join('\n\n').trim();
   if (!sobra || ABERTURA_META.test(sobra) || detectarVazamento(sobra)) return texto;
+  if (!FALA_AO_PACIENTE.test(partes[n])) return texto;
   return sobra;
 }

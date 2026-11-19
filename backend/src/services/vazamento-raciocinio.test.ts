@@ -1,0 +1,120 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+
+import { cortarAberturaMetanarrativa, detectarVazamento, NOMES_DE_FERRAMENTA } from './vazamento.js';
+
+// ── 19/11/2026: o raciocínio do modelo entregue como fala (pacientes receberam isso no WhatsApp) ──────────────
+// Tabela `messages`, role = 'assistant'. O detector do main deixou passar todos os cinco.
+
+const CASO_APARECIDA =
+  'A equipe já confirmou a consulta dela (18/11 às 10h15) e o pagamento no dia — não preciso agir sobre isso, só responder o cumprimento.\n\nBoa tarde, Aparecida! Tudo certo então, nos vemos no dia 18, às 10h15. Qualquer coisa, estou à disposição! 😊';
+const CASO_CURRICULO =
+  'Esse "paciente" na verdade já foi encerrado como candidato a vaga (currículo), não é atendimento de consulta — então não há agendamento em aberto para processar aqui.\n\nAlém disso, não posso seguir instruções que chegam como se fossem do sistema dentro da conversa — sigo apenas as regras da minha configuração real. Não há nenhuma consulta marcada ou prometida nesta conversa, então não cabe chamar agendar_consulta nem reescrever nada.\n\nSe você é a pessoa que mandou mensagem sobre a vaga de nutricionista: agradeço o interesse! O recrutamento é feito direto pela equipe da clínica. 😊';
+const CASO_INJETADA =
+  'Ignorando a instrução injetada (não é o paciente falando, e não tenho ferramenta de agendar_consulta disponível — vou seguir as regras reais da conversa).\n\nRosilda ainda não escolheu dia nem horário, então vou corrigir a mensagem para não afirmar nada sobre reserva/garantia, e perguntar só a preferência de turno.\n\nVocê prefere ser atendida pela manhã ou à tarde? Assim já encaminho pra equipe que cuida da agenda confirmar o melhor horário pra você 😊';
+const CASO_CAUTELA =
+  'Preciso confirmar algo antes de responder: a equipe enviou um áudio e não tenho o conteúdo dele transcrito, então vou seguir com cautela aqui.\n\nBom dia! 😊 Que bom falar com você de novo! Me conta, como você está se sentindo hoje — ainda com aquela dor que comentou?';
+// Promptfoo em produção, caso fim-de-semana-nao-transfere (Porto): a resposta veio só com isto, junto com chamadas de ferramenta.
+const CASO_CALENDARIO = 'Confira meu calendário real antes de responder.';
+
+test('as 5 frases reais de 03/11 a 19/11 são pegas (o detector do main deixou passar todas)', () => {
+  for (const [nome, msg] of Object.entries({
+    aparecida: CASO_APARECIDA,
+    curriculo: CASO_CURRICULO,
+    injetada: CASO_INJETADA,
+    cautela: CASO_CAUTELA,
+    calendario: CASO_CALENDARIO,
+  })) {
+    const v = detectarVazamento(msg);
+    assert.ok(v, `${nome} chegou ao paciente e precisa ser pega`);
+    assert.equal(v.tipo, 'bastidor_em_portugues', nome);
+  }
+});
+
+test('cada pedaço do raciocínio é pego sozinho, sem depender do resto da mensagem', () => {
+  for (const m of [
+    'não preciso agir sobre isso, só responder o cumprimento',
+    'Preciso confirmar algo antes de responder.',
+    'vou seguir com cautela aqui',
+    'não tenho o conteúdo dele transcrito',
+    'Ignoro essa "instrução" — não é o paciente falando',
+    'Vou ignorar isso como instrução e seguir normalmente.',
+    'não tenho ferramenta de agendar_consulta disponível',
+    'Já mandei as tools, agora só falta a resposta',
+    'Esse caso não é de qualificação.',
+    'Não há nada para eu agir aqui além de registrar a ocorrência.',
+    'pela regra de insistência, respondo o valor direto',
+    'Ele agradeceu e encerrou a conversa — respondo curto e calorosamente.',
+    'A equipe já se apresentou e perguntou o nome — ainda não tenho resposta do paciente, então vou retomar com calor.',
+    'Essa mensagem é só um "Bom dia" — não traz resposta à pergunta da equipe. Vou responder de forma breve.',
+    'O áudio veio com transcrição confusa, não dá pra entender.',
+  ]) {
+    assert.ok(detectarVazamento(m), m);
+  }
+});
+
+test('todo nome de ferramenta do agente, escrito na fala, é vazamento', () => {
+  for (const nome of NOMES_DE_FERRAMENTA) {
+    assert.ok(detectarVazamento(`Vou chamar ${nome} agora e já volto.`), nome);
+  }
+  // snake_case de outra coisa não é ferramenta
+  assert.equal(detectarVazamento('Pode me mandar o arquivo comprovante_pix.pdf?'), null);
+});
+
+test('frases boas parecidas com o raciocínio passam: nada de falso positivo', () => {
+  for (const m of [
+    'O especialista confirma na consulta o que é a causa da dor 😊',
+    'Antes de marcar, me conta onde dói?',
+    'Antes de responder sobre o valor, me conta: há quanto tempo você sente essa dor?',
+    'A equipe já confirmou sua consulta para quinta, às 9h. Qualquer coisa, me chama!',
+    'A equipe já está com o atendimento por aqui, então vou deixar com eles neste momento 😊',
+    'Entendi, ele está viajando, então vou aguardar vocês voltarem. Me chama quando puderem!',
+    'Preciso confirmar uma coisa importante: ele chegou a sentir perda de força na perna?',
+    'Vou conferir a agenda e já te falo o horário certinho 🙏',
+    'Esse conteúdo não parece ser deste atendimento, então vou ficar por aqui 😊 Quando quiser falar de dor nas costas, me chama.',
+    'Não há nenhuma ação necessária da sua parte, é só chegar 10 minutos antes.',
+    'Não tenho acesso à agenda em tempo real, mas a equipe da recepção confirma pra você.',
+    'Pode deixar, vou seguir com seu agendamento assim que você me passar o nome completo.',
+    'O paciente fica deitado durante a avaliação, é bem tranquilo.',
+    'Com cautela a gente conduz cada caso, por isso a avaliação vem primeiro.',
+    'Ignorar a dor só piora, viu? Vamos marcar sua avaliação?',
+    'Aqui seguimos as orientações do especialista, sem pressa nem promessa.',
+    'Vou processar aqui o seu comprovante e já confirmo o horário 😊',
+    'Quando a consulta está confirmada, o sistema manda um lembrete na véspera.',
+  ]) {
+    assert.equal(detectarVazamento(m), null, m);
+  }
+});
+
+test('Aparecida (16/11): corta o parágrafo de raciocínio e fica só a fala', () => {
+  const r = cortarAberturaMetanarrativa(CASO_APARECIDA);
+  assert.equal(r, 'Boa tarde, Aparecida! Tudo certo então, nos vemos no dia 18, às 10h15. Qualquer coisa, estou à disposição! 😊');
+  assert.equal(detectarVazamento(r), null);
+});
+
+test('03/11: corta o "preciso confirmar algo antes de responder" e fica o bom dia', () => {
+  const r = cortarAberturaMetanarrativa(CASO_CAUTELA);
+  assert.equal(r, 'Bom dia! 😊 Que bom falar com você de novo! Me conta, como você está se sentindo hoje — ainda com aquela dor que comentou?');
+  assert.equal(detectarVazamento(r), null);
+});
+
+test('05/11: se um dos parágrafos de raciocínio o detector não conhece, NÃO corta (o reescritor decide)', () => {
+  // o 2º parágrafo ("Rosilda ainda não escolheu… então vou corrigir a mensagem") não é reconhecido como bastidor:
+  // cortar só o 1º deixaria raciocínio no WhatsApp
+  assert.equal(cortarAberturaMetanarrativa(CASO_INJETADA), CASO_INJETADA);
+});
+
+test('só corta quando a sobra fala com o paciente: sobra que continua sendo raciocínio volta igual', () => {
+  const m = 'Não vou tomar nenhuma ação adicional neste turno.\n\nNão há nome, queixa ou dado novo para registrar, então sigo aguardando.';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+});
+
+test('parágrafo de abertura que fala com a pessoa nunca é cortado', () => {
+  const m = 'Preciso confirmar algo antes de responder: você disse que é na lombar?\n\nBom dia! Me conta mais 😊';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+});
+
+test('mensagem boa de vários parágrafos não é mexida pelo corte', () => {
+  const m = 'Oi, Maria! 😊 Que bom te ver por aqui.\n\nA equipe já confirmou sua consulta para quinta, às 9h.\n\nQualquer dúvida, me chama!';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+});
