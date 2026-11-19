@@ -121,6 +121,9 @@ function portas(
   const sofias: Array<{ falas: Fala[]; modo: string }> = [];
   const kommo: string[] = [];
   const equipe: Array<{ conversa: number; motivo: string }> = [];
+  /** conversas de que a etiqueta «Sofia atendendo» foi tirada / em que foi posta */
+  const encerradas: number[] = [];
+  const comecadas: number[] = [];
   let leituras = 0;
   let lidas = 0;
   const p: PortasDaIa = {
@@ -161,8 +164,12 @@ function portas(
       (t as { cancelado: boolean }).cancelado = true;
     },
     hoje: () => '2026-11-12',
+    comecarAtendimento: async (conversa, criterio) => {
+      if (!criterio || (await criterio(lidaPadrao(o.lida ?? {})))) comecadas.push(conversa);
+    },
+    encerrarAtendimento: async (conversa) => void encerradas.push(conversa),
   };
-  return { p, notas, publicas, agendados, sofias, kommo, equipe };
+  return { p, notas, publicas, agendados, sofias, kommo, equipe, encerradas, comecadas };
 }
 
 const M = { conversa: 12, caixa: 2, slug: 'doutor-hernia-parauapebas', audios: [] as string[] };
@@ -568,4 +575,85 @@ test('ROBÔ ligado: unidade com a Sofia desligada também abre a conversa', asyn
   a.p.abrirParaEquipe = async (c) => { abertas.push(c); };
   await aoChegar(M, a.p, novaMemoriaDaIa());
   assert.deepEqual(abertas, [12]);
+});
+
+// ── «Sofia atendendo» (chatwoot-sofia-atendendo.ts): quando a etiqueta sai e quando entra ──────────────────────
+
+test('etiqueta sofia-atendendo: LIGADO põe na 1ª mensagem (antes dos 60 s); SECO e DESLIGADO não põem', async () => {
+  for (const [estado, esperado] of [['ligado', [12]], ['seco', []], ['desligado', []]] as const) {
+    const a = portas({ estado });
+    await aoChegar(M, a.p, novaMemoriaDaIa());
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(a.comecadas, esperado, estado);
+  }
+});
+
+test('etiqueta sofia-atendendo: sai quando a Sofia NÃO responde e não vai tentar de novo (Kommo, calada, falhou, sem telefone, teto, horário divergente)', async () => {
+  const casos: Array<[string, Parameters<typeof portas>[0], string]> = [
+    ['cartão no Kommo', { estado: 'ligado', cartao: { leadId: 1 } }, 'cartao-no-kommo'],
+    ['Kommo fora do ar', { estado: 'ligado', cartao: 'lanca' }, 'kommo-indisponivel'],
+    ['pausada pela equipe', { estado: 'ligado', lida: { etiquetas: ['ia-pausada'] } }, 'calada'],
+    ['sem telefone', { estado: 'ligado', lida: { telefone: null } }, 'sem-telefone'],
+    ['modelo sem texto', { estado: 'ligado', sofia: { resposta: '' } }, 'sem-texto'],
+    ['a equipe já respondeu (a pausa pode ter falhado)', { estado: 'ligado', mensagens: [msg(0, 'oi'), msg(1, 'Oi! Já te respondo')] }, 'equipe-respondeu'],
+  ];
+  for (const [rotulo, o, desfecho] of casos) {
+    const a = portas(o);
+    assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), desfecho, rotulo);
+    assert.deepEqual(a.encerradas, [12], rotulo);
+  }
+});
+
+test('etiqueta sofia-atendendo: FICA quando a Sofia respondeu, quando o paciente escreveu de novo (nova rodada) e quando a rodada está ocupada', async () => {
+  const enviada = portas({ estado: 'ligado' });
+  assert.equal(await rodarSofia(M, enviada.p, novaMemoriaDaIa()), 'enviada');
+  assert.deepEqual(enviada.encerradas, []);
+  const mudou = portas({ estado: 'ligado', depois: [msg(0, 'oi, quanto custa?'), msg(0, 'e tem desconto?')] });
+  assert.equal(await rodarSofia(M, mudou.p, novaMemoriaDaIa()), 'mudou');
+  assert.deepEqual(mudou.encerradas, [], 'a próxima rodada responde: a Sofia continua atendendo');
+  const mem = novaMemoriaDaIa();
+  mem.emAndamento.add(12);
+  const ocupada = portas({ estado: 'ligado' });
+  assert.equal(await rodarSofia(M, ocupada.p, mem), 'ocupada');
+  assert.deepEqual(ocupada.encerradas, []);
+});
+
+test('etiqueta sofia-atendendo: a Sofia que passa a conversa para a equipe tira a etiqueta na hora', async () => {
+  const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true, resposta: 'Vou chamar uma colega.' } });
+  await rodarSofia(M, a.p, novaMemoriaDaIa());
+  assert.deepEqual(a.encerradas, [12]);
+});
+
+test('etiqueta sofia-atendendo: o critério da ENTRADA é o da rodada (cartão no Kommo, Kommo fora, sem telefone, teto) — não pisca', async () => {
+  const casos: Array<[string, Parameters<typeof portas>[0], boolean]> = [
+    ['livre', { estado: 'ligado' }, true],
+    ['cartão ativo no Kommo', { estado: 'ligado', cartao: { leadId: 1 } }, false],
+    ['Kommo fora do ar', { estado: 'ligado', cartao: 'lanca' }, false],
+    ['sem telefone', { estado: 'ligado', lida: { telefone: null } }, false],
+  ];
+  for (const [rotulo, o, entra] of casos) {
+    const a = portas(o);
+    await aoChegar(M, a.p, novaMemoriaDaIa());
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(a.comecadas, entra ? [12] : [], rotulo);
+  }
+  // teto do dia
+  const a = portas({ estado: 'ligado' });
+  const mem = novaMemoriaDaIa();
+  mem.rodadas.set(`${M.slug}|2026-11-12`, TETO_SOFIA_POR_DIA);
+  await aoChegar(M, a.p, mem);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(a.comecadas, [], 'teto do dia: a rodada desiste, a etiqueta nem entra');
+});
+
+test('etiqueta sofia-atendendo: unidade DESLIGADA e rodada em SECO tiram a etiqueta que ficou', async () => {
+  const d = portas({ estado: 'desligado' });
+  await aoChegar(M, d.p, novaMemoriaDaIa());
+  assert.deepEqual(d.encerradas, [12]);
+  const r = portas({ estado: 'desligado' });
+  assert.equal(await rodarSofia(M, r.p, novaMemoriaDaIa()), 'desligado');
+  assert.deepEqual(r.encerradas, [12]);
+  const seco = portas({ estado: 'seco' });
+  assert.equal(await rodarSofia(M, seco.p, novaMemoriaDaIa()), 'nota');
+  assert.deepEqual(seco.encerradas, [12]);
 });

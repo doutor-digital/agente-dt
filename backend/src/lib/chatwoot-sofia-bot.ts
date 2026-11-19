@@ -8,7 +8,8 @@
  * Sem as duas variáveis: nada muda (a Sofia segue respondendo pelo usuário «Sofia»).
  *
  * RISCO (explicado ao João em 14/11): com o robô ligado à caixa, conversa nova nasce em «Pendentes» e só vai para «Abertas»
- * quando o robô passa — quem olha só «Minhas/Abertas» não a vê antes disso. Proposta: ligar o robô à caixa só fora do horário.
+ * quando o robô passa — quem olha só «Minhas/Abertas» não a vê antes disso. Tratado em 19/11 (chatwoot-sofia-atendendo.ts): a conversa
+ * vai para «Abertas» já na 1ª mensagem do paciente e leva a etiqueta `sofia-atendendo` enquanto a Sofia conversa.
  * Ligar o robô à caixa é feito no Chatwoot (Caixa → Robô), não aqui.
  */
 import { chamar, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';

@@ -14,6 +14,7 @@ export const ETIQUETAS_DO_CODIGO: readonly string[] = [
   'historico',
   'esperando-humano',
   'ia-pausada',
+  'sofia-atendendo',
   'sem-follow-up',
   'sem-resposta',
   'pendente-de-revisao',

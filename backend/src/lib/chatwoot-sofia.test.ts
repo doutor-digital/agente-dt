@@ -17,6 +17,7 @@ import {
   etiquetaNormalizada,
   montarFerramentas,
   motivoDeNaoResponder,
+  passarParaEquipeNoChatwoot,
   rodarSofiaDoChatwoot,
   type ConversaLida,
   type DepsDasFerramentas,
@@ -376,6 +377,10 @@ test('registrar_qualificacao e aplicar_tag: conferem a lista viva; etiqueta rese
   assert.match(r, /RECUSADO \(não é sua\): retomada, esperando-humano, interno/);
   assert.match(r, /Não existe na conta: inventada/);
   assert.deepEqual(m.chat.etiquetas, [['quente']]);
+  // «sofia-atendendo» é sinal do servidor: o modelo não põe (mesmo existindo na conta)
+  const x = montar('ligado', { chat: chatFalso({ etiquetasDaConta: ['quente', 'sofia-atendendo'] }) });
+  assert.match(await x.por('aplicar_tag').invoke({ tags: ['sofia-atendendo'] }), /RECUSADO \(não é sua\): sofia-atendendo/);
+  assert.deepEqual(x.chat.etiquetas, []);
   const s = montar('seco');
   await s.por('aplicar_tag').invoke({ tag: 'quente' });
   assert.equal(s.chat.escreveu(), 0);
@@ -592,4 +597,64 @@ test('cartão ativo no Kommo: casa pelo telefone, ignora ganho/perdido, olha TOD
   // Kommo fora do ar lança (quem chama não responde)
   const d = cartaoNoKommoDaUnidade(U, { buscarContatosPorTelefone: async () => { throw new Error('403'); }, listLeadsPorIds: async () => [] } as never);
   await assert.rejects(() => d('+5594999990000'), /403/);
+});
+
+// ── a passagem AVISA quem está com a conversa (a conversa já nasce aberta: o Chatwoot não notifica a caixa na passagem) ──
+
+function chatDaPassagem(o: { destino?: { id: number; nome: string } | null; etiquetasAntes?: string[]; semDestino?: boolean } = {}) {
+  const base = chatFalso();
+  const consultas: number[] = [];
+  const chat: PortaDoChatwoot = {
+    ...base.chat,
+    conversa: async (id) => ({ id, nome: 'X', telefone: '+5594999990000', attrs: {}, etiquetas: o.etiquetasAntes ?? [], grupo: false, interno: false }),
+    ...(o.semDestino ? {} : { destinoDaPassagem: async (id: number) => (consultas.push(id), o.destino === undefined ? { id: 9, nome: 'Lorena Souza' } : o.destino) }),
+  };
+  return { chat, consultas, notas: base.notas, etiquetas: base.etiquetas };
+}
+
+test('passagem: nota privada com @menção ao responsável do rodízio, no formato do painel de Tarefas', async () => {
+  const c = chatDaPassagem({ destino: { id: 9, nome: 'Lorena Souza' } });
+  await passarParaEquipeNoChatwoot(c.chat, { conversa: CONVERSA, etapa: 'Sofia qualifica', motivo: 'quer falar com a Dra.' });
+  assert.deepEqual(c.notas, ['🔔 [@Lorena](mention://user/9/Lorena) 🙋 A Sofia passou esta conversa para você: quer falar com a Dra.']);
+  assert.deepEqual(c.etiquetas, [['esperando-humano']]);
+});
+
+test('passagem: sem destino (ninguém com a conversa e sem gerente) ou porta que não sabe → a nota de sempre, sem menção', async () => {
+  for (const o of [{ destino: null }, { semDestino: true }]) {
+    const c = chatDaPassagem(o);
+    await passarParaEquipeNoChatwoot(c.chat, { conversa: CONVERSA, etapa: 'Sofia qualifica', motivo: 'dúvida' });
+    assert.deepEqual(c.notas, ['🙋 Sofia passou esta conversa para a equipe: dúvida']);
+  }
+});
+
+test('passagem: já passada antes (etiqueta esperando-humano no lugar) NÃO chama a pessoa de novo', async () => {
+  const c = chatDaPassagem({ etiquetasAntes: ['esperando-humano'] });
+  await passarParaEquipeNoChatwoot(c.chat, { conversa: CONVERSA, etapa: 'Sofia qualifica', motivo: 'dúvida' });
+  assert.equal(c.consultas.length, 0);
+  assert.ok(!c.notas[0]!.includes('mention://'));
+});
+
+test('passagem: falhar ao achar quem avisar não derruba a passagem', async () => {
+  const base = chatFalso();
+  const chat: PortaDoChatwoot = { ...base.chat, destinoDaPassagem: async () => { throw new Error('Chatwoot 500'); } };
+  await passarParaEquipeNoChatwoot(chat, { conversa: CONVERSA, etapa: 'Sofia qualifica', motivo: 'dúvida' });
+  assert.deepEqual(base.notas, ['🙋 Sofia passou esta conversa para a equipe: dúvida']);
+  assert.deepEqual(base.etiquetas, [['esperando-humano']]);
+});
+
+test('destino da passagem (Chatwoot de verdade): o responsável do rodízio; sem dono, a gerente da caixa (Parauapebas: Cleia, user 4); o usuário da integração nunca', async () => {
+  const { portaDoChatwoot } = await import('./chatwoot-porta.js');
+  const { criarContextoChatwoot } = await import('../mcp-remoto/chatwoot.js');
+  const conversa = (assignee: unknown) => ({ id: 77, inbox_id: 3, status: 'open', meta: { assignee }, labels: [] });
+  const porta = (c: unknown) => portaDoChatwoot(criarContextoChatwoot({ url: 'https://crm.exemplo.test', conta: 1, token: 'tk' }, {
+    fetch: (async (url: string) => {
+      const u = new URL(url);
+      const j = u.pathname.endsWith('/agents') ? [{ id: 3, name: 'Outra' }, { id: 4, name: 'Cleia Santos' }] : c;
+      return { ok: true, status: 200, text: async () => JSON.stringify(j) } as Response;
+    }) as unknown as typeof fetch,
+  }));
+  assert.deepEqual(await porta(conversa({ id: 9, name: 'Lorena Souza' })).destinoDaPassagem!(77), { id: 9, nome: 'Lorena Souza' });
+  assert.deepEqual(await porta(conversa(null)).destinoDaPassagem!(77), { id: 4, nome: 'Cleia Santos' });
+  assert.deepEqual(await porta(conversa({ id: 2, name: 'Conector Claude' })).destinoDaPassagem!(77), { id: 4, nome: 'Cleia Santos' });
+  assert.equal(await porta({ ...conversa(null), inbox_id: 999 }).destinoDaPassagem!(77), null);
 });
