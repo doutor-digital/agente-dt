@@ -502,6 +502,8 @@ test('corrigirSinalErrado: o antecipado dito pela 1ª vez é o total mal rotulad
   const t1 = 'O valor com sinal de R$ 250 antecipado (R$ 50 agora + R$ 200 no dia).';
   assert.equal(corrigirSinalErrado(t1, S).texto, t1);
   assert.equal(corrigirSinalErrado('Fica R$ 250 garantindo com sinal de R$ 250 antecipado no Pix.', S).texto, 'Fica R$ 250 garantindo com sinal de R$ 50 antecipado no Pix.');
+  // sem desdobramento depois, "sinal de R$ <antecipado> antecipado" é o erro do sinal: vira R$ 50
+  assert.equal(corrigirSinalErrado('Para garantir é só pagar o sinal de R$ 200 antecipado.', { sinal: 50, antecipado: 200 }).texto, 'Para garantir é só pagar o sinal de R$ 50 antecipado.');
   // v diferente do antecipado (o R$ 250 velho na Balsas, onde o antecipado é R$ 200): sempre errado
   assert.equal(corrigirSinalErrado('R$ 250 com sinal de R$ 250 antecipado', { sinal: 50, antecipado: 200 }).texto, 'R$ 250 com sinal de R$ 50 antecipado');
 });

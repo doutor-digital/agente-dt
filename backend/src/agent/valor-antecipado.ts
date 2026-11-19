@@ -29,14 +29,18 @@
  *    antecipado é PARTE do valor do dia, não alternativa: "R$ 100 antecipado + R$ 250 no dia"
  *    está certo e trocar o 100 por 350 seria o desastre.
  * 3. O PREÇO DO DIA NÃO É O SLOT DO ANTECIPADO (19/11/2026). A janela "R$ X … marca" tem até 45 caracteres e achava o preço do dia quando
- *    a frase o CONTRAPÕE ao antecipado — "R$ 350 no dia, mas se pagar antes, no Pix, fica R$ 200" virava "R$ 200 no dia, mas… fica R$ 200"
+ *    a frase o CONTRAPÕE ao antecipado: "R$ 350 no dia, mas se pagar antes, no Pix, fica R$ 200" virava "R$ 200 no dia, mas… fica R$ 200"
  *    (Açailândia, Balsas, Canaã, Mossoró: 9 vezes em 30 dias). A decisão é por NÚMERO, não por palavra (3 rodadas de lista de palavras erraram):
- *    a unidade sabe quanto custa o dia (`noDia`, de `precosDaConsulta`) e quanto custa o antecipado. Com a marca há dois lugares de R$: X (antes) e Y (o que
- *    a marca traz logo depois dela, numa gramática fechada: "pagando antes [por Pix], fica [em] R$ Y" / "antecipado de R$ Y" / "antecipado: R$ Y").
- *    X é o preço do DIA da unidade quando é igual ao `noDia`. Se existe Y, X NÃO é o slot (é a outra opção) e Y é conferido (vira o antecipado). A frase
- *    dizer "no dia" (não "no dia 21") entre X e a marca também faz X ser pulado quando há Y (X errado, "R$ 400 no dia, mas pagando antes fica R$ 200", é cortado
- *    pelo catálogo, nunca vira o antecipado), mas aí Y não é mexido. Sem Y, X só é pulado se for o `noDia` E a frase disser "no dia". Em todo outro caso nada muda: a frase segue como no main. X colado na marca (nada entre os dois) nunca é pulado. Y nunca é conferido se for o `noDia`, o
- *    sinal da unidade (`sinal`), "agora", "de sinal" ou vier seguido de "no dia".
+ *    a unidade sabe quanto cobra no dia (`noDia`, de `precosDaConsulta`), quanto cobra antecipado e quanto é o sinal (`sinal`).
+ *
+ *    Com a marca há dois lugares de R$: X (antes dela) e Y (o que a marca traz logo depois, numa gramática fechada: "pagando antes [por Pix], fica [em] R$ Y",
+ *    "antecipado de R$ Y", "antecipado: R$ Y"). A ordem das regras, da mais forte para a mais fraca:
+ *      a. X COLADO na marca (só o modo de pagar entre os dois: "R$ 350 pagando antecipado, fica R$ 250") É o antecipado: conferido como sempre, nunca pulado;
+ *      b. Y não conta se for o `noDia`, o `sinal`, "agora", "de sinal / entrada / reserva", "mais barato" ou vier seguido de "no dia / na clínica";
+ *      c. X igual ao `noDia` e existe Y: X é a outra opção e Y é conferido (vira o antecipado);
+ *      d. a frase diz "no dia" (não "no dia 21") entre X e a marca e existe Y: X é pulado (se estiver errado, o catálogo corta; nunca vira o antecipado), Y não é mexido;
+ *      e. X igual ao `noDia` e a frase diz "no dia", sem Y: nada a trocar.
+ *    Em todo outro caso nada muda: a frase segue como no main.
  */
 
 /** Marcadores de que o R$ anterior é o valor do pagamento antecipado. */
@@ -59,7 +63,7 @@ const VALOR_DA_MARCA = new RegExp(
 /** Esse R$ não é o antecipado: vem seguido de "no dia" (não "no dia 21") / "na clínica" (preço do dia) ou de "agora / de sinal / de entrada / de reserva" (o sinal). */
 const NAO_E_O_ANTECIPADO_DEPOIS = /^\s*(?:no\s+dia\b(?!\s+\d)|na\s+cl[ií]nica\b|agora\b|mais\s+(?:barato|em\s+conta)\b|de\s+(?:desconto|economia)\b|(?:de\s+)?(?:sinal|entrada|reserva)\b)/i;
 /** O que pode vir entre o R$ e a marca sem deixar de ser "R$ colado na marca": só o modo de pagar ("R$ 350 pagando antecipado", "R$ 350 com pagamento antecipado", "R$ 350 pelo Pix antecipado"). */
-const MODO_DE_PAGAR_ANTES = /\b(?:pagando|pagar|paga|pagamento|com|no|na|pelo|pela|por|via|em|o|a|de|pix|p[ií]x|link|valor)\b/gi;
+const MODO_DE_PAGAR_ANTES = /\b(?:pagando|pagar|paga|pagamento|com|no|pelo|por|via|pix|p[ií]x|link)\b/gi;
 /** "no dia" como jeito de pagar, não data ("no dia 21"). */
 const NO_DIA = /\bno\s+dia\b(?!\s+\d)/i;
 
@@ -198,9 +202,10 @@ export function corrigirSinalErrado(
     if (RELATA_O_QUE_O_PACIENTE_FEZ.test(frase)) return todo;
     const v = paraNumero(todo.replace(/^R\$\s?/i, ''));
     if (!Number.isFinite(v) || v === sinal) return todo;
-    // "O valor com sinal de R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)": o R$ é o antecipado da unidade e é a PRIMEIRA vez que a mensagem o diz — é o total com sinal
-    // mal rotulado, não o sinal repetido. O erro de verdade repete o total ("R$ 250 garantindo com sinal de R$ 250 antecipado"): aí já havia um R$ antecipado antes.
-    if (antecipado != null && v === antecipado && !valorAntes(texto.slice(0, posicao), antecipado)) return todo;
+    // "O valor com sinal de R$ 250 antecipado (R$ 50 agora + R$ 200 no dia)": o R$ é o antecipado da unidade, é a PRIMEIRA vez que a mensagem o diz e o desdobramento
+    // com o sinal vem logo depois — é o total com sinal mal rotulado, não o sinal repetido. O erro de verdade repete o total ("R$ 250 garantindo com sinal de R$ 250
+    // antecipado") ou não traz desdobramento ("é só pagar o sinal de R$ 200 antecipado"): esses viram o sinal.
+    if (antecipado != null && v === antecipado && !valorAntes(texto.slice(0, posicao), antecipado) && valorAntes(texto.slice(posicao + todo.length, posicao + todo.length + 80), sinal)) return todo;
     corrigiu.push(v);
     return `R$ ${fmt(sinal)}`;
   });
