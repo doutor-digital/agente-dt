@@ -449,6 +449,8 @@ export interface TrocaDaTaxa {
     /** depois da insistência tratada, o modelo liberou pagar tudo na clínica: saiu o lembrete da taxa, sem a chave */
     | 'lembrete_da_taxa'
     | 'horario_sem_comprovante'
+    /** a resposta pedia nome/telefone na hora do horário, antes da taxa e do comprovante: saiu o pedido da taxa com a chave */
+    | 'dados_antes_da_taxa'
     /** cartão ilegível: só a afirmação falsa de horário saiu, sem pedir pagamento (`semAAfirmacaoDoHorario`) */
     | 'afirmacao_retirada'
     /** cartão pago ou ilegível e a resposta trazia chave, titular ou valor fora do cadastro: saiu a cortesia, sem dados e sem pedir pagamento (`semODadoErrado`) */
@@ -770,5 +772,90 @@ export function travaDaTaxaDeReserva(texto: string, dados: DadosDaTaxa | null, c
     const r = conservandoOResto(texto, dados, (t) => afirmaNoTrecho(t), recadoSemComprovante(dados), recadoSemComprovante(dados));
     return { ...r, motivo: 'horario_sem_comprovante' };
   }
+  // A chave já foi enviada (o paciente vai pagar): pedir o nome agora não repete o bloco da taxa a cada turno.
+  if (!chaveJaEnviada && pedeDadosAntesDaTaxa(texto, ctx)) {
+    // Sem sobra aproveitável, o pedido da taxa vem sozinho: o texto «o seu horário ainda não está garantido» corrigiria uma promessa que a
+    // resposta (só um pedido de nome) não fez.
+    const r = conservandoOResto(texto, dados, (t) => pedeDadosNoTrecho(normalizar(t)) || afirmaNoTrecho(t), pedidoDaChave(dados), pedidoDaChave(dados));
+    return { ...r, motivo: 'dados_antes_da_taxa' };
+  }
   return null;
+}
+
+// --- Nome e telefone na hora do horário, antes da taxa ---------------------------------------------------------------------------
+//
+// Boa Vista, 19/11/2026: "Perfeito, terça às 16h! Pra eu deixar seu cadastro pronto, me confirma seu nome completo?" — 6 conversas entre
+// 05/11 e 17/11. Nada ali é uma afirmação de horário garantido (`afirmaHorarioGarantido` não pega), mas o paciente sai achando que a
+// vaga está salva. Nesta unidade o passo seguinte à escolha do horário é a taxa; nome e telefone só entram depois do comprovante (a
+// trava nem chega aqui com comprovante na conversa, cartão pago ou consulta de pé).
+//
+// A rede é ESTREITA de propósito: pedir a taxa a quem não escolheu horário é pior que deixar passar. Só troca quando (1) a resposta
+// anterior da Sofia propôs horário(s) com HORA concreta («9h», «09:00»), (2) o paciente escolheu um deles — citando a hora oferecida, ou
+// um aceite curto e nada mais a UMA proposta — e (3) a resposta pede cadastro (verbo de pedido) sem falar da taxa.
+
+/**
+ * Pede o cadastro do paciente. «nome completo», «telefone com DDD» e «nome e sobrenome» já são pedido por si. As demais palavras
+ * (CPF, sobrenome, um telefone, data de nascimento, nome dele…) só contam com o verbo de pedido antes: «leve um documento com CPF» e
+ * «posso te ligar no seu telefone» não são pedidos.
+ */
+const PEDE_DADOS_DO_CADASTRO = new RegExp(
+  [
+    String.raw`\b(?:nome completo|nome e sobrenome|telefone com ddd)\b`,
+    String.raw`\b(?:preciso|precisamos|me (?:passa|passe|diz|diga|confirma|confirme|informa|informe|manda|mande)|pode (?:me )?(?:passar|confirmar|informar|dizer|mandar)|qual (?:e )?o|informe|confirme|envie|digite)\b[^.?!]{0,40}\b(?:nome|sobrenome|telefone|numero|cpf|nascimento)\b`,
+  ].join('|'),
+);
+/** Já fala da taxa na mesma resposta: o pedido de dados vem junto do que importa. */
+const FALA_DA_TAXA = /\b(?:taxa|pix|comprovante|antecipad\w*|sinal)\b/;
+/** Hora concreta: «9h», «9h30», «09:00», «14:30», «8 horas», «8::00» (erro de teclado). Dia da semana, «hoje» e «amanhã» sozinhos NÃO são horário. */
+const HORA_CONCRETA = /\b(\d{1,2})(?::{1,2}(\d{2})|h(\d{2})?|\s?horas?)(?!\d)/g;
+/** «sim», «ok», «pode ser», «beleza»… — o aceite curto, INTEIRO (sem mais nada na fala). «quero» não é aceite. */
+const ACEITE_CURTO =
+  /^(?:sim|ok|okay|pode|pode ser|beleza|combinado|isso|certo|fechado|ta|ta bom|ta certo|ta otimo|perfeito|otimo|show|vamos|bora|isso mesmo|pode sim|pode ser sim|tudo bem|tranquilo)$/;
+/** Recusa, pedido de outra coisa ou dúvida («acho que às 9h», «talvez 9h», «se der»): nunca é a escolha firme de um horário oferecido. */
+const RECUSA_OU_PEDIDO =
+  /\b(?:nao|nem|sem|outr[oa]s?|depois|antes|mais (?:cedo|tarde)|tem|teria|consegue|seria possivel|acho|achar|talvez|quem sabe|depende|se der|se puder|vou ver|vou pensar|preciso (?:ver|conferir|confirmar)|pode ser que)\b|\?/;
+
+/** As horas («H:MM») escritas no texto normalizado, sem repetir. */
+function horasDoTexto(n: string): string[] {
+  const horas = new Set<string>();
+  for (const m of n.matchAll(HORA_CONCRETA)) {
+    const h = Number(m[1]);
+    const min = Number(m[2] ?? m[3] ?? '0');
+    if (h <= 23 && min <= 59) horas.add(`${h}:${String(min).padStart(2, '0')}`);
+  }
+  return [...horas];
+}
+
+/** O paciente cita («9h», «09:00», «as 9 então», «pras 11») uma das horas oferecidas. */
+function citaHoraOferecida(fala: string, oferecidas: string[]): boolean {
+  if (horasDoTexto(fala).some((h) => oferecidas.includes(h))) return true;
+  // «as 9», «pras 11»: o número solto só vale depois de «as/pras/para as» (nunca «a 3 meses»)
+  for (const m of fala.matchAll(/\b(?:as|pras|para as)\s+(\d{1,2})(?![\d:h])/g)) {
+    if (oferecidas.includes(`${Number(m[1])}:00`)) return true;
+  }
+  return false;
+}
+
+function pedeDadosNoTrecho(n: string): boolean {
+  return PEDE_DADOS_DO_CADASTRO.test(n);
+}
+
+/** A fala sem acento, pontuação nem emoji: para comparar o aceite curto inteiro. */
+const soAsPalavras = (v: string) => normalizar(v).replace(/[^\p{L}\p{N} ]/gu, ' ').replace(/\s+/g, ' ').trim();
+
+/**
+ * A resposta pede nome/telefone logo depois de o paciente ESCOLHER o horário e sem falar da taxa. Só vale com HORA concreta na resposta
+ * anterior da Sofia E a escolha dele na última fala: a hora oferecida citada, ou um aceite curto e nada mais a UMA proposta. Recusa,
+ * pedido de outro horário, «quero marcar» e número solto («dor a 3 meses») não são escolha. Devolve false sem horário escolhido, sem
+ * pedido de cadastro, ou quando a resposta já fala da taxa.
+ */
+export function pedeDadosAntesDaTaxa(texto: string, ctx: Pick<ContextoDaTaxa, 'falasDoPaciente' | 'respostaAnterior'>): boolean {
+  if (FALA_DA_TAXA.test(normalizar(texto))) return false;
+  const oferecidas = horasDoTexto(normalizar(ctx.respostaAnterior));
+  if (oferecidas.length === 0) return false;
+  const fala = normalizar(ctx.falasDoPaciente[ctx.falasDoPaciente.length - 1] ?? '');
+  if (RECUSA_OU_PEDIDO.test(fala)) return false;
+  const escolheu = citaHoraOferecida(fala, oferecidas) || (oferecidas.length === 1 && ACEITE_CURTO.test(soAsPalavras(fala)));
+  if (!escolheu) return false;
+  return trechos(texto).some((t) => pedeDadosNoTrecho(normalizar(t)));
 }

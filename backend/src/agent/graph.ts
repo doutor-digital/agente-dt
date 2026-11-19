@@ -1318,6 +1318,7 @@ export async function buildAgentGraph(
               recorder,
               motivo: 'comprovante',
               detalhe: ficou.detalhe,
+              semLancar: ficou.marcaSozinha,
             });
           }
         }

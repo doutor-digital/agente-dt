@@ -493,11 +493,11 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
   // As demais unidades: o texto de sempre, palavra por palavra (o bloco é cacheado).
   const linhaDoComprovante = unit?.spineBookingRequiresPayment
-    ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de reserva: com o comprovante na conversa e o dia e a hora já combinados,
+    ? `COMPROVANTE de Pix (foto ou PDF) nesta unidade, que cobra taxa de agendamento: com o comprovante na conversa e o dia e a hora já combinados,
   chame agendar_consulta — o sistema confere o comprovante (favorecido, valor, código da transação) e marca. Se a ferramenta recusar, diga ao
   paciente só o que ela mandar. NUNCA escreva "pagamento confirmado" nem "Pix caiu": o dinheiro quem confere é a equipe. "Já paguei" ou "fiz o
   pix" ESCRITO, sem a foto ou o PDF, não vale: peça o comprovante, uma vez, e não marque.
-  TAXA OBRIGATÓRIA: nesta unidade a consulta só é marcada com a taxa de reserva paga antes. NUNCA ofereça pagar tudo na
+  TAXA OBRIGATÓRIA: nesta unidade a consulta só é marcada com a taxa de agendamento paga antes. NUNCA ofereça pagar tudo na
   clínica, NUNCA dê a escolha "Pix antecipado ou na clínica" e NÃO pergunte "como prefere pagar": diga o total e as duas
   partes (a taxa antes + o restante no dia) e siga para a taxa. Se o paciente insistir em pagar tudo no dia, explique uma
   vez que a taxa garante o horário e já faz parte do valor; se recusar de novo, passe para a equipe.`
@@ -505,7 +505,17 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   Não confirma consulta: a equipe confirma em até 1 hora (com taxa de reserva, a ferramenta libera).`;
   // Sinal por Pix (Sofia 2.0): o último passo é o sinal (link gerado pela ferramenta), não a chave fixa.
   const comSinal = !!unit && sinalDaUnidade(unit) !== null;
-  const passos = semAntecipado ? 'dia → horário → dados' : comSinal ? 'dia → horário → dados → sinal (Pix)' : 'dia → horário → dados → Pix';
+  // Taxa de reserva OBRIGATÓRIA (Boa Vista): o passo seguinte ao horário é a taxa (Pix + comprovante), não os dados. Com "dados → Pix"
+  // a Sofia respondia a escolha do horário com "me passa seu nome completo e um telefone" e o paciente saía achando que a vaga estava
+  // garantida (medido em produção em 19/11/2026: 6 conversas entre 05/11 e 17/11 em que a resposta à escolha do horário pedia
+  // nome/telefone sem falar da taxa; caso `taxa-de-reserva-boa-vista` do Promptfoo reprovado). Nome e telefone só entram depois do comprovante, se o cadastro não existir.
+  const passos = semAntecipado
+    ? 'dia → horário → dados'
+    : unit?.spineBookingRequiresPayment
+      ? 'dia → horário → taxa de agendamento (Pix + comprovante) → só então os dados (nome e telefone, se faltarem)'
+      : comSinal
+        ? 'dia → horário → dados → sinal (Pix)'
+        : 'dia → horário → dados → Pix';
   // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
   // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
   const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment
@@ -513,16 +523,25 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
     : comSinal
       ? `(escolher entre os horários que você ofereceu; "Sinal de R$ ${fmtBRL((unit?.sinalPixCentavos ?? 0) / 100)}" ou "Pagar no dia";\n  `
       : '(escolher entre os horários que você ofereceu; "Pix antecipado" ou "Na clínica";\n  ';
+  // Taxa de reserva obrigatória: o dia combinado leva à TAXA, não ao agendar_consulta (a ferramenta recusa sem o comprovante, e a recusa
+  // mandava dizer que "o horário fica separado" — a promessa que o passo 3 da agenda acaba de proibir). Nas demais, o texto de sempre.
+  const comTaxaObrigatoria = !!unit?.spineBookingRequiresPayment && !semAntecipado;
+  const confirmacaoDoDia = comTaxaObrigatoria
+    ? `Resposta curta à SUA PRIMEIRA pergunta "consegue
+  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — o dia está combinado: siga para a taxa de agendamento
+  (Pix + comprovante) e NÃO marque ainda. Também JÁ É confirmação — vá à taxa sem perguntar "consegue vir?" de novo: a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").`
+    : `Resposta curta à SUA PRIMEIRA pergunta "consegue
+  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
+  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
+  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").`;
   return xmlBlock('regras_gerais', `- ANTI-ALUCINAÇÃO: nunca invente fatos sobre a clínica (preços, horários,
   procedimentos, prazos, políticas, médicos, especialidades, endereços).
   Use APENAS o que está nas Fontes Oficiais acima OU na Base de Conhecimento.
   Se a informação não está em nenhum dos dois, responda: "Vou confirmar isso
   com a equipe e te retorno, tá? 😊". Pequenas variações de tom OK; inventar fatos NÃO.
 - CONFIRMAÇÃO: só está confirmado quando a pessoa diz, SEM condição, que vem naquele dia e hora
-  ("sim, vou", "confirmado", "pode confirmar"). Resposta curta à SUA PRIMEIRA pergunta "consegue
-  vir {dia} às {hora}?" também confirma: "sim", "ok", "pode ser", "beleza", "combinado" — siga e
-  marque. Também JÁ É confirmação — marque sem perguntar "consegue vir?" de novo: a própria
-  pessoa escreve o dia/hora que quer entre os que você ofereceu ("terça às 11:30", "amanhã 14h30").
+  ("sim, vou", "confirmado", "pode confirmar"). ${confirmacaoDoDia}
   ${linhaDoComprovante} NÃO é confirmação: "confirmo depois", "confirmo com antecedência", "vou ver", "se der eu vou", "acho que
   sim" — nem um "ok"/"tá"/"pode ser" que veio depois de você insistir. Nesses casos NÃO mande o
   cartão e pergunte UMA vez só, com o dia e a hora por extenso, assim: "Pra eu marcar: você consegue
@@ -806,6 +825,52 @@ function renderHorariosPorDia(unit: Unit): string {
   return ` Esse horário vale para ${dias || 'os demais dias'}. ${partes.join('. ')}. Nunca ofereça horário fora da janela do dia.`;
 }
 
+/**
+ * Os passos 3 a 6 da SEQUÊNCIA OBRIGATÓRIA da agenda: o que acontece quando o paciente escolhe o horário.
+ *
+ * Unidade com taxa de reserva obrigatória (Boa Vista): a escolha do horário NÃO é a hora de pedir nome e telefone nem de dizer que a
+ * vaga está garantida — é a hora de explicar a taxa, passar a chave Pix e pedir o comprovante. O código já recusa marcar sem o
+ * comprovante (`decidirTrava`), então um "me passa seu nome pra garantir sua vaga" não marcava nada, mas deixava o paciente achando que
+ * sim. As demais unidades: o texto de sempre, palavra por palavra.
+ */
+export function sequenciaDepoisDoHorario(unit: Unit, moverDepois: (passo: number) => string): string {
+  if (!unit.spineBookingRequiresPayment || unidadeSemAntecipado(unit)) {
+    return `3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
+4. Se NÃO achar, pergunte o nome completo e o telefone com DDD e chame
+   cadastrar_paciente({ nome, telefone }). Ela devolve o idClient e o
+   agendamento segue normalmente — não transfira por causa disso.
+5. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois(6)}`;
+  }
+  // "taxa de agendamento" é o nome que o paciente lê nas Fontes e no follow-up desta unidade: um nome só para a mesma cobrança.
+  const p = precosDaConsulta(unit);
+  const valorDaTaxa = p ? ` de R$ ${fmtBRL(p.antecipado)}` : ' (o valor exato está nas Fontes Oficiais)';
+  const resto = p ? ` (abate do total: ficam R$ ${fmtBRL(p.noDia)} no dia)` : ' (ela abate do total)';
+  const chave = unit.pixKey?.trim();
+  const titular = unit.pixHolder?.trim();
+  const ondeEstaAChave = chave
+    ? `a chave Pix ${chave}${titular ? ` (${titular})` : ''}`
+    : 'a chave Pix de <dados_da_clinica> (nunca invente uma)';
+  const exemplo = `Pra garantir esse horário, a taxa de agendamento ${p ? `é R$ ${fmtBRL(p.antecipado)}` : 'é {o valor das Fontes Oficiais}'} por Pix${chave ? ` (chave ${chave})` : ''}. Me manda o comprovante aqui?`;
+  return `3. Quando ele ESCOLHER o horário, a PRÓXIMA mensagem é sobre a TAXA e é só texto, SEM chamar ferramenta
+   nenhuma (nem consultar_horarios, nem agendar_consulta) — não pede nome nem telefone e não diz que a vaga JÁ está garantida, reservada ou salva. Nessa mensagem diga: o horário só fica garantido com a taxa de
+   agendamento${valorDaTaxa}${resto}, paga por Pix; passe ${ondeEstaAChave} e peça o comprovante (foto ou PDF) aqui na conversa.
+   Exemplo: "${exemplo}". Só isso: nem nome, nem telefone, nem outro pedido na mesma mensagem (um passo por mensagem).
+   Nessa mensagem NÃO escreva "ficou reservado", "fica reservado", "está garantido" nem "é seu": o horário
+   só passa a existir quando agendar_consulta marcar.
+   Escolher o horário JÁ confirma o dia: não pergunte "consegue vir?" antes da taxa. Esse horário saiu da lista que você consultou
+   há instantes, nesta conversa: consultar_horarios de novo só atrasa o pedido da taxa (a ferramenta agendar_consulta confere se o
+   horário segue livre quando o comprovante chegar). Responda já, em uma mensagem curta, SEM repetir dia e hora; o endereço e o que
+   falta pagar no dia vêm na confirmação, depois que a consulta for marcada.
+4. Com o comprovante na conversa, é AGORA que entram os dados: se você ainda não sabe o nome completo dele (o que ele escreveu na
+   conversa), pergunte — uma coisa por mensagem — e só então chame buscar_paciente({ nome }) para achar o cadastro. Nunca busque
+   com um nome que você adivinhou.
+5. Se NÃO achar, pergunte o telefone com DDD (só se faltar) e chame cadastrar_paciente({ nome, telefone }). Ela devolve o idClient
+   e o agendamento segue — não transfira por causa disso.
+6. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }); a ferramenta confere o comprovante. Se ela recusar
+   porque o horário foi ocupado nesse meio tempo, ele JÁ pagou: peça desculpas em uma frase, chame consultar_horarios, ofereça
+   outro e diga que o comprovante segue valendo para o novo horário.${moverDepois(7)}`;
+}
+
 function renderAgenda(unit: Unit): string {
   if (!unit.spineEnabled) return '';
 
@@ -816,11 +881,13 @@ function renderAgenda(unit: Unit): string {
 
   const intents = unit.pipelineIntents as Record<string, number> | null;
   const etapaAgendado = intents?.scheduled_meeting;
-  const moverDepois = etapaAgendado
-    ? `\n6. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
-      `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
-      `a etapa tem que refletir o que de fato aconteceu.`
-    : '';
+  // O número do passo depende da sequência (5 passos; 6 com a taxa de reserva): quem monta a sequência passa o número.
+  const moverDepois = (passo: number): string =>
+    etapaAgendado
+      ? `\n${passo}. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
+        `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
+        `a etapa tem que refletir o que de fato aconteceu.`
+      : '';
 
   const endereco = unit.clinicAddress?.trim();
   const pix = unit.pixKey?.trim();
@@ -954,11 +1021,7 @@ SEQUÊNCIA OBRIGATÓRIA, sem pular passo:
    horários: consulte e ofereça os dois. Só pergunte a preferência quando a agenda
    não devolver horário. No MÁXIMO 2 ou 3 opções da lista. Oferecer dez
    vira lista de compras e o paciente não escolhe nenhum.
-3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
-4. Se NÃO achar, pergunte o nome completo e o telefone com DDD e chame
-   cadastrar_paciente({ nome, telefone }). Ela devolve o idClient e o
-   agendamento segue normalmente — não transfira por causa disso.
-5. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois}
+${sequenciaDepoisDoHorario(unit, moverDepois)}
 
 QUANDO A TOOL RECUSAR (horário ocupado, bloqueado ou agenda pausada):
 - NUNCA diga que está agendado. Nunca prometa dia ou hora.
@@ -1380,7 +1443,7 @@ oferecer horário para quem ainda não contou a dor perde a venda, e investigar 
 dor de quem já escolheu o horário perde a paciência dele.
 
   ESTADO                          PRÓXIMO MOVIMENTO
-${tabelaInicio}  escolheu horário             →  buscar/cadastrar paciente e agendar
+${tabelaInicio}  escolheu horário             →  ${comTaxa ? 'pedir a taxa de agendamento (Pix) e o comprovante; só com ele, cadastro e agenda' : 'buscar/cadastrar paciente e agendar'}
   agendou                      →  confirmar em bloco e proteger o comparecimento
   objeção em qualquer ponto    →  acolher, reenquadrar, e VOLTAR ao movimento
                                   que estava fazendo — não recomece do zero

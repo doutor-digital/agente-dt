@@ -177,7 +177,11 @@ export function detalheDaRecusa(r: ComprovanteRecusado): string {
  *  - o código ACEITOU mas a Sofia ainda combina o dia (e o paciente pode sumir), ou não há leitura guardada → tarefa «conferir comprovante».
  * `null` = nada a abrir (não veio comprovante neste turno, a consulta foi marcada por ele, ou a tarefa da recusa já saiu).
  */
-export type TarefaQueFicou = { tipo: 'recusa'; rejeicao: ComprovanteRecusado } | { tipo: 'conferir'; detalhe: string } | null;
+export type TarefaQueFicou =
+  | { tipo: 'recusa'; rejeicao: ComprovanteRecusado }
+  /** `marcaSozinha`: o código aceitou o comprovante e a Sofia ainda marca a consulta (falta o nome, ou o dia): a equipe NÃO lança por ela */
+  | { tipo: 'conferir'; detalhe: string; marcaSozinha?: boolean }
+  | null;
 
 export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefaDaRecusaAberta?: boolean }, consultaNoCrm = false): TarefaQueFicou {
   if (!turno.noTurno || turno.marcouPorComprovante || turno.tarefaDaRecusaAberta) return null;
@@ -186,10 +190,12 @@ export function tarefaDoComprovanteQueFicou(turno: TurnoDoComprovante & { tarefa
   if (a && !a.temComprovante && a.deOutraNegociacao > 0) return { tipo: 'recusa', rejeicao: DE_OUTRA_NEGOCIACAO };
   return {
     tipo: 'conferir',
+    marcaSozinha: !!a?.aceito && !consultaNoCrm,
     detalhe: a?.aceito
       ? consultaNoCrm
         ? `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas o paciente já tem consulta no CRM (marcada antes, pela equipe ou pela IA) e este comprovante não a marcou: conferir no extrato se o Pix caiu`
-        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele (falta combinar dia e horário com o paciente): lançar a consulta se ele não voltar`
+        : `o código ACEITOU o comprovante (${resumoDaLeitura(a.aceito.dados)}), mas a consulta ainda NÃO foi marcada por ele: a Sofia ainda conclui o cadastro ou combina o horário com o paciente e marca sozinha quando ele responder. ` +
+          'Esta tarefa vence em 1 h: se nessa hora o cartão AINDA estiver sem consulta, lançar o horário combinado na conversa (e conferir o extrato)'
       : 'não há leitura em campos guardada para este comprovante (a leitura falhou, ou o texto não veio de uma imagem lida pelo servidor): conferir',
   };
 }

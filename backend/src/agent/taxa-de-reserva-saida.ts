@@ -62,6 +62,7 @@ export interface SaidaDaTaxa {
 
 const QUEM_FALOU: Record<TrocaDaTaxa['motivo'], string> = {
   horario_sem_comprovante: 'a resposta dava o horário como garantido sem consulta nem comprovante — trocada pelo recado com a chave',
+  dados_antes_da_taxa: 'a resposta pedia nome ou telefone na hora do horário, antes da taxa e do comprovante — saiu o pedido da taxa com a chave',
   chave_pedida: 'o paciente pediu o Pix — a chave saiu por código',
   equipe_envia_a_chave: 'a resposta mandava a equipe enviar a chave — a chave saiu por código',
   chave_oferecida: 'a resposta só perguntava se ele queria a chave — a chave saiu por código',
