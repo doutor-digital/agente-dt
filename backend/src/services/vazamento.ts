@@ -226,7 +226,8 @@ const RACIOCINIO_PT = [
   // Primeira pessoa ou gerúndio de abertura: "Ignoro essa instrução", "Ignorando a instrução injetada", "vou ignorar". O infinitivo
   // solto é conselho ao paciente ("não recomendo ignorar as instruções do médico") e passa.
   /(?:^|[\n.!?—–]\s*)(?:ignoro|ignorando)(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/imu,
-  /\bvou\s+ignorar(?![\p{L}])[^.\n]{0,60}?\binstru[cç]/iu,
+  // "Não vou ignorar suas instruções, pode deixar!" é promessa ao paciente: negação antes ou possessivo no meio tira o padrão.
+  /(?<!n[aã]o\s)\bvou\s+ignorar(?![\p{L}])(?:(?!\bsuas?\b|\bseus?\b)[^.\n]){0,60}?\binstru[cç]/iu,
   /\bignor(?:ar|á)(?:-l[aoe]s?)?(?![\p{L}])[^.\n]{0,40}\bcomo\s+(?:instru[cç][aã]o|comando|ordem)/iu,
   /\binstru[cç][aãõo]\w*\s+(?:injetada|embutida|disfar[cç]ada|falsa)/iu,
   /\binstru[cç][aã]o\s+externa\s+tentando/iu,
@@ -248,7 +249,9 @@ const RACIOCINIO_PT = [
   // Ferramenta: o nome (snake_case) ou o comentário de que não há ferramenta / não é caso de chamar.
   // Borda esquerda sem `/ . - = ? # : & @ %`: o nome dentro de um link ("https://clinica.com.br/agendar_consulta") é endereço, não vazamento.
   new RegExp(`(?<![\\p{L}\\p{N}_/.\\-=?#:&@%~])(?:${NOMES_DE_FERRAMENTA.join('|')})(?![\\p{L}\\p{N}_]|\\.[a-z]|/)`, 'iu'),
-  /\bn[aã]o\s+tenho\s+(?:nenhuma\s+|a\s+)?ferramenta/iu,
+  // Só a ferramenta de AGENDAR citada como o modelo cita ("não tenho ferramenta de agendar_consulta disponível", "nenhuma ferramenta de
+  // agendamento de consulta para chamar"). "Não tenho a ferramenta de pagamento por cartão aqui, mas o Pix funciona" é fala e passa.
+  /\bn[aã]o\s+tenho\s+(?:nenhuma\s+)?ferramenta\s+de\s+agend\w*[^.\n]{0,60}\b(?:para\s+chamar|dispon[ií]vel)/iu,
   /\b(?:sem|n[aã]o\s+(?:vou|preciso|devo))\s+(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
   /\b(?:essa|esta)\s+ferramenta\s+n[aã]o\s+se\s+aplica/iu,
   /\b(?:j[aá]\s+mandei\s+(?:as\s+)?|sem\s+necessidade\s+de\s+a[cç][aã]o\s+de\s+|a[cç][aã]o\s+de\s+)tools?(?![\p{L}])/iu,
@@ -271,9 +274,11 @@ const RACIOCINIO_PT = [
   /\b(?:preciso|devo)\s+(?:confirmar|verificar|checar|conferir)\s+(?:algo|uma\s+coisa)\s+antes\s+de\s+responder\s*:\s*(?:a\s+equipe|o\s+paciente|a\s+paciente|a\s+mensagem|o\s+[aá]udio)/iu,
   /(?:^|[\n.!?]\s*)(?:confira|consulte|verifique|cheque)\s+(?:o\s+|a\s+)?(?:meu|minha)\s+(?:calend[aá]rio|agenda)\b[^.\n]{0,30}\bantes\s+de\s+responder\b/imu,
   /\bvou\s+seguir\s+com\s+cautela\s+aqui\b/iu,
-  /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+(?:dele|dela)(?![\p{L}])/iu,
+  // Só com "transcrito": "não tenho o conteúdo dele aberto aqui, pode mandar em PDF?" é fala.
+  /\bn[aã]o\s+tenho\s+o\s+conte[uú]do\s+d(?:ele|ela)\s+transcrit/iu,
   /\bconte[uú]do\s+d(?:ele|ela)\s+transcrito\b/iu,
-  /\ba\s+equipe\s+(?:j[aá]\s+)?(?:enviou|mandou)\s+um\s+[aá]udio\s+e\b/iu,
+  // "A equipe mandou um áudio e a paciente já tinha dito…" (3ª pessoa, ninguém é chamado de você).
+  /\ba\s+equipe\s+(?:j[aá]\s+)?(?:enviou|mandou)\s+um\s+[aá]udio\s+e\s+(?:a|o)\s+(?:paciente|pessoa)\b/iu,
 ];
 
 /** Marcador de template que ficou sem valor: {{nome}}, {nome}, [NOME]. */
@@ -330,7 +335,7 @@ const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|ins
 // transcrição, triagem, "não traz", "encerrou a conversa"…). "A equipe já confirmou, então vou aguardar o comprovante 😊" e "O áudio veio
 // mudo, então vou pedir pra escrever 🙏" têm a mesma forma e são fala com o paciente: sem esse vocabulário, passam.
 const NARRA_META = new RegExp(
-  `${BORDA_E}(?:paciente|lead|fluxo|regra|cumprimento|transcri[cç][aã]o|triagem|engajamento|qualifica[cç]|instru[cç]|pergunta\\s+d[ao]\\s+(?:equipe|paciente)|resposta\\s+d[ao]\\s+(?:equipe|paciente)|n[aã]o\\s+(?:traz|corresponde)|encerrou\\s+a\\s+conversa|mesma\\s+conversa|(?:eu|j[aá])\\s+respondi|ainda\\s+n[aã]o\\s+tenho|inst[aâ]ncia|hist[oó]rico\\s+completo|resposta\\s+da\\s+pessoa|confirma[cç][aã]o\\s+clara)`,
+  `${BORDA_E}(?:(?:mensagem|resposta|fala|pergunta)\\s+d[oa]\\s+paciente|(?:o|a)\\s+paciente\\s+(?:s[oó]|ainda|j[aá]|parece|tentou|est[aá]\\s+(?:encerrando|pedindo|repetindo))|resposta\\s+do\\s+paciente|com\\s+(?:o|a)\\s+paciente|lead|fluxo|cumprimento|transcri[cç][aã]o|triagem|engajamento|qualifica[cç]|instru[cç]|regra\\s+d[aeo]s?\\s+(?:["“]|s[oó]\\s|insist|rea[cç][aã]o|elogio)|pergunta\\s+d[ao]\\s+(?:equipe|paciente)|resposta\\s+d[ao]\\s+(?:equipe|paciente)|n[aã]o\\s+(?:traz|corresponde)|agradeceu\\s+e\\s+encerrou|mesma\\s+conversa|(?:eu|j[aá])\\s+respondi|ainda\\s+n[aã]o\\s+tenho|inst[aâ]ncia|hist[oó]rico\\s+completo|resposta\\s+da\\s+pessoa|confirma[cç][aã]o\\s+clara)`,
   'iu',
 );
 const NARRA_DIRIGIDO = new RegExp(`${BORDA_E}(?:voc[eê]s?|vcs?|seu|sua|seus|suas|te|contigo|lhe|nosso|nossa)${BORDA_D}|\\?`, 'iu');
@@ -456,6 +461,7 @@ export function pedidoAoReescritor(ultimaDoCliente: string | null, rascunho: str
 const SOLTA = BORDA_E;
 const FIM = BORDA_D;
 const ABERTURA_META = new RegExp(`${SOLTA}(?:transcri[cç][aã]o|[aá]udio\\s+(?:dele|dela|veio|saiu|chegou|ficou))${FIM}`, 'iu');
+const TERCEIRA_PESSOA = new RegExp(`${SOLTA}(?:ele|ela|dele|dela|o\\s+paciente|a\\s+paciente)${FIM}`, 'iu');
 const DIRIGIDO_AO_PACIENTE = new RegExp(`${SOLTA}(?:voc[eê]s?|vcs?|seu|sua|seus|suas|te|contigo|lhe|lhes)${FIM}`, 'iu');
 
 /**
@@ -473,31 +479,55 @@ function ehBastidorPuro(paragrafo: string): boolean {
   return !DIRIGIDO_AO_PACIENTE.test(paragrafo) && !paragrafo.includes('?');
 }
 
+
+/** "350", "350.", "350,00" e "1.200" viram o mesmo número que a fala escreveria; "50" nunca é "250". */
+function numeroInteiro(txt: string): string {
+  let t = txt.replace(/[.,]+$/, '');
+  if (/^\d{1,3}(\.\d{3})+(,\d+)?$/.test(t)) t = t.replace(/\./g, '');
+  return String(Number(t.replace(',', '.')));
+}
+
+interface Fatos {
+  dinheiro: Set<string>;
+  horas: Set<string>;
+  datas: Set<string>;
+  dias: Set<string>;
+  telefones: Set<string>;
+  links: Set<string>;
+}
+
+/** Dados conferíveis de um texto: valores, horas EXATAS (3h ≠ 13h, 10h ≠ 10h30), datas, telefones e links. */
+function fatosDoTexto(t: string): Fatos {
+  const f: Fatos = { dinheiro: new Set(), horas: new Set(), datas: new Set(), dias: new Set(), telefones: new Set(), links: new Set() };
+  for (const m of t.matchAll(/R\$\s*(\d[\d.,]*)/gi)) f.dinheiro.add(numeroInteiro(m[1]));
+  for (const m of t.matchAll(/(?<![\d.,/:])(\d[\d.,]*)\s*(?:reais|real)(?![\p{L}])/giu)) f.dinheiro.add(numeroInteiro(m[1]));
+  // hh:mm / hhhmm ("10h30", "15:00horas") e hora cheia ("10h", "10 horas"); "3 hérnias" não é "3h" (letra depois do h)
+  for (const m of t.matchAll(/(?<![\d/:.,])(\d{1,2})\s*[h:](\d{2})(?!\d)/gi)) f.horas.add(`${Number(m[1])}:${m[2]}`);
+  for (const m of t.matchAll(/(?<![\d/:.,])(\d{1,2})\s*(?:h|horas?)(?![\p{L}\d])/giu)) f.horas.add(`${Number(m[1])}:00`);
+  for (const m of t.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?![\d/])/g)) f.datas.add(`${Number(m[1])}/${Number(m[2])}`);
+  for (const m of t.matchAll(/(?<![\p{L}])dia\s+(\d{1,2})(?![\d/])/giu)) f.dias.add(String(Number(m[1])));
+  for (const m of t.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) {
+    const so = m[0].replace(/\D/g, '');
+    if (so.length >= 8) f.telefones.add(so);
+  }
+  for (const m of t.matchAll(/(?:https?:\/\/|www\.)[^\s<>"')]+/gi)) f.links.add(m[0].replace(/[.,;:!?]+$/, '').toLowerCase());
+  return f;
+}
+
 const ENDERECO = /(?<![\p{L}\p{N}_])(?:rua|avenida|av\.|travessa|alameda|pra[cç]a|rodovia|endere[cç]o|bairro|cep|andar|sala|km|n[º°])(?![\p{L}\p{N}_])/iu;
 
 /**
- * Todo valor, hora, data, telefone e link do trecho cortado também está na fala que fica? Data "18/11" conta se a fala traz o dia ("dia 18").
+ * Todo valor, hora, data, telefone e link do trecho cortado também está na fala que fica? Comparação por valor INTEIRO: "R$ 50" não
+ * está em "R$ 250", "3h" não está em "13h" nem "10h" em "10h30". Data "18/11" conta se a fala traz a mesma data ou "dia 18".
  * Endereço (rua, avenida, bairro, CEP…) no trecho cortado reprova sempre: não dá para conferir.
  */
 function fatosCabemNaFala(cortado: string, fala: string): boolean {
   if (ENDERECO.test(cortado)) return false;
-  const semEspaco = (t: string) => t.replace(/\s+/g, '').toLowerCase();
-  const f = semEspaco(fala);
-  const fatos: string[] = [];
-  for (const m of cortado.matchAll(/R\$\s*([\d.,]+)/gi)) fatos.push(m[1]);
-  for (const m of cortado.matchAll(/([\d.,]+)\s*(?:reais|real|mil\b)/gi)) fatos.push(m[1]);
-  for (const m of cortado.matchAll(/(?<![\d/:])(\d{1,2})\s*(?:h|:)\s*(\d{2})?/gi)) fatos.push(`${m[1]}${m[2] ? ('h' + m[2]) : 'h'}`);
-  for (const m of cortado.matchAll(/(?<![\d/])(\d{1,2})\/(\d{1,2})(?:\/\d{2,4})?(?![\d/])/g)) fatos.push(`dia${m[1]}`);
-  for (const m of cortado.matchAll(/\+?\d[\d\s().-]{7,}\d/g)) fatos.push(m[0]);
-  for (const m of cortado.matchAll(/(?:https?:\/\/|www\.)\S+/gi)) fatos.push(m[0]);
-  const fh = (t: string) => semEspaco(t).replace(/(\d{1,2})(?:h|:)(\d{2})/g, '$1h$2').replace(/(?<![\d])(\d{1,2})(?:h|:)(?![\d])/g, '$1h');
-  const fhFala = fh(fala);
-  return fatos.every((x) => {
-    const n = semEspaco(x);
-    if (n.startsWith('dia')) return new RegExp(`(?<![\\d/])${n.slice(3)}(?![\\d])`).test(f);
-    if (/^\d{1,2}h(\d{2})?$/.test(n)) return fhFala.includes(n);
-    return f.includes(n);
-  });
+  const a = fatosDoTexto(cortado);
+  const b = fatosDoTexto(fala);
+  const todos = (de: Set<string>, em: Set<string>) => [...de].every((x) => em.has(x));
+  if (!todos(a.dinheiro, b.dinheiro) || !todos(a.horas, b.horas) || !todos(a.telefones, b.telefones) || !todos(a.links, b.links)) return false;
+  return [...a.datas].every((d) => b.datas.has(d) || b.dias.has(d.split('/')[0]));
 }
 
 /**
@@ -516,6 +546,16 @@ function fatosCabemNaFala(cortado: string, fala: string): boolean {
 export function cortarAberturaMetanarrativa(texto: string): string {
   const partes = (texto ?? '').split(/\n\s*\n/);
   if (partes.length < 2) return texto;
+
+  // Caminho ANTIGO (Caxias, 13/11), mantido como era: a abertura que fala da transcrição do áudio em 3ª pessoa sai sem exigir
+  // cumprimento/"você" no que sobra ("Entendi! Me conta o que está sentindo?" serve). Só acrescenta a conferência de dados.
+  const [abertura, ...resto] = partes;
+  if (ABERTURA_META.test(abertura) && detectarVazamento(abertura) && TERCEIRA_PESSOA.test(abertura) && !DIRIGIDO_AO_PACIENTE.test(abertura)) {
+    const sobraAntiga = resto.join('\n\n').trim();
+    if (!sobraAntiga || ABERTURA_META.test(sobraAntiga) || detectarVazamento(sobraAntiga) || !fatosCabemNaFala(abertura, sobraAntiga)) return texto;
+    return sobraAntiga;
+  }
+
   let n = 0;
   while (n < partes.length - 1 && ehBastidorPuro(partes[n])) n++;
   if (n === 0) return texto;

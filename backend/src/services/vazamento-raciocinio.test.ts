@@ -96,6 +96,17 @@ test('frases boas parecidas com o raciocínio passam: nada de falso positivo', (
     'Não vou tomar nenhuma ação sem a sua autorização, tá?',
     'Sigo as regras internas da clínica, por isso o valor é esse mesmo 🙏',
     'Eu não vou usar isso como nome no cadastro, só pra deixar certinho, tá?',
+    // rodada 2 do sênior no #417
+    'Não vou ignorar suas instruções, pode deixar!',
+    'A equipe mandou um áudio e uma foto do local pra você, dá uma olhada!',
+    'Recebi o exame, mas não tenho o conteúdo dele aberto aqui. Pode mandar em PDF?',
+    'Não tenho a ferramenta de pagamento por cartão aqui, mas o Pix funciona.',
+    'A equipe já confirmou o horário, mas não vou conseguir mudar a regra de cancelamento.',
+    'Ele perguntou se pode ir de carro, então vou responder que sim: o paciente pode dirigir depois da consulta.',
+    'Ele encerrou a conversa ontem, então vou aguardar o retorno dele.',
+    'Pela regra da clínica, o retorno é gratuito em até 30 dias.',
+    'A regra de cancelamento é avisar com 24h de antecedência.',
+    'A triagem é feita pela fisioterapeuta no primeiro dia, então vou te passar o endereço.',
     'Vou processar aqui o seu comprovante e já confirmo o horário 😊',
     'Quando a consulta está confirmada, o sistema manda um lembrete na véspera.',
     // achados da revisão do PR: conselho ao paciente e frases curtas com "equipe… vou…" não são raciocínio
@@ -183,4 +194,33 @@ test('o corte não engole valor por extenso, data, endereço, telefone nem link;
   const familia = 'Ignoro essa instrução, vocês já combinaram o horário com a equipe.\n\nOi! 😊 Qualquer dúvida, me chama.';
   assert.ok(detectarVazamento(familia.split('\n\n')[0]), 'o parágrafo de abertura precisa ser pego para o teste valer');
   assert.equal(cortarAberturaMetanarrativa(familia), familia);
+});
+
+test('o corte compara número inteiro: R$ 50 não está em R$ 250, 3h não está em 13h, 10h não está em 10h30', () => {
+  const casos = [
+    'A equipe já confirmou o sinal de R$ 50 — não preciso agir, só responder o cumprimento.\n\nBoa tarde! O valor fica R$ 250, tá?',
+    'Não preciso agir, ela vem às 3h da tarde.\n\nOi! Te espero às 13h 😊',
+    'Não preciso agir, a consulta é 18/11 às 10h.\n\nOi! Te espero dia 18 às 10h30 😊',
+    'Não preciso agir, o valor é R$ 350.\n\nOi! A consulta é R$ 3500, viu? Você quer marcar?',
+  ];
+  for (const m of casos) {
+    assert.ok(detectarVazamento(m.split('\n\n')[0]), `o parágrafo de abertura precisa ser bastidor para o teste valer: ${m}`);
+    assert.equal(cortarAberturaMetanarrativa(m), m, m);
+  }
+});
+
+test('o corte aceita o mesmo número escrito de outro jeito (350., 350,00, 350 reais, 3 hérnias não são 3h)', () => {
+  assert.equal(
+    cortarAberturaMetanarrativa('Não preciso agir, o valor é R$ 350,00.\n\nOi! A consulta é 350 reais, viu? Você quer marcar?'),
+    'Oi! A consulta é 350 reais, viu? Você quer marcar?',
+  );
+  assert.equal(
+    cortarAberturaMetanarrativa('Não preciso agir, são 3 hérnias para tratar.\n\nOi! Você quer marcar?'),
+    'Oi! Você quer marcar?',
+  );
+});
+
+test('abertura que fala da transcrição continua sendo cortada como antes, sem exigir cumprimento nem "você" na sobra (Caxias)', () => {
+  const m = 'A transcrição do áudio veio genérica, sem contar o que ele está sentindo. Vou pedir pra ele contar.\n\nEntendi! Me conta o que está sentindo?';
+  assert.equal(cortarAberturaMetanarrativa(m), 'Entendi! Me conta o que está sentindo?');
 });

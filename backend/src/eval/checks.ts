@@ -221,7 +221,10 @@ export function conferir(
   ctx: ContextoDaConferencia,
 ): Falha[] {
   const falhas: Falha[] = [];
-  const t = normalizar(resp.texto);
+  // Tudo é conferido no texto que o paciente de fato receberia: a produção corta o parágrafo de raciocínio que vem antes da fala
+  // (cortarAberturaMetanarrativa) ANTES de olhar vazamento, preço e o resto. Sem isso o Promptfoo reprovaria o que o paciente nunca recebe.
+  const saida = cortarAberturaMetanarrativa(resp.texto);
+  const t = normalizar(saida);
   const chamadas = resp.ferramentas.map((f) => f.nome);
 
   if (!resp.texto.trim() && chamadas.length === 0) {
@@ -230,9 +233,7 @@ export function conferir(
 
   // Vazamento de bastidor: a mesma barreira que a produção usa (services/vazamento.ts). Vale para TODO caso, sem opção de desligar:
   // raciocínio, nome de ferramenta ou "não preciso agir" na fala nunca é resposta certa (19/11/2026: pacientes receberam isso).
-  // Confere o que o paciente de fato receberia: a produção corta o parágrafo de raciocínio que vem antes da fala (cortarAberturaMetanarrativa)
-  // ANTES de olhar o vazamento. Sem isso o Promptfoo reprovaria um vazamento que o paciente nunca recebe.
-  const vazou = detectarVazamento(cortarAberturaMetanarrativa(resp.texto));
+  const vazou = detectarVazamento(saida);
   if (vazou) {
     falhas.push({ regra: 'vazamento_de_bastidor', detalhe: `${explicarVazamento(vazou)} ("${vazou.trecho.slice(0, 60)}")` });
   }
@@ -271,7 +272,7 @@ export function conferir(
     }
   }
 
-  const ofertados = ofereceHorarioOcupado(resp.texto, espera.naoOfereceHorario ?? []);
+  const ofertados = ofereceHorarioOcupado(saida, espera.naoOfereceHorario ?? []);
   for (const h of ofertados) {
     falhas.push({ regra: 'horario_ocupado', detalhe: `ofereceu ${h}, que já está ocupado` });
   }
@@ -279,7 +280,7 @@ export function conferir(
   // O guardrail é o mesmo da produção. Se ele precisou agir, a IA errou —
   // mesmo que o paciente nunca veja o erro, porque a próxima mudança de prompt
   // pode ser justamente a que tira o guardrail do caminho.
-  const g = aplicarGuardrail(resp.texto, ctx.unit, { mensagensDoPaciente: ctx.falasDoPaciente });
+  const g = aplicarGuardrail(saida, ctx.unit, { mensagensDoPaciente: ctx.falasDoPaciente });
   for (const gatilho of [...g.triggered, ...(resp.gatilhosDoGuardrail ?? [])]) {
     if (gatilho.startsWith('preco') && espera.precoDoCatalogo !== false) {
       falhas.push({ regra: 'preco_fora_do_catalogo', detalhe: gatilho });
@@ -294,12 +295,12 @@ export function conferir(
   }
 
   if (espera.naoTransfere !== false) {
-    for (const key of detectarTransferencia(resp.texto)) {
+    for (const key of detectarTransferencia(saida)) {
       falhas.push({ regra: 'transferiu', detalhe: key });
     }
   }
 
-  if (espera.naoDesiste !== false && pareceDesistir(resp.texto)) {
+  if (espera.naoDesiste !== false && pareceDesistir(saida)) {
     falhas.push({ regra: 'desistiu', detalhe: 'despediu-se sem propor dia, hora nem pergunta' });
   }
 
