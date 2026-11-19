@@ -110,3 +110,58 @@ test('o pedido é reconhecido por verbo: «preciso do seu nome» pega; «posso t
   assert.equal(pedeDadosAntesDaTaxa('Certo, quarta às 9h! Se precisar posso te ligar no seu telefone.', CTX), false);
   assert.equal(pedeDadosAntesDaTaxa('Certo, quarta às 9h! Vou anotar o nome dele.', CTX), false);
 });
+
+// --- Os falsos positivos que o sênior apontou (rodada 2): a rede só vale com ESCOLHA de uma hora oferecida ----------------------------
+
+const ofertaDeHorarios = 'Tenho quarta às 09:00 ou às 11:00. Qual fica melhor pra você? 😊';
+const ctx = (fala: string, respostaAnterior = ofertaDeHorarios): ContextoDaTaxa => ({ ...CTX, falasDoPaciente: [fala], respostaAnterior });
+const PEDE_NOME = 'Claro! Me passa seu nome completo, por favor?';
+
+test('«hoje» não é oferta e «quero» não é aceite: «Como posso te ajudar hoje?» -> «quero marcar consulta» não vira pedido de taxa', () => {
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('quero marcar consulta', 'Como posso te ajudar hoje? 😊')), false);
+  assert.equal(travaDaTaxaDeReserva(PEDE_NOME, DADOS, ctx('quero marcar consulta', 'Como posso te ajudar hoje? 😊')), null);
+  // nem com uma oferta de hora de verdade: «quero» não é aceite
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('quero')), false);
+});
+
+test('recusa ou pedido de outro horário não é escolha', () => {
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('não consigo nesses, só depois das 18h')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('quinta não dá, tem sábado?')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('às 9 não dá, pode ser outro horário?')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('às 9 não consigo')), false);
+});
+
+test('número solto não é hora: «sinto dor a 3 meses» depois de uma oferta', () => {
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('sinto dor a 3 meses')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('sinto dor a 3 meses', 'Tenho quarta às 3h ou às 11:00.')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('faz 11 meses que sinto dor')), false);
+});
+
+test('o paciente cita a hora oferecida (de várias formas) ou aceita a ÚNICA proposta com uma palavra', () => {
+  for (const fala of ['9h', 'as 9', 'às 9', 'pode ser 09:00', '11 horas', 'as 11h então', 'Sexta às 9::00', 'pras 11']) {
+    assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx(fala)), true, fala);
+  }
+  const uma = 'Consegui quarta às 09:00. Fica bom pra você?';
+  for (const fala of ['sim', 'Ok!', 'pode ser', 'Combinado 👍', 'fechado', 'Pode sim']) {
+    assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx(fala, uma)), true, fala);
+  }
+  // aceite a DUAS opções não diz qual; aceite com mais coisa na fala ou hora que não foi oferecida também não
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('ok')), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('sim, mas só às 18h', uma)), false);
+  assert.equal(pedeDadosAntesDaTaxa(PEDE_NOME, ctx('às 15h', uma)), false);
+});
+
+test('CPF e «um telefone» só contam com verbo de pedido', () => {
+  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Na chegada, leve um documento com CPF.', ctx('9h')), false);
+  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Tem um telefone fixo na recepção se precisar.', ctx('9h')), false);
+  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Me passa seu CPF?', ctx('9h')), true);
+  assert.equal(pedeDadosAntesDaTaxa('Perfeito, quarta às 9h! Pode me passar um telefone pra contato?', ctx('9h')), true);
+});
+
+test('resposta que é só o pedido de nome: sai o pedido da taxa em texto neutro, sem «o seu horário ainda não está garantido»', () => {
+  const troca = travaDaTaxaDeReserva('Ótimo! Me confirma seu nome completo?', DADOS, ctx('9h'));
+  assert.equal(troca?.motivo, 'dados_antes_da_taxa');
+  assert.match(troca!.texto, /49\.485\.277\/0001-40/);
+  assert.match(troca!.texto, /taxa de agendamento de R\$ 100/);
+  assert.doesNotMatch(troca!.texto, /ainda não está garantido|Só um detalhe importante/);
+});
