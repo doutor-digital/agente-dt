@@ -378,13 +378,27 @@ const CASOS: { n: string; unit: Unit; entra: string; sai: string }[] = [
   { n: 'r8.02', unit: ARAGUAINA, entra: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.', sai: 'O comprovante mostra R$ 300, que é o valor da consulta antecipada.' },
   { n: 'r8.03', unit: SERRA_COM_PLANO, entra: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?', sai: 'O comprovante veio de R$ 250, que é o valor da consulta antecipada, certo?' },
   // ── 9. /code-review obrigatório: o R$ negado/escondido continua "já no texto" (não vira substituto) e "seria" não nega (esperado = main) ──
+  // r9.01 e r9.05: ERRO CONHECIDO DO MAIN — o esperado fixa o que o main faz (o R$ 400/380 do dia vira o antecipado R$ 250); está aqui só para o PR não piorar, não porque esteja certo.
   { n: 'r9.01', unit: ARAGUAINA, entra: 'No dia o valor é R$ 400, não R$ 350.', sai: 'No dia o valor é R$ 250, não R$ 350.' },
   { n: 'r9.02', unit: ARAGUAINA, entra: 'Pagando antecipado fica R$ 300, e não R$ 350 no dia.', sai: 'Pagando antecipado fica R$ 250, e não R$ 350 no dia.' },
-  { n: 'r9.03', unit: ARAGUAINA, entra: 'Pagando antecipado fica R$ 300, e não R$ 350 no dia.', sai: 'Pagando antecipado fica R$ 250, e não R$ 350 no dia.' },
   { n: 'r9.04', unit: SERRA_COM_PLANO, entra: 'Pagando antes fica R$ 300, não R$ 350.', sai: 'Pagando antes fica R$ 280, não R$ 350.' },
   { n: 'r9.05', unit: ARAGUAINA, entra: 'R$ 380 no dia, mas pagando antes você garante com sinal de R$ 50.', sai: 'R$ 250 no dia, mas pagando antes você garante com sinal de R$ 50.' },
   { n: 'r9.06', unit: ARAGUAINA, entra: 'Não seria R$ 400 no total, né? Fica R$ 250.', sai: 'Não seria R$ 350 no total, né? Fica R$ 250.' },
   { n: 'r9.07 "fica R$ 200 + R$ 50 de sinal agora": o 200 é parcela de uma soma, não o antecipado (melhor que o main, que trocava o preço do dia)', unit: ARAGUAINA, entra: 'São R$ 350 no dia, ou pagando antecipado fica R$ 200 + R$ 50 de sinal agora.', sai: 'São R$ 350 no dia, ou pagando antecipado fica R$ 200 + R$ 50 de sinal agora.' },
+  // ── 10. rodada 5 do sênior: o R$ do PACIENTE não conta como "já no texto" para o substituto — só o NEGADO conta (esperado = main) ──
+  { n: 'r10.01', unit: SERRA_COM_PLANO, entra: 'Seu Pix de R$ 280 caiu certinho. Pagando antes fica R$ 290.', sai: 'Seu Pix de R$ 280 caiu certinho. Pagando antes fica R$ 280.' },
+  { n: 'r10.02', unit: SERRA_COM_PLANO, entra: 'Você pagou R$ 280 certinho, e a consulta antecipada sai R$ 290.', sai: 'Você pagou R$ 280 certinho, e a consulta antecipada sai R$ 280.' },
+  { n: 'r10.03', unit: ARAGUAINA, entra: 'Recebi seu Pix de R$ 250, que recebi agora. A consulta antecipada fica R$ 260.', sai: 'Recebi seu Pix de R$ 250, que recebi agora. A consulta antecipada fica R$ 250.' },
+  { n: 'r10.04', unit: ARAGUAINA, entra: 'O comprovante mostra R$ 250. O valor antecipado é R$ 260.', sai: 'O comprovante mostra R$ 250. O valor antecipado é R$ 250.' },
+  { n: 'r10.05', unit: ARAGUAINA, entra: 'O comprovante mostra R$ 350. No dia fica R$ 340.', sai: 'O comprovante mostra R$ 350. No dia fica R$ 350.' },
+  { n: 'r10.06', unit: SERRA_COM_PLANO, entra: 'Fica R$ 290 pagando antes, não R$ 280.', sai: 'Fica R$ 280 pagando antes, não R$ 280.' },
+  { n: 'r10.07', unit: ARAGUAINA, entra: 'Fica R$ 260 no Pix, não R$ 250.', sai: 'Fica R$ 200 no Pix, não R$ 250.' },
+  { n: 'r10.08', unit: SEM_SINAL, entra: 'Pagando antes fica R$ 300, e não R$ 200.', sai: 'Pagando antes fica R$ 350, e não R$ 200.' },
+  { n: 'r10.09', unit: SEM_SINAL, entra: 'Recebi seu comprovante de R$ 200. Pagando antes fica R$ 220.', sai: 'Recebi seu comprovante de R$ 200. Pagando antes fica R$ 200.' },
+  { n: 'r10.10', unit: ARAGUAINA, entra: 'O valor não seria R$ 450, e sim R$ 250 com o sinal.', sai: 'O valor não seria R$ 350, e sim R$ 250 com o sinal.' },
+  // r10.11 PENDÊNCIA CONHECIDA (PR futuro): o "+ R$ 30 de taxa" faz o 250 não ser lido como antecipado; o certo seria 280 (restoNoDia). Hoje fica como o modelo escreveu — melhor que o main,
+  // que trocava o R$ 350 do DIA por 280.
+  { n: 'r10.11', unit: SERRA_COM_PLANO, entra: 'A consulta é R$ 350 no dia, ou pagando antecipado fica R$ 250 + R$ 30 de taxa.', sai: 'A consulta é R$ 350 no dia, ou pagando antecipado fica R$ 250 + R$ 30 de taxa.' },
 ];
 
 for (const c of CASOS) {

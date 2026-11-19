@@ -139,7 +139,7 @@ function corrigirValores(
    */
   totalComSinal?: PrecosComSinal,
   /**
-   * Valores que o texto TEM mas estão escondidos da trava (o R$ que a Sofia nega — "…e não R$ 350 no dia" — e o que o paciente mandou). Contam como "já no texto":
+   * Valores que o texto TEM mas estão escondidos da trava porque a Sofia os NEGA ("…e não R$ 350 no dia"; o do paciente não entra: é dele, não do preço da unidade). Contam como "já no texto":
    * sem isto o 350 negado voltava a ser candidato a substituto e saía "fica R$ 350, e não R$ 350 no dia".
    */
   escondidosNoTexto: Iterable<number> = [],
@@ -376,13 +376,14 @@ export function aplicarGuardrail(text: string, unit: Unit, contexto: ContextoDoG
   const presentesEscondidos = new Set<number>();
   const escondeOferta = (t: string): string => {
     const doPaciente = posicoesDeValorDoPaciente(t);
-    for (const pos of posicoesDeValorNegado(t)) doPaciente.add(pos);
+    const negados = posicoesDeValorNegado(t);
+    for (const pos of negados) doPaciente.add(pos);
     if (exatosDaOferta.size === 0 && doPaciente.size === 0) return t;
     return t.replace(/R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/gi, (m, inteiro: string, centavos: string | undefined, posicao: number) => {
       const valor = Number(`${inteiro.replace(/\./g, '')}.${centavos ?? '00'}`);
       const daOferta = exatosDaOferta.has(valor) && !catalogo.has(Math.trunc(valor));
       if (!daOferta && !doPaciente.has(posicao)) return m;
-      if (doPaciente.has(posicao)) presentesEscondidos.add(Math.trunc(valor));
+      if (negados.has(posicao)) presentesEscondidos.add(Math.trunc(valor));
       escondidos.push(m);
       // mantém o "R$" na frente (as travas param no próximo R$) mas sem o número, que é o que elas procuram
       return `R$ ⟦${escondidos.length - 1}⟧`;
