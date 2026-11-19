@@ -13,7 +13,7 @@
 #
 #   GRAVAR=1  grava (sem isto: seco, só conta)      CAIXA=8     caixa do Messenger
 #   DIAS=3    só contatos criados nos últimos N dias (0 = todos)   HORAS=2  idem em horas (vale no lugar de DIAS)
-#   MAXIMO=30 no máximo N consultas à Meta por rodada
+#   MAXIMO=30 no máximo N consultas à Meta por rodada (metade os mais novos, metade sorteio)   SLOT=n semente do sorteio (teste)
 #   RITMO=0.7 segundos entre chamadas à Meta
 require 'json'
 require File.join(ENV['HS_DIR'] || File.dirname(File.expand_path(__FILE__)), 'historico_social')
@@ -55,7 +55,9 @@ begin
     fonte = S::FonteFixture.new(JSON.parse(File.read(ENV['FIXTURES'])).fetch('messenger'), lado_pagina: ch.page_id)
   end
 
-  escopo.order('contacts.id DESC').limit(MAXIMO).pluck('contacts.id', 'contact_inboxes.source_id').each do |contato_id, psid|
+  # metade dos mais novos + sorteio que muda a cada rodada: contato que a Meta não nomeia não prende a fila dos mais antigos
+  ids = S.escolher_candidatos(escopo, MAXIMO, ENV['SLOT'] || (Time.now.to_i / 600)).uniq
+  ContactInbox.where(inbox_id: inbox.id, contact_id: ids).pluck(:contact_id, :source_id).each do |contato_id, psid|
     c[:consultados] += 1
     begin
       externo = fonte.participante_por_usuario(psid)

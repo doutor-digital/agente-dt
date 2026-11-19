@@ -30,7 +30,7 @@ INSTALLATION_ENV=docker
 DISABLE_DATABASE_ENVIRONMENT_CHECK=1
 ENV
 rodar() { docker run --rm --network "$NET" --env-file "$TRAB/env" -v "$AQUI":/t:ro -v "$TRAB":/work "$@"; }
-echo "1/6 criando o banco vazio (schema do Chatwoot)"
+echo "1/7 criando o banco vazio (schema do Chatwoot)"
 rodar "$IMG" bundle exec rails db:schema:load 2>&1 | grep -v -E "^\s*$|^[WIDE], \[" | tail -3
 FALHOU=0
 fase() { # $1 = número, $2 = rótulo
@@ -38,11 +38,12 @@ fase() { # $1 = número, $2 = rótulo
   rodar -e FASE="$1" "$IMG" bundle exec rails runner /t/silencio-teste.rb 2>&1 | grep -v -E "^\s*$|^[WIDE], \[|INFO: Sidekiq|warning:" | tee "$TRAB/raw$1" | grep -E "^(PASSOU|FALHOU|RESULTADO|controle|durante|LOG|REG|Error|.*rror)" | sed -E 's/^REG .*/REG (registro de ids, omitido aqui)/' | tee "$TRAB/saida$1"
   grep -q "TUDO PASSOU" "$TRAB/saida$1" || FALHOU=1
 }
-fase 1 "2/6 semeia, controle positivo, seco, importação, conferência"
-fase 2 "3/6 segunda rodada (idempotência) + mensagem velha que aparece depois"
-fase 3 "4/6 rotina dos John Doe do Messenger"
-fase 4 "5/6 mensagem nova chega pelo caminho normal depois da importação"
+fase 1 "2/7 semeia, controle positivo, seco, importação, conferência"
+fase 2 "3/7 segunda rodada (idempotência) + mensagem velha que aparece depois"
+fase 3 "4/7 rotina dos John Doe do Messenger"
+fase 4 "5/7 mensagem nova chega pelo caminho normal depois da importação"
 cat "$TRAB/raw1" "$TRAB/raw2" | grep '^REG ' > "$TRAB/registro.jsonl"
-fase 5 "6/6 desfazer com o registro de ids (seco e de verdade)"
+fase 5 "6/7 desfazer com o registro de ids (seco e de verdade)"
+fase 6 "7/7 parâmetros ruins (limite 0, corte tarde demais) são recusados"
 echo; [ "$FALHOU" = 0 ] && echo "PROVA DE SILÊNCIO: TUDO PASSOU" || echo "PROVA DE SILÊNCIO: HOUVE FALHA (veja acima)"
 exit "$FALHOU"

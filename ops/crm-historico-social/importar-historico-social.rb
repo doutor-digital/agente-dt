@@ -15,7 +15,8 @@
 #   GRAVAR=1            sem isto é CONFERÊNCIA EM SECO: só lê (Meta e banco) e conta. NADA é escrito.
 #   CAIXAS=7,8          ids das caixas (padrão 7 e 8)
 #   LIMITE_CONVERSAS=n  só as n primeiras conversas de cada caixa (teste pequeno antes do lote)
-#   CORTE=ISO8601       mensagens a partir desta hora NÃO são importadas (são «vivas»: o webhook entrega). Padrão: início da rodada − 15 min
+#   CORTE=ISO8601       mensagens a partir desta hora NÃO são importadas (são «vivas»: o webhook entrega). Padrão: a hora em que CADA CAIXA foi
+#                       criada (inboxes.created_at) — webhook atrasado da Meta repete por horas. Só vale se não passar de início − 15 min.
 #   RITMO=0.7           segundos entre chamadas à Meta (a API de conversas aguenta ~2/s)
 #   FIXTURES=arquivo    (teste) lê as conversas de um JSON em vez da Meta
 #   MODO=desfazer       com REGISTRO=arquivo.jsonl (linhas REG de uma rodada): desfaz o que aquela rodada criou (seco sem GRAVAR=1)
@@ -29,10 +30,29 @@ $stdout.sync = true
 
 GRAVAR = ENV['GRAVAR'] == '1'
 CAIXAS = (ENV['CAIXAS'] || '7,8').split(',').map { |x| x.strip.to_i }.reject(&:zero?)
-LIMITE = ENV['LIMITE_CONVERSAS'].to_i
+ERROS_DE_PARAMETRO = [] # explicados na 1ª linha de erro (antes de qualquer coisa ser lida ou gravada)
+LIMITE = begin
+  if ENV['LIMITE_CONVERSAS'].to_s.empty?
+    0
+  else
+    n = Integer(ENV['LIMITE_CONVERSAS'], 10)
+    ERROS_DE_PARAMETRO << 'LIMITE_CONVERSAS=0 (ou negativo) é recusado: 0 não significa «sem limite» — tire a variável para importar tudo' if n <= 0
+    n
+  end
+rescue ArgumentError
+  ERROS_DE_PARAMETRO << 'LIMITE_CONVERSAS precisa ser um número inteiro'
+  0
+end
 RITMO = (ENV['RITMO'] || '0.7').to_f
 INICIO = Time.now.utc
-CORTE = ENV['CORTE'].to_s.empty? ? INICIO - (15 * 60) : Time.iso8601(ENV['CORTE']).utc
+CORTE_INFORMADO = begin
+  ENV['CORTE'].to_s.empty? ? nil : Time.iso8601(ENV['CORTE']).utc
+rescue ArgumentError
+  ERROS_DE_PARAMETRO << 'CORTE inválido (use AAAA-MM-DDTHH:MM:SSZ)'
+  nil
+end
+DESDE_14_11 = Time.utc(2026, 11, 14, 3, 0, 0) # 14/11 00:00 em Belém: o corte do «arquivo» das telas do agente (chatwoot-regua.ts)
+RECENTE_72H = INICIO - (72 * 3600)
 FIXTURES = ENV['FIXTURES'].to_s.empty? ? nil : ENV['FIXTURES']
 
 def log(texto)
@@ -149,13 +169,18 @@ def nome_do_contato(canal, externo, perfil)
 end
 
 def importar_caixa!(inbox, tag, resumo)
+  corte = begin
+    S.resolver_corte(informado: CORTE_INFORMADO, criacao_da_caixa: inbox.created_at, inicio: INICIO)
+  rescue ArgumentError => e
+    raise ErroNosso, e.message
+  end
   c = nil
   fonte = nil
   tipos = Hash.new(0)
   canal, fonte = fonte_da_caixa(inbox)
   c = resumo[inbox.id] = zerar
   seguidos = 0 # erros seguidos (qualquer conversa bem-sucedida zera): muitos seguidos = algo quebrado, para a rodada
-  log "caixa #{inbox.id} (#{canal}): lendo conversas da Meta#{LIMITE.positive? ? " (limite #{LIMITE})" : ''}"
+  log "caixa #{inbox.id} (#{canal}): lendo conversas da Meta#{LIMITE.positive? ? " (limite #{LIMITE})" : ''}; corte #{corte.iso8601}"
 
   fonte.conversas(limite: LIMITE.positive? ? LIMITE : nil) do |conv|
     c[:conversas_meta] += 1
@@ -199,7 +224,7 @@ def importar_caixa!(inbox, tag, resumo)
       end
 
       existentes = Message.where(inbox_id: inbox.id, source_id: normais.map { |m| m[:mid] }).pluck(:source_id).to_set
-      sep = S.separar(normais, existentes: existentes, corte: CORTE)
+      sep = S.separar(normais, existentes: existentes, corte: corte)
       c[:mensagens_ja_existiam] += sep[:ja_existiam]
       c[:mensagens_pos_corte_nao_importadas] += sep[:pos_corte]
       novas = sep[:novas]
@@ -214,6 +239,10 @@ def importar_caixa!(inbox, tag, resumo)
                                                       .where('additional_attributes @> ?::jsonb', { S::MARCA_CONVERSA => conv['id'] }.to_json).first
       c[conversa_existente ? :conversas_historico_atualizadas : :conversas_historico_novas] += 1
       c[:mensagens_a_gravar] += novas.size
+      # contagens que o João precisa ver ANTES de gravar: (a) última mensagem a partir de 14/11 (apareceria no funil se não fosse arquivo);
+      # (b) a última é do PACIENTE e tem menos de 72 h (lead sem resposta que ficaria enterrado como «resolvido»)
+      c[:ultima_msg_desde_14_11] += 1 if novas.last[:ts] >= DESDE_14_11
+      c[:ultima_msg_do_paciente_menos_de_72h] += 1 if novas.last[:entrada] && novas.last[:ts] >= RECENTE_72H
       next unless GRAVAR
 
       perfil = (canal == :instagram && situacao == :novo) ? fonte.perfil_instagram(externo_id) : nil
@@ -238,7 +267,10 @@ rescue S::ErroDaMeta => e # a própria LISTA de conversas falhou (página inteir
   log "caixa #{inbox.id}: a lista de conversas da Meta foi interrompida (#{erro_seguro(e)}) — rode de novo para o resto"
 ensure
   if c
-    c[:chamadas_a_meta] = fonte.graph.chamadas if fonte.respond_to?(:graph) && fonte.graph
+    if fonte.respond_to?(:graph) && fonte.graph
+    c[:chamadas_a_meta] = fonte.graph.chamadas
+    c[:uso_maximo_da_cota_pct] = fonte.graph.uso_maximo.round
+  end
     tipos.sort_by { |k, _| k.to_s }.each { |k, v| c["anexo_#{k}".to_sym] = v }
   end
 end
@@ -306,9 +338,22 @@ def contar_pendentes_de_vida(inbox_ids)
   Conversation.where(inbox_id: inbox_ids).where('NOT COALESCE(jsonb_exists(additional_attributes, ?), false)', S::MARCA_CONVERSA).count
 end
 
+def imprimir_resumo(resumo, vivas_antes)
+  resumo.each do |caixa, c|
+    log "RESUMO caixa #{caixa}: " + c.sort_by { |k, _| k.to_s }.map { |k, v| "#{k}=#{v}" }.join(' ')
+  end
+  log "conversas vivas nas caixas: antes=#{vivas_antes} depois=#{contar_pendentes_de_vida(CAIXAS)} (a diferença é uso normal; a importação só grava conversas de histórico)"
+rescue StandardError
+  nil
+end
+
 # ─── execução ───────────────────────────────────────────────────────────────────────────────────────────────────────
-log "início — #{GRAVAR ? 'GRAVANDO' : 'CONFERÊNCIA EM SECO (nada é escrito)'}; caixas #{CAIXAS.inspect}; corte #{CORTE.iso8601}#{FIXTURES ? '; FONTE = fixtures (teste)' : ''}"
+log "início — #{GRAVAR ? 'GRAVANDO' : 'CONFERÊNCIA EM SECO (nada é escrito)'}; caixas #{CAIXAS.inspect}; corte #{CORTE_INFORMADO ? CORTE_INFORMADO.iso8601 : 'a criação de cada caixa'}#{FIXTURES ? '; FONTE = fixtures (teste)' : ''}"
+resumo = {}
+vivas_antes = nil
 begin
+  raise ErroNosso, ERROS_DE_PARAMETRO.join('; ') unless ERROS_DE_PARAMETRO.empty?
+
   if ENV['MODO'] == 'desfazer'
     desfazer!
     log 'FIM'
@@ -322,7 +367,6 @@ begin
   raise ErroNosso, "caixa(s) não encontrada(s): #{CAIXAS - inboxes.map(&:id)}" if inboxes.size != CAIXAS.size
 
   vivas_antes = contar_pendentes_de_vida(CAIXAS)
-  resumo = {}
   inboxes.each do |inbox|
     importar_caixa!(inbox, tag, resumo)
   rescue S::Parar => e
@@ -330,14 +374,11 @@ begin
     (resumo[inbox.id] ||= zerar)[:parou] = 1
     break
   end
-  vivas_depois = contar_pendentes_de_vida(CAIXAS)
-  resumo.each do |caixa, c|
-    log "RESUMO caixa #{caixa}: " + c.sort_by { |k, _| k.to_s }.map { |k, v| "#{k}=#{v}" }.join(' ')
-  end
-  log "conversas vivas nas caixas: antes=#{vivas_antes} depois=#{vivas_depois} (a diferença é uso normal; a importação só grava conversas de histórico)"
+  imprimir_resumo(resumo, vivas_antes)
   log 'FIM'
 rescue StandardError => e
   log "ERRO FATAL (#{erro_seguro(e)})"
+  imprimir_resumo(resumo, vivas_antes) unless resumo.empty? # o que a 1ª caixa já fez não se perde se a 2ª quebrar
   log 'FIM'
   exit 1
 end

@@ -325,6 +325,76 @@ class HistoricoSocialTest < Minitest::Test
     assert_includes http.urls[0], 'user_id=5550001'
   end
 
+  def test_perfil_negado_por_consentimento_230_nao_derruba_a_rodada
+    # o Chatwoot ignora o 230 em Instagram::MessageText#handle_error_response; antes disto o importador parava tudo no mesmo ponto
+    [230, 10, 200, 3, 9010, 100].each do |cod|
+      g, = graph([erro(cod, 400), ok('name' => 'Ana', 'username' => 'ana')])
+      f = S::FonteMeta.new(canal: :instagram, graph: g, lado_pagina: '17841')
+      assert_nil f.perfil_instagram('1'), "código #{cod}: segue sem o nome"
+      assert_equal({ 'name' => 'Ana', 'username' => 'ana' }, f.perfil_instagram('2'), 'e a próxima pessoa continua sendo lida')
+    end
+  end
+
+  def test_perfil_com_token_recusado_ainda_para
+    g, = graph([erro(190, 400)])
+    f = S::FonteMeta.new(canal: :instagram, graph: g, lado_pagina: '17841')
+    assert_raises(S::Parar) { f.perfil_instagram('1') }
+  end
+
+  def test_230_fora_do_perfil_continua_parando
+    g, = graph([erro(230, 403)])
+    assert_raises(S::Parar) { g.get('/x') }
+  end
+
+  # ── corte ──
+  def test_corte_padrao_e_a_criacao_da_caixa
+    inicio = Time.utc(2026, 11, 20, 12)
+    criacao = Time.utc(2026, 11, 19, 13, 49)
+    assert_equal criacao, S.resolver_corte(informado: nil, criacao_da_caixa: criacao, inicio: inicio)
+  end
+
+  def test_corte_informado_depois_de_inicio_menos_15_min_e_recusado
+    inicio = Time.utc(2026, 11, 20, 12)
+    assert_raises(ArgumentError) { S.resolver_corte(informado: inicio - 600, criacao_da_caixa: inicio - 86_400, inicio: inicio) }
+    assert_raises(ArgumentError) { S.resolver_corte(informado: inicio, criacao_da_caixa: inicio - 86_400, inicio: inicio) }
+    ok = inicio - (15 * 60)
+    assert_equal ok, S.resolver_corte(informado: ok, criacao_da_caixa: inicio - 86_400, inicio: inicio), 'exatamente 15 min vale'
+  end
+
+  # ── cota da Meta ──
+  def com_cabecalho(resp, app: nil, biz: nil)
+    [resp[0], resp[1], { 'x-app-usage' => app, 'x-business-use-case-usage' => biz }]
+  end
+
+  def test_cota_para_antes_de_estourar_no_messenger
+    biz = { '109' => [{ 'call_count' => 85, 'total_cputime' => 3, 'total_time' => 2 }] }.to_json
+    g, = graph([com_cabecalho(ok('ok' => 1), biz: biz)])
+    e = assert_raises(S::Parar) { g.get('/x') }
+    assert_includes e.message, '85%'
+    assert_equal 85, g.uso_maximo
+  end
+
+  def test_cota_para_antes_de_estourar_no_instagram
+    g, = graph([com_cabecalho(ok('ok' => 1), app: { 'call_volume' => 90, 'cpu_time' => 1 }.to_json)])
+    assert_raises(S::Parar) { g.get('/x') }
+  end
+
+  def test_cota_acima_de_60_desacelera_e_abaixo_nao
+    esperas = []
+    http = HttpFalso.new([com_cabecalho(ok('a' => 1), app: { 'call_volume' => 65, 'cpu_time' => 1 }.to_json), com_cabecalho(ok('b' => 1), app: { 'call_volume' => 10 }.to_json)])
+    g = S::Graph.new(base: 'https://graph.exemplo/v22.0', token: 'T', ritmo: 0, http: http, dorme: ->(s) { esperas << s }, pausa_por_uso: 60)
+    g.get('/1')
+    g.get('/2')
+    assert_equal [60], esperas, 'só a chamada com 65% espera'
+    assert_equal 65, g.uso_maximo
+  end
+
+  def test_sem_cabecalho_de_uso_nao_quebra
+    g, = graph([ok('ok' => 1)])
+    assert_equal({ 'ok' => 1 }, g.get('/x'))
+    assert_equal 0, g.uso_maximo
+  end
+
   def test_perfil_instagram_negado_devolve_nil
     g, = graph([erro(100, 400, 33)])
     f = S::FonteMeta.new(canal: :instagram, graph: g, lado_pagina: '17841')

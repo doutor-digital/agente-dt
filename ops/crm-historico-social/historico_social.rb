@@ -32,6 +32,29 @@ module HistoricoSocial
     n.strip.empty? || n == NOME_PADRAO
   end
 
+  MARGEM_DO_CORTE = 15 * 60 # o corte nunca pode passar de «início − 15 min»
+
+  # Corte = a partir de quando a mensagem é «viva» (o webhook entrega) e NÃO se importa. Padrão: o dia/hora em que a CAIXA foi criada
+  # (webhook atrasado da Meta repete por horas: com corte curto, a mensagem some no Instagram — o Chatwoot a acha «já existente» — e
+  # duplica no Messenger). `informado` (--corte) só vale se não passar de início − 15 min.
+  def resolver_corte(informado:, criacao_da_caixa:, inicio:)
+    teto = inicio - MARGEM_DO_CORTE
+    return criacao_da_caixa.utc if informado.nil?
+
+    raise ArgumentError, "corte #{informado.utc.iso8601} é depois de início − 15 min (#{teto.utc.iso8601}): recusado" if informado > teto
+
+    informado.utc
+  end
+
+  # Quem a rotina dos «John Doe» consulta nesta rodada: os mais NOVOS primeiro (metade da cota) e o resto por sorteio que muda a cada
+  # rodada (`slot`) — contato que a Meta não nomeia nunca prende a fila dos mais antigos.
+  def escolher_candidatos(escopo, maximo, slot)
+    novos = (maximo / 2.0).ceil
+    ids_novos = escopo.reorder('contacts.id DESC').limit(novos).pluck('contacts.id')
+    resto = escopo.where.not(id: ids_novos).reorder(Arel.sql("md5(contacts.id::text || '#{slot.to_i}')")).limit(maximo - ids_novos.size).pluck('contacts.id')
+    ids_novos + resto
+  end
+
   # Condição SQL «nome ainda é o padrão»: espelha nome_padrao? (John Doe exato, ou só espaço/tab/quebra de linha).
   def sql_nome_padrao(coluna)
     "(#{coluna} = '#{NOME_PADRAO}' OR btrim(#{coluna}, E' \\t\\r\\n') = '')"
@@ -183,7 +206,12 @@ module HistoricoSocial
 
     attr_reader :chamadas
 
-    def initialize(base:, token:, ritmo: 0.7, http: nil, dorme: nil, tentativas: 3, falhas_seguidas_max: 5, espera_limite: 90)
+    USO_PAUSAR_EM = 60  # % da cota (maior dos contadores da Meta): daqui para cima, espera antes da próxima chamada
+    USO_PARAR_EM = 80   # % da cota: para a rodada ANTES de estourar (o token é o mesmo do atendimento ao vivo)
+
+    attr_reader :uso_maximo
+
+    def initialize(base:, token:, ritmo: 0.7, http: nil, dorme: nil, tentativas: 3, falhas_seguidas_max: 5, espera_limite: 90, pausa_por_uso: 60)
       @base = base.chomp('/')
       @token = token
       @ritmo = ritmo
@@ -192,20 +220,25 @@ module HistoricoSocial
       @tentativas = tentativas
       @falhas_seguidas_max = falhas_seguidas_max
       @espera_limite = espera_limite
+      @pausa_por_uso = pausa_por_uso
+      @uso_maximo = 0
+      @pausas_seguidas = 0
       @falhas_seguidas = 0
       @chamadas = 0
     end
 
     # caminho relativo ("/{id}") com parâmetros, ou URL inteira (paging.next, que já leva o token)
-    def get(caminho, params = {})
+    # `tolerar_negado`: permissão/consentimento negado (230, 10, 200, 3…) vira ErroDaMeta (o chamador segue sem o dado) em vez de Parar.
+    def get(caminho, params = {}, tolerar_negado = false)
       uri = montar(caminho, params)
       tent = 0
       loop do
         tent += 1
         @dorme.call(@ritmo) if @ritmo.positive?
         @chamadas += 1
-        status, corpo = chamar(uri)
+        status, corpo, cabecalhos = chamar(uri)
         json = ler(corpo)
+        controlar_uso!(cabecalhos)
         erro = json.is_a?(Hash) ? json['error'] : nil
         if erro.nil? && status.to_i < 400 && json.is_a?(Hash)
           @falhas_seguidas = 0
@@ -213,7 +246,7 @@ module HistoricoSocial
         end
         codigo = erro.is_a?(Hash) ? erro['code'] : nil
         sub = erro.is_a?(Hash) ? erro['error_subcode'] : nil
-        classificar!(codigo, sub, status, ilegivel: json.nil?)
+        classificar!(codigo, sub, status, ilegivel: json.nil?, tolerar_negado: tolerar_negado)
         # transitório (ou 5xx/timeout) e limite de chamadas: tenta de novo com espera crescente (o limite espera MUITO mais: minutos);
         # esgotou as tentativas, conta uma falha seguida — e falhas seguidas demais param a rodada inteira
         if tent >= @tentativas
@@ -269,17 +302,49 @@ module HistoricoSocial
       CODIGOS_DE_LIMITE.include?(codigo)
     end
 
-    def classificar!(codigo, _sub, status, ilegivel: false)
+    # Maior contador de uso (%) nos cabeçalhos da Meta. IG (login do Instagram): x-app-usage {call_volume, cpu_time}; Messenger:
+    # x-business-use-case-usage {id: [{call_count, total_cputime, total_time}]}. Passou de USO_PARAR_EM: para ANTES de estourar.
+    def controlar_uso!(cab)
+      return unless cab.is_a?(Hash)
+
+      usos = []
+      [cab['x-app-usage'], cab['x-business-use-case-usage']].each do |h|
+        j = ler(h)
+        next unless j.is_a?(Hash)
+
+        j.each_value do |v|
+          (v.is_a?(Array) ? v : [j]).each do |x|
+            next unless x.is_a?(Hash)
+
+            %w[call_count total_cputime total_time call_volume cpu_time].each { |k| usos << x[k].to_f if x[k].is_a?(Numeric) }
+          end
+        end
+      end
+      uso = usos.max.to_f
+      @uso_maximo = uso if uso > @uso_maximo
+      raise Parar, "uso da cota da Meta em #{uso.round}% — paro antes de estourar; retome mais tarde (de preferência à noite)" if uso >= USO_PARAR_EM
+
+      if uso >= USO_PAUSAR_EM
+        @pausas_seguidas += 1
+        raise Parar, "cota da Meta segue acima de #{USO_PAUSAR_EM}% depois de #{@pausas_seguidas} pausas — paro" if @pausas_seguidas > 30
+
+        @dorme.call(@pausa_por_uso)
+      else
+        @pausas_seguidas = 0
+      end
+    end
+
+    def classificar!(codigo, _sub, status, ilegivel: false, tolerar_negado: false)
       return if ilegivel || CODIGOS_TRANSITORIOS.include?(codigo) || limite?(codigo) || status.to_i >= 500 # corpo que não é JSON (proxy/CDN): repete
       raise Parar, "token da Meta recusado (código #{codigo})" if CODIGOS_DE_TOKEN.include?(codigo)
-      raise Parar, "permissão da Meta negada (código #{codigo})" if CODIGOS_DE_PERMISSAO.include?(codigo)
+      raise Parar, "permissão da Meta negada (código #{codigo})" if CODIGOS_DE_PERMISSAO.include?(codigo) && !tolerar_negado
       raise ErroDaMeta.new(codigo, nil, status) # pedido inválido/objeto sumiu: não adianta repetir, o chamador pula essa conversa
     end
 
     def http_real(uri)
       Net::HTTP.start(uri.host, uri.port, use_ssl: true, open_timeout: 15, read_timeout: 60) do |h|
         r = h.request(Net::HTTP::Get.new(uri))
-        [r.code.to_i, r.body]
+        [r.code.to_i, r.body, { 'x-app-usage' => r['x-app-usage'], 'x-business-use-case-usage' => r['x-business-use-case-usage'] }]
       end
     end
   end
@@ -355,7 +420,9 @@ module HistoricoSocial
 
     # Instagram: perfil de quem escreveu (mesma chamada que o Chatwoot faz ao criar o contato). nil se a Meta negar.
     def perfil_instagram(igsid)
-      r = @graph.get("/#{igsid}", fields: 'name,username')
+      # perfil negado (230 «consentimento do usuário», 10, 200, 3, 9010, 100…) NÃO para nada: o próprio Chatwoot ignora e segue sem o nome.
+      # Só token (190) e limite de chamadas param a rodada.
+      r = @graph.get("/#{igsid}", { fields: 'name,username' }, true)
       { 'name' => HistoricoSocial.limpar(r['name']), 'username' => HistoricoSocial.limpar(r['username']) }
     rescue ErroDaMeta
       nil

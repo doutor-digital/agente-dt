@@ -627,6 +627,16 @@ test('ehArquivo / arquivoComEtapa: só etiqueta historico + atividade antes do c
   assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, custom_attributes: { etapa: 'Perdido' } }), false, 'viva não é arquivo');
 });
 
+test('ehArquivo: histórico importado do Instagram/Messenger (meta_conversation_id) é SEMPRE arquivo, mesmo com atividade depois de 14/11', () => {
+  const depois = Math.floor(Date.parse('2026-11-18T12:00:00Z') / 1000);
+  const meta = { meta_conversation_id: 'aWdfZAG1' };
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: depois, additional_attributes: meta }), true, 'última mensagem de 18/11: continua arquivo');
+  assert.equal(arquivoComEtapa({ labels: ['historico'], last_activity_at: depois, additional_attributes: meta, custom_attributes: { etapa: 'Perdido' } }), true);
+  assert.equal(ehArquivo({ labels: ['outra'], last_activity_at: depois, additional_attributes: meta }), false, 'sem a etiqueta (a equipe tirou) volta a ser conversa normal');
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: depois, additional_attributes: { meta_conversation_id: '' } }), false);
+  assert.equal(ehArquivo({ labels: ['historico'], last_activity_at: depois, additional_attributes: {} }), false, 'WhatsApp unificado: regra antiga (corte de 14/11) intacta');
+});
+
 // ── arquivo com consulta de pé é paciente vivo ──
 
 test('ehArquivo: historico parado com consulta de hoje em diante OU dos últimos 35 dias (situação viva) não é arquivo; Desmarcado, vazio e consulta mais velha são', () => {

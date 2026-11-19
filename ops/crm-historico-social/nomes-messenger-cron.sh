@@ -14,7 +14,7 @@ P="$(docker ps --filter name=chatwoot_postgres --format '{{.CreatedAt}}|{{.ID}}'
 R="$(docker ps --filter name=chatwoot_rails --format '{{.CreatedAt}}|{{.ID}}' | sort -r | head -1 | cut -d'|' -f2)"
 [ -n "$P" ] && [ -n "$R" ] || { echo "$(agora) nomes-messenger: não achei os contêineres do Chatwoot"; exit 0; }
 U="$(docker exec "$P" printenv POSTGRES_USER)"; D="$(docker exec "$P" printenv POSTGRES_DB)"
-N="$(docker exec "$P" psql -U "$U" -d "$D" -Atc "select count(distinct c.id) from contacts c join contact_inboxes ci on ci.contact_id=c.id where ci.inbox_id=$CAIXA and (c.name='John Doe' or btrim(c.name)='') and c.created_at > (now() at time zone 'utc') - interval '$HORAS hours'" 2>/dev/null)"
+N="$(docker exec "$P" psql -U "$U" -d "$D" -Atc "select count(distinct c.id) from contacts c join contact_inboxes ci on ci.contact_id=c.id where ci.inbox_id=$CAIXA and (c.name='John Doe' or btrim(c.name, E' \t\r\n')='') and c.created_at > (now() at time zone 'utc') - interval '$HORAS hours'" 2>/dev/null)"
 if ! [[ "${N:-x}" =~ ^[0-9]+$ ]]; then echo "$(agora) nomes-messenger: não consegui perguntar ao Postgres"; exit 0; fi
 if [ "$N" = 0 ]; then echo "$(agora) nomes-messenger: candidatos=0 (janela ${HORAS}h)"; exit 0; fi
 docker exec "$R" mkdir -p /tmp/crm-historico-social && docker cp "$DIR/." "$R:/tmp/crm-historico-social/" >/dev/null 2>&1 || { echo "$(agora) nomes-messenger: não copiei o código"; exit 0; }

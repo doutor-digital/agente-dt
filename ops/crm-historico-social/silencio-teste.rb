@@ -53,6 +53,11 @@ ActiveSupport::Notifications.subscribe('perform_start.active_job') { |*| $conta[
 ActiveSupport::Notifications.subscribe('deliver.action_mailer') { |*| $conta[:emails] += 1 if $medindo }
 ActiveJob::Base.queue_adapter = :inline # se algo disparasse, EXECUTARIA aqui (webhook, automação) — e apareceria nos números
 
+# o importador define constantes ao ser carregado; para carregá-lo de novo no mesmo processo, tira todas
+def limpar_constantes
+  %i[GRAVAR CAIXAS CORTE_INFORMADO LIMITE RITMO INICIO FIXTURES ERROS_DE_PARAMETRO DESDE_14_11 RECENTE_72H].each { |k| Object.send(:remove_const, k) if Object.const_defined?(k) }
+end
+
 def medir
   $conta.clear
   $medindo = true
@@ -174,7 +179,7 @@ if FASE == 1
   base = contagem.call
   ENV['FIXTURES'] = FIX
   ENV['CAIXAS'] = "#{ig.id},#{fb.id}"
-  ENV['CORTE'] = (AGORA - 120).iso8601
+  ENV['CORTE'] = (AGORA - (20 * 60)).iso8601
   ENV['RITMO'] = '0'
   ENV.delete('GRAVAR')
   medir { load File.join(DIR, 'importar-historico-social.rb') }
@@ -182,10 +187,7 @@ if FASE == 1
   confere('SECO não disparou nada', $conta.values.sum.zero?, $conta.inspect)
 
   # ── gravando ──
-  Object.send(:remove_const, :GRAVAR)
-  Object.send(:remove_const, :CAIXAS)
-  Object.send(:remove_const, :CORTE)
-  %i[LIMITE RITMO INICIO FIXTURES].each { |k| Object.send(:remove_const, k) }
+  limpar_constantes
   ENV['GRAVAR'] = '1'
   medir { load File.join(DIR, 'importar-historico-social.rb') }
   puts "durante a importação: #{$conta.inspect}"
@@ -251,7 +253,7 @@ if FASE == 2
   ig = Inbox.find_by(name: 'ig')
   fb = Inbox.find_by(name: 'fb')
   ENV['CAIXAS'] = "#{ig.id},#{fb.id}"
-  ENV['CORTE'] = (AGORA - 120).iso8601
+  ENV['CORTE'] = (AGORA - (20 * 60)).iso8601
   medir { load File.join(DIR, 'importar-historico-social.rb') }
   confere('IDEMPOTENTE: 2ª rodada não criou nem uma linha', contagem.call == antes, "#{antes} -> #{contagem.call}")
   confere('IDEMPOTENTE: 2ª rodada também em silêncio', $conta.values.sum.zero?, $conta.inspect)
@@ -259,10 +261,7 @@ if FASE == 2
   j = JSON.parse(File.read(FIX))
   j['instagram']['conversas'][0]['messages'] << { 'id' => 'ig_m0', 'created_time' => (AGORA - (4000 * 60)).strftime('%Y-%m-%dT%H:%M:%S+0000'), 'from' => { 'id' => 'ig_novo' }, 'message' => 'mais antiga ainda' }
   File.write(FIX, j.to_json)
-  Object.send(:remove_const, :GRAVAR)
-  Object.send(:remove_const, :CAIXAS)
-  Object.send(:remove_const, :CORTE)
-  %i[LIMITE RITMO INICIO FIXTURES].each { |k| Object.send(:remove_const, k) }
+  limpar_constantes
   medir { load File.join(DIR, 'importar-historico-social.rb') }
   c_ig = Conversation.where("additional_attributes @> ?::jsonb", { meta_conversation_id: 'cv_ig_novo' }.to_json).to_a
   confere('mensagem velha que apareceu depois entra na MESMA conversa (1 conversa, 5 mensagens)', c_ig.size == 1 && c_ig.first.messages.count == 5, c_ig.map { |c| c.messages.count }.inspect)
@@ -297,6 +296,47 @@ if FASE == 3
   confere('NOMES: conversa do contato intacta (last_activity_at, updated_at, etc.)', foto_viva(conv) == foto && conv.updated_at.to_f == upd)
 end
 
+if FASE == 3
+  # fila dos «John Doe»: quem a Meta não nomeia (os mais novos) não pode prender os mais antigos
+  require File.join(DIR, 'historico_social')
+  fb = Inbox.find_by(name: 'fb')
+  velho = ContactInboxWithContactBuilder.new(source_id: 'fb_velho', inbox: fb, contact_attributes: { name: 'John Doe' }).perform.contact
+  velho.update_columns(created_at: Time.now.utc - 86_400)
+  novos = (1..6).map { |i| ContactInboxWithContactBuilder.new(source_id: "fb_sem_#{i}", inbox: fb, contact_attributes: { name: 'John Doe' }).perform.contact }
+  escopo = Contact.joins(:contact_inboxes).where(contact_inboxes: { inbox_id: fb.id }).where(HistoricoSocial.sql_nome_padrao('contacts.name'))
+  sorteios = (0..40).map { |slot| HistoricoSocial.escolher_candidatos(escopo, 2, slot) }
+  confere('FILA: o contato mais novo sempre entra', sorteios.all? { |ids| ids.include?(novos.last.id) })
+  confere('FILA: o mais antigo também é alcançado (rodízio), mesmo com 6 mais novos sem nome', sorteios.any? { |ids| ids.include?(velho.id) })
+  confere('FILA: respeita o máximo', sorteios.all? { |ids| ids.size == 2 })
+end
+
+if FASE == 6
+  # parâmetros ruins são RECUSADOS antes de ler ou gravar qualquer coisa
+  contagem = -> { [Contact.count, ContactInbox.count, Conversation.count, Message.count] }
+  recusa = lambda do |env|
+    antes = contagem.call
+    limpar_constantes
+    ENV.update(env)
+    saiu = begin
+      load File.join(DIR, 'importar-historico-social.rb')
+      nil
+    rescue SystemExit => e
+      e.status
+    end
+    [saiu, contagem.call == antes]
+  end
+  ENV['FIXTURES'] = FIX
+  ENV['GRAVAR'] = '1'
+  ENV['RITMO'] = '0'
+  ENV['CAIXAS'] = "#{Inbox.find_by(name: 'ig').id},#{Inbox.find_by(name: 'fb').id}"
+  st, igual = recusa.call('LIMITE_CONVERSAS' => '0', 'CORTE' => '')
+  confere('LIMITE_CONVERSAS=0 é recusado (não vira «sem limite») e nada é gravado', st == 1 && igual, [st, igual].inspect)
+  st, igual = recusa.call('LIMITE_CONVERSAS' => '', 'CORTE' => (Time.now.utc - 60).iso8601)
+  confere('CORTE depois de início − 15 min é recusado e nada é gravado', st == 1 && igual, [st, igual].inspect)
+  st, igual = recusa.call('LIMITE_CONVERSAS' => '', 'CORTE' => 'ontem')
+  confere('CORTE ilegível é recusado', st == 1 && igual, [st, igual].inspect)
+end
+
 if FASE == 4
   # depois da importação, a pessoa escreve de novo pelo caminho NORMAL do Chatwoot (webhook do Instagram)
   ig = Inbox.find_by(name: 'ig')
@@ -328,7 +368,7 @@ if FASE == 5
   end
   confere('DESFAZER em seco não apagou nada', contagem.call == antes)
   ENV['GRAVAR'] = '1'
-  %i[GRAVAR CAIXAS CORTE LIMITE RITMO INICIO FIXTURES].each { |k| Object.send(:remove_const, k) if Object.const_defined?(k) }
+  limpar_constantes
   begin
     load File.join(DIR, 'importar-historico-social.rb')
   rescue SystemExit

@@ -7,8 +7,11 @@
 #   bash ops/historico-social-crm-joao.sh --so-conferir            # 1º: conta tudo (Meta e banco, só leitura) e NÃO grava nada
 #   bash ops/historico-social-crm-joao.sh --limite=5               # piloto: grava só as 5 primeiras conversas de cada caixa
 #   bash ops/historico-social-crm-joao.sh                          # o lote inteiro
-#   opções: --caixa=7 | --caixa=8 (padrão: as duas)   --corte=AAAA-MM-DDTHH:MM:SSZ (padrão: início da rodada − 15 min; mensagem
-#           mais nova que o corte é «viva» e fica para o webhook)   --ritmo=0.7 (segundos entre chamadas à Meta)
+#   opções: --caixa=7 | --caixa=8 (padrão: as duas)   --corte=AAAA-MM-DDTHH:MM:SSZ (padrão: a hora em que CADA caixa foi criada; mensagem
+#           a partir do corte é «viva» e fica para o webhook; a opção é recusada se passar de início − 15 min)
+#           --ritmo=0.7 (segundos entre chamadas à Meta)
+#   COTA DA META: o Instagram usa o MESMO token do atendimento ao vivo (~2.000 chamadas na rodada inteira). O importador lê o uso da cota
+#   nos cabeçalhos da Meta, desacelera a partir de 60% e PARA a 80% (o log traz uso_maximo_da_cota_pct). Rode de preferência à NOITE.
 #
 #   DESFAZER (usa o registro de ids que cada rodada deixa no log):
 #   bash ops/historico-social-crm-joao.sh --desfazer=historico-social-AAAAMMDD-HHMMSS-gravar.txt              # só mostra o que desfaria
@@ -32,7 +35,7 @@ for a in "$@"; do
   case "$a" in
     --so-conferir) SECO=1 ;;
     --caixa=7|--caixa=8) CAIXAS="${a#--caixa=}" ;;
-    --limite=[0-9]*) [[ "$a" =~ ^--limite=[0-9]+$ ]] || { echo "opção inválida: $a"; exit 2; }; LIMITE="${a#--limite=}" ;;
+    --limite=*) [[ "$a" =~ ^--limite=[1-9][0-9]*$ ]] || { echo "opção inválida: $a (use um número maior que zero; 0 NÃO significa «sem limite» — para o lote inteiro tire a opção)"; exit 2; }; LIMITE="${a#--limite=}" ;;
     --corte=*) [[ "$a" =~ ^--corte=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || { echo "opção inválida: $a (use --corte=2026-11-19T14:00:00Z)"; exit 2; }; CORTE="${a#--corte=}" ;;
     --ritmo=*) [[ "$a" =~ ^--ritmo=[0-9](\.[0-9]+)?$ ]] || { echo "opção inválida: $a"; exit 2; }; RITMO="${a#--ritmo=}" ;;
     --desfazer=*) [[ "$a" =~ ^--desfazer=historico-social-[0-9]{8}-[0-9]{6}-gravar\.txt$ ]] || { echo "opção inválida: $a (nome do arquivo de log de uma rodada que GRAVOU, ex.: historico-social-20261119-153000-gravar.txt)"; exit 2; }; DESFAZER="${a#--desfazer=}" ;;
