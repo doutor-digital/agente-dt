@@ -409,8 +409,30 @@ test('a tela salva pelo salvarTarefa (conferindo as tarefas recentes quando o PO
   assert.ok(js.includes('await salvarTarefa({') && js.includes('tarefaPedida(d, pedido)') && js.includes('/api/public/tarefas/recentes?slug='), 'o salvar passa pela conferência');
   const salvarForm = js.slice(js.indexOf('async function salvarForm'), js.indexOf('// ── WhatsApp das meninas'));
   assert.ok(!/await carregar\(/.test(salvarForm), 'a releitura da lista não está no try do agendamento (é o atualizar do salvarTarefa)');
-  assert.ok(/await buscar\(fetch, url, opcoes, 45000\)/.test(js), 'toda chamada à API tem tempo máximo e a rede que cai vira erro sem status');
+  assert.ok(/await buscar\(fetch, url, opcoes, ms \|\| TEMPO_DA_ESCRITA_MS\)/.test(js), 'toda chamada à API tem tempo máximo e a rede que cai vira erro sem status');
   assert.ok(js.includes('function carregar(forcar)'), 'depois de salvar a lista é relida DE NOVO, mesmo com outra leitura em andamento');
+});
+
+test('NENHUM botão da tela relê a lista dentro do try da gravação: cancelar, confirmar, feita, resultado e WhatsApp das atendentes passam pelo gravarEAtualizar', () => {
+  const js = scriptDaPagina();
+  assert.ok((js.match(/gravarEAtualizar\(function/g) ?? []).length >= 4, 'acao, resultado, salvar número e remover número');
+  // carregar() sem `true` só pode aparecer na entrada da tela e no poll de 60 s (leitura que não vem depois de gravar)
+  const soltos = [...js.matchAll(/.{30}carregar\(\)/g)].map((m) => m[0]);
+  for (const t of soltos) assert.ok(t.includes('document.hidden') || t.includes('await carregar()'), `carregar() solto: ${t}`);
+  assert.ok(!/api\('POST'[^\n]*\.then\(function\(\)\{[^\n]*carregar/.test(js), 'POST seguido de carregar no mesmo then/catch');
+});
+
+test('pedido idêntico a uma tarefa já FEITA: o servidor diz o estado e a tela não fala em «já estava agendada»', async () => {
+  preparar();
+  const corpo = { slug: PARAU, tipo: 'lembrete', conversaId: 40, quandoLocal: local(5 * HORA), texto: 'ver o exame' };
+  await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  const aberta = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.deepEqual([aberta.corpo.repetida, aberta.corpo.estado], [true, 'pendente']);
+  tarefas[0]!.estado = 'feita';
+  const feita = await pedir('POST', '/public/tarefas', 'tok-agente', corpo);
+  assert.deepEqual([feita.corpo.repetida, feita.corpo.estado], [true, 'feita']);
+  const js = scriptDaPagina();
+  assert.ok(js.includes("r.estado === 'feita' ? 'Uma tarefa idêntica já foi feita há pouco: nada novo foi agendado.'"));
 });
 
 test('limite de tarefas abertas por conversa', async () => {

@@ -8,23 +8,24 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
-import { ESPERAS_DA_CONFERENCIA_MS, SALVAR_NA_PAGINA_JS, comSalvarNaPagina } from './tarefas-salvar-na-pagina.js';
+import { ESPERAS_DA_CONFERENCIA_MS, ESTADOS_QUE_PROVAM, JANELA_DA_PROVA_MS, SALVAR_NA_PAGINA_JS, TEMPO_DA_ESCRITA_MS, TEMPO_DA_LEITURA_NA_CONFERENCIA_MS, comSalvarNaPagina } from './tarefas-salvar-na-pagina.js';
 
 interface Fns {
+  gravarEAtualizar: (gravar: () => Promise<unknown>, atualizar: () => Promise<unknown>) => Promise<{ resposta: unknown; atualizou: boolean }>;
   buscar: (fetchFn: unknown, url: string, opcoes: unknown, ms: number) => Promise<{ r: { ok: boolean; status: number }; j: Record<string, unknown> }>;
   salvarTarefa: (x: Record<string, unknown>) => Promise<{ resposta: Record<string, unknown>; conferida: boolean; atualizou: boolean }>;
   tarefaPedida: (d: unknown, p: Record<string, unknown>) => boolean;
 }
 const fns = (): Fns => {
   const ctx = vm.createContext({ Date, Error, Promise, JSON, Object, setTimeout, clearTimeout, AbortController });
-  vm.runInContext(`${SALVAR_NA_PAGINA_JS}\nthis.salvarTarefa = salvarTarefa; this.tarefaPedida = tarefaPedida; this.buscar = buscar;`, ctx);
+  vm.runInContext(`${SALVAR_NA_PAGINA_JS}\nthis.salvarTarefa = salvarTarefa; this.tarefaPedida = tarefaPedida; this.buscar = buscar; this.gravarEAtualizar = gravarEAtualizar;`, ctx);
   return ctx as unknown as Fns;
 };
 
 const AGORA = '2026-11-19T15:13:55.000Z';
 const PEDIDO = { id: null, conversaId: 912, tipo: 'mensagem', quandoLocal: '2026-11-19T15:18', texto: 'Oi, Maria! Passando para lembrar.', responsavelId: 4, criadoPor: 'cleia@clinica.com' };
 const tarefa = (o: Record<string, unknown> = {}) => ({
-  id: 't1', tipo: 'mensagem', conversaId: 912, quandoLocal: '2026-11-19T15:18', texto: 'Oi, Maria! Passando para lembrar.', responsavel: { id: 4, nome: 'Cleia' }, criadaEm: '2026-11-19T15:13:52.077Z', criadoPor: 'cleia@clinica.com', ...o,
+  id: 't1', estado: 'pendente', tipo: 'mensagem', conversaId: 912, quandoLocal: '2026-11-19T15:18', texto: 'Oi, Maria! Passando para lembrar.', responsavel: { id: 4, nome: 'Cleia' }, criadaEm: '2026-11-19T15:13:52.077Z', criadoPor: 'cleia@clinica.com', ...o,
 });
 const lista = (...t: unknown[]) => ({ agora: AGORA, tarefas: t });
 const semResposta = () => new TypeError('Failed to fetch');
@@ -167,4 +168,32 @@ test('o trecho entra na página no lugar do marcador, sem crase nem ${} (a pági
   assert.ok(!html.includes('__SALVAR_JS__'));
   assert.ok(!SALVAR_NA_PAGINA_JS.includes('`') && !SALVAR_NA_PAGINA_JS.includes('${'));
   assert.doesNotThrow(() => new Function(SALVAR_NA_PAGINA_JS));
+});
+
+test('só prova o pedido a tarefa que EXISTE: idêntica cancelada, falhada ou barrada (de um pedido anterior) NÃO vira «conferi»; feita, pendente, enviando e aguardando valem', () => {
+  const { tarefaPedida } = fns();
+  for (const estado of ['cancelada', 'falhou', 'barrada']) assert.equal(tarefaPedida(lista(tarefa({ estado })), PEDIDO), false, estado);
+  for (const estado of ESTADOS_QUE_PROVAM) assert.equal(tarefaPedida(lista(tarefa({ estado })), PEDIDO), true, estado);
+  assert.deepEqual([...ESTADOS_QUE_PROVAM].sort(), ['aguardando', 'enviando', 'feita', 'pendente']);
+});
+
+test('e a tela, de ponta a ponta: POST sem resposta + só a cancelada idêntica na lista = «não consegui confirmar» (nunca «conferi»)', async () => {
+  const m = mundo({ enviar: async () => Promise.reject(semResposta()), listar: [async () => lista(tarefa({ estado: 'cancelada' })), async () => lista(tarefa({ estado: 'cancelada' })), async () => lista(tarefa({ estado: 'falhou' }))] });
+  await assert.rejects(fns().salvarTarefa(m.x()), (e: Error & { incerto?: boolean }) => e.incerto === true);
+  assert.equal(m.chamadas.enviar, 1);
+});
+
+test('o pior caso da conferência cabe na janela em que a tarefa ainda vale como «criada agora há pouco»', () => {
+  const pior = TEMPO_DA_ESCRITA_MS + ESPERAS_DA_CONFERENCIA_MS.reduce((a, b) => a + b, 0) + ESPERAS_DA_CONFERENCIA_MS.length * TEMPO_DA_LEITURA_NA_CONFERENCIA_MS;
+  assert.ok(pior < JANELA_DA_PROVA_MS, `${pior} ms deve ser menor que ${JANELA_DA_PROVA_MS} ms`);
+});
+
+test('gravarEAtualizar: a gravação que falha lança; a atualização que falha só vira atualizou:false (cancelar, confirmar, feita, resultado, WhatsApp das atendentes)', async () => {
+  const { gravarEAtualizar } = fns();
+  const ok = await gravarEAtualizar(async () => ({ ok: true }), async () => Promise.reject(semResposta()));
+  assert.equal(ok.atualizou, false);
+  assert.deepEqual(JSON.parse(JSON.stringify(ok.resposta)), { ok: true });
+  let atualizou = 0;
+  await assert.rejects(gravarEAtualizar(async () => Promise.reject(recusa(409, 'a tarefa mudou')), async () => void atualizou++), (e: Error & { status?: number }) => e.status === 409);
+  assert.equal(atualizou, 0);
 });

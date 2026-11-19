@@ -548,10 +548,10 @@ export async function tarefasCriarHandler(req: Request, res: Response): Promise<
   // cancelada não entram: aí tentar de novo é pedido novo de verdade
   const igualA = { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, tipo: p.data.tipo, quando: d.quando, texto: d.texto, modeloNome: d.modeloNome, responsavelId: d.responsavelId };
   const igual =
-    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: { in: [...ESTADOS_ABERTOS] } }, select: { id: true } })) ??
-    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: 'feita', criadoEm: { gte: new Date(agora.getTime() - REPETIDA_EM_MS) } }, select: { id: true } }));
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: { in: [...ESTADOS_ABERTOS] } }, select: { id: true, estado: true } })) ??
+    (await prisma.crmTarefa.findFirst({ where: { ...igualA, estado: 'feita', criadoEm: { gte: new Date(agora.getTime() - REPETIDA_EM_MS) } }, select: { id: true, estado: true } }));
   if (igual) {
-    res.json({ ok: true, id: igual.id, repetida: true, aviso: d.aviso });
+    res.json({ ok: true, id: igual.id, repetida: true, estado: igual.estado, aviso: d.aviso });
     return;
   }
   const abertas = await prisma.crmTarefa.count({ where: { unitId: r.unit.id, conta: r.conta, conversaId: alvo.conversaId, estado: { in: [...ESTADOS_ABERTOS] } } });

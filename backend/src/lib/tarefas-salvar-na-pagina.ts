@@ -18,14 +18,27 @@ export const MARCADOR_DO_SALVAR = '/*__SALVAR_JS__*/';
 
 /** Esperas (ms) entre as conferências da lista depois de um POST sem resposta. */
 export const ESPERAS_DA_CONFERENCIA_MS = [700, 2500, 6000];
+/**
+ * Tempo máximo de cada chamada: a que grava e cada leitura da conferência. O pior caso inteiro (POST + esperas + 3 leituras) tem de caber na janela em que a tarefa ainda
+ * «foi criada agora há pouco» (180 s em `tarefaPedida`): 45 + 9,2 + 3 × 10 = 84 s.
+ */
+export const TEMPO_DA_ESCRITA_MS = 45_000;
+export const TEMPO_DA_LEITURA_NA_CONFERENCIA_MS = 10_000;
+/** Por quanto tempo depois de criada a tarefa ainda vale como prova de «acabei de pedir». */
+export const JANELA_DA_PROVA_MS = 180_000;
+/** Estados em que a tarefa existe de verdade: cancelada, falhada e barrada NÃO provam que o pedido entrou (podem ser de um pedido anterior). */
+export const ESTADOS_QUE_PROVAM = ['pendente', 'enviando', 'aguardando', 'feita'];
 
 export const SALVAR_NA_PAGINA_JS =
-  '// a tarefa pedida está na lista? p = { id (só ao editar), verificavel (editar: mudou hora, texto ou responsável), conversaId, tipo, quandoLocal, texto, responsavelId, criadoPor }\n' +
+  'var TEMPO_DA_ESCRITA_MS = ' + TEMPO_DA_ESCRITA_MS + ', TEMPO_DA_LEITURA_MS = ' + TEMPO_DA_LEITURA_NA_CONFERENCIA_MS + ', ESTADOS_QUE_PROVAM = ' + JSON.stringify(ESTADOS_QUE_PROVAM) + ';\n' +
+  '  // a tarefa pedida está na lista? p = { id (só ao editar), verificavel (editar: mudou hora, texto ou responsável), conversaId, tipo, quandoLocal, texto, responsavelId, criadoPor }\n' +
   '  function tarefaPedida(d, p){\n' +
   '    var lista = (d && d.tarefas) || [];\n' +
   '    var agora = d && d.agora ? new Date(d.agora).getTime() : Date.now();\n' +
   '    for (var i = 0; i < lista.length; i++) {\n' +
   '      var t = lista[i];\n' +
+  '      // cancelada/falhada/barrada pode ser de um pedido anterior igual: só prova a que existe de verdade\n' +
+  '      if (ESTADOS_QUE_PROVAM.indexOf(t.estado) < 0) continue;\n' +
   "      if (t.quandoLocal !== p.quandoLocal || (t.texto || '') !== (p.texto || '')) continue;\n" +
   '      if (p.responsavelId && t.responsavel && t.responsavel.id !== p.responsavelId) continue;\n' +
   '      // editar: só prova a edição quem mudou algo que a lista mostra (salvar sem mudar nada, ou mudar só o modelo, não dá para conferir)\n' +
@@ -36,7 +49,7 @@ export const SALVAR_NA_PAGINA_JS =
   '      if (p.criadoPor && t.criadoPor !== p.criadoPor) continue;\n' +
   '      // criada agora há pouco: uma tarefa igual de ontem não prova nada\n' +
   '      var criada = t.criadaEm ? new Date(t.criadaEm).getTime() : 0;\n' +
-  '      if (criada && agora - criada <= 180000 && agora - criada >= -60000) return true;\n' +
+  '      if (criada && agora - criada <= ' + JANELA_DA_PROVA_MS + ' && agora - criada >= -60000) return true;\n' +
   '    }\n' +
   '    return false;\n' +
   '  }\n' +
@@ -65,6 +78,13 @@ export const SALVAR_NA_PAGINA_JS =
   '    var atualizou = true;\n' +
   '    try { await x.atualizar(); } catch (e) { atualizou = false; }\n' +
   '    return { resposta: r.resposta, conferida: r.conferida, atualizou: atualizou };\n' +
+  '  }\n' +
+  '  // Grava (erro lança: é do agendamento) e DEPOIS atualiza a tela; a atualização que falha só vira atualizou: false — vale para cancelar, confirmar, feita, resultado e WhatsApp.\n' +
+  '  async function gravarEAtualizar(gravar, atualizar){\n' +
+  '    var r = await gravar();\n' +
+  '    var atualizou = true;\n' +
+  '    try { await atualizar(); } catch (e) { atualizou = false; }\n' +
+  '    return { resposta: r, atualizou: atualizou };\n' +
   '  }\n' +
   '  // A chamada ao servidor com tempo máximo. Só a REDE vira «sem resposta» (erro sem status, texto de gente, nunca o «Failed to fetch» cru do navegador); bug de montagem do pedido não.\n' +
   '  // O tempo vale também para ler o corpo da resposta.\n' +
