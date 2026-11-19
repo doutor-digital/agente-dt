@@ -45,36 +45,41 @@ test('taxa obrigatória: escolher o horário leva à taxa e ao comprovante, e no
   const seq = sequencia(composeSystemPrompt({ unit: BOA_VISTA }));
   const passo3 = seq.slice(seq.indexOf('3. '), seq.indexOf('4. '));
   assert.match(passo3, /ESCOLHER o horário/);
-  assert.match(passo3, /taxa de\s+reserva de R\$ 100/);
+  assert.match(passo3, /taxa de\s+agendamento de R\$ 100 \(abate do total: ficam R\$ 250 no dia\)/);
   assert.match(passo3, /não pede nome nem telefone/);
   assert.match(passo3, /chave Pix 49\.485\.277\/0001-40 \(BENSAG FISIOTERAPIA LTDA\)/);
   assert.match(passo3, /comprovante/);
   // a resposta à escolha não vira uma nova consulta de agenda (a rodada local de 19/11 caía em "vou confirmar a disponibilidade")
   assert.match(passo3, /NÃO chame consultar_horarios de novo/);
   assert.match(passo3, /não diz que a vaga JÁ está garantida/);
-  // o pedido de nome e telefone vem DEPOIS do comprovante, no passo 5
-  const passo5 = seq.slice(seq.indexOf('5. '), seq.indexOf('6. '));
-  assert.match(passo5, /AGORA pergunte o nome completo e o telefone/);
-  assert.ok(seq.indexOf('comprovante') < seq.indexOf('AGORA pergunte o nome'));
+  // o pedido de nome e telefone vem DEPOIS do comprovante, no passo 4
+  const passo4 = seq.slice(seq.indexOf('4. '), seq.indexOf('5. '));
+  assert.match(passo4, /é AGORA que entram os dados/);
+  assert.match(passo4, /Nunca busque\s+com um nome que você adivinhou/);
+  assert.ok(seq.indexOf('comprovante') < seq.indexOf('é AGORA que entram os dados'));
   // agendar_consulta continua sendo o último passo
   assert.match(seq, /6\. Com o idClient em mãos, chame agendar_consulta/);
+  // pagou e o horário foi ocupado: a Sofia sabe o que dizer
+  assert.match(seq, /ele JÁ pagou: peça desculpas/);
 });
 
 test('taxa obrigatória: as regras gerais não mandam mais "dados → Pix"', () => {
   const regras = renderRulesGlobal(BOA_VISTA);
   assert.doesNotMatch(regras, /dia → horário → dados → Pix/);
-  assert.match(regras, /dia → horário → taxa de reserva \(Pix \+ comprovante\) → só então os dados/);
+  assert.match(regras, /dia → horário → taxa de agendamento \(Pix \+ comprovante\) → só então os dados/);
 });
 
-test('o passo da mover_etapa, quando existe, continua depois de agendar_consulta (renumerado para 7)', () => {
+test('o passo da mover_etapa, quando existe, continua depois de agendar_consulta (passo 7 com a taxa, 6 sem ela)', () => {
   const comEtapa = { ...BOA_VISTA, pipelineIntents: { scheduled_meeting: 123 } } as unknown as Unit;
   const seq = sequencia(composeSystemPrompt({ unit: comEtapa }));
   assert.match(seq, /\n7\. SÓ DEPOIS de a consulta ser marcada com sucesso, chame mover_etapa\(\{ statusId: 123 \}\)/);
   assert.doesNotMatch(seq, /\n6\. SÓ DEPOIS/);
+  const outra = sequencia(composeSystemPrompt({ unit: { ...OUTRA, pipelineIntents: { scheduled_meeting: 123 } } as unknown as Unit }));
+  assert.match(outra, /\n6\. SÓ DEPOIS de a consulta ser marcada com sucesso, chame mover_etapa/);
 });
 
 test('sem taxa obrigatória: a sequência é a de sempre, palavra por palavra', () => {
-  const texto = sequenciaDepoisDoHorario(OUTRA, '\n6. X');
+  const texto = sequenciaDepoisDoHorario(OUTRA, (n) => `\n${n}. X`);
   assert.equal(
     texto,
     `3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
@@ -91,6 +96,14 @@ test('sem taxa obrigatória: a sequência é a de sempre, palavra por palavra', 
 
 test('taxa obrigatória sem chave Pix cadastrada: manda ler <dados_da_clinica> e nunca inventar', () => {
   const semChave = { ...BOA_VISTA, pixKey: null, pixHolder: null } as unknown as Unit;
-  const texto = sequenciaDepoisDoHorario(semChave, '');
+  const texto = sequenciaDepoisDoHorario(semChave, () => '');
   assert.match(texto, /chave Pix de <dados_da_clinica> \(nunca invente uma\)/);
+});
+
+test('taxa obrigatória com fontes sem valor legível: a frase continua inteira (sem "taxa de agendamento de a taxa ...")', () => {
+  const semValor = { ...BOA_VISTA, sourceProdutos: 'Consulta com o especialista.' } as unknown as Unit;
+  const texto = sequenciaDepoisDoHorario(semValor, () => '');
+  assert.match(texto, /taxa de\s+agendamento \(o valor exato está nas Fontes Oficiais\) \(ela abate do total\), paga por Pix/);
+  assert.match(texto, /a taxa de agendamento é \{o valor das Fontes Oficiais\} por Pix/);
+  assert.doesNotMatch(texto, /agendamento de a taxa/);
 });

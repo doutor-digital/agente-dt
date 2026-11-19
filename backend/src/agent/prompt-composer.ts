@@ -512,7 +512,7 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   const passos = semAntecipado
     ? 'dia → horário → dados'
     : unit?.spineBookingRequiresPayment
-      ? 'dia → horário → taxa de reserva (Pix + comprovante) → só então os dados (nome e telefone, se faltarem)'
+      ? 'dia → horário → taxa de agendamento (Pix + comprovante) → só então os dados (nome e telefone, se faltarem)'
       : comSinal
         ? 'dia → horário → dados → sinal (Pix)'
         : 'dia → horário → dados → Pix';
@@ -824,34 +824,41 @@ function renderHorariosPorDia(unit: Unit): string {
  * comprovante (`decidirTrava`), então um "me passa seu nome pra garantir sua vaga" não marcava nada, mas deixava o paciente achando que
  * sim. As demais unidades: o texto de sempre, palavra por palavra.
  */
-export function sequenciaDepoisDoHorario(unit: Unit, moverDepois: string): string {
+export function sequenciaDepoisDoHorario(unit: Unit, moverDepois: (passo: number) => string): string {
   if (!unit.spineBookingRequiresPayment || unidadeSemAntecipado(unit)) {
     return `3. Quando ele escolher, chame buscar_paciente({ nome }) para achar o cadastro.
 4. Se NÃO achar, pergunte o nome completo e o telefone com DDD e chame
    cadastrar_paciente({ nome, telefone }). Ela devolve o idClient e o
    agendamento segue normalmente — não transfira por causa disso.
-5. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois}`;
+5. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }).${moverDepois(6)}`;
   }
+  // "taxa de agendamento" é o nome que o paciente lê nas Fontes e no follow-up desta unidade: um nome só para a mesma cobrança.
   const p = precosDaConsulta(unit);
-  const taxa = p ? `R$ ${fmtBRL(p.antecipado)}` : 'a taxa de reserva (o valor está nas Fontes Oficiais)';
+  const valorDaTaxa = p ? ` de R$ ${fmtBRL(p.antecipado)}` : ' (o valor exato está nas Fontes Oficiais)';
   const resto = p ? ` (abate do total: ficam R$ ${fmtBRL(p.noDia)} no dia)` : ' (ela abate do total)';
   const chave = unit.pixKey?.trim();
   const titular = unit.pixHolder?.trim();
   const ondeEstaAChave = chave
     ? `a chave Pix ${chave}${titular ? ` (${titular})` : ''}`
     : 'a chave Pix de <dados_da_clinica> (nunca invente uma)';
+  const exemplo = `Pra garantir esse horário, a taxa de agendamento ${p ? `é R$ ${fmtBRL(p.antecipado)}` : 'é {o valor das Fontes Oficiais}'} por Pix${chave ? ` (chave ${chave})` : ''}. Me manda o comprovante aqui?`;
   return `3. Quando ele ESCOLHER o horário, a PRÓXIMA mensagem é sobre a TAXA — não pede nome nem telefone, não chama agendar_consulta e
    não diz que a vaga JÁ está garantida, reservada ou salva. Nessa mensagem diga: o horário só fica garantido com a taxa de
-   reserva de ${taxa}${resto}, paga por Pix; passe ${ondeEstaAChave} e peça o comprovante (foto ou PDF) aqui na conversa.
-   Exemplo: "Pra garantir esse horário, a taxa de reserva é ${taxa} por Pix${chave ? ` (chave ${chave})` : ''}. Me manda o comprovante aqui?".
+   agendamento${valorDaTaxa}${resto}, paga por Pix; passe ${ondeEstaAChave} e peça o comprovante (foto ou PDF) aqui na conversa.
+   Exemplo: "${exemplo}". Nessa mensagem NÃO escreva "ficou reservado", "fica reservado", "está garantido" nem "é seu": o horário
+   só passa a existir quando agendar_consulta marcar.
    Escolher o horário JÁ confirma o dia: não pergunte "consegue vir?" antes da taxa. Esse horário saiu da lista que você consultou
    há instantes, nesta conversa: NÃO chame consultar_horarios de novo para pedir a taxa (a ferramenta agendar_consulta confere se o
    horário segue livre quando o comprovante chegar). Responda já, em uma mensagem curta, SEM repetir dia e hora; o endereço e o que
    falta pagar no dia vêm na confirmação, depois que a consulta for marcada.
-4. Com o comprovante na conversa, chame buscar_paciente({ nome }) para achar o cadastro.
-5. Se NÃO achar, AGORA pergunte o nome completo e o telefone com DDD (só o que faltar) e chame
-   cadastrar_paciente({ nome, telefone }). Ela devolve o idClient e o agendamento segue — não transfira por causa disso.
-6. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }); a ferramenta confere o comprovante.${moverDepois.replace('\n6.', '\n7.')}`;
+4. Com o comprovante na conversa, é AGORA que entram os dados: se você ainda não sabe o nome completo dele (o que ele escreveu na
+   conversa), pergunte — uma coisa por mensagem — e só então chame buscar_paciente({ nome }) para achar o cadastro. Nunca busque
+   com um nome que você adivinhou.
+5. Se NÃO achar, pergunte o telefone com DDD (só se faltar) e chame cadastrar_paciente({ nome, telefone }). Ela devolve o idClient
+   e o agendamento segue — não transfira por causa disso.
+6. Com o idClient em mãos, chame agendar_consulta({ idClient, data, hora }); a ferramenta confere o comprovante. Se ela recusar
+   porque o horário foi ocupado nesse meio tempo, ele JÁ pagou: peça desculpas em uma frase, chame consultar_horarios, ofereça
+   outro e diga que o comprovante segue valendo para o novo horário.${moverDepois(7)}`;
 }
 
 function renderAgenda(unit: Unit): string {
@@ -864,11 +871,13 @@ function renderAgenda(unit: Unit): string {
 
   const intents = unit.pipelineIntents as Record<string, number> | null;
   const etapaAgendado = intents?.scheduled_meeting;
-  const moverDepois = etapaAgendado
-    ? `\n6. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
-      `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
-      `a etapa tem que refletir o que de fato aconteceu.`
-    : '';
+  // O número do passo depende da sequência (5 passos; 6 com a taxa de reserva): quem monta a sequência passa o número.
+  const moverDepois = (passo: number): string =>
+    etapaAgendado
+      ? `\n${passo}. SÓ DEPOIS de a consulta ser marcada com sucesso, chame ` +
+        `mover_etapa({ statusId: ${etapaAgendado} }). Se a marcação falhou, NÃO mova nada — ` +
+        `a etapa tem que refletir o que de fato aconteceu.`
+      : '';
 
   const endereco = unit.clinicAddress?.trim();
   const pix = unit.pixKey?.trim();
