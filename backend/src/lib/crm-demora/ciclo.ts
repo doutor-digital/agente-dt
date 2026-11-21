@@ -225,7 +225,7 @@ function passoTratado(c: Ctx, a: Alvo, id: number, passo: Passo, chaveEp: string
 
 /**
  * Depois de mandar o WhatsApp: `ok` conta como feito; `incerto` (estouro de tempo: pode ter saído) NUNCA desfaz a linha — repetir seria mandar em dobro; `recusado`
- * (a Evolution respondeu com erro) desfaz e adia para UMA nova tentativa, e na segunda recusa a linha fica e a conta fecha.
+ * (a Evolution respondeu com erro, ou nem deu para conectar nela: não saiu) desfaz e adia para UMA nova tentativa, e na segunda recusa a linha fica e a conta fecha.
  */
 async function aposOZap(c: Ctx, a: Alvo, id: number, base: RegraBase, chave: string, r: ResultadoDoEnvio): Promise<boolean> {
   if (r === 'ok') return true;
@@ -236,11 +236,11 @@ async function aposOZap(c: Ctx, a: Alvo, id: number, base: RegraBase, chave: str
     return false;
   }
   // a 1ª recusa deixa uma linha DURÁVEL (sobrevive a reinício do servidor); com ela já no banco, esta é a 2ª recusa: a linha do aviso fica e a conta fecha
-  const primeira = await c.deps.armazem.registrar({ caixa: a.caixa.id, conversationId: id, regra: `${base}-recusa`, chave, modo: a.u.modo, texto: 'WhatsApp recusado pela Evolution (1 nova tentativa permitida)' });
+  const primeira = await c.deps.armazem.registrar({ caixa: a.caixa.id, conversationId: id, regra: `${base}-recusa`, chave, modo: a.u.modo, texto: 'WhatsApp recusado pela Evolution ou Evolution fora do ar (1 nova tentativa permitida)' });
   if (primeira) {
     await desfazer(c, a, id, base, chave);
     adiar(c, a, id, base, chave);
-  } else logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp recusado pela 2ª vez — desisto deste aviso`);
+  } else logger.warn({ unit: a.u.slug, conversa: id, base }, `${ID_CICLO}: WhatsApp recusado (ou Evolution fora do ar) pela 2ª vez — desisto deste aviso`);
   return false;
 }
 
