@@ -35,6 +35,7 @@ export const ID_COMPANY_POR_SLUG: Readonly<Record<string, number>> = {
   'doutor-hernia-taubate': 197,
   'doutor-hernia-olimpia': 214,
   'doutor-hernia-rioverde': 440,
+  'doutor-hernia-timbo': 436, // mesmo id do raspador de bloqueios (/root/sync-bloqueios.mjs), que já lê Timbó desde 30/10
   // Kommo dividido: cada uma entra na própria unidade da franquia (idCompany lido da API em 19/10/2026).
   'doutor-hernia-petropolis': 192,
   'doutor-hernia-caxias': 243,
