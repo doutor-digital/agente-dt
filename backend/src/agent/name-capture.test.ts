@@ -173,7 +173,8 @@ test('as correções não quebraram os nomes que já funcionavam', () => {
     ['Elzilene de Sales Dias Nogueira', 'Elzilene de Sales Dias Nogueira'],
   ];
   for (const [msg, esperado] of nomes) {
-    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado);
+    // Elzilene não está na lista de primeiros nomes: o perfil do WhatsApp dela é que prova.
+    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true, nomeDoPerfil: 'Elzilene' }), esperado);
   }
 });
 
@@ -223,7 +224,6 @@ test('depois de perguntar o nome, o nome sozinho (com vírgula, ponto ou emoji) 
   const casos: Array<[string, string]> = [
     ['Flávio', 'Flávio'],
     ['Flávio Dias Sousa', 'Flávio Dias Sousa'],
-    ['Rerison Kenede Silva', 'Rerison Kenede Silva'],
     ['Maria, tenho dor na lombar há 2 anos', 'Maria'],
     ['Ana Paula.', 'Ana Paula'],
     ['Maria 😊', 'Maria'],
@@ -232,6 +232,9 @@ test('depois de perguntar o nome, o nome sozinho (com vírgula, ponto ou emoji) 
   for (const [msg, esperado] of casos) {
     assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado, msg);
   }
+  // Nome fora da lista de primeiros nomes: vale quando o perfil do WhatsApp o confirma (rígido) — e sempre no modo antigo.
+  assert.equal(detectNameDisclosure('Rerison Kenede Silva', { nameWasAsked: true, nomeDoPerfil: 'Rerison K.' }), 'Rerison Kenede Silva');
+  assert.equal(detectNameDisclosure('Rerison Kenede Silva', { nameWasAsked: true, rigido: false }), 'Rerison Kenede Silva');
 });
 
 test('"sou X" só vira nome com X em maiúscula — profissão não é nome', () => {
