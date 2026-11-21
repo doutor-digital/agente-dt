@@ -4,8 +4,9 @@
  * UNIQUE de `chatwoot_regua_disparo`), o Chatwoot DA CONTA DA UNIDADE (nunca o de outra) e o WhatsApp da atendente (a instância dos avisos,
  * `EVOLUTION_ALERT_*`, com os números de `crm_tarefa_zap`).
  *
- * Modo por unidade (tela de automações): desligado = o robô ignora; SECO (de fábrica em toda conta) = decide e só anota «mandaria…» no banco, sem escrever
- * no paciente, no CRM nem no WhatsApp de ninguém; ligado = faz.
+ * Modo por unidade (tela de automações): desligado = o robô não lê nem anota nada (só apaga o marcador «ligado desde» das caixas); SECO (de fábrica em
+ * toda conta) = decide e só anota «mandaria…» no banco, sem escrever no paciente, no CRM nem no WhatsApp de ninguém (e também apaga o marcador);
+ * ligado = faz.
  */
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
@@ -198,7 +199,14 @@ export function mundoReal(): MundoDaDemora {
 let timer: NodeJS.Timeout | null = null;
 let primeira: NodeJS.Timeout | null = null;
 let rodando = false;
-const memoria = novaMemoriaDaDemora();
+/**
+ * Memória do processo (marcador «ligado desde», «já apaguei o marcador», esperas…). Recomeça a cada start/stop: o supervisor do lease para os workers
+ * quando outra cópia vira líder e liga de novo quando esta volta — sem zerar, esta cópia reusaria o marcador VELHO de antes e mandaria a fila do
+ * intervalo de uma vez.
+ */
+let memoria = novaMemoriaDaDemora();
+/** Só para teste. */
+export const memoriaDoWorker = () => memoria;
 
 async function varrer(): Promise<void> {
   if (rodando) return;
@@ -214,6 +222,7 @@ async function varrer(): Promise<void> {
 
 export function startCrmDemoraWorker(): void {
   if (timer) return;
+  memoria = novaMemoriaDaDemora();
   if (!contaChatwootDoAmbiente()) {
     logger.info(`${ID_CICLO}: sem CHATWOOT_API_TOKEN/CHATWOOT_CONTA_ID — worker não sobe`);
     return;
@@ -228,4 +237,5 @@ export function stopCrmDemoraWorker(): void {
   if (timer) clearInterval(timer);
   primeira = null;
   timer = null;
+  memoria = novaMemoriaDaDemora();
 }
