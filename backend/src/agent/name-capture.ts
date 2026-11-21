@@ -69,8 +69,17 @@ const STOPWORDS = new Set([
   // "Cliente"). Ficam no prompt como exemplo de "isso não é nome" — e daí o modelo as copia.
   'ocupado', 'ocupada', 'cliente', 'clientes', 'loja', 'lead', 'contato', 'usuario', 'usuaria',
   'desconhecido', 'desconhecida', 'anonimo', 'anonima', 'indisponivel', 'placeholder', 'informado', 'definir',
-  // Saíram como nome em 05–21/11/2026 («meu nome é ainda disse que é uma hérnia», «sou a favor», «sou o analista», «eu sou daqui de…»).
+]);
+
+/**
+ * Palavras que nunca são nome e que saíram como título em 05–21/11/2026 («meu nome é ainda disse que é uma hérnia», «sou a favor», «sou o
+ * analista», «eu sou daqui de…», «Mim Chamou Rodrigo», «Nome De Valdete»). Ficam FORA de `STOPWORDS` de propósito: só valem com a chave
+ * `TITULO_CAPTURA_RIGIDA` ligada E só na captura da rede de segurança (`looksLikeName(x, true)`). Os outros chamadores — `atualizar_titulo_lead`
+ * (a IA), nome-no-contato, nome-apresentavel — seguem com o `looksLikeName(x)` de sempre.
+ */
+const PALAVRAS_RIGIDAS = new Set([
   'ainda', 'disse', 'falo', 'trabalho', 'favor', 'daqui', 'analista', 'pedreiro', 'mulher', 'homem', 'imagem', 'audio', 'https', 'http',
+  'nome', 'mim', 'chamou', 'chame', 'chamo', 'mesmo', 'ha', 'tou', 'data', 'rua', 'avenida', 'travessa', 'bairro', 'quadra', 'setor', 'loteamento',
 ]);
 
 /** "Oiii", "Oie", "Olaaa", "kkkk", "rsrs": cumprimento e risada esticados não cabem numa lista. */
@@ -94,7 +103,7 @@ const NAME_WORD_RE = /^[a-zà-ÿ][a-zà-ÿ'\-]*$/i;
 const MAX_TOKENS_REAIS = 6;
 const MAX_PALAVRAS = 8;
 
-export function looksLikeName(candidate: string): boolean {
+export function looksLikeName(candidate: string, rigido = false): boolean {
   const cleaned = (candidate ?? '').trim();
   if (!cleaned) return false;
   if (/\d/.test(cleaned)) return false;
@@ -118,6 +127,7 @@ export function looksLikeName(candidate: string): boolean {
     if (CONNECTORS.has(n)) continue;
     if (VERBOS_DE_PERGUNTA.has(n)) return false;
     if (STOPWORDS.has(n)) return false;
+    if (rigido && PALAVRAS_RIGIDAS.has(n)) return false;
     if (CUMPRIMENTO_OU_RISADA.test(n)) return false;
     if (!NAME_WORD_RE.test(w)) return false;
     if (n.length < 2) return false;
@@ -126,12 +136,64 @@ export function looksLikeName(candidate: string): boolean {
   return tokensReais > 0 && tokensReais <= MAX_TOKENS_REAIS;
 }
 
-/** Sobrenomes que seguem "de/da/do" mesmo escritos em minúscula ("maria da silva"): é o que separa "da Silva" de "da reunião". */
-const SOBRENOMES_APOS_CONECTOR = new Set([
-  'silva', 'santos', 'souza', 'sousa', 'oliveira', 'pereira', 'costa', 'rodrigues', 'almeida', 'nascimento', 'lima', 'araujo', 'ribeiro',
-  'ferreira', 'carvalho', 'gomes', 'martins', 'rocha', 'barbosa', 'alves', 'jesus', 'fatima', 'lourdes', 'deus', 'nazare', 'socorro',
-  'aparecida', 'conceicao', 'assis', 'paula', 'carmo', 'santo', 'santana', 'anjos', 'rosario', 'cruz', 'moura', 'melo', 'mello', 'freitas',
-  'barros', 'cardoso', 'castro', 'dias', 'lopes', 'moreira', 'nunes', 'teixeira', 'vieira', 'campos', 'andrade', 'azevedo', 'batista',
+/**
+ * Chave de emergência: `TITULO_CAPTURA_RIGIDA=off` (ou `false`, `0`) devolve a captura do nome ao que era até 21/11/2026 — a rede de
+ * segurança do título, as palavras novas de `PALAVRAS_RIGIDAS` e a regravação do título —, sem novo deploy de código. Ligada por padrão.
+ */
+export function capturaRigidaLigada(raw: string | undefined = process.env.TITULO_CAPTURA_RIGIDA): boolean {
+  return !['off', 'false', '0'].includes((raw ?? '').trim().toLowerCase());
+}
+
+/**
+ * Sobrenomes comuns no Brasil. Servem a duas coisas: «de/da/do» + um destes é sobrenome mesmo escrito em minúscula ("maria da silva" ×
+ * "breno da reunião"), e um nome de 2+ palavras que TERMINA em um destes ("Adeilma Gomes Lima") é nome completo mesmo com o primeiro nome
+ * fora da lista.
+ */
+const SOBRENOMES_COMUNS = new Set([
+  'silva', 'santos', 'oliveira', 'souza', 'sousa', 'rodrigues', 'ferreira', 'alves', 'pereira', 'lima', 'gomes', 'costa', 'ribeiro', 'martins',
+  'carvalho', 'almeida', 'lopes', 'soares', 'fernandes', 'vieira', 'barbosa', 'rocha', 'dias', 'nascimento', 'andrade', 'moreira', 'nunes',
+  'marques', 'machado', 'mendes', 'freitas', 'cardoso', 'ramos', 'goncalves', 'santana', 'teixeira', 'moura', 'cavalcante', 'campos', 'araujo',
+  'melo', 'mello', 'borges', 'pinto', 'monteiro', 'correia', 'batista', 'reis', 'farias', 'lacerda', 'siqueira', 'brito', 'miranda', 'azevedo',
+  'barros', 'castro', 'cunha', 'duarte', 'fonseca', 'guimaraes', 'henrique', 'matos', 'medeiros', 'morais', 'moraes', 'neves',
+  'paiva', 'peixoto', 'pires', 'queiroz', 'rezende', 'sales', 'sampaio', 'tavares', 'viana', 'xavier', 'jesus', 'fatima', 'lourdes',
+  'deus', 'nazare', 'socorro', 'aparecida', 'conceicao', 'assis', 'paula', 'carmo', 'santo', 'anjos', 'rosario', 'cruz', 'gracas', 'dores',
+  'mercedes',
+]);
+/**
+ * Segundo nome que vale DEPOIS de um primeiro nome já provado («Maria Clara», «Ana Sophia», «Maria da Penha»), mas que sozinho não prova nada
+ * — ficam fora de `PRIMEIROS_NOMES` por serem também palavra comum, nome de IA da rede ou cidade.
+ */
+const SEGUNDOS_NOMES = new Set([
+  'clara', 'aurora', 'sara', 'aline', 'cintia', 'sophia', 'sofia', 'irma', 'vitoria', 'penha', 'luz', 'rosa', 'gloria', 'graca', 'esperanca',
+  'paz', 'domingos', 'salvador', 'marco', 'tomas',
+]);
+/** Palavra que cabe numa cauda de nome sem ser descartada: conector, primeiro nome, sobrenome comum, Júnior/Filho/Neto ou segundo nome. */
+function ehPalavraConhecida(p: string): boolean {
+  return CONNECTORS.has(p) || PRIMEIROS_NOMES.has(p) || SOBRENOMES_COMUNS.has(p) || SUFIXO_DE_FAMILIA.has(p) || SEGUNDOS_NOMES.has(p);
+}
+const SUFIXO_DE_FAMILIA = new Set(['junior', 'filho', 'neto', 'sobrinho']);
+
+/**
+ * Com maiúscula, "de/da/do" + palavra costuma ser sobrenome ("Paiva", "Gouvêa", "Sales") — menos estas, que vêm de «aqui é a Ana da
+ * Recepção», «Bruno da Khube», «Carlos do Banco».
+ */
+const NAO_E_SOBRENOME_APOS_CONECTOR = new Set([
+  'recepcao', 'clinica', 'empresa', 'reuniao', 'loja', 'equipe', 'unidade', 'atendimento', 'consultorio', 'hospital', 'secretaria',
+  'farmacia', 'banco', 'escritorio', 'agencia', 'central', 'financeiro', 'comercial', 'vendas', 'ia', 'sofia', 'doutor', 'doutora',
+  'dra', 'dr', 'igreja', 'escola', 'faculdade', 'prefeitura', 'associacao', 'cooperativa', 'laboratorio', 'imobiliaria', 'agropecuaria',
+]);
+
+/**
+ * Lugares que já viraram «nome» («Meu nome é Goiânia»). Só nome de lugar que NÃO é também nome de gente — Vitória, Natal, Santos, Campos,
+ * Serra, Cristina, Salvador (nome e cidade) ficam de fora.
+ */
+const LUGARES = new Set([
+  'goiania', 'brasilia', 'manaus', 'belem', 'recife', 'curitiba', 'palmas', 'cuiaba', 'teresina', 'maceio', 'aracaju', 'florianopolis',
+  'fortaleza', 'joinville', 'uberlandia', 'campinas', 'guarulhos', 'osasco', 'sorocaba', 'londrina', 'maringa', 'anapolis', 'araguari',
+  'parauapebas', 'maraba', 'imperatriz', 'araguaina', 'acailandia', 'balsas', 'bebedouro', 'taubate', 'olimpia', 'mossoro', 'timbo',
+  'petropolis', 'caxias', 'divinopolis', 'tatui', 'salto', 'cerquilho', 'capivari', 'boituva', 'canaa', 'carajas', 'tocantins', 'maranhao',
+  'bahia', 'pernambuco', 'goias', 'piaui', 'ceara', 'amazonas', 'rondonia', 'roraima', 'amapa', 'sergipe', 'alagoas', 'paraiba', 'parana',
+  'minas', 'gerais', 'angra', 'formosa', 'paragominas', 'xinguara', 'brasil', 'portugal', 'venezuela', 'colombia', 'bolivia', 'paraguai', 'argentina', 'janeiro',
 ]);
 
 /** Sigla de estado colada ao nome por hífen ("Recife-pe"): vem de "sou Fulano, Recife-PE", não faz parte do nome. */
@@ -140,8 +202,6 @@ const SUFIXO_DE_UF = /-(ac|al|ap|am|ba|ce|df|es|go|ma|mt|ms|mg|pa|pb|pr|pe|pi|rj
 export interface OpcoesDeExtracao {
   /** Corte rígido da cauda do nome (ver `capturaRigidaLigada`). Sem ele, o comportamento de antes de 21/11/2026. */
   rigido?: boolean;
-  /** Depois do que foi capturado a linha acaba (só pontuação/espaço). "da reunião" no meio da frase não é sobrenome; no fim da linha vale. */
-  fimDaLinha?: boolean;
 }
 
 export function extractLeadingName(raw: string, opts: OpcoesDeExtracao = {}): string | null {
@@ -155,15 +215,17 @@ export function extractLeadingName(raw: string, opts: OpcoesDeExtracao = {}): st
       if (n === 'e') break;
       // "Marcos Nascimento Recife-pe": a sigla do estado não é nome.
       if (out.length > 0 && SUFIXO_DE_UF.test(w)) break;
-      // "Bruno Menezes da IA2GO", "breno da reunião esqueci seu nome": conector só se o que vem depois parece sobrenome.
+      if (PALAVRAS_RIGIDAS.has(n)) break;
+      // "Bruno Menezes da IA2GO", "breno da reunião esqueci seu nome", "Ana da Recepção": conector só se o que vem depois é sobrenome.
       if (CONNECTORS.has(n) && out.length > 0) {
         const proxima = words[i + 1];
+        const np = proxima ? norm(proxima) : '';
         const pareceSobrenome =
           !!proxima &&
+          !NAO_E_SOBRENOME_APOS_CONECTOR.has(np) &&
           (/^\p{Lu}\p{Ll}/u.test(proxima) ||
             (/^\p{Lu}{2,}$/u.test(proxima) && /^\p{Lu}{2,}$/u.test(words[0])) || // "FLAVIO DE PAIVA": tudo em caixa alta
-            SOBRENOMES_APOS_CONECTOR.has(norm(proxima)) ||
-            (!!opts.fimDaLinha && i + 1 === words.length - 1));
+            ehPalavraConhecida(np));
         if (!pareceSobrenome) break;
       }
     }
@@ -172,9 +234,21 @@ export function extractLeadingName(raw: string, opts: OpcoesDeExtracao = {}): st
     out.push(w);
     if (out.length >= MAX_PALAVRAS) break;
   }
+  // Rígido: depois do primeiro nome, a palavra que segue só fica se for conhecida (primeiro nome, sobrenome comum, de/da/do) ou escrita
+  // com maiúscula — «Meu nome é Mateus exatamente…», «me chamo Valmir porém…» (cauda de frase em minúscula) viravam «Mateus Exatamente».
+  if (opts.rigido) {
+    const corte = out.findIndex((w, i) => {
+      if (i === 0) return false;
+      const np = norm(w);
+      return !(ehPalavraConhecida(np) || /^\p{Lu}/u.test(w));
+    });
+    if (corte > 0) out.length = corte;
+  }
   while (out.length && CONNECTORS.has(norm(out[out.length - 1]))) out.pop();
   const cand = out.join(' ');
-  return looksLikeName(cand) ? cand : null;
+  // «Meu nome é Goiânia»: lugar não é nome.
+  if (opts.rigido && out.some((w) => LUGARES.has(norm(w)))) return null;
+  return looksLikeName(cand, !!opts.rigido) ? cand : null;
 }
 
 export function askedForName(assistantMessage: string | null | undefined): boolean {
@@ -185,33 +259,44 @@ export function askedForName(assistantMessage: string | null | undefined): boole
 }
 
 /**
- * Chave de emergência: `TITULO_CAPTURA_RIGIDA=off` volta a captura do nome (rede de segurança do título) ao que era até 21/11/2026,
- * sem novo deploy de código. Ligada por padrão: na dúvida, não grava.
+ * A parte da resposta solta a «como posso te chamar?» que tem PROVA de ser nome, ou null se nenhuma tem.
+ *
+ * - A PRIMEIRA palavra está na lista de primeiros nomes comuns (primeiros-nomes.ts) — não qualquer uma: «Mim Chamou Rodrigo», «Chame Ana
+ *   Mesmo», «Nome De Valdete». O resto só entra se for conhecido (primeiro nome, sobrenome comum, de/da/do) ou se a última palavra for
+ *   sobrenome comum («Edna Evangelista Cardoso»). Cauda sem prova é cortada: «Mateus Exatamente» → «Mateus», «Erica Há» → «Erica».
+ * - Primeiro nome raro só passa como nome completo: 3+ palavras, todas as seguintes conhecidas, a última sobrenome comum
+ *   («Adeilma Gomes Lima»). «Alguns Dias», «Brasil Sales», «Data De Nascimento» não passam.
+ *
+ * «Lomba», «Esim», «Canaense», «Nego lindo», «Aonde faca» não têm prova. O nome do contato (perfil) NÃO serve de prova: o `author.name`
+ * que chega do Kommo é o nome do contato no Kommo, e quem o grava é a própria IA (atualizar_titulo_lead → nomeTambemNoContato).
  */
-export function capturaRigidaLigada(raw: string | undefined = process.env.TITULO_CAPTURA_RIGIDA): boolean {
-  return (raw ?? '').trim().toLowerCase() !== 'off';
+function trechoComProva(nome: string): string | null {
+  const palavras = (nome ?? '').trim().split(/\s+/).filter(Boolean);
+  if (palavras.length === 0) return null;
+  const n = palavras.map(norm);
+  const nucleo = n.filter((p) => !CONNECTORS.has(p));
+  while (nucleo.length > 1 && SUFIXO_DE_FAMILIA.has(nucleo[nucleo.length - 1])) nucleo.pop();
+  const terminaEmSobrenome = nucleo.length >= 2 && SOBRENOMES_COMUNS.has(nucleo[nucleo.length - 1]);
+
+  if (PRIMEIROS_NOMES.has(n[0])) {
+    // «Edna Evangelista Cardoso»: o nome do meio pode ser raro, mas escrito com maiúscula — «Maria quero reis» não.
+    if (terminaEmSobrenome && palavras.slice(1, -1).every((w, i) => ehPalavraConhecida(n[i + 1]) || /^\p{Lu}/u.test(w))) return palavras.join(' ');
+    let fim = 1;
+    while (fim < palavras.length && ehPalavraConhecida(n[fim])) fim++;
+    while (fim > 1 && CONNECTORS.has(n[fim - 1])) fim--;
+    return palavras.slice(0, fim).join(' ');
+  }
+  if (nucleo.length >= 3 && terminaEmSobrenome && n.slice(1).every(ehPalavraConhecida)) return palavras.join(' ');
+  return null;
 }
 
-const tokensDeNome = (texto: string): string[] => norm(texto ?? '').split(/[^a-z]+/).filter((t) => t.length >= 3);
-
-/**
- * O nome tem alguma prova de que é nome? Um primeiro nome comum (lista fechada, primeiros-nomes.ts) ou uma palavra do perfil do
- * WhatsApp do contato (o que o próprio paciente pôs no aparelho dele). "Lomba", "Esim", "Canaense", "Nego lindo" não têm nenhuma das duas.
- * Nome colado ao sobrenome no perfil também prova, a partir de 6 letras: perfil "jozivambatista834" prova "Jozivam". Abaixo disso o
- * prefixo é coincidência ("Lomba" × "Lombardi Transportes"). O contato do KOMMO não entra: nosso próprio código grava o nome do paciente
- * lá, e um nome errado se provaria sozinho no turno seguinte — só o `author.name` que o WhatsApp mandou no webhook.
- */
-export function nomeCorroborado(nome: string, nomeDoPerfil?: string | null): boolean {
-  const toks = tokensDeNome(nome).filter((t) => !CONNECTORS.has(t));
-  if (toks.length === 0) return false;
-  if (PRIMEIROS_NOMES.has(toks[0])) return true;
-  const perfil = tokensDeNome(nomeDoPerfil ?? '');
-  return toks.some((t) => perfil.some((p) => p === t || (t.length >= 6 && p.startsWith(t))));
+export function nomeCorroborado(nome: string): boolean {
+  return trechoComProva(nome) !== null;
 }
 
 interface Pedaco {
   texto: string;
-  /** Transcrição de áudio: é frase solta, nunca "a resposta" à pergunta do nome. */
+  /** Transcrição de áudio (quando o webhook põe a marca). */
   audio: boolean;
 }
 
@@ -221,7 +306,12 @@ const MARCA_DE_MIDIA = /\[(?:áudio|audio|imagem|arquivo|v[ií]deo|figurinha|sti
  * Separa o que o paciente ESCREVEU do que o sistema colou na mensagem. O texto que a IA recebe traz "[imagem do cliente]: <o que o
  * modelo de visão viu>", "[áudio do cliente]: <transcrição>", links e avisos entre colchetes — e a rede de segurança lia isso como se
  * fosse fala dele: 9× o cartão virou "Imagem Do Cliente", 2× "Áudio Do Cliente", 4× "Https" (medido 05–21/11/2026).
- * Descrição de imagem e arquivo saem; transcrição de áudio fica, marcada; link e "[voice]" saem do texto digitado.
+ *
+ * O webhook monta cada mensagem como `<texto escrito>\n\n[<tipo> do cliente]: <o que leu>` (webhook.controller.ts, ~1541), então o que
+ * o paciente escreveu vem SEMPRE antes das marcas, e tudo depois de uma marca de imagem/arquivo — parágrafos inclusive — é descrição.
+ * Descrição sai inteira (a de imagem pode ter parágrafos); transcrição de áudio fica, com a marca; link e "[voice]" saem do texto.
+ * Áudio SOZINHO chega sem marca nenhuma (webhook, ~1454: `humanMessage ? … : transcript`) e é lido como texto escrito: as regras
+ * não podem depender da marca.
  */
 function pedacosDaFala(raw: string): Pedaco[] {
   const texto = (raw ?? '').replace(/\r/g, '');
@@ -235,16 +325,11 @@ function pedacosDaFala(raw: string): Pedaco[] {
   const antes = marcas.length ? texto.slice(0, marcas[0].index) : texto;
   if (limpar(antes)) pedacos.push({ texto: limpar(antes), audio: false });
   marcas.forEach((m, i) => {
+    if (!/áudio|audio/i.test(m[0])) return;
     const ini = (m.index ?? 0) + m[0].length;
     const fim = i + 1 < marcas.length ? marcas[i + 1].index : texto.length;
-    const corpo = texto.slice(ini, fim);
-    // A descrição/transcrição é o primeiro parágrafo; o que vem depois de uma linha em branco é a próxima mensagem da rajada,
-    // digitada pelo paciente ("[imagem do cliente]: …\n\nMeu nome é Ana").
-    const corte = corpo.search(/\n\s*\n/);
-    const descricao = corte < 0 ? corpo : corpo.slice(0, corte);
-    const resto = corte < 0 ? '' : corpo.slice(corte);
-    if (/áudio|audio/i.test(m[0]) && limpar(descricao)) pedacos.push({ texto: limpar(descricao), audio: true });
-    if (limpar(resto)) pedacos.push({ texto: limpar(resto), audio: false });
+    const t = limpar(texto.slice(ini, fim));
+    if (t) pedacos.push({ texto: t, audio: true });
   });
   return pedacos;
 }
@@ -252,41 +337,23 @@ function pedacosDaFala(raw: string): Pedaco[] {
 export interface OpcoesDeCaptura {
   /** A IA acabou de perguntar o nome (askedForName da última fala dela). */
   nameWasAsked?: boolean;
-  /** Nome do contato no WhatsApp (`author.name` do webhook): prova um nome que a lista de primeiros nomes não tem. */
-  nomeDoPerfil?: string | null;
   /** Padrão: `capturaRigidaLigada()`. */
   rigido?: boolean;
 }
 
-export interface ResultadoDaCaptura {
-  nome: string | null;
-  /** Sem nome, mas havia candidato a que só o perfil do WhatsApp poderia provar: vale ler o perfil e tentar de novo. */
-  precisaPerfil: boolean;
-}
-
-export function detectarNome(userMessage: string, opts: OpcoesDeCaptura = {}): ResultadoDaCaptura {
+export function detectNameDisclosure(userMessage: string, opts: OpcoesDeCaptura = {}): string | null {
   const rigido = opts.rigido ?? capturaRigidaLigada();
   const pedacos: Pedaco[] = rigido ? pedacosDaFala(userMessage) : [{ texto: (userMessage ?? '').trim(), audio: false }];
-  const ctx = { semProva: false };
   for (const p of pedacos) {
-    const nome = detectarNoPedaco(p, opts, rigido, ctx);
-    if (nome) return { nome, precisaPerfil: false };
+    const name = detectarNoPedaco(p, opts, rigido);
+    if (name) return name;
   }
-  return { nome: null, precisaPerfil: ctx.semProva };
+  return null;
 }
 
-export function detectNameDisclosure(userMessage: string, opts: OpcoesDeCaptura = {}): string | null {
-  return detectarNome(userMessage, opts).nome;
-}
-
-function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean, ctx: { semProva: boolean }): string | null {
+function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean): string | null {
   const cleaned = pedaco.texto.trim();
   if (!cleaned) return null;
-  const corrobora = (nome: string) => {
-    const ok = nomeCorroborado(nome, opts.nomeDoPerfil);
-    if (!ok) ctx.semProva = true;
-    return ok;
-  };
 
   const NAME_CHARS = "[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'\\-]*";
   // Rígido: a cauda não pode terminar no meio de uma palavra ("IA2GO" virava "IA").
@@ -303,16 +370,15 @@ function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean
     // Rígido: o que vem antes de "meu nome" tem que ser SÓ o nome ("Saiu com o meu nome aí" não é «Saiu»).
     { re: new RegExp(`^${TAIL}\\s+(?:(?:é|eh|e)\\s+)?(?:o\\s+)?meu\\s+nome\\b`, 'i'), exata: true },
   ];
-  const fimDaLinha = (m: RegExpMatchArray): boolean => {
-    const resto = cleaned.slice((m.index ?? 0) + m[0].length).split('\n')[0] ?? '';
-    return !/[\p{L}\p{N}]/u.test(resto);
-  };
-  // Padrão fraco («aqui é o X», «sou X»): sem prova de nome só vale se a IA acabou de perguntar e a pessoa escreveu em maiúscula.
-  const valeFraco = (inicio: string, name: string) => corrobora(name) || (!!opts.nameWasAsked && /^\p{Lu}/u.test(inicio));
+  // Padrão fraco («aqui é o X», «sou X»): sem o nome na lista só vale se a IA acabou de perguntar e a pessoa escreveu UMA palavra em maiúscula
+  // (e que não seja o nome de uma IA da rede: «Eu sou a Sofia»).
+  const valeFraco = (inicio: string, name: string) =>
+    nomeCorroborado(name) ||
+    (!!opts.nameWasAsked && /^\p{Lu}/u.test(inicio) && name.trim().split(/\s+/).length === 1 && !SEGUNDOS_NOMES.has(norm(name)));
   for (const { re, fraco, exata } of patterns) {
     const m = cleaned.match(re);
     if (m && m[1]) {
-      const name = extractLeadingName(m[1], { rigido, fimDaLinha: rigido && fimDaLinha(m) });
+      const name = extractLeadingName(m[1], { rigido });
       if (!name) continue;
       if (rigido && exata) {
         // "Gilmar é o meu nome": o "é o" que o TAIL engole não é nome.
@@ -327,18 +393,18 @@ function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean
   // "sou X" é o padrão mais solto: "sou paciente", "sou auxiliar de professora", "sou motorista" viraram
   // título. Sem artigo e sem a IA ter perguntado o nome, só conta com X em maiúscula — é como a pessoa
   // escreve o próprio nome, e não a profissão. "sou a vania" / "sou o jonas" (com artigo) valem em minúscula.
-  // Rígido: precisa de prova (lista/perfil) ou de pergunta da IA + maiúscula — "sou a favor", "sou o analista", "sou pedreiro",
+  // Rígido: precisa do nome na lista, ou de pergunta da IA + maiúscula — "sou a favor", "sou o analista", "sou pedreiro",
   // "sou a Arapay assistente da AranetPlay" (robô de outra empresa), "sou daqui".
   const sou = cleaned.match(new RegExp(`\\b(?:eu\\s+)?sou\\s+((?:o|a)\\s+)?${TAIL}`, 'i'));
   if (sou && sou[2]) {
-    const name = extractLeadingName(sou[2], { rigido, fimDaLinha: rigido && fimDaLinha(sou) });
+    const name = extractLeadingName(sou[2], { rigido });
     const vale = rigido
       ? !!name && !!(sou[1] || opts.nameWasAsked || /^\p{Lu}/u.test(sou[2])) && valeFraco(sou[2], name)
       : !!(sou[1] || opts.nameWasAsked || /^\p{Lu}/u.test(sou[2]));
     if (name && vale) return name;
   }
 
-  // Áudio é frase solta, e o pedaço até a primeira vírgula ("Mulher, eu tenho vontade…") não é a resposta à pergunta do nome.
+  // Transcrição de áudio (com a marca) é frase solta: «Mariana, queria saber o valor» fala COM a atendente, não diz o nome do paciente.
   const respostaCurta = !rigido || !pedaco.audio || cleaned.split(/\s+/).length <= 3;
   if (opts.nameWasAsked && respostaCurta) {
     // Pergunta nao e nome. Caso real (Serra, 01/09/2026): a IA perguntou "como
@@ -348,10 +414,13 @@ function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean
     if (cleaned.includes('?')) return null;
     // A rajada chega como uma mensagem só, uma por linha ("Olá bom dia\n\nLindalva"): o nome pode estar em qualquer uma.
     for (const linha of cleaned.split(/\n+/)) {
-      const name = respostaQueEONome(linha);
-      // Rígido: a palavra solta depois de "como posso te chamar?" é nome só com prova. Antes, qualquer uma virava título
-      // ("Lomba", "Esim", "Canaense", "Nego Lindo", "Aonde Faca", "Td Bem").
-      if (name && (!rigido || corrobora(name))) return name;
+      const name = respostaQueEONome(linha, rigido);
+      // Rígido: a palavra solta depois de "como posso te chamar?" é nome só no trecho que tem prova (`trechoComProva`).
+      // Antes, qualquer uma virava título ("Lomba", "Esim", "Canaense", "Nego Lindo", "Aonde Faca", "Td Bem").
+      if (name) {
+        const aceito = rigido ? trechoComProva(name) : name;
+        if (aceito) return aceito;
+      }
     }
   }
 
@@ -366,12 +435,24 @@ function detectarNoPedaco(pedaco: Pedaco, opts: OpcoesDeCaptura, rigido: boolean
  * ("Flow responses received"): das 859 capturas da rede em 30 dias, ~350 eram frase (medido 19/10/2026).
  * Agora vale o trecho até a primeira vírgula/ponto, e ele inteiro tem que parecer nome: "Maria, tenho
  * dor" continua dando "Maria"; "Maria 😊" também (emoji sai). Número no trecho = telefone ou data.
+ *
+ * Rígido: corta também em « e » / « ou » («Vanila Sodré e Letícia Sodré» → «Vanila Sodré») e recusa quando depois do nome vem um
+ * cumprimento seguido de mais frase — «Aline, boa tarde, queria o valor» é áudio falando COM a atendente, não o nome do paciente.
  */
-function respostaQueEONome(resposta: string): string | null {
+function respostaQueEONome(resposta: string, rigido = false): string | null {
   const trecho = resposta.split(/[,.;:!]|\s[-–—]\s/)[0] ?? '';
   if (/\d/.test(trecho)) return null;
-  const limpo = trecho.replace(/[^\p{L}\p{M}'\-\s]/gu, ' ').replace(/\s+/g, ' ').trim();
-  return looksLikeName(limpo) ? limpo : null;
+  if (rigido) {
+    const resto = resposta.slice(trecho.length);
+    if (/^\W*(?:boa|bom|oi+|ol[aá]|bao)\b[^,.;!?]*[,.;!?]\s*\S/i.test(resto)) return null;
+  }
+  let limpo = trecho.replace(/[^\p{L}\p{M}'\-\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  if (rigido) {
+    const palavras = limpo.split(' ');
+    const corte = palavras.findIndex((p, i) => i > 0 && ['e', 'ou'].includes(norm(p)));
+    if (corte > 0) limpo = palavras.slice(0, corte).join(' ');
+  }
+  return looksLikeName(limpo, rigido) ? limpo : null;
 }
 
 /**

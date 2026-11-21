@@ -16,7 +16,7 @@ import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaCo
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
-import { askedForName, capturaRigidaLigada, detectarNome, looksLikeName, titleCaseName, tituloJaTrazONome } from './name-capture.js';
+import { askedForName, capturaRigidaLigada, detectNameDisclosure, looksLikeName, titleCaseName, tituloJaTrazONome } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
 import { falasDoTurno, fraseDoPasse, soFalaDoPaciente } from './sinal-de-alerta.js';
@@ -1697,13 +1697,7 @@ export async function buildAgentGraph(
             ? lastAssistant.content
             : JSON.stringify(lastAssistant.content)
           : null;
-        const nameWasAsked = askedForName(lastAssistantText);
-        let captura = detectarNome(userMessage, { nameWasAsked });
-        // O perfil do WhatsApp só é lido quando decide: palavra solta depois de "como posso te chamar?" só vira título com prova de nome.
-        if (!captura.nome && captura.precisaPerfil) {
-          captura = detectarNome(userMessage, { nameWasAsked, nomeDoPerfil: await nomeDoPerfilDoContato(unit.id, state.leadId) });
-        }
-        const detected = captura.nome;
+        const detected = detectNameDisclosure(userMessage, { nameWasAsked: askedForName(lastAssistantText) });
         if (detected) {
           await maybeAutoUpdateLeadTitle({
             recorder,
@@ -1747,25 +1741,6 @@ export async function buildAgentGraph(
   return compiled;
 }
 
-/**
- * O nome que o paciente pôs no perfil do WhatsApp: a conversa guarda o `author.name` que o webhook trouxe. Só ele — o contato do Kommo
- * não serve de prova porque nosso próprio código grava o nome do paciente lá (um nome errado se provaria sozinho no turno seguinte).
- * Falha de leitura = sem perfil = nome sem prova = não grava.
- */
-async function nomeDoPerfilDoContato(unitId: string, leadId: number): Promise<string | null> {
-  try {
-    const conv = await prisma.conversation.findFirst({
-      where: { unitId, leadId: String(leadId) },
-      orderBy: { lastMessageAt: 'desc' },
-      select: { contactName: true },
-    });
-    return conv?.contactName?.trim() || null;
-  } catch (err) {
-    logger.warn({ err: String(err), leadId }, 'safety-net do título: sem nome do contato na conversa');
-    return null;
-  }
-}
-
 async function maybeAutoUpdateLeadTitle({
   recorder,
   kommo,
@@ -1780,7 +1755,7 @@ async function maybeAutoUpdateLeadTitle({
   tz: string;
 }): Promise<void> {
   const t0 = performance.now();
-  if (!looksLikeName(name)) {
+  if (!looksLikeName(name, capturaRigidaLigada())) {
     await recorder.step({
       kind: 'THINKING',
       title: `[safety-net] "${name}" não parece nome — captura descartada`,
@@ -1796,7 +1771,7 @@ async function maybeAutoUpdateLeadTitle({
     // "Lead #123" do Kommo e o nosso provisório "Lead 23/09/2026" são placeholders: o nome capturado vence
     // Rígido: título que já traz o nome NÃO é reescrito. Antes `includes` contava como "genérico", e a rede regravava por cima o título
     // que a IA acabara de pôr: 225 de 317 trocas (05–21/11/2026) foram regravação idêntica no Kommo, 13 trocaram "da/de/do" por
-    // "Da/De/Do" e 3 CORTARAM sobrenome que a IA tinha posto ("Antônio Souza" → "Antônio"). Dois escritores do mesmo campo.
+    // "Da/De/Do", 2 CORTARAM sobrenome que a IA tinha posto ("Antônio Souza" → "Antônio") e 1 trocou a data. Dois escritores do mesmo campo.
     const rigido = capturaRigidaLigada();
     const placeholder = ehSemNome(current) || ehTituloPadrao(current);
     if (rigido && !placeholder && tituloJaTrazONome(current, display)) {

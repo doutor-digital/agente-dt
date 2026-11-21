@@ -170,11 +170,9 @@ test('as correções não quebraram os nomes que já funcionavam', () => {
     ['Dayane', 'Dayane'],
     ['José Carlos', 'José Carlos'],
     ['Maria da Silva dos Santos', 'Maria da Silva dos Santos'],
-    ['Elzilene de Sales Dias Nogueira', 'Elzilene de Sales Dias Nogueira'],
   ];
   for (const [msg, esperado] of nomes) {
-    // Elzilene não está na lista de primeiros nomes: o perfil do WhatsApp dela é que prova.
-    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true, nomeDoPerfil: 'Elzilene' }), esperado);
+    assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado);
   }
 });
 
@@ -232,8 +230,10 @@ test('depois de perguntar o nome, o nome sozinho (com vírgula, ponto ou emoji) 
   for (const [msg, esperado] of casos) {
     assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado, msg);
   }
-  // Nome fora da lista de primeiros nomes: vale quando o perfil do WhatsApp o confirma (rígido) — e sempre no modo antigo.
-  assert.equal(detectNameDisclosure('Rerison Kenede Silva', { nameWasAsked: true, nomeDoPerfil: 'Rerison K.' }), 'Rerison Kenede Silva');
+  // Nome raro dito sozinho (fora da lista de primeiros nomes) só vale com «meu nome é…» no modo rígido — e sempre no modo antigo.
+  assert.equal(detectNameDisclosure('Rerison Kenede Silva', { nameWasAsked: true, rigido: true }), null);
+  assert.equal(detectNameDisclosure('Meu nome é Rerison Kenede Silva', { rigido: true }), 'Rerison Kenede Silva');
+  assert.equal(detectNameDisclosure('Meu nome é Elzilene de Sales Dias Nogueira', { rigido: true }), 'Elzilene de Sales Dias Nogueira');
   assert.equal(detectNameDisclosure('Rerison Kenede Silva', { nameWasAsked: true, rigido: false }), 'Rerison Kenede Silva');
 });
 
@@ -254,7 +254,7 @@ test('rajada, minúscula com artigo e "X meu nome" — nomes reais que a regra n
     ['Sou suzane', 'suzane'],
     ['Gilmar meu nome.', 'Gilmar'],
     ['José Filho', 'José Filho'],
-    ['Irma Santos', 'Irma Santos'],
+    ['Irene Santos', 'Irene Santos'],  // «Irma» saiu da lista (irmã): só passa com «meu nome é»
   ];
   for (const [msg, esperado] of casos) {
     assert.equal(detectNameDisclosure(msg, { nameWasAsked: true }), esperado, msg);
