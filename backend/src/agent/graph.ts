@@ -16,7 +16,7 @@ import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaCo
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
-import { askedForName, detectNameDisclosure, looksLikeName, titleCaseName } from './name-capture.js';
+import { askedForName, capturaRigidaLigada, detectNameDisclosure, looksLikeName, titleCaseName, tituloJaTrazONome } from './name-capture.js';
 import { aplicarGuardrail } from './guardrail.js';
 import type { OfertaVigente } from './oferta-da-campanha.js';
 import { falasDoTurno, fraseDoPasse, soFalaDoPaciente } from './sinal-de-alerta.js';
@@ -1697,9 +1697,7 @@ export async function buildAgentGraph(
             ? lastAssistant.content
             : JSON.stringify(lastAssistant.content)
           : null;
-        const detected = detectNameDisclosure(userMessage, {
-          nameWasAsked: askedForName(lastAssistantText),
-        });
+        const detected = detectNameDisclosure(userMessage, { nameWasAsked: askedForName(lastAssistantText) });
         if (detected) {
           await maybeAutoUpdateLeadTitle({
             recorder,
@@ -1757,7 +1755,7 @@ async function maybeAutoUpdateLeadTitle({
   tz: string;
 }): Promise<void> {
   const t0 = performance.now();
-  if (!looksLikeName(name)) {
+  if (!looksLikeName(name, capturaRigidaLigada())) {
     await recorder.step({
       kind: 'THINKING',
       title: `[safety-net] "${name}" não parece nome — captura descartada`,
@@ -1771,10 +1769,21 @@ async function maybeAutoUpdateLeadTitle({
     const lead = await kommo.getLead(leadId);
     const current = (lead.name ?? '').trim();
     // "Lead #123" do Kommo e o nosso provisório "Lead 23/09/2026" são placeholders: o nome capturado vence
-    const looksGeneric =
-      ehSemNome(current) ||
-      ehTituloPadrao(current) ||
-      current.toLowerCase().includes(display.toLowerCase());
+    // Rígido: título que já traz o nome NÃO é reescrito. Antes `includes` contava como "genérico", e a rede regravava por cima o título
+    // que a IA acabara de pôr: 225 de 317 trocas (05–21/11/2026) foram regravação idêntica no Kommo, 13 trocaram "da/de/do" por
+    // "Da/De/Do", 2 CORTARAM sobrenome que a IA tinha posto ("Antônio Souza" → "Antônio") e 1 trocou a data. Dois escritores do mesmo campo.
+    const rigido = capturaRigidaLigada();
+    const placeholder = ehSemNome(current) || ehTituloPadrao(current);
+    if (rigido && !placeholder && tituloJaTrazONome(current, display)) {
+      await recorder.step({
+        kind: 'KOMMO_ACTION',
+        title: `[safety-net] título do lead já traz o nome "${display}" ("${current}") — não regravo`,
+        payload: { leadId, current, detected: display },
+        latencyMs: Math.round(performance.now() - t0),
+      });
+      return;
+    }
+    const looksGeneric = placeholder || (!rigido && current.toLowerCase().includes(display.toLowerCase()));
     if (!looksGeneric) {
       await recorder.step({
         kind: 'KOMMO_ACTION',
