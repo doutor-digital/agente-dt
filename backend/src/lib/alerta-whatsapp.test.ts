@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { avisarJoao, configurado, enviarPelaEvolution, enviarPelaEvolutionComResultado, esquecerAvisos } from './alerta-whatsapp.js';
+import { avisarJoao, configurado, enviarPelaEvolution, enviarPelaEvolutionComResultado, esquecerAvisos, naoConectou } from './alerta-whatsapp.js';
 
 /**
  * Sem Evolution configurada o aviso vira só log — e a trava por chave tem que
@@ -38,4 +38,19 @@ test('envio pela Evolution: ok, recusado (a Evolution RESPONDEU com erro) e ince
   // o antigo continua devolvendo boolean
   assert.equal(await enviarPelaEvolution(ALVO, { post: estouro }), false);
   assert.equal(await enviarPelaEvolution(ALVO, { post: (async () => ({})) as never }), true);
+});
+
+test('Evolution fora do ar (nem conectou) é RECUSA — dá para tentar de novo; conectou e caiu continua incerto', async () => {
+  const rede = (code: string, extra: object = {}) => (async () => Promise.reject(Object.assign(new Error(code), { code, ...extra }))) as never;
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ECONNREFUSED') }), 'recusado');
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ENOTFOUND') }), 'recusado');
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('EAI_AGAIN') }), 'recusado');
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ECONNRESET') }), 'incerto');
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ETIMEDOUT') }), 'incerto');
+  // AggregateError do Node (IPv4 e IPv6): as duas recusadas = recusa; uma estourou = incerto
+  const agregado = (...codes: string[]) => ({ cause: Object.assign(new AggregateError(codes.map((c) => Object.assign(new Error(c), { code: c }))), { code: codes[0] }) });
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ECONNREFUSED', agregado('ECONNREFUSED', 'ECONNREFUSED')) }), 'recusado');
+  assert.equal(await enviarPelaEvolutionComResultado(ALVO, { post: rede('ECONNREFUSED', agregado('ECONNREFUSED', 'ETIMEDOUT')) }), 'incerto');
+  assert.equal(naoConectou(null), false);
+  assert.equal(naoConectou(new Error('sem código')), false);
 });

@@ -63,6 +63,11 @@ export interface Armazem {
    * age só nos episódios de espera abertos DEPOIS dele: nada de rajada sobre a fila antiga que o seco já anotou.
    */
   ligadoDesde(caixa: number, agora: Date): Promise<Date>;
+  /**
+   * Apaga o marcador «ligado desde» da caixa (a automação voltou para seco ou foi desligada). Sem isso, ligar → seco → religar usaria o marcador VELHO e
+   * todas as esperas abertas no intervalo virariam rajada de WhatsApp ao religar.
+   */
+  esquecerLigado(caixa: number): Promise<void>;
   /** o WhatsApp de uma atendente (`crm_tarefa_zap`); null = não cadastrado */
   numeroDoAgente(conta: number, agenteId: number): Promise<{ telefone: string; nome: string } | null>;
 }
@@ -99,8 +104,10 @@ export interface MemoriaDaDemora {
   conectores: Map<number, number>;
   /** caixa → quando foi vista ligada pela primeira vez */
   ligadoDesde: Map<number, Date>;
+  /** caixas fora do «ligado» cujo marcador já foi apagado por este processo (não apaga de novo a cada minuto) */
+  semMarcador: Set<number>;
 }
-export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map(), ligadoDesde: new Map() });
+export const novaMemoriaDaDemora = (): MemoriaDaDemora => ({ esperas: new Map(), tratados: new Set(), adiados: new Map(), conectores: new Map(), ligadoDesde: new Map(), semMarcador: new Set() });
 /** Depois de uma falha (ou de «sem ninguém a avisar»), espera isto para tentar de novo. */
 export const ESPERA_ENTRE_TENTATIVAS_MS = 5 * 60_000;
 const LIMITE_DA_MEMORIA = 20_000;
@@ -463,12 +470,28 @@ async function tratarConversa(c: Ctx, a: Alvo, atual: Estado1, devidos: Passo[],
   if (agir.includes('aviso-30')) await passoAviso30(c, a, fresco, minutos, gerenteDaConversa);
 }
 
+/** Fora do «ligado» (seco ou desligado): apaga o marcador de cada caixa uma vez por processo; religar recomeça a contar dali. Falha só avisa (no seco nada sai). */
+async function esquecerLigado(deps: { armazem: Armazem; memoria: MemoriaDaDemora }, u: UnidadeDaDemora, resumo: ResumoDaDemora): Promise<void> {
+  for (const caixa of u.caixas) {
+    deps.memoria.ligadoDesde.delete(caixa.id);
+    if (deps.memoria.semMarcador.has(caixa.id)) continue;
+    try {
+      await deps.armazem.esquecerLigado(caixa.id);
+      deps.memoria.semMarcador.add(caixa.id);
+    } catch (err) {
+      resumo.falhas++;
+      logger.warn({ unit: u.slug, caixa: caixa.id, err: msgDoErro(err) }, `${ID_CICLO}: não consegui apagar o marcador «ligado desde» — tento no próximo ciclo`);
+    }
+  }
+}
+
 export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoDaDemora; memoria: MemoriaDaDemora }): Promise<ResumoDaDemora> {
   const { mundo, memoria } = deps;
   const resumo = resumoVazio();
   const c: Ctx = { deps, resumo, agora: mundo.agora() };
   const janela = janelaDeEnvio(mundo.env ?? process.env);
   for (const u of await mundo.unidades()) {
+    if (u.modo !== 'ligado') await esquecerLigado(deps, u, resumo);
     if (u.modo === 'desligado') continue;
     if (!u.ctx?.conta) {
       logger.warn({ unit: u.slug }, `${ID_CICLO}: a unidade não tem conta válida no CRM — pulo, sem chamar o Chatwoot`);
@@ -478,6 +501,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
     for (const caixa of u.caixas) {
       let ligadoDesde: Date | null = null;
       if (u.modo === 'ligado') {
+        memoria.semMarcador.delete(caixa.id);
         ligadoDesde = memoria.ligadoDesde.get(caixa.id) ?? null;
         if (!ligadoDesde) {
           try {
@@ -490,7 +514,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
             continue;
           }
         }
-      } else memoria.ligadoDesde.delete(caixa.id);
+      }
       const a: Alvo = { u, ctx: u.ctx, conta: u.ctx.conta.conta, caixa, robos: await robosDaConta(deps, u.ctx), ligadoDesde };
       let lista: any[];
       try {
