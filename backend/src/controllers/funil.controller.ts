@@ -50,6 +50,7 @@ import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
+import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1746,7 +1747,7 @@ export function menuFunilHandler(_req: Request, res: Response): void {
 }
 
 /**
- * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor), o botão da assistente da atendente e o guia da etapa. Blocos
+ * O que o Chatwoot carrega em `GET /funil/menu.js`: o menu (Hoje, Funil, Oportunidades e, para a gestão, Marketing e Gestor), o botão da assistente da atendente, o guia da etapa e o selo «Sofia atendendo». Blocos
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
@@ -1754,7 +1755,9 @@ export function montarMenuJs(agente: string): string {
   const origem = JSON.stringify(agente);
   // o guia da etapa («O que fazer agora») é um terceiro bloco independente: se falhar ao executar, o menu e a assistente seguem
   const guia = guiaJs(origem);
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}`;
+  // o selo da Sofia (faixa roxa no cartão + barra na conversa) é o quarto bloco independente: só visual, só lê; falhou, o resto segue
+  const selo = seloSofiaJs();
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}${selo ? `;try{\n${selo}\n}catch(e){}\n` : ''}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
