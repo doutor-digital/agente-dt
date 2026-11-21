@@ -9,6 +9,13 @@ import {
   TROCAS_DO_CONDUZIR_DIRETO,
 } from './prompt-composer.js';
 import { renderRajada } from './rajada.js';
+import {
+  analisarRepeticao,
+  fazPerguntaDeSinalDeAlerta,
+  INSTRUCAO_NOME_SO_AO_MARCAR,
+  INSTRUCAO_SEM_PERGUNTA_DE_ALERTA,
+  travaDaResposta,
+} from './repeticao.js';
 import type { Fala } from './repeticao.js';
 import { renderSinalDeAlerta } from './sinal-de-alerta.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
@@ -243,4 +250,36 @@ test('review: nome já pedido 2 vezes (semPedirNome) — a chave não volta a pe
   const tudo = renderFaltaParaAgendar({ ...semNome, horario_escolhido: 'amanhã 9h' }, { nomeNaHoraDeMarcar: true, semPedirNome: true });
   assert.doesNotMatch(tudo, /menos o nome/);
   assert.match(tudo, /Você já tem tudo para marcar/);
+});
+
+// ── Trava em código (11/11/2026): o prompt sozinho não segurou em produção ───────────────────────────────────────
+// Lead 6035300 (Timbó, 11/11 09:53, chaves ligadas): "…R$ 250,00, paga no dia… Como posso te chamar?"
+// Lead 6033980 (Timbó, 11/11 09:17): "…ela chegou a sentir a perna fraca, perdendo força, ou dificuldade pra segurar xixi ou fezes?"
+test('trava: com as chaves, resposta que pede o nome fora da hora ou pergunta sinal de alerta é refeita', () => {
+  const vazio = analisarRepeticao([]);
+  const pedeNomeAntes =
+    'Poxa, sinto muito que esteja sentindo tanta dor Isso é exatamente o que tratamos aqui na Doutor Hérnia.\n\nA consulta com nosso especialista é R$ 250,00, paga no dia, na clínica.\n\nComo posso te chamar?';
+  const perguntaAlerta =
+    'Sim, já estamos atendendo aqui em Timbó! Sinto muito que sua mãe esteja com essa dor forte puxando pra perna.\n\nSó preciso confirmar uma coisa importante: ela chegou a sentir a perna fraca, perdendo força, ou dificuldade pra segurar xixi ou fezes?';
+  const nomeCompleto = 'Perfeito! Pra deixar reservado quinta às 10:30, me passa seu nome completo?';
+  const conduz = 'Entendo, isso é exatamente o que tratamos aqui. Tenho quinta às 10:30 ou às 14:00, qual fica melhor?';
+
+  // sem as chaves: a trava de sempre (nada aqui, ninguém pediu o nome 2 vezes)
+  assert.equal(travaDaResposta(vazio, pedeNomeAntes, []), null);
+  assert.equal(travaDaResposta(vazio, perguntaAlerta, []), null);
+
+  const chaves = { semPerguntaDeAlerta: true, nomeNaHoraDeMarcar: true };
+  const t1 = travaDaResposta(vazio, pedeNomeAntes, [], chaves);
+  assert.equal(t1?.acao, 'refazer_sem_nome');
+  assert.equal(t1 && 'instrucao' in t1 ? t1.instrucao : '', INSTRUCAO_NOME_SO_AO_MARCAR);
+  const t2 = travaDaResposta(vazio, perguntaAlerta, [], chaves);
+  assert.equal(t2?.acao, 'refazer_sem_alerta');
+  assert.equal(t2 && 'instrucao' in t2 ? t2.instrucao : '', INSTRUCAO_SEM_PERGUNTA_DE_ALERTA);
+  // nome completo na hora de marcar e resposta que conduz: passam
+  assert.equal(travaDaResposta(vazio, nomeCompleto, [], chaves), null);
+  assert.equal(travaDaResposta(vazio, conduz, [], chaves), null);
+  // só a chave do nome não mexe na pergunta de alerta, e vice-versa
+  assert.equal(travaDaResposta(vazio, perguntaAlerta, [], { nomeNaHoraDeMarcar: true }), null);
+  assert.equal(travaDaResposta(vazio, pedeNomeAntes, [], { semPerguntaDeAlerta: true }), null);
+  assert.equal(fazPerguntaDeSinalDeAlerta('A dor desce pra perna? Quer ver os horários?'), false);
 });
