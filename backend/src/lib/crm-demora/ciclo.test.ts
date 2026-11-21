@@ -80,6 +80,10 @@ let zapFunciona = true;
 let zapFalha: 'recusado' | 'incerto' = 'recusado';
 /** desde quando a automação está ligada nesta caixa (o marcador do banco); por padrão, há muito: a fila de antes de ligar é outro teste */
 let ligadoDesdeDoBanco: Date | null = null;
+/** o marcador foi apagado (voltou para seco/desligou): o próximo «ligado» grava um NOVO, com a hora do ciclo — como o banco de verdade */
+let marcadorApagado = false;
+let esquecidos = 0;
+let esquecerFalha = false;
 let relidas = 0;
 
 /** o usuário do Chatwoot por onde sai a mensagem de espera: o conector da conta 1 é o 2; o de outra conta pode ser qualquer id */
@@ -166,7 +170,17 @@ function armazem() {
       return zaps[agenteId] ?? null;
     },
     async ligadoDesde(_caixa: number, agoraDoCiclo: Date) {
+      if (marcadorApagado) {
+        marcadorApagado = false;
+        ligadoDesdeDoBanco = new Date(agoraDoCiclo.getTime());
+      }
       return (ligadoDesdeDoBanco ??= new Date(agoraDoCiclo.getTime() - 24 * 3600_000));
+    },
+    async esquecerLigado(_caixa: number) {
+      if (esquecerFalha) throw new Error('banco fora');
+      esquecidos++;
+      ligadoDesdeDoBanco = null;
+      marcadorApagado = true;
     },
   };
 }
@@ -186,6 +200,9 @@ beforeEach(() => {
   zapFunciona = true;
   zapFalha = 'recusado';
   ligadoDesdeDoBanco = null;
+  marcadorApagado = false;
+  esquecidos = 0;
+  esquecerFalha = false;
   relidas = 0;
   memoria = C.novaMemoriaDaDemora();
   conector = 2;
@@ -233,6 +250,39 @@ test('seco → ligado: age SÓ nas esperas abertas DEPOIS de ligar — a fila an
   assert.deepEqual(saidas.espera.map((e) => e.conversa).sort(), [41, 42], 'a conversa 41 voltou a escrever DEPOIS de ligar: é espera nova');
   assert.equal(saidas.zaps.length, 2);
   assert.ok(nova.id === 42 && regras().includes('demora-aviso-10'));
+});
+
+test('ligado → seco → religado: o marcador VELHO é apagado ao sair do ligado — a espera aberta no intervalo do seco não vira rajada ao religar', async () => {
+  ligadoDesdeDoBanco = new Date(agora.getTime() - 60 * 60_000); // ligado há 1 h
+  await ciclo('ligado');
+  nada();
+  avanca(1);
+  await ciclo('seco'); // voltou para seco
+  assert.equal(esquecidos, 1, 'sair do ligado apaga o marcador');
+  conv({ id: 51, mensagens: [P(avancado(0))] }); // paciente escreve DURANTE o seco
+  avanca(45);
+  await ciclo('seco');
+  await ciclo('seco');
+  assert.equal(esquecidos, 1, 'no seco apaga uma vez só por processo, não a cada minuto');
+  assert.ok(regras().includes('demora-aviso-30~seco'));
+  const r = await ciclo('ligado'); // religa: o marcador novo é AGORA
+  nada();
+  assert.equal(r.barrados['espera aberta antes de ligar (fila antiga)'], 1);
+  assert.equal(ligadoDesdeDoBanco?.getTime(), agora.getTime());
+});
+
+test('desligar também apaga o marcador (sem ler nada); falha ao apagar só avisa e tenta no ciclo seguinte', async () => {
+  conv({ mensagens: [P(-12)] });
+  esquecerFalha = true;
+  let r = await ciclo('desligado');
+  assert.equal(r.falhas, 1);
+  assert.equal(r.unidades, 0);
+  esquecerFalha = false;
+  r = await ciclo('desligado');
+  assert.equal(esquecidos, 1);
+  assert.equal(r.falhas, 0);
+  assert.equal(banco.length, 0);
+  nada();
 });
 
 test('ligado sem poder ler desde quando está ligado: não age (melhor um ciclo a menos que a fila antiga inteira)', async () => {

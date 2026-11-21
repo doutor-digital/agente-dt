@@ -77,6 +77,9 @@ export function armazemDoBanco(): Armazem {
         return de_novo?.criadoEm ?? agora;
       }
     },
+    async esquecerLigado(caixa) {
+      await prisma.chatwootReguaDisparo.deleteMany({ where: { caixa, conversationId: 0, regra: 'demora-ligado-desde' } });
+    },
     async numeroDoAgente(conta, agenteId) {
       const z = await prisma.crmTarefaZap.findUnique({ where: { conta_agenteId: { conta, agenteId } } });
       return z ? { telefone: z.telefone, nome: z.agenteNome } : null;
@@ -98,7 +101,7 @@ export function mundoReal(): MundoDaDemora {
       const saida: UnidadeDaDemora[] = [];
       for (const [slug, caixas] of porSlug) {
         const modo = modoDaDemora(slug);
-        if (modo === 'desligado') continue;
+        // a desligada também vem: o ciclo só apaga o marcador «ligado desde» dela (religar não pode herdar o marcador velho) e não lê nada
         const iaLigada = estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS) === 'ligado';
         const unit = await unidadeEmMemoria(slug);
         if (!unit) continue;
