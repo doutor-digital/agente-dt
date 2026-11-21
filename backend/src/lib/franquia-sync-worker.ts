@@ -1240,7 +1240,7 @@ async function espelharPaciente(ctx: CtxSync, leadId: number, lead: KommoLead, i
       }
     }
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria campo da pessoa');
+      logger.debug({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria campo da pessoa');
       registrarSimulacao(unit, 'franquia-revisao', { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
       continue;
     }
@@ -1319,7 +1319,7 @@ async function espelharSessoes(ctx: CtxSync, leadId: number, lead: KommoLead, p:
     const info = acharCampoDeSessao(porNome, e.campo, normalizar);
     if (!info) continue;
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
+      logger.debug({ unit: unit.slug, leadId, campo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, motivo: e.motivo }, 'franquia-sync [seco]: gravaria sessão/tratamento');
       registrarSimulacao(unit, estado === 'seco' ? 'franquia-sessoes' : (ctx.automacaoDoSeco ?? 'franquia-revisao'), { leadId, acao: 'gravaria', alvo: e.campo, valor: e.limpar ? '(limpar)' : e.valor, noCartao: campo(e.campo)?.valor, motivo: e.motivo });
       continue;
     }
@@ -1503,7 +1503,7 @@ async function espelharAtendimento(ctx: CtxSync, leadId: number, lead: KommoLead
 
   for (const e of plano.escritas) {
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela [seco]: gravaria atendimento');
+      logger.debug({ unit: unit.slug, leadId, campo: e.campo, valor: e.valor, motivo: e.motivo }, 'franquia-tela [seco]: gravaria atendimento');
       registrarSimulacao(unit, estado === 'seco' ? 'franquia-tela' : (ctx.automacaoDoSeco ?? 'franquia-revisao'), { leadId, acao: 'gravaria', alvo: e.campo, valor: e.valor, motivo: e.motivo });
       continue;
     }
@@ -2107,7 +2107,7 @@ async function processarCartao(ctx: CtxSync, leadId: number, lead: KommoLead, p:
       if (noCartao != null && Number(noCartao) === idAlvo) continue;
     }
     if (seco) {
-      logger.info({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
+      logger.debug({ unit: unit.slug, leadId, campo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo }, 'franquia-sync [seco]: gravaria campo');
       registrarSimulacao(unit, ctx.automacaoDoSeco ?? 'franquia-revisao', { leadId, acao: 'gravaria', alvo: w.nome, valor: w.limpar ? '(limpar)' : w.valor, motivo: w.motivo });
       continue;
     }
