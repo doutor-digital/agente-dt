@@ -208,6 +208,8 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
       parcial,
       // quando o histórico («últimas ações») foi lido: a leitura fica guardada (fresca 1 min, servida como velha até 2 min; mais de 10 s = «velho» para a tela); a tela diz «histórico das HH:MM»
       historicoEm: hist.em === null ? null : new Date(hist.em).toISOString(),
+      // idade na hora de responder: a tela soma o tempo que a resposta ficou com ela e recarrega ao entrar na aba quando passa do minuto guardado
+      historicoIdadeMs: hist.em === null ? null : Date.now() - hist.em,
       historicoVelho: hist.em !== null && Date.now() - hist.em > HISTORICO_RECENTE_MS,
       nativas: { ...nativas, link: conta ? `${conta.url}/app/accounts/${conta.conta}/settings/automation/list` : null },
     });

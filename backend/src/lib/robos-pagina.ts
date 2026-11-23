@@ -178,7 +178,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
-  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], DADOS = null, PODE = false, ENV = null, atual = null, aba = 'ed', busca = '', MODO = 'robos', AUTO = null, autoAtual = null;
+  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], DADOS = null, PODE = false, ENV = null, atual = null, aba = 'ed', busca = '', MODO = 'robos', AUTO = null, autoAtual = null, AUTO_EM = 0, tAuto = null, tentandoAuto = false, tentativasAuto = 0, avisoEstado = false;
   var $ = function(id){ return document.getElementById(id); };
   var NS = 'http://www.w3.org/2000/svg';
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -487,8 +487,8 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     var parcial = (AUTO && AUTO.parcial) || [];
     var hhmm = AUTO && AUTO.historicoEm ? new Date(AUTO.historicoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
     if (a.origem === 'catalogo' && a.ultimas.length) { a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); }); if (hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Histórico das ' + hhmm + '.')); }
-    else if (a.origem === 'catalogo' && parcial.indexOf('ultimas') >= 0) ac.appendChild(el('div', 'tri-ajuda', 'Não consegui ler o histórico agora (o servidor está lento). Abra a aba de novo em instantes.'));
-    else if (a.origem === 'catalogo' && AUTO && AUTO.historicoVelho && hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Nada no histórico das ' + hhmm + '. Pode haver ações mais novas: abra a aba de novo em instantes.'));
+    else if (a.origem === 'catalogo' && parcial.indexOf('ultimas') >= 0) ac.appendChild(el('div', 'tri-ajuda', 'Não consegui ler o histórico agora (o servidor está lento).' + (tentandoAuto ? ' Tentando de novo sozinho…' : ' Para tentar de novo, troque de aba e volte.')));
+    else if (a.origem === 'catalogo' && AUTO && AUTO.historicoVelho && hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Nada no histórico das ' + hhmm + '. Pode haver ações mais novas (o histórico é lido a cada minuto).'));
     else ac.appendChild(el('div', 'tri-ajuda', a.origem === 'catalogo' ? 'Sem registro: o log do servidor não guardou nada desta automação para esta unidade.' : 'Sem registro nesta tela.'));
     card.appendChild(ac);
     box.appendChild(card); tela.appendChild(box);
@@ -500,13 +500,22 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     $('nome').textContent = autoAtual ? autoAtual.nome : 'Automações';
     listaAuto(); viewAuto();
   }
+  // quantos ms tem o histórico que a tela está mostrando: a idade que o servidor disse + o tempo que a resposta já ficou aqui
+  function idadeDoHistorico(){ return AUTO && AUTO.historicoIdadeMs != null ? AUTO.historicoIdadeMs + (Date.now() - AUTO_EM) : 0; }
+  // a resposta vale ser buscada de novo ao entrar na aba: não veio, veio incompleta (parte estourou o teto) ou o histórico já passou do minuto em que o servidor o guarda
+  function autoPedeRecarga(){ return !AUTO || !!AUTO.erro || (AUTO.parcial || []).length > 0 || idadeDoHistorico() > 60000; }
   async function carregarAuto(){
+    clearTimeout(tAuto); tentandoAuto = false;
     try {
-      AUTO = await api('GET', '/api/public/robos/automacoes?slug=' + enc(U.slug)); PODE = !!AUTO.pode;
-      if ((AUTO.parcial || []).indexOf('estado') >= 0) aviso('O servidor está lento: o estado das automações pode estar desatualizado. Abra a aba de novo em instantes.', true);
+      AUTO = await api('GET', '/api/public/robos/automacoes?slug=' + enc(U.slug)); PODE = !!AUTO.pode; AUTO_EM = Date.now();
+      if ((AUTO.parcial || []).indexOf('estado') >= 0) { aviso('O servidor está lento: o estado das automações pode estar desatualizado. Estou tentando de novo.', true); avisoEstado = true; }
+      else if (avisoEstado) { aviso(''); avisoEstado = false; }
       var itens = itensDeAuto(), ant = autoAtual ? autoAtual.id : lerGuardado('robos:auto');
       autoAtual = itens.filter(function(a){ return a.id === ant; })[0] || itens[0] || null;
-    } catch (e) { aviso(e.message, true); AUTO = { automacoes: [], nativas: { regras: [], lidas: false, link: null }, pode: false }; }
+    } catch (e) { aviso(e.message, true); AUTO = { automacoes: [], nativas: { regras: [], lidas: false, link: null }, pode: false, erro: true }; AUTO_EM = Date.now(); }
+    // incompleta ou com histórico velho: tenta sozinha mais 2 vezes (o servidor termina a leitura em segundo plano e a próxima já vem pronta)
+    if (!AUTO.erro && autoPedeRecarga() && tentativasAuto < 2) { tentativasAuto++; tentandoAuto = true; tAuto = setTimeout(function(){ tentandoAuto = false; if (MODO === 'auto') carregarAuto(); }, 4000); }
+    else if (!autoPedeRecarga()) tentativasAuto = 0;
     if (MODO === 'auto') tudoAuto();
   }
   function confirmar(a, alvo){
@@ -529,7 +538,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   function trocarModo(m){
     MODO = m; busca = ''; $('busca').value = '';
     $('mRobos').setAttribute('aria-pressed', String(m === 'robos')); $('mAuto').setAttribute('aria-pressed', String(m === 'auto'));
-    if (m === 'auto') { if (!AUTO) carregarAuto(); tudoAuto(); } else tudo();
+    if (m === 'auto') { if (autoPedeRecarga()) { tentativasAuto = 0; carregarAuto(); } tudoAuto(); } else tudo();
   }
   $('mRobos').addEventListener('click', function(){ trocarModo('robos'); });
   $('mAuto').addEventListener('click', function(){ trocarModo('auto'); });

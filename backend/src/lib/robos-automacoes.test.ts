@@ -216,6 +216,7 @@ test('23/11: a busca do log é UMA consulta (não uma por automação), da unida
   assert.match(fonte('./robos-pagina.ts'), /AUTO\.historicoVelho && hhmm\) ac\.appendChild\(el\('div', 'tri-ajuda', 'Nada no histórico das '/, 'histórico velho e vazio não diz «Sem registro»');
   assert.match(ctl, /parcial\.length \|\| total > 2000/, 'estouro de parte loga mesmo com a aba abaixo de 2 s');
   assert.match(ctl, /historicoVelho:/);
+  assert.match(ctl, /historicoIdadeMs: hist\.em === null/, 'a resposta diz a idade do histórico (a tela recarrega ao entrar quando passa do minuto)');
   assert.equal(A.HISTORICO_RECENTE_MS, 10_000);
 });
 
