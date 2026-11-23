@@ -9,6 +9,8 @@ import { registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
 import { ErroHttp, montar, type Cli, type Nf, type Pg } from './asaas-falso.js';
 import { asaasDadosFiscais, asaasNota, asaasNotas, registrarLeituraNotasAsaas } from './asaas-notas.js';
 import { confirmarNota, EVENTO_NOTA, prepararNota, type PedidoDePreparo } from './asaas-notas-escrita.js';
+import { cancelarCobranca } from './asaas-operacoes.js';
+import { EVENTO_OPERACAO } from './asaas-limites.js';
 import { unidadesComNotas } from './asaas-escrita.js';
 
 const Q = { id: 'u1', email: 'joao@exemplo.com' };
@@ -555,8 +557,12 @@ test('confirmar cancelar: chama o Asaas UMA vez (POST …/cancel), avisa o Teleg
   assert.equal(m.avisos.length, 1);
   assert.match(m.avisos[0]!, /NOTA FISCAL: CANCELAMENTO PEDIDO/);
   assert.match(m.avisos[0]!, new RegExp(AUTORIZADA.id));
-  const ev = m.eventos.filter((e) => e.evento === EVENTO_NOTA);
-  assert.deepEqual(ev.map((e) => [e.args.fase ?? 'resultado', e.args.operacao]), [['intencao', 'cancelar_nota'], ['resultado', 'cancelar_nota']]);
+  // pela trava compartilhada: a intenção é gravada pelo porteiro (antes do Asaas) e o resultado fecha a MESMA intenção
+  assert.deepEqual(m.intencoes.map((i) => [i.evento, i.args.operacao, i.args.chamadasAteAgora]), [[EVENTO_OPERACAO, 'cancelar_nota', 0]]);
+  const ev = m.eventos.filter((e) => e.evento === EVENTO_OPERACAO && e.args.operacao === 'cancelar_nota');
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0]!.args.intencaoId, m.banco.linhas.find((l) => l.argumentos.fase === 'intencao')!.argumentos.intencaoId);
+  assert.equal(ev[0]!.ok, true);
   await recusa(confirmar(m, confirmacao), /desconhecido ou já usado/);
   assert.equal(m.f.posts().length, 1);
 });
@@ -643,6 +649,87 @@ test('cancelar: valores neutros que o modelo manda (emitirAgora false, impostos 
   assert.match(ok.confirmacao, /^[0-9A-F]{12}$/);
   await recusa(prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id, emitirAgora: true }), /são de emissão e não valem aqui: emitirAgora/);
   await recusa(prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id, impostos: { ir: 1 } }), /impostos/);
+});
+
+// ------------------------------------------------------------------ antes de ligar: parcelas, avulsa recente, trava de cancelamentos
+
+test('parcelamento: a nota da parcela 1 NÃO é "repetida" da parcela 2; a do parcelamento inteiro (sem cobrança) e a desta mesma cobrança são', async () => {
+  const parcela2 = { ...COBRANCA, id: 'pay_parcela0000002', installment: 'ins_000000123456' };
+  const daParcela1: Nf = { ...AUTORIZADA, id: 'inv_000000000801', payment: 'pay_parcela0000001', installment: 'ins_000000123456' };
+  const doParcelamento: Nf = { ...AUTORIZADA, id: 'inv_000000000802', payment: undefined, installment: 'ins_000000123456' };
+  const desta: Nf = { ...AUTORIZADA, id: 'inv_000000000803', payment: parcela2.id, installment: 'ins_000000123456' };
+  // só a da parcela 1 existe: nenhum alerta
+  const so1 = base({ pagamentos: [parcela2], notas: [daParcela1] });
+  assert.ok(!(await preparar(so1, { cobrancaId: parcela2.id })).avisos.some((x: string) => /REPETIDA/.test(x)));
+  // a do parcelamento inteiro e a desta cobrança alertam; a da parcela 1 continua fora do aviso
+  const tudoJunto = base({ pagamentos: [parcela2], notas: [daParcela1, doParcelamento, desta] });
+  const r = await preparar(tudoJunto, { cobrancaId: parcela2.id });
+  assert.match(r.avisos[0], /ATENÇÃO, NOTA REPETIDA/);
+  assert.ok(r.avisos[0].includes('inv_000000000802') && r.avisos[0].includes('inv_000000000803'));
+  assert.ok(!r.avisos[0].includes('inv_000000000801'), 'a nota da parcela 1 entrou como repetida');
+  // o Asaas ignorando o filtro de parcelamento (devolve a conta toda): notas alheias não viram aviso
+  const ignora = base({ pagamentos: [parcela2], notas: [daParcela1, { ...AUTORIZADA, id: 'inv_000000000804', payment: 'pay_outrocliente001', customer: 'cus_outrapessoa11' }] });
+  const original = ignora.f.conta.fonte.get.bind(ignora.f.conta.fonte);
+  ignora.f.conta.fonte.get = (async (caminho: string, query: Record<string, string | number | undefined> = {}) => original(caminho, { ...query, installment: undefined, payment: undefined })) as typeof ignora.f.conta.fonte.get;
+  assert.ok(!(await preparar(ignora, { cobrancaId: parcela2.id })).avisos.some((x: string) => /REPETIDA/.test(x)));
+});
+
+test('nota avulsa recente: emitir pela cobrança avisa se o mesmo cliente tem avulsa do MESMO valor nos últimos 60 dias — só aviso, nunca bloqueio', async () => {
+  const avulsa: Nf = { ...AUTORIZADA, id: 'inv_000000000811', payment: undefined, effectiveDate: '2026-10-05', value: 250 };
+  const m = base({ notas: [avulsa] });
+  const r = await preparar(m);
+  const aviso = r.avisos.find((x: string) => /POSSÍVEL NOTA REPETIDA/.test(x));
+  assert.ok(aviso, 'sem o aviso da avulsa');
+  assert.match(aviso, /AVULSA.*R\$ 250,00.*últimos 60 dias.*inv_000000000811/s);
+  assert.ok(!r.avisos.some((x: string) => /ATENÇÃO, NOTA REPETIDA/.test(x)), 'não é o aviso forte (esse é só da mesma cobrança)');
+  // é só aviso: confirma e emite normalmente (o recheck do confirmar não a considera)
+  assert.equal((await confirmar(m, r.confirmacao)).notaCriada, true);
+  assert.equal(m.f.posts().length, 1);
+  // fora da janela, outro valor, outro status ou nota que tem cobrança: sem aviso
+  for (const [nome, nota] of [
+    ['antiga', { ...avulsa, effectiveDate: '2026-08-01' }],
+    ['outro valor', { ...avulsa, value: 251 }],
+    ['cancelada', { ...avulsa, status: 'CANCELED' }],
+    ['com cobrança', { ...avulsa, payment: 'pay_outracobranca01' }],
+    ['de outro cliente', { ...avulsa, customer: 'cus_outrapessoa11' }],
+  ] as const) {
+    const x = await preparar(base({ notas: [nota as Nf] }));
+    assert.ok(!x.avisos.some((a: string) => /POSSÍVEL NOTA REPETIDA/.test(a)), nome);
+  }
+  // a janela também é conferida do nosso lado: se o Asaas ignorasse o filtro de data, a avulsa antiga não vira aviso
+  const velha = base({ notas: [{ ...avulsa, effectiveDate: '2026-08-01' }] });
+  const original = velha.f.conta.fonte.get.bind(velha.f.conta.fonte);
+  velha.f.conta.fonte.get = (async (caminho: string, query: Record<string, string | number | undefined> = {}) => original(caminho, { ...query, 'effectiveDate[Ge]': undefined })) as typeof velha.f.conta.fonte.get;
+  assert.ok(!(await preparar(velha)).avisos.some((x: string) => /POSSÍVEL NOTA REPETIDA/.test(x)));
+  // listagem que falha: vira aviso, não erro
+  const falha = base({ falhas: [{ metodo: 'GET', caminho: /^\/invoices$/, erro: new ErroHttp('Asaas 500', 500) }] });
+  await recusa(preparar(falha), /tente em instantes/); // a conferência FORTE (mesma cobrança) continua bloqueando
+});
+
+test('cancelar nota passa pela trava ASAAS_CANCELAMENTOS_POR_HORA (a mesma do cancelar_cobranca): estourou, recusa no confirmar, código gasto, prepare de novo depois', async () => {
+  const outra: Nf = { ...AUTORIZADA, id: 'inv_000000000821', payment: undefined };
+  const m = base({ notas: [{ ...AUTORIZADA }, outra, { ...AUTORIZADA, id: 'inv_000000000822', payment: undefined }] }, { cancelamentosPorHora: () => 2 });
+  const cancelar = async (id: string) => prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: id }) as Promise<any>;
+  for (const id of [AUTORIZADA.id, outra.id]) assert.equal((await confirmar(m, (await cancelar(id)).confirmacao)).cancelamentoPedido, true);
+  assert.equal(m.f.posts().length, 2);
+  // a terceira estoura o limite de 2 por hora
+  const terceira = await cancelar('inv_000000000822');
+  const erro = await confirmar(m, terceira.confirmacao).then(() => null, (e: Error) => e);
+  assert.ok(erro);
+  assert.match(erro.message, /limite de 2 cancelamentos por hora nesta chave do Asaas já foi atingido \(2\).*O código foi gasto: prepare o cancelamento de novo depois/s);
+  assert.equal(m.f.posts().length, 2, 'nada foi enviado ao Asaas');
+  await recusa(confirmar(m, terceira.confirmacao), /desconhecido ou já usado/);
+  // passada a hora, volta a valer
+  m.relogio.t += 61 * 60_000;
+  assert.equal((await confirmar(m, (await cancelar('inv_000000000822')).confirmacao)).cancelamentoPedido, true);
+});
+
+test('cancelar nota e cancelar cobrança dividem o MESMO limite por hora', async () => {
+  const m = base({ notas: [{ ...AUTORIZADA }], pagamentos: [{ ...COBRANCA, id: 'pay_pendente000001', status: 'PENDING' }] }, { cancelamentosPorHora: () => 1 });
+  await cancelarCobranca(m.ctx, Q, { unidade: 'serra', cobrancaId: 'pay_pendente000001' }, m.registrar);
+  const p = (await prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id })) as any;
+  await recusa(confirmar(m, p.confirmacao), /limite de 1 cancelamentos por hora/);
+  assert.deepEqual(m.f.posts().map((c) => c.caminho), ['/payments/pay_pendente000001']);
 });
 
 // ------------------------------------------------------------------ rotas e protocolo
