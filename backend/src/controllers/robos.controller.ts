@@ -15,7 +15,7 @@ import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
 import { paginaDosRobos } from '../lib/robos-pagina.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
-import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao } from '../lib/robos-automacoes.js';
+import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, type ParteQueFalhou } from '../lib/robos-automacoes.js';
 import { estadoGravado, panoramaDaUnidade, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexerNosRobos, visaoDosRobos, type Aprovados } from '../lib/robos-estado.js';
 
@@ -151,8 +151,13 @@ interface RegraNativa {
   evento: string;
 }
 
-/** Teto de cada parte da aba «Automações»: estourou, a parte aparece vazia (regras nativas: só o link) e a aba abre. */
-const TETO_DA_ABA_MS = 5000;
+/**
+ * Teto de cada parte da aba «Automações»: estourou, a parte aparece vazia (regras nativas: só o link; histórico e «quem mexeu»: aviso na tela) e a
+ * aba abre. Pior caso: recarregar (0,5 s) + as partes que correm juntas (1,2 s do banco, 1,5 s das regras nativas) ≈ 2 s, fora o login. Em 23/11/2026 a aba levou 5,5–7,3 s porque o
+ * histórico (14 buscas na mesma janela do log) não tinha teto aqui nem para «quem mexeu», que esperava na fila do mesmo pool.
+ */
+const TETO_DA_ABA_MS = 1500;
+const TETO_DO_RECARREGAR_MS = 500;
 
 /** As regras nativas do Chatwoot (Configurações → Automação), só leitura. Falhou ao ler: lista vazia + o link. */
 async function regrasNativas(slug: string): Promise<{ regras: RegraNativa[]; lidas: boolean }> {
@@ -182,9 +187,11 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     const t0 = Date.now();
     const ms: Record<string, number> = {};
     const medir = <T>(nome: string, p: Promise<T>): Promise<T> => p.finally(() => { ms[nome] = Date.now() - t0; });
-    await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DA_ABA_MS, undefined));
+    await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DO_RECARREGAR_MS, undefined));
+    const parcial: ParteQueFalhou[] = [];
     const [automacoes, nativas] = await Promise.all([
-      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug)),
+      // o teto de cada leitura do banco (histórico e «quem mexeu», juntas) fica dentro de `automacoesDaUnidade`
+      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug, { aoFalhar: (parte) => parcial.push(parte) })),
       medir('nativas', comTeto(regrasNativas(r.unit.slug), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
     ]);
     if (Date.now() - inicio > 2000) logger.warn({ unit: r.unit.slug, ms: { login: msLogin, ...ms } }, 'robos: aba Automações demorou');
@@ -193,6 +200,8 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
       unidade: { slug: r.unit.slug, nome: r.unit.name },
       pode: podeMexerNosRobos(r.a.papel),
       automacoes,
+      // o que não deu para ler dentro do teto ('ultimas' = histórico das automações, 'mudancas' = quem mexeu por último): a tela avisa em vez de dizer «sem registro»
+      parcial,
       nativas: { ...nativas, link: conta ? `${conta.url}/app/accounts/${conta.conta}/settings/automation/list` : null },
     });
   } catch (e) {

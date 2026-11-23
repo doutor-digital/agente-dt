@@ -24,8 +24,8 @@ function bancoFalso(o: { mudancas?: Array<{ automacao: string; por: string | nul
     async mudancas() {
       return o.mudancas ?? [];
     },
-    async ultimas(id) {
-      return o.ultimas?.[id] ?? [];
+    async ultimasDe() {
+      return o.ultimas ?? {};
     },
     async unidade(slug) {
       return o.semUnidade ? null : { id: 'u1', slug };
@@ -105,23 +105,86 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   for (const f of A.FIXAS.filter((x) => x.variavel)) assert.ok(codigo.includes(f.variavel!), `${f.variavel} não está mais no código`);
 });
 
-test('aba «Automações» não espera o histórico lento: buscas juntas, com teto (15/11: a aba ficava 60 s em «Carregando…»)', async () => {
+test('aba «Automações» não espera o histórico lento: UMA busca, com teto (15/11 e 23/11: a aba ficava 5–60 s em «Carregando…»)', async () => {
   const { banco } = bancoFalso({});
-  let chamadas = 0;
-  banco.ultimas = async (id) => {
-    chamadas++;
-    if (id === 'chatwoot-agenda') return new Promise(() => {}); // nunca responde
+  let buscas = 0;
+  banco.ultimasDe = async (ids) => {
+    buscas++;
     await new Promise((r) => setTimeout(r, 40));
-    return [{ em: '2026-11-15T12:00:00.000Z', nivel: 'info', texto: `${id}: ciclo`, resumo: '' }];
+    return Object.fromEntries(ids.map((id) => [id, [{ em: '2026-11-15T12:00:00.000Z', nivel: 'info', texto: `${id}: ciclo`, resumo: '' }]]));
   };
-  const t0 = Date.now();
   const l = await A.automacoesDaUnidade(banco, SLUG, { env: {}, tetoMs: 150 });
-  const ms = Date.now() - t0;
-  assert.ok(ms < 600, `levou ${ms} ms — as buscas precisam correr juntas e respeitar o teto`);
-  assert.equal(chamadas, l.filter((x) => x.origem === 'catalogo').length);
-  assert.deepEqual(l.find((x) => x.id === 'chatwoot-agenda')!.ultimas, [], 'a que travou aparece sem histórico');
+  assert.equal(buscas, 1, 'o log é lido UMA vez para todas as automações (eram 14 buscas na mesma janela)');
+  assert.equal(l.find((x) => x.id === 'chatwoot-agenda')!.ultimas.length, 1);
   assert.equal(l.find((x) => x.id === 'chatwoot-ia')!.ultimas.length, 1);
-  assert.match(fonte('./robos-automacoes.ts'), /createdAt: \{ gte: new Date\(Date\.now\(\) - DIAS_DO_HISTORICO/, 'a busca no log olha só os últimos dias');
+  const fonteLib = fonte('./robos-automacoes.ts');
+  assert.match(fonteLib, /created_at >= \$\{desde\}/, 'a busca no log olha só os últimos dias');
+  assert.match(fonteLib, /const desde = new Date\(Date\.now\(\) - DIAS_DO_HISTORICO/);
+});
+
+test('23/11: se o histórico OU «quem mexeu» travar, a aba abre dentro do teto, a parte que travou vem vazia e o aviso diz qual', async () => {
+  for (const travada of ['ultimas', 'mudancas', 'as duas'] as const) {
+    const { banco } = bancoFalso({ mudancas: [{ automacao: 'chatwoot-agenda', por: 'Suzanne (Chatwoot)', em: new Date('2026-11-16T10:00:00Z') }], ultimas: { 'chatwoot-agenda': [{ em: '2026-11-16T12:00:00.000Z', nivel: 'info', texto: 'chatwoot-agenda: ciclo', resumo: '' }] } });
+    const boa = { mudancas: banco.mudancas, ultimasDe: banco.ultimasDe };
+    if (travada !== 'mudancas') banco.ultimasDe = () => new Promise(() => {}); // nunca responde
+    if (travada !== 'ultimas') banco.mudancas = () => new Promise(() => {});
+    const falhou: string[] = [];
+    const t0 = Date.now();
+    const l = await A.automacoesDaUnidade(banco, SLUG, { env: {}, tetoMs: 150, aoFalhar: (p) => falhou.push(p) });
+    const ms = Date.now() - t0;
+    assert.ok(ms < 600, `${travada}: levou ${ms} ms — cada leitura do banco precisa de teto (o «quem mexeu» não tinha e esperava a fila do pool)`);
+    const ag = l.find((x) => x.id === 'chatwoot-agenda')!;
+    assert.equal(l.length > 10, true, 'a lista abre inteira');
+    assert.deepEqual(falhou.sort(), travada === 'as duas' ? ['mudancas', 'ultimas'] : [travada]);
+    assert.equal(ag.ultimas.length, travada === 'mudancas' ? 1 : 0, 'o histórico vem vazio só se ELE travou');
+    assert.equal(ag.mudou === null, travada !== 'ultimas', '«quem mexeu» vem vazio só se ELE travou');
+    void boa;
+  }
+});
+
+test('23/11: erro do banco (não só demora) também vira «parte vazia + aviso», e leitura que deu certo não avisa', async () => {
+  const { banco } = bancoFalso({});
+  banco.ultimasDe = async () => { throw new Error('pool esgotado'); };
+  const falhou: string[] = [];
+  const l = await A.automacoesDaUnidade(banco, SLUG, { env: {}, aoFalhar: (p) => falhou.push(p) });
+  assert.deepEqual(falhou, ['ultimas']);
+  assert.ok(l.length > 10);
+  const ok: string[] = [];
+  await A.automacoesDaUnidade(bancoFalso({}).banco, SLUG, { env: {}, aoFalhar: (p) => ok.push(p) });
+  assert.deepEqual(ok, []);
+});
+
+test('23/11: a memória curta junta pedidos seguidos numa busca só, expira, e erro não fica guardado', async () => {
+  const memoria = new Map<string, { ate: number; p: Promise<number> }>();
+  let agora = 1_000;
+  let buscas = 0;
+  const buscar = async () => ++buscas;
+  const [a, b, c] = await Promise.all([1, 2, 3].map(() => A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora)));
+  assert.deepEqual([a, b, c], [1, 1, 1], 'três aberturas da aba ao mesmo tempo = uma busca (a tela dispara várias de uma vez)');
+  agora += 59_000;
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora), 1);
+  agora += 2_000;
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora), 2, 'passou o prazo: busca de novo');
+  assert.equal(await A.comMemoriaCurta(memoria, 'outra', 60_000, buscar, () => agora), 3, 'chave (unidade) diferente não se mistura');
+  let tentativas = 0;
+  const falha = () => { tentativas++; return Promise.reject(new Error('x')); };
+  await assert.rejects(A.comMemoriaCurta(memoria, 'e', 60_000, falha, () => agora));
+  await new Promise((r) => setImmediate(r));
+  await assert.rejects(A.comMemoriaCurta(memoria, 'e', 60_000, falha, () => agora));
+  assert.equal(tentativas, 2, 'erro não fica na memória: a próxima abertura tenta de novo');
+});
+
+test('23/11: a busca do log é UMA consulta (não uma por automação), da unidade, e a aba/controller têm os tetos e o aviso', () => {
+  const lib = fonte('./robos-automacoes.ts');
+  assert.equal((lib.match(/system_logs/g) ?? []).length >= 1, true);
+  assert.equal((lib.match(/\$queryRaw/g) ?? []).length, 1, 'uma consulta só para o histórico de todas as automações');
+  assert.doesNotMatch(lib, /systemLog\.findMany/, 'nada de uma busca por automação');
+  assert.match(lib, /context->>'slug' = \$\{slug\}/, 'só desta unidade');
+  const ctl = fonte('../controllers/robos.controller.ts');
+  assert.match(ctl, /comTeto\(recarregarAutomacoes\(\), TETO_DO_RECARREGAR_MS/);
+  assert.match(ctl, /aoFalhar: \(parte\) => parcial\.push\(parte\)/);
+  assert.match(ctl, /\n\s+parcial,/, 'a resposta leva o aviso do que não foi lido');
+  assert.match(fonte('./robos-pagina.ts'), /parcial\.indexOf\('ultimas'\)/, 'a tela diz que não leu em vez de «sem registro»');
 });
 
 test('«últimas ações»: o que o log guardou; sem log, «sem registro» (nada inventado); quem mexeu por último', async () => {

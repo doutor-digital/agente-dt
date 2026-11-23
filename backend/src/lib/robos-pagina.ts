@@ -476,7 +476,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       });
       card.appendChild(tri);
       card.appendChild(el('div', 'tri-ajuda', 'Ligada: faz de verdade. Só no papel: decide e deixa registro, sem mexer em nada. Desligada: não faz nada.' + (a.exigeSecoAntes ? ' Para ligar, ela precisa ter rodado antes em «Só no papel».' : '') + (PODE ? '' : ' Você pode ver; só quem administra o CRM muda.')));
-      card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : 'Ninguém mexeu pela tela: vale o padrão do servidor.'));
+      card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : (((AUTO && AUTO.parcial) || []).indexOf('mudancas') >= 0 ? 'Não consegui ler quem mexeu por último agora (o servidor está lento).' : 'Ninguém mexeu pela tela: vale o padrão do servidor.')));
     } else if (a.origem === 'nativa') {
       card.appendChild(el('div', 'tri-ajuda', 'Regra automática do CRM' + (a.evento ? ' (evento: ' + a.evento + ')' : '') + '. Para mudar, use Configurações > Automação.'));
       if (AUTO.nativas && AUTO.nativas.link) { var ab = el('button', 'bt sec', 'Abrir a tela de Automação'); ab.type = 'button'; ab.addEventListener('click', function(){ window.open(AUTO.nativas.link, '_blank', 'noopener'); }); card.appendChild(ab); }
@@ -484,7 +484,9 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       card.appendChild(el('div', 'tri-ajuda', a.nota || 'Somente leitura.'));
     }
     var ac = el('div', 'acoes24'); ac.appendChild(el('h3', null, 'Últimas ações'));
+    var parcial = (AUTO && AUTO.parcial) || [];
     if (a.origem === 'catalogo' && a.ultimas.length) a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); });
+    else if (a.origem === 'catalogo' && parcial.indexOf('ultimas') >= 0) ac.appendChild(el('div', 'tri-ajuda', 'Não consegui ler o histórico agora (o servidor está lento). Abra a aba de novo em instantes.'));
     else ac.appendChild(el('div', 'tri-ajuda', a.origem === 'catalogo' ? 'Sem registro: o log do servidor não guardou nada desta automação para esta unidade.' : 'Sem registro nesta tela.'));
     card.appendChild(ac);
     box.appendChild(card); tela.appendChild(box);

@@ -127,8 +127,8 @@ export interface AutomacaoNaTela {
 export interface BancoDasAutomacoes {
   /** quem mexeu e quando, por automação, desta unidade */
   mudancas(slug: string, ids: string[]): Promise<Array<{ automacao: string; por: string | null; em: Date }>>;
-  /** as últimas linhas do log do servidor que começam com `<id>:` e são desta unidade */
-  ultimas(id: string, slug: string, quantas: number): Promise<UltimaAcao[]>;
+  /** para cada id, as últimas linhas do log do servidor que começam com `<id>:` e são desta unidade — UMA busca para todos os ids (o log é grande) */
+  ultimasDe(ids: string[], slug: string, quantas: number): Promise<Record<string, UltimaAcao[]>>;
   unidade(slug: string): Promise<{ id: string; slug: string } | null>;
   gravar(unit: { id: string }, automacao: string, estado: Estado, por: string): Promise<void>;
 }
@@ -137,11 +137,16 @@ const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade ne
 
 /**
  * O histórico de cada automação sai de system_logs, que só tem índice por data: para uma automação que quase não
- * escreve log, a busca varria a tabela inteira (≈9 s cada, ≈60 s a aba «Automações», 15/11/2026). Agora as buscas
- * correm juntas, olham só os últimos dias e têm teto: estourou, a automação aparece sem as últimas ações.
+ * escreve log, a busca varre todos os dias da janela. Duas rodadas de conserto:
+ *  - 15/11/2026: a busca varria a tabela inteira (≈9 s cada, ≈60 s a aba): agora olha só os últimos dias e as buscas têm teto;
+ *  - 23/11/2026: eram 14 buscas (uma por automação), cada uma lendo a MESMA janela de ~57 mil linhas (≈30 mil páginas do banco cada;
+ *    shared_buffers de 128 MB, janela de ~240 MB): na 1ª abertura com o cache frio, a aba levava 5,5–7,3 s. Agora é UMA busca só
+ *    (a janela é lida uma vez), o resultado fica 60 s na memória (a tela abre várias vezes seguidas) e tanto o histórico quanto
+ *    «quem mexeu» têm teto — estourou, a parte aparece vazia e a aba avisa.
  */
 export const DIAS_DO_HISTORICO = 14;
-export const TETO_DO_HISTORICO_MS = 3000;
+export const TETO_DO_HISTORICO_MS = 1200;
+export const MEMORIA_DO_HISTORICO_MS = 60_000;
 export function comTeto<T>(p: Promise<T>, ms: number, padrao: T, o: { propagarErro?: boolean } = {}): Promise<T> {
   return new Promise((ok, falha) => {
     const t = setTimeout(() => ok(padrao), ms);
@@ -153,24 +158,33 @@ export function comTeto<T>(p: Promise<T>, ms: number, padrao: T, o: { propagarEr
   });
 }
 
+/** O que não deu para ler dentro do teto: a aba abre sem essa parte e a tela avisa. */
+export type ParteQueFalhou = 'ultimas' | 'mudancas';
+
 export async function automacoesDaUnidade(
   banco: BancoDasAutomacoes,
   slug: string,
-  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade>; tetoMs?: number } = {},
+  o: { env?: NodeJS.ProcessEnv; panorama?: ReturnType<typeof panoramaDaUnidade>; tetoMs?: number; aoFalhar?: (parte: ParteQueFalhou) => void } = {},
 ): Promise<AutomacaoNaTela[]> {
   const env = o.env ?? process.env;
   const panorama = o.panorama ?? panoramaDaUnidade(slug, env);
   const ids = Object.keys(DO_CATALOGO);
-  const ultimasDe = new Map(
-    await Promise.all(ids.map(async (id) => [id, await comTeto(banco.ultimas(id, slug, 5), o.tetoMs ?? TETO_DO_HISTORICO_MS, [] as UltimaAcao[])] as const)),
-  );
-  const mudancas = new Map((await banco.mudancas(slug, ids)).map((m) => [m.automacao, m]));
+  const teto = o.tetoMs ?? TETO_DO_HISTORICO_MS;
+  // as duas leituras do banco correm juntas, cada uma com teto; `null` = estourou o teto ou deu erro (a tela abre sem essa parte)
+  const [ultimasLidas, mudancasLidas] = await Promise.all([
+    comTeto<Record<string, UltimaAcao[]> | null>(banco.ultimasDe(ids, slug, 5), teto, null),
+    comTeto<Awaited<ReturnType<BancoDasAutomacoes['mudancas']>> | null>(banco.mudancas(slug, ids), teto, null),
+  ]);
+  if (ultimasLidas === null) o.aoFalhar?.('ultimas');
+  if (mudancasLidas === null) o.aoFalhar?.('mudancas');
+  const ultimasDe = ultimasLidas ?? {};
+  const mudancas = new Map((mudancasLidas ?? []).map((m) => [m.automacao, m]));
   const saida: AutomacaoNaTela[] = [];
   for (const id of ids) {
     const a = automacaoPorId(id);
     const linha = panorama.find((p) => p.id === id);
     if (!a || !linha) continue;
-    const ultimas = ultimasDe.get(id) ?? [];
+    const ultimas = ultimasDe[id] ?? [];
     const m = mudancas.get(id);
     saida.push({
       id,
@@ -260,21 +274,50 @@ export function resumoDoContexto(ctx: unknown): string {
     .join(' · ');
 }
 
+/**
+ * Guarda a PROMESSA por um tempo curto: quem pedir de novo no meio da busca pega a mesma (nada de 14 buscas por abertura da aba) e, se a
+ * primeira quem pediu desistiu pelo teto, a busca termina em segundo plano e a próxima abertura já acha pronto. Erro não fica guardado.
+ */
+export function comMemoriaCurta<T>(memoria: Map<string, { ate: number; p: Promise<T> }>, chave: string, ttlMs: number, buscar: () => Promise<T>, agora: () => number = Date.now): Promise<T> {
+  const t = agora();
+  const guardada = memoria.get(chave);
+  if (guardada && guardada.ate > t) return guardada.p;
+  for (const [k, v] of memoria) if (v.ate <= t) memoria.delete(k);
+  const p = buscar();
+  const reg = { ate: t + ttlMs, p };
+  memoria.set(chave, reg);
+  p.catch(() => { if (memoria.get(chave) === reg) memoria.delete(chave); });
+  return p;
+}
+
+const memoriaDoHistorico = new Map<string, { ate: number; p: Promise<Record<string, UltimaAcao[]>> }>();
+
+/** UMA leitura do log para todas as automações da unidade: as `quantas` mais recentes de cada `<id>:` dos últimos DIAS_DO_HISTORICO dias. */
+export function ultimasDoLog(ids: string[], slug: string, quantas: number): Promise<Record<string, UltimaAcao[]>> {
+  return comMemoriaCurta(memoriaDoHistorico, `${slug}|${quantas}|${ids.join(',')}`, MEMORIA_DO_HISTORICO_MS, async () => {
+    const desde = new Date(Date.now() - DIAS_DO_HISTORICO * 86_400_000);
+    const linhas = await prisma.$queryRaw<Array<{ id: string; created_at: Date; level: string; msg: string; context: unknown }>>`
+      SELECT t.id, t.created_at, t.level, t.msg, t.context FROM (
+        SELECT substring(msg from '^([^:]+):') AS id, created_at, level::text AS level, msg, context,
+               row_number() OVER (PARTITION BY substring(msg from '^([^:]+):') ORDER BY created_at DESC) AS rn
+        FROM system_logs
+        WHERE created_at >= ${desde} AND context->>'slug' = ${slug} AND substring(msg from '^([^:]+):') = ANY(${ids}::text[])
+      ) t
+      WHERE t.rn <= ${quantas}::int
+      ORDER BY t.created_at DESC`;
+    const saida: Record<string, UltimaAcao[]> = {};
+    for (const x of linhas) (saida[x.id] ??= []).push({ em: x.created_at.toISOString(), nivel: x.level, texto: x.msg.slice(0, 200), resumo: resumoDoContexto(x.context) });
+    return saida;
+  });
+}
+
 export function bancoDasAutomacoes(): BancoDasAutomacoes {
   return {
     async mudancas(slug, ids) {
       const l = await prisma.unitAutomacao.findMany({ where: { automacao: { in: ids }, unit: { slug } }, select: { automacao: true, atualizadoPor: true, atualizadoEm: true } });
       return l.map((x) => ({ automacao: x.automacao, por: x.atualizadoPor, em: x.atualizadoEm }));
     },
-    async ultimas(id, slug, quantas) {
-      const l = await prisma.systemLog.findMany({
-        where: { createdAt: { gte: new Date(Date.now() - DIAS_DO_HISTORICO * 86_400_000) }, msg: { startsWith: `${id}:` }, context: { path: ['slug'], equals: slug } },
-        orderBy: { createdAt: 'desc' },
-        take: quantas,
-        select: { createdAt: true, level: true, msg: true, context: true },
-      });
-      return l.map((x) => ({ em: x.createdAt.toISOString(), nivel: String(x.level), texto: x.msg.slice(0, 200), resumo: resumoDoContexto(x.context) }));
-    },
+    ultimasDe: (ids, slug, quantas) => ultimasDoLog(ids, slug, quantas),
     async unidade(slug) {
       return prisma.unit.findUnique({ where: { slug }, select: { id: true, slug: true } });
     },
