@@ -701,6 +701,11 @@ test('nota avulsa recente: emitir pela cobrança avisa se o mesmo cliente tem av
   const original = velha.f.conta.fonte.get.bind(velha.f.conta.fonte);
   velha.f.conta.fonte.get = (async (caminho: string, query: Record<string, string | number | undefined> = {}) => original(caminho, { ...query, 'effectiveDate[Ge]': undefined })) as typeof velha.f.conta.fonte.get;
   assert.ok(!(await preparar(velha)).avisos.some((x: string) => /POSSÍVEL NOTA REPETIDA/.test(x)));
+  // o Asaas ignorando o filtro de cliente: a avulsa de OUTRO cliente não vira aviso
+  const alheia = base({ notas: [{ ...avulsa, customer: 'cus_outrapessoa11' }] });
+  const orig2 = alheia.f.conta.fonte.get.bind(alheia.f.conta.fonte);
+  alheia.f.conta.fonte.get = (async (caminho: string, query: Record<string, string | number | undefined> = {}) => orig2(caminho, { ...query, customer: undefined })) as typeof alheia.f.conta.fonte.get;
+  assert.ok(!(await preparar(alheia)).avisos.some((x: string) => /POSSÍVEL NOTA REPETIDA/.test(x)));
   // listagem que falha: vira aviso, não erro
   const falha = base({ falhas: [{ metodo: 'GET', caminho: /^\/invoices$/, erro: new ErroHttp('Asaas 500', 500) }] });
   await recusa(preparar(falha), /tente em instantes/); // a conferência FORTE (mesma cobrança) continua bloqueando

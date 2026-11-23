@@ -157,7 +157,7 @@ export async function avisoDeNotaAvulsaRecente(ctx: ContextoAsaas, c: ContaAsaas
     return 'não consegui conferir se este cliente já tem nota avulsa recente do mesmo valor (o Asaas não respondeu à listagem): confira com asaas_notas antes de aprovar';
   }
   const avulsas = lidas.itens.filter(
-    (n) => notaVale(n.status) && !n.payment && !n.installment && (!n.effectiveDate || n.effectiveDate >= desde) && Math.round((Number(n.value) || 0) * 100) === Math.round(valor * 100),
+    (n) => notaVale(n.status) && n.customer === clienteId && !n.payment && !n.installment && (!n.effectiveDate || n.effectiveDate >= desde) && Math.round((Number(n.value) || 0) * 100) === Math.round(valor * 100),
   );
   if (!avulsas.length) return lidas.truncado ? 'este cliente tem notas demais para eu conferir se há nota avulsa recente do mesmo valor: confira com asaas_notas antes de aprovar' : null;
   const quais = avulsas.map((n) => `${n.id} (${STATUS_NOTA[n.status ?? ''] ?? n.status}${n.number ? `, nº ${n.number}` : ''}, emissão ${n.effectiveDate ? dataBR(n.effectiveDate) : '?'})`).join('; ');
