@@ -125,7 +125,6 @@ test('aba «Automações» não espera o histórico lento: UMA busca, com teto (
 test('23/11: se o histórico OU «quem mexeu» travar, a aba abre dentro do teto, a parte que travou vem vazia e o aviso diz qual', async () => {
   for (const travada of ['ultimas', 'mudancas', 'as duas'] as const) {
     const { banco } = bancoFalso({ mudancas: [{ automacao: 'chatwoot-agenda', por: 'Suzanne (Chatwoot)', em: new Date('2026-11-16T10:00:00Z') }], ultimas: { 'chatwoot-agenda': [{ em: '2026-11-16T12:00:00.000Z', nivel: 'info', texto: 'chatwoot-agenda: ciclo', resumo: '' }] } });
-    const boa = { mudancas: banco.mudancas, ultimasDe: banco.ultimasDe };
     if (travada !== 'mudancas') banco.ultimasDe = () => new Promise(() => {}); // nunca responde
     if (travada !== 'ultimas') banco.mudancas = () => new Promise(() => {});
     const falhou: string[] = [];
@@ -138,7 +137,6 @@ test('23/11: se o histórico OU «quem mexeu» travar, a aba abre dentro do teto
     assert.deepEqual(falhou.sort(), travada === 'as duas' ? ['mudancas', 'ultimas'] : [travada]);
     assert.equal(ag.ultimas.length, travada === 'mudancas' ? 1 : 0, 'o histórico vem vazio só se ELE travou');
     assert.equal(ag.mudou === null, travada !== 'ultimas', '«quem mexeu» vem vazio só se ELE travou');
-    void boa;
   }
 });
 
@@ -155,7 +153,7 @@ test('23/11: erro do banco (não só demora) também vira «parte vazia + aviso�
 });
 
 test('23/11: a memória curta junta pedidos seguidos numa busca só, expira, e erro não fica guardado', async () => {
-  const memoria = new Map<string, { ate: number; p: Promise<number> }>();
+  const memoria = new Map<string, import('./robos-automacoes.js').EntradaDaMemoria<number>>();
   let agora = 1_000;
   let buscas = 0;
   const buscar = async () => ++buscas;
@@ -174,6 +172,56 @@ test('23/11: a memória curta junta pedidos seguidos numa busca só, expira, e e
   assert.equal(tentativas, 2, 'erro não fica na memória: a próxima abertura tenta de novo');
 });
 
+test('23/11: passou o prazo, o valor velho serve NA HORA e uma busca nova corre em segundo plano (quem abre a aba de vez em quando não paga a leitura fria)', async () => {
+  const memoria = new Map<string, import('./robos-automacoes.js').EntradaDaMemoria<number>>();
+  let agora = 0;
+  let buscas = 0;
+  let solta!: (n: number) => void;
+  const buscar = () => (++buscas === 1 ? Promise.resolve(1) : new Promise<number>((r) => { solta = r; }));
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1);
+  agora = 120_000; // velho (passou os 60 s), mas dentro dos 15 min
+  const t0 = Date.now();
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1, 'devolve o velho sem esperar a busca nova (que ainda não terminou)');
+  assert.ok(Date.now() - t0 < 50);
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1);
+  assert.equal(buscas, 2, 'UMA renovação em segundo plano, não uma por pedido');
+  solta(2);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 2, 'a renovação terminou: já vem o novo');
+  agora += 1_000_000; // velho demais (>15 min): busca de verdade e espera
+  const p = A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000);
+  solta(3);
+  assert.equal(await p, 3);
+});
+
+test('23/11: a busca do histórico agrupa por automação, limita a 5 por automação e vem da consulta única (SQL provado em produção, só leitura)', async () => {
+  const { prisma } = await import('./prisma.js');
+  const antes = (prisma as any).$queryRaw;
+  let chamadas = 0;
+  (prisma as any).$queryRaw = async () => {
+    chamadas++;
+    return [
+      { id: 'chatwoot-agenda', created_at: new Date('2026-11-23T12:00:00Z'), level: 'info', msg: 'chatwoot-agenda: ciclo', context: { slug: SLUG, agenda: 12, gravadas: 3 } },
+      { id: 'chatwoot-agenda', created_at: new Date('2026-11-23T11:00:00Z'), level: 'warn', msg: 'chatwoot-agenda: x', context: null },
+      { id: 'chatwoot-regua', created_at: new Date('2026-11-23T10:00:00Z'), level: 'info', msg: 'chatwoot-regua: ciclo', context: { conversas: 4 } },
+    ];
+  };
+  try {
+    const ids = Object.keys(A.DO_CATALOGO);
+    const [r1, r2] = await Promise.all([A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5), A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5)]);
+    assert.equal(chamadas, 1, 'duas aberturas juntas = uma consulta ao banco');
+    assert.equal(r1, r2);
+    assert.deepEqual(Object.keys(r1).sort(), ['chatwoot-agenda', 'chatwoot-regua']);
+    assert.equal(r1['chatwoot-agenda']!.length, 2);
+    assert.equal(r1['chatwoot-agenda']![0]!.resumo, 'agenda 12 · gravadas 3');
+    assert.equal(r1['chatwoot-agenda']![0]!.em, '2026-11-23T12:00:00.000Z');
+    assert.equal(r1['chatwoot-agenda']![1]!.nivel, 'warn');
+    assert.equal(r1['chatwoot-regua']![0]!.resumo, 'conversas 4');
+  } finally {
+    (prisma as any).$queryRaw = antes;
+  }
+});
+
 test('23/11: a busca do log é UMA consulta (não uma por automação), da unidade, e a aba/controller têm os tetos e o aviso', () => {
   const lib = fonte('./robos-automacoes.ts');
   assert.equal((lib.match(/system_logs/g) ?? []).length >= 1, true);
@@ -181,8 +229,9 @@ test('23/11: a busca do log é UMA consulta (não uma por automação), da unida
   assert.doesNotMatch(lib, /systemLog\.findMany/, 'nada de uma busca por automação');
   assert.match(lib, /context->>'slug' = \$\{slug\}/, 'só desta unidade');
   const ctl = fonte('../controllers/robos.controller.ts');
-  assert.match(ctl, /comTeto\(recarregarAutomacoes\(\), TETO_DO_RECARREGAR_MS/);
+  assert.match(ctl, /comTeto\(recarregarAutomacoes\(\)\.then\(\(\) => true\), TETO_DO_RECARREGAR_MS/);
   assert.match(ctl, /aoFalhar: \(parte\) => parcial\.push\(parte\)/);
+  assert.match(ctl, /parcial\.push\('estado'\)/, 'o recarregar que estourou o teto também avisa (estado possivelmente velho)');
   assert.match(ctl, /\n\s+parcial,/, 'a resposta leva o aviso do que não foi lido');
   assert.match(fonte('./robos-pagina.ts'), /parcial\.indexOf\('ultimas'\)/, 'a tela diz que não leu em vez de «sem registro»');
 });

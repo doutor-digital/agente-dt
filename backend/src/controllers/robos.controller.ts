@@ -187,8 +187,9 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     const t0 = Date.now();
     const ms: Record<string, number> = {};
     const medir = <T>(nome: string, p: Promise<T>): Promise<T> => p.finally(() => { ms[nome] = Date.now() - t0; });
-    await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DO_RECARREGAR_MS, undefined));
     const parcial: ParteQueFalhou[] = [];
+    // estourou: a aba segue com o estado que o servidor já tinha (a própria tela que muda um interruptor já o recarrega) e AVISA
+    if (!(await medir('recarregar', comTeto(recarregarAutomacoes().then(() => true), TETO_DO_RECARREGAR_MS, false)))) parcial.push('estado');
     const [automacoes, nativas] = await Promise.all([
       // o teto de cada leitura do banco (histórico e «quem mexeu», juntas) fica dentro de `automacoesDaUnidade`
       medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug, { aoFalhar: (parte) => parcial.push(parte) })),

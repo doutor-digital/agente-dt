@@ -18,6 +18,7 @@
  * pausa-equipe, sem-carinha, teto-mensal, cache-conversa, exame-de-imagem…) ficam de fora de propósito — o teste fixa as duas listas.
  */
 import { prisma } from './prisma.js';
+import { logger } from './logger.js';
 import { automacaoPorId, type Automacao } from './automacoes.js';
 import { ehEstado, gravarEstadoDaAutomacao, panoramaDaUnidade, type Estado } from './automacoes-estado.js';
 import { podeMexerNosRobos } from './robos-estado.js';
@@ -147,6 +148,8 @@ const NOTA_FIXA = 'Controlado pela Doutor Digital: não tem chave por unidade ne
 export const DIAS_DO_HISTORICO = 14;
 export const TETO_DO_HISTORICO_MS = 1200;
 export const MEMORIA_DO_HISTORICO_MS = 60_000;
+/** Depois dos 60 s o valor velho ainda serve por mais este tempo, enquanto uma busca nova corre em segundo plano. */
+export const HISTORICO_VELHO_SERVE_MS = 15 * 60_000;
 export function comTeto<T>(p: Promise<T>, ms: number, padrao: T, o: { propagarErro?: boolean } = {}): Promise<T> {
   return new Promise((ok, falha) => {
     const t = setTimeout(() => ok(padrao), ms);
@@ -159,7 +162,7 @@ export function comTeto<T>(p: Promise<T>, ms: number, padrao: T, o: { propagarEr
 }
 
 /** O que não deu para ler dentro do teto: a aba abre sem essa parte e a tela avisa. */
-export type ParteQueFalhou = 'ultimas' | 'mudancas';
+export type ParteQueFalhou = 'ultimas' | 'mudancas' | 'estado';
 
 export async function automacoesDaUnidade(
   banco: BancoDasAutomacoes,
@@ -171,9 +174,11 @@ export async function automacoesDaUnidade(
   const ids = Object.keys(DO_CATALOGO);
   const teto = o.tetoMs ?? TETO_DO_HISTORICO_MS;
   // as duas leituras do banco correm juntas, cada uma com teto; `null` = estourou o teto ou deu erro (a tela abre sem essa parte)
+  // erro de verdade (SQL, pool) NÃO some calado: vai para o log (a aba só mostra «servidor lento»); estourar o teto é medido pelo controller
+  const registrar = <T>(parte: ParteQueFalhou, p: Promise<T>): Promise<T> => p.catch((e: unknown) => { logger.warn({ err: String(e), parte, unit: slug }, 'robos: leitura da aba Automações falhou'); throw e; });
   const [ultimasLidas, mudancasLidas] = await Promise.all([
-    comTeto<Record<string, UltimaAcao[]> | null>(banco.ultimasDe(ids, slug, 5), teto, null),
-    comTeto<Awaited<ReturnType<BancoDasAutomacoes['mudancas']>> | null>(banco.mudancas(slug, ids), teto, null),
+    comTeto<Record<string, UltimaAcao[]> | null>(registrar('ultimas', banco.ultimasDe(ids, slug, 5)), teto, null),
+    comTeto<Awaited<ReturnType<BancoDasAutomacoes['mudancas']>> | null>(registrar('mudancas', banco.mudancas(slug, ids)), teto, null),
   ]);
   if (ultimasLidas === null) o.aoFalhar?.('ultimas');
   if (mudancasLidas === null) o.aoFalhar?.('mudancas');
@@ -275,22 +280,41 @@ export function resumoDoContexto(ctx: unknown): string {
 }
 
 /**
- * Guarda a PROMESSA por um tempo curto: quem pedir de novo no meio da busca pega a mesma (nada de 14 buscas por abertura da aba) e, se a
- * primeira quem pediu desistiu pelo teto, a busca termina em segundo plano e a próxima abertura já acha pronto. Erro não fica guardado.
+ * Guarda a PROMESSA por um tempo curto: quem pedir de novo no meio da busca pega a mesma (nada de 14 buscas por abertura da aba) e, se
+ * quem pediu desistiu pelo teto, a busca termina em segundo plano e a próxima abertura já acha pronto. Passado `ttlMs` o valor velho ainda
+ * serve por até `velhoMs` enquanto UMA busca nova corre em segundo plano (quem abre a aba de vez em quando não paga a leitura fria toda vez).
+ * Erro não fica guardado.
  */
-export function comMemoriaCurta<T>(memoria: Map<string, { ate: number; p: Promise<T> }>, chave: string, ttlMs: number, buscar: () => Promise<T>, agora: () => number = Date.now): Promise<T> {
+export interface EntradaDaMemoria<T> { ate: number; ateVelho: number; p: Promise<T>; v?: { valor: T }; renovando: boolean }
+export function comMemoriaCurta<T>(memoria: Map<string, EntradaDaMemoria<T>>, chave: string, ttlMs: number, buscar: () => Promise<T>, agora: () => number = Date.now, velhoMs = 0): Promise<T> {
   const t = agora();
   const guardada = memoria.get(chave);
   if (guardada && guardada.ate > t) return guardada.p;
-  for (const [k, v] of memoria) if (v.ate <= t) memoria.delete(k);
+  if (guardada && guardada.v && guardada.ateVelho > t) {
+    if (!guardada.renovando) {
+      guardada.renovando = true;
+      buscar().then(
+        (valor) => { memoria.set(chave, novaEntrada(valor, t, ttlMs, velhoMs)); },
+        (e: unknown) => { guardada.renovando = false; logger.warn({ err: String(e) }, 'robos: renovar o histórico em segundo plano falhou'); },
+      );
+    }
+    return Promise.resolve(guardada.v.valor);
+  }
+  for (const [k, v] of memoria) if (v.ateVelho <= t) memoria.delete(k);
   const p = buscar();
-  const reg = { ate: t + ttlMs, p };
+  const reg: EntradaDaMemoria<T> = { ate: t + ttlMs, ateVelho: t + ttlMs + velhoMs, p, renovando: false };
   memoria.set(chave, reg);
-  p.catch(() => { if (memoria.get(chave) === reg) memoria.delete(chave); });
+  p.then(
+    (valor) => { reg.v = { valor }; },
+    () => { if (memoria.get(chave) === reg) memoria.delete(chave); },
+  );
   return p;
 }
+function novaEntrada<T>(valor: T, t: number, ttlMs: number, velhoMs: number): EntradaDaMemoria<T> {
+  return { ate: t + ttlMs, ateVelho: t + ttlMs + velhoMs, p: Promise.resolve(valor), v: { valor }, renovando: false };
+}
 
-const memoriaDoHistorico = new Map<string, { ate: number; p: Promise<Record<string, UltimaAcao[]>> }>();
+const memoriaDoHistorico = new Map<string, EntradaDaMemoria<Record<string, UltimaAcao[]>>>();
 
 /** UMA leitura do log para todas as automações da unidade: as `quantas` mais recentes de cada `<id>:` dos últimos DIAS_DO_HISTORICO dias. */
 export function ultimasDoLog(ids: string[], slug: string, quantas: number): Promise<Record<string, UltimaAcao[]>> {
@@ -308,7 +332,7 @@ export function ultimasDoLog(ids: string[], slug: string, quantas: number): Prom
     const saida: Record<string, UltimaAcao[]> = {};
     for (const x of linhas) (saida[x.id] ??= []).push({ em: x.created_at.toISOString(), nivel: x.level, texto: x.msg.slice(0, 200), resumo: resumoDoContexto(x.context) });
     return saida;
-  });
+  }, Date.now, HISTORICO_VELHO_SERVE_MS);
 }
 
 export function bancoDasAutomacoes(): BancoDasAutomacoes {

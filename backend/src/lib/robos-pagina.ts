@@ -501,6 +501,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   async function carregarAuto(){
     try {
       AUTO = await api('GET', '/api/public/robos/automacoes?slug=' + enc(U.slug)); PODE = !!AUTO.pode;
+      if ((AUTO.parcial || []).indexOf('estado') >= 0) aviso('O servidor está lento: o estado das automações pode estar desatualizado. Abra a aba de novo em instantes.', true);
       var itens = itensDeAuto(), ant = autoAtual ? autoAtual.id : lerGuardado('robos:auto');
       autoAtual = itens.filter(function(a){ return a.id === ant; })[0] || itens[0] || null;
     } catch (e) { aviso(e.message, true); AUTO = { automacoes: [], nativas: { regras: [], lidas: false, link: null }, pode: false }; }
