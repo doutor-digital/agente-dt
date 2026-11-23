@@ -17,9 +17,9 @@
  * Não existe aqui: editar nota (PUT), cancelar só no Asaas (`cancelOnlyOnAsaas`), campos da Reforma Tributária de imóveis, nota de parcelamento.
  */
 import { ErroDeEntrada, somarDias, validarData } from '../franquia-mcp/travas.js';
-import { dinheiro, diaLocal, textoDoAviso } from './asaas-limites.js';
+import { dinheiro, diaLocal, EVENTO_OPERACAO, textoDoAviso } from './asaas-limites.js';
 import {
-  cabecalhoDaConta, clientePorId, comAvisos, contaDeEscrita, dataBR, descricaoValida, ErroSemId, fusoDe, mascararDoc, mascararEmail, melhorEsforco, podeTerGravado, sanear, valorValido,
+  cabecalhoDaConta, clientePorId, comAvisos, conferirTravas, contaDeEscrita, dataBR, descricaoValida, ErroSemId, fusoDe, mascararDoc, mascararEmail, melhorEsforco, podeTerGravado, reservar, sanear, valorValido,
   type ClienteAsaas, type CtxEscrita, type Quem, type Registrar,
 } from './asaas-escrita.js';
 import {
@@ -118,7 +118,14 @@ export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, ori
   try {
     for (const q of consultas) {
       const r = await paginar<NotaAsaas>(ctx, c, '/invoices', q);
-      for (const n of r.itens) if (!lidas.itens.some((x) => x.id === n.id)) lidas.itens.push(n);
+      for (const n of r.itens) {
+        // da busca por parcelamento só entram a nota DESTA cobrança ou a do parcelamento INTEIRO (sem cobrança E com o `installment` IGUAL ao desta cobrança): a nota da
+        // parcela 1 não é repetida da parcela 2, e, se o Asaas ignorasse o filtro, nenhuma avulsa da conta (de outro paciente, sem parcelamento) entraria
+        if ('installment' in q && (n.payment ? n.payment !== origem.id : n.installment !== origem.parcelamento)) continue;
+        // da busca por cobrança, só as notas DESTA cobrança (o Asaas ignorando o filtro não pode trazer nota de outra)
+        if ('payment' in q && n.payment !== origem.id) continue;
+        if (!lidas.itens.some((x) => x.id === n.id)) lidas.itens.push(n);
+      }
       lidas.truncado ||= r.truncado;
     }
   } catch (e) {
@@ -128,6 +135,34 @@ export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, ori
   if (lidas.truncado) throw new ErroDeEntrada(`esta origem tem notas demais para eu conferir se já existe uma igual: por segurança nada foi feito. Confira no painel do Asaas.${fase === 'confirmar' ? ' O código foi gasto.' : ''}`);
   const ativas = lidas.itens.filter((n) => notaVale(n.status));
   return origem.tipo === 'cobranca' ? ativas : ativas.filter((n) => n.effectiveDate === dataEmissao && Math.round((Number(n.value) || 0) * 100) === Math.round(valor * 100));
+}
+
+/**
+ * "Recente" para a nota avulsa: 60 dias = duas competências mensais (a do mês e a anterior, que é quando se esquece de que a avulsa já cobriu a cobrança);
+ * mais que isso, quem cobra a mesma mensalidade todo mês só levaria falso alarme.
+ */
+export const DIAS_NOTA_AVULSA_RECENTE = 60;
+
+/**
+ * Ao emitir pela COBRANÇA: o mesmo cliente já tem nota AVULSA (sem cobrança nem parcelamento) do mesmo valor nos últimos 60 dias (contados de HOJE)? Só AVISA (a avulsa pode ser de
+ * outro serviço): nunca bloqueia, e se a leitura falhar devolve um aviso em vez de erro.
+ */
+export async function avisoDeNotaAvulsaRecente(ctx: ContextoAsaas, c: ContaAsaas, clienteId: string, valor: number, hoje: string): Promise<string | null> {
+  // a janela conta de HOJE (e não da data de emissão pedida): nota agendada para daqui a 90 dias ainda tem de enxergar a avulsa de ontem
+  const desde = somarDias(hoje, -DIAS_NOTA_AVULSA_RECENTE);
+  let lidas: { itens: NotaAsaas[]; truncado: boolean };
+  try {
+    lidas = await paginar<NotaAsaas>(ctx, c, '/invoices', { customer: clienteId, 'effectiveDate[Ge]': desde });
+  } catch (e) {
+    if (httpStatus(e) === 401) throw e;
+    return 'não consegui conferir se este cliente já tem nota avulsa recente do mesmo valor (o Asaas não respondeu à listagem): confira com asaas_notas antes de aprovar';
+  }
+  const avulsas = lidas.itens.filter(
+    (n) => notaVale(n.status) && n.customer === clienteId && !n.payment && !n.installment && (!n.effectiveDate || n.effectiveDate >= desde) && Math.round((Number(n.value) || 0) * 100) === Math.round(valor * 100),
+  );
+  if (!avulsas.length) return lidas.truncado ? 'este cliente tem notas demais para eu conferir se há nota avulsa recente do mesmo valor: confira com asaas_notas antes de aprovar' : null;
+  const quais = avulsas.map((n) => `${n.id} (${STATUS_NOTA[n.status ?? ''] ?? n.status}${n.number ? `, nº ${n.number}` : ''}, emissão ${n.effectiveDate ? dataBR(n.effectiveDate) : '?'})`).join('; ');
+  return `POSSÍVEL NOTA REPETIDA: este cliente tem nota AVULSA (sem cobrança) de ${dinheiro(valor)}, o mesmo valor, nos últimos ${DIAS_NOTA_AVULSA_RECENTE} dias: ${quais}. Se ela já cobre esta cobrança, não emita outra. É só um aviso: a avulsa pode ser de outro serviço.`;
 }
 
 // ----------------------------------------------------------------- validação do pedido
@@ -318,6 +353,11 @@ async function prepararEmissao({ asaas, esc }: CtxEscrita, c: Conta, quem: Quem,
     avisos.unshift(`ATENÇÃO, NOTA REPETIDA: ${origem.tipo === 'cobranca' ? (origem.parcelamento ? 'esta cobrança (ou o parcelamento dela)' : 'esta cobrança') : 'este cliente, neste valor e nesta data,'} JÁ TEM nota fiscal ativa: ${quais}. Emitir de novo gera uma SEGUNDA nota. Só confirme se a pessoa quer isso mesmo.`);
   }
 
+  if (origem.tipo === 'cobranca') {
+    const avulsa = await avisoDeNotaAvulsaRecente(asaas, c, tomador.id, valor, hoje);
+    if (avulsa) avisos.push(avulsa);
+  }
+
   const corpo: Record<string, unknown> = {
     ...(origem.tipo === 'cobranca' ? { payment: origem.id } : { customer: origem.id }),
     serviceDescription: descricao,
@@ -387,6 +427,11 @@ async function prepararCancelamento({ esc }: CtxEscrita, c: Conta, quem: Quem, a
   if (!CANCELAVEIS.has(status)) {
     throw new ErroDeEntrada(`a nota ${id} ${POR_QUE_NAO_CANCELA[status] ?? `está com o status "${status || 'desconhecido'}", que não permite cancelar`}. Nada foi preparado.`);
   }
+  // o limite de cancelamentos por hora já no resumo (sem reservar): a pessoa não aprova um resumo que vai falhar no confirmar com o código gasto. O confirmar reserva de verdade.
+  await conferirTravas(esc, c, { tipo: 'cancelamento', valor: Number(nota.value) || 0, noTeto: 0 }).catch((e) => {
+    if (e instanceof ErroDeEntrada) throw new ErroDeEntrada(`${e.message.replace(/ Nada foi feito\.$/, '')} Nada foi preparado.`);
+    throw e;
+  });
   const avisos: string[] = [...avisosDaConta];
   const cancelaPelaApi = status === 'AUTHORIZED' ? await prefeituraCancelaPelaApi(c) : null;
   if (cancelaPelaApi === false) avisos.push('a prefeitura desta conta NÃO aceita cancelamento automático pela integração: o Asaas deve recusar, e o cancelamento terá de ser feito no portal da prefeitura');
@@ -505,8 +550,17 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
     if (atual.status !== p.statusAntes) {
       throw new ErroDeEntrada(`a nota ${id} mudou de status desde o resumo (era "${STATUS_NOTA[p.statusAntes ?? ''] ?? p.statusAntes}", agora é "${STATUS_NOTA[atual.status ?? ''] ?? atual.status}"): não cancelei. Prepare de novo. Nada foi feito.`);
     }
-    const base = { conta: c.slug, operacao: 'cancelar_nota', notaId: id, valor: p.valor, statusAntes: p.statusAntes, pediuPor: quem.id };
-    await intencao(base);
+    // a QUANTIDADE de cancelamentos por hora (ASAAS_CANCELAMENTOS_POR_HORA, por chave do Asaas) é a MESMA trava do cancelar_cobranca: a reserva grava a intenção
+    // dentro da trava da chave e conta como cancelamento; estourou, o código já foi gasto e a pessoa prepara de novo depois
+    const base0 = { conta: c.slug, operacao: 'cancelar_nota', valor: p.valor ?? 0, noTeto: 0, idAsaas: id, statusAntes: p.statusAntes, pediuPor: quem.id };
+    let reserva: { intencaoId: string; grupo: string };
+    try {
+      reserva = await reservar(esc, c, quem, { tipo: 'cancelamento', valor: p.valor ?? 0, noTeto: 0, evento: EVENTO_OPERACAO, argumentos: base0 });
+    } catch (e) {
+      if (e instanceof ErroDeEntrada) throw new ErroDeEntrada(`${e.message} O código foi gasto: prepare o cancelamento de novo depois.`);
+      throw e;
+    }
+    const base = { ...base0, intencaoId: reserva.intencaoId, chaveAsaas: reserva.grupo };
     let r: NotaAsaas | null = null;
     try {
       r = await c.escrita.enviar<NotaAsaas>('POST', `/invoices/${id}/cancel`);
@@ -519,13 +573,13 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
         if (lida && (lida.status === 'PROCESSING_CANCELLATION' || lida.status === 'CANCELED')) r = lida;
       }
       if (!r) {
-        registrar(EVENTO_NOTA, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+        registrar(EVENTO_OPERACAO, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
         if (incerto) avisar(aviso('CANCELAMENTO DE NOTA COM RESULTADO INCERTO', { ...(p.valor ? { valor: p.valor } : {}), id, detalhe: 'O Asaas não confirmou: o cancelamento PODE ter sido pedido. Conferir no painel.' }));
         throw incerto ? new Error(`${s.message} — o cancelamento PODE ter sido pedido: confira com asaas_nota antes de repetir.`) : new Error(`${s.message} — o código foi gasto: prepare de novo se quiser tentar outra vez.`);
       }
     }
     const statusAgora = r?.status ?? null;
-    registrar(EVENTO_NOTA, { ...base, idAsaas: id, status: statusAgora }, true);
+    registrar(EVENTO_OPERACAO, { ...base, status: statusAgora }, true);
     avisar(aviso('NOTA FISCAL: CANCELAMENTO PEDIDO', { ...(p.valor ? { valor: p.valor } : {}), id, detalhe: `status agora: ${statusAgora ?? '?'} · antes: ${p.statusAntes}` }));
     return {
       conta: cabecalho,
