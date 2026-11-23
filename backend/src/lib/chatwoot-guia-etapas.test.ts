@@ -464,3 +464,10 @@ test('com CHATWOOT_GUIA_ETAPA=0 o «?» do Funil/Hoje/Oportunidades também some
     else process.env.CHATWOOT_GUIA_ETAPA = antes;
   }
 });
+
+test('Agendado: o guia diz o que o robô do pré-pagamento lê — «Pagamento antecipado» = vai pagar antes; pagou = etiqueta «pagou-antecipado»', () => {
+  const passos = G.GUIA_DAS_ETAPAS['Agendado'].passos.join(' | ');
+  assert.match(passos, /Vai pagar antes\? Marque «Pagamento antecipado»/);
+  assert.match(passos, /etiqueta «pagou-antecipado»/);
+  assert.doesNotMatch(passos, /Pagou o sinal\? Marque «Pagamento antecipado»/, 'marcar o campo para quem já pagou faria o robô cobrar de novo');
+});
