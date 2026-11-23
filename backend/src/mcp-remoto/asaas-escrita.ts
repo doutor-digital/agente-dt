@@ -22,6 +22,7 @@ import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
 import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
+import { PendentesNota } from './asaas-notas-pendentes.js';
 import {
   arredondar, cancelamentosPorHora, conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso,
   type DestinosLidos, type Livro, type Porteiro, type TetoEspecifico, type TipoDeLancamento, type TipoDeSaida,
@@ -46,6 +47,19 @@ export function cobrancasPorHora(e: NodeJS.ProcessEnv = process.env): number {
 export function unidadesComEscrita(e: NodeJS.ProcessEnv = process.env): Set<string> {
   return new Set(
     (e.ASAAS_ESCRITA_UNIDADES ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !s.includes('*')),
+  );
+}
+
+/**
+ * Unidades em que a NOTA FISCAL (preparar/confirmar emissão e cancelamento) está LIGADA: slugs separados por vírgula em ASAAS_NOTAS_UNIDADES, mesmo formato
+ * e mesma regra de ASAAS_ESCRITA_UNIDADES (ausente ou vazia = desligada em todas; "*" não vale). Exige estar TAMBÉM em ASAAS_ESCRITA_UNIDADES. A leitura não depende dela.
+ */
+export function unidadesComNotas(e: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (e.ASAAS_NOTAS_UNIDADES ?? '')
       .split(',')
       .map((s) => s.trim().toLowerCase())
       .filter((s) => s && !s.includes('*')),
@@ -289,6 +303,8 @@ export interface EstadoEscritaAsaas {
   cancelamentosPorHora: () => number;
   /** unidades com a escrita ligada (ASAAS_ESCRITA_UNIDADES) */
   unidades: () => Set<string>;
+  /** unidades com a NOTA FISCAL (emitir/cancelar) ligada (ASAAS_NOTAS_UNIDADES); vale junto com `unidades` */
+  unidadesNotas: () => Set<string>;
   /** destinos de transferência permitidos da clínica (ASAAS_TRANSFERENCIA_DESTINOS) */
   destinos: (slug: string) => DestinosLidos;
   /** manda o aviso (Telegram); devolve se saiu. Nunca lança. */
@@ -301,6 +317,8 @@ export interface EstadoEscritaAsaas {
   nomes: Map<string, { nome: string; ate: number }>;
   /** operações uma por vez EM CADA CONTA neste processo (contas diferentes não esperam umas pelas outras); entre processos quem segura é o porteiro */
   filas: Map<string, Promise<unknown>>;
+  /** nota fiscal (emitir/cancelar): pedidos preparados à espera do ok da pessoa (código de uso único, 15 min) */
+  notas: PendentesNota;
 }
 
 /** Sem porteiro (nem nos testes) a escrita não anda: tetos que não conseguem ler o banco não são tetos. */
@@ -322,6 +340,7 @@ export function criarEscritaAsaas(
     porHora?: () => number;
     cancelamentosPorHora?: () => number;
     unidades?: () => Set<string>;
+    unidadesNotas?: () => Set<string>;
     destinos?: (slug: string) => DestinosLidos;
     alertar?: (texto: string) => Promise<boolean>;
     esperaLinhaMs?: number;
@@ -336,6 +355,7 @@ export function criarEscritaAsaas(
     porHora: o.porHora ?? (() => cobrancasPorHora()),
     cancelamentosPorHora: o.cancelamentosPorHora ?? (() => cancelamentosPorHora()),
     unidades: o.unidades ?? (() => unidadesComEscrita()),
+    unidadesNotas: o.unidadesNotas ?? (() => unidadesComNotas()),
     destinos: o.destinos ?? ((slug) => lerDestinos(slug)),
     // o servidor passa o Telegram de verdade (producao.ts); sem isso o aviso não sai, e o teste de producao.ts garante a ligação
     alertar: o.alertar ?? (async () => false),
@@ -343,6 +363,7 @@ export function criarEscritaAsaas(
     porteiro: o.porteiro ?? PORTEIRO_AUSENTE,
     nomes: new Map(),
     filas: new Map(),
+    notas: new PendentesNota(o.agora ?? Date.now),
   };
 }
 
@@ -519,6 +540,10 @@ export interface ClienteAsaas {
   phone?: string;
   notificationDisabled?: boolean;
   deleted?: boolean;
+  /** endereço do cadastro (a nota fiscal do tomador costuma exigir) */
+  postalCode?: string;
+  address?: string;
+  addressNumber?: string;
 }
 
 export type ContaDeEscrita = ContaAsaas & { escrita: EscritaAsaas };
@@ -923,7 +948,7 @@ export function mascararPedido(entrada: Record<string, any>, conhecidos?: readon
   const extras = conhecidos ? Object.keys(entrada).filter((k) => !conhecidos.includes(k)) : [];
   const a = Object.fromEntries(Object.entries(entrada).filter(([k]) => !extras.includes(k)));
   const novo = a.novoCliente as { nome?: string; email?: string; telefone?: string; endereco?: unknown } | undefined;
-  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, externalReference, destino, contaBancaria, ...resto } = a;
+  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, observacoes, nome, externalReference, destino, contaBancaria, ...resto } = a;
   const semCartao = Object.fromEntries(Object.entries(resto).filter(([k]) => !(CAMPOS_DE_CARTAO.test(k) && k !== 'forma')));
   const tinhaCartao = Object.keys(resto).length !== Object.keys(semCartao).length;
   return {
@@ -941,6 +966,8 @@ export function mascararPedido(entrada: Record<string, any>, conhecidos?: readon
     ...(contaBancaria ? { temContaBancaria: true } : {}),
     // o texto da cobrança pode trazer o motivo do tratamento: o registro guarda só o tamanho (o texto fica no Asaas, pelo id)
     ...(descricao !== undefined ? { descricaoCaracteres: String(descricao).length } : {}),
+    // observações da nota fiscal: mesmo tratamento da descrição (podem trazer o motivo do tratamento)
+    ...(observacoes !== undefined ? { observacoesCaracteres: String(observacoes).length } : {}),
     ...(novoCliente
       ? { novoCliente: { nome: novo?.nome ? abreviarNome(novo.nome) : undefined, ...(novo?.email ? { email: mascararEmail(novo.email) } : {}), ...(novo?.telefone ? { telefone: mascararTelefone(novo.telefone) } : {}), ...(novo?.endereco ? { temEndereco: true } : {}) } }
       : {}),

@@ -3,7 +3,7 @@
  * de quem pode usar. A lógica está em `asaas-escrita.ts` (cliente e cobrança), `asaas-operacoes.ts` (editar, cancelar, estornar,
  * transferir) e `asaas-limites.ts` (tetos, destinos, aviso).
  *
- * Tudo DIRETO, sem passo de confirmação — por isso as travas automáticas existem: só quem está em MCP_ESCRITA_EMAILS vê estas
+ * Tudo DIRETO, sem passo de confirmação (a exceção é a NOTA FISCAL, em dois passos: `registrarNotasFiscaisAsaas`, mais abaixo) — por isso as travas automáticas existem: só quem está em MCP_ESCRITA_EMAILS vê estas
  * ferramentas, só nas clínicas de ASAAS_ESCRITA_UNIDADES, uma clínica por vez, com tetos por operação e por dia, lista fechada de
  * destinos para transferência e aviso no Telegram.
  */
@@ -14,6 +14,8 @@ import { asaasCobranca, type ContextoAsaas } from './asaas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
 import { contaDeEscrita, criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
 import { PADRAO_TETOS } from './asaas-limites.js';
+import { asaasNota, asaasNotas, STATUS_DO_FILTRO } from './asaas-notas.js';
+import { confirmarNota, MAX_DIAS_EMISSAO, prepararNota, type PedidoDePreparo } from './asaas-notas-escrita.js';
 import { executar } from './ferramenta.js';
 
 /** `executar` com a mensagem de erro limpa (sem chave, documento ou e-mail) e os argumentos mascarados no registro. */
@@ -37,24 +39,17 @@ const endereco = z.object({
 
 const SO_QUEM_PODE =
   'Faz DIRETO, sem pedir confirmação: confira o pedido com a pessoa ANTES de chamar (clínica, cliente, valor). Só quem tem permissão de escrita vê esta ferramenta, e só nas clínicas liberadas no servidor.';
+const SO_QUEM_PODE_NOTA =
+  'Só quem tem permissão de escrita vê esta ferramenta, e só nas clínicas liberadas no servidor para escrita (ASAAS_ESCRITA_UNIDADES) E ligadas para nota fiscal (ASAAS_NOTAS_UNIDADES; fora dela responde que a nota não está ligada), uma clínica por vez.';
 const PROIBIDO =
   'Este conector NUNCA: altera dados bancários da clínica, chaves de API, webhooks ou usuários do Asaas; faz antecipação ou empréstimo; paga contas (boleto de terceiros); recebe número de cartão pelo chat.';
 
-export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, esc: EstadoEscritaAsaas, quem: Quem, auditar: Auditar): void {
-  const ctx: CtxEscrita = { asaas, esc };
-  // em produção o `auditar` devolve uma promessa (true = o banco gravou); a escrita de dinheiro espera a intenção ser gravada antes de chamar o Asaas
-  const registrar: Registrar = (evento, argumentos, ok, erro) => auditar({ ferramenta: evento, argumentos, ok, ms: 0, ...(erro ? { erro } : {}) });
-  const unidade = z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra"). "todas" não vale para gravar.');
-  const avisarCliente = z.boolean().optional().describe('o Asaas pode mandar e-mail/SMS da cobrança ao cliente? Padrão NÃO (false). Só true se a pessoa pediu.');
-  const escreve = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
-  const apaga = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
-  const tetos = `Tetos automáticos (por chave do Asaas; veja o que vale de verdade em asaas_limites): padrão R$ ${PADRAO_TETOS.operacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.diaReais.toLocaleString('pt-BR')} por dia, somando cobranças criadas + estornos + transferências; estorno e transferência têm teto PRÓPRIO, menor (padrão R$ ${PADRAO_TETOS.saidaOperacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.saidaDiaReais.toLocaleString('pt-BR')} por dia, cada um). Passou do teto, recusa; quem sobe o teto é o João, no servidor.`;
-
-  /**
-   * Registra a ferramenta com o esquema `passthrough`: o SDK NÃO descarta em silêncio o campo que não existe (ex. `cardNumber`, `ccv`, `expiryMonth`);
-   * ele chega aqui e o pedido inteiro é RECUSADO. No registro da auditoria, campo desconhecido entra só pelo nome, nunca pelo valor.
-   */
-  const tool = <S extends z.ZodRawShape>(
+/**
+ * Registra a ferramenta com o esquema `passthrough`: o SDK NÃO descarta em silêncio o campo que não existe (ex. `cardNumber`, `ccv`, `expiryMonth`);
+ * ele chega aqui e o pedido inteiro é RECUSADO. No registro da auditoria, campo desconhecido entra só pelo nome, nunca pelo valor.
+ */
+function ferramentaSegura(server: McpServer, auditar: Auditar) {
+  return <S extends z.ZodRawShape>(
     nome: string,
     cfg: { title: string; description: string; inputSchema: S; annotations: Record<string, boolean> },
     fn: (args: z.infer<z.ZodObject<S>>) => Promise<unknown>,
@@ -67,6 +62,19 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       }),
     );
   };
+}
+
+export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, esc: EstadoEscritaAsaas, quem: Quem, auditar: Auditar): void {
+  const ctx: CtxEscrita = { asaas, esc };
+  // em produção o `auditar` devolve uma promessa (true = o banco gravou); a escrita de dinheiro espera a intenção ser gravada antes de chamar o Asaas
+  const registrar: Registrar = (evento, argumentos, ok, erro) => auditar({ ferramenta: evento, argumentos, ok, ms: 0, ...(erro ? { erro } : {}) });
+  const unidade = z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra"). "todas" não vale para gravar.');
+  const avisarCliente = z.boolean().optional().describe('o Asaas pode mandar e-mail/SMS da cobrança ao cliente? Padrão NÃO (false). Só true se a pessoa pediu.');
+  const escreve = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true };
+  const apaga = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
+  const tetos = `Tetos automáticos (por chave do Asaas; veja o que vale de verdade em asaas_limites): padrão R$ ${PADRAO_TETOS.operacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.diaReais.toLocaleString('pt-BR')} por dia, somando cobranças criadas + estornos + transferências; estorno e transferência têm teto PRÓPRIO, menor (padrão R$ ${PADRAO_TETOS.saidaOperacaoReais.toLocaleString('pt-BR')} por operação e R$ ${PADRAO_TETOS.saidaDiaReais.toLocaleString('pt-BR')} por dia, cada um). Passou do teto, recusa; quem sobe o teto é o João, no servidor.`;
+
+  const tool = ferramentaSegura(server, auditar);
 
   server.registerTool(
     'asaas_limites',
@@ -241,6 +249,122 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
 }
 
 /**
+ * Nota fiscal (NFS-e): a ESCRITA em DOIS passos, diferente do resto do Asaas (que é direto). Preparar mostra o resumo e devolve um código;
+ * só o confirmar, com o ok da pessoa, chama o Asaas. Também só para quem escreve: as leituras que trazem o link do PDF/XML (asaas_notas, asaas_nota). A lógica de leitura está em `asaas-notas.ts` (e asaas_dados_fiscais, liberada a quem tem o Asaas, é registrada lá).
+ */
+export function registrarNotasFiscaisAsaas(server: McpServer, asaas: ContextoAsaas, esc: EstadoEscritaAsaas, quem: Quem, auditar: Auditar): void {
+  const ctx: CtxEscrita = { asaas, esc };
+  const registrar: Registrar = (evento, argumentos, ok, erro) => auditar({ ferramenta: evento, argumentos, ok, ms: 0, ...(erro ? { erro } : {}) });
+  const tool = ferramentaSegura(server, auditar);
+  // as duas leituras que trazem o link do PDF/XML (CPF, endereço e serviço do paciente) só existem para quem escreve, e só nas clínicas liberadas, como asaas_cobranca
+  const umaUnidade = z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra")');
+  const dia = (o: string) => z.string().optional().describe(`${o}, AAAA-MM-DD`);
+  server.registerTool(
+    'asaas_notas',
+    {
+      title: 'Notas fiscais de serviço (Asaas)',
+      description:
+        'Notas fiscais de serviço (NFS-e) do Asaas de UMA clínica, com filtro por período (data de EMISSÃO), status, cobrança (pay_…), cliente (cus_…) ou referência. ' +
+        'Devolve número, status em português, valor, data, tomador, descrição curta e os links do PDF e do XML quando a nota já foi emitida; mais o total por status. ' +
+        'É preciso ao menos um filtro. Status: SCHEDULED (agendada), SYNCHRONIZED (enviada à prefeitura), AUTHORIZED (emitida), PROCESSING_CANCELLATION, CANCELED, CANCELLATION_DENIED, ERROR. ' +
+        'Para saber se a clínica PODE emitir, use asaas_dados_fiscais. Só leitura: emitir e cancelar são asaas_preparar_nota → asaas_confirmar_nota. ' +
+        'Só para quem tem permissão de escrita (o link do PDF/XML mostra CPF, endereço e o serviço do paciente).',
+      inputSchema: {
+        unidade: umaUnidade,
+        inicio: dia('início do período de emissão'),
+        fim: dia('fim do período de emissão'),
+        status: z.enum(STATUS_DO_FILTRO).optional(),
+        cobrancaId: z.string().optional().describe('notas desta cobrança (pay_…)'),
+        clienteId: z.string().optional().describe('notas deste cliente/tomador (cus_…)'),
+        referencia: z.string().optional().describe('externalReference da nota'),
+        maxItens: z.number().int().min(0).max(100).optional().describe('notas detalhadas na resposta (padrão 30); o total e o resumo por status contam todas'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) =>
+      executarSeguro('asaas_notas', args, auditar, async () => {
+        contaDeEscrita(asaas, esc, args.unidade);
+        return asaasNotas(asaas, args);
+      }),
+  );
+  server.registerTool(
+    'asaas_nota',
+    {
+      title: 'Uma nota fiscal (Asaas)',
+      description:
+        'Uma nota fiscal de serviço pelo id (inv_…), completa: número, status e o motivo (se deu erro), valor, deduções, data, tomador, serviço municipal, descrição, observações, ' +
+        'impostos e retenções, RPS, código de verificação e os links do PDF e do XML. Use para conferir o resultado depois de emitir ou cancelar. ' +
+        'Só para quem tem permissão de escrita (o link do PDF/XML mostra CPF, endereço e o serviço do paciente).',
+      inputSchema: { unidade: umaUnidade, notaId: z.string().min(4).describe('inv_…') },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) =>
+      executarSeguro('asaas_nota', args, auditar, async () => {
+        contaDeEscrita(asaas, esc, args.unidade);
+        return asaasNota(asaas, args);
+      }),
+  );
+  const aliquota = (o: string) => z.number().min(0).max(100).optional().describe(`${o}, em % (ex. 2 ou 2.5)`);
+  tool(
+    'asaas_preparar_nota',
+    {
+      title: 'Preparar nota fiscal: emitir ou cancelar (Asaas)',
+      description:
+        'PASSO 1 de 2 para EMITIR ou CANCELAR uma nota fiscal de serviço (NFS-e) de UMA clínica. NÃO emite nem cancela nada: confere tudo no Asaas e devolve o resumo COMPLETO (clínica, tomador, valor, deduções, serviço municipal, ' +
+        'impostos e de onde veio cada um, descrição, data de emissão), os avisos (nota repetida da mesma cobrança, tomador sem endereço…) e um código. MOSTRE o resumo inteiro à pessoa e só chame asaas_confirmar_nota se ela aprovar. ' +
+        'acao="emitir": informe cobrancaId (pay_…) OU clienteId (cus_…, nota avulsa); "servico" (id, código ou parte do nome do serviço municipal; veja asaas_dados_fiscais); a data (dataEmissao para AGENDAR, ou emitirAgora=true para emitir hoje); ' +
+        'e os impostos em "impostos": retemIss, inss e ir SEMPRE (0 se não há), iss (se a prefeitura não traz a alíquota), e pis/cofins/csll (0 automático no Simples Nacional). ' +
+        'NUNCA suponha alíquota, retenção ou serviço: o que a pessoa não disse, PERGUNTE (ou à contabilidade); o conector recusa e diz o que falta. Clínica sem dados fiscais no Asaas: recusa. ' +
+        'valor e descricao saem da cobrança se não vierem. acao="cancelar": informe só notaId (inv_…); o cancelamento de nota JÁ EMITIDA depende do prazo e das regras da prefeitura e pode ser negado. ' +
+        'O código vale 15 minutos, uma vez, só para quem preparou. ' + SO_QUEM_PODE_NOTA,
+      inputSchema: {
+        unidade: z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra"). "todas" não vale.'),
+        acao: z.enum(['emitir', 'cancelar']),
+        cobrancaId: z.string().optional().describe('emitir: a cobrança (pay_…) que a nota fatura'),
+        clienteId: z.string().optional().describe('emitir: nota avulsa para este cliente/tomador (cus_…)'),
+        valor: z.number().optional().describe('emitir: valor da nota em reais; sem isso usa o da cobrança (obrigatório na nota avulsa)'),
+        deducoes: z.number().optional().describe('emitir: deduções em reais (não mudam o valor da nota, reduzem a base do ISS); padrão 0'),
+        servico: z.string().optional().describe('emitir: serviço municipal — id, código (ex. 4.01) ou parte do nome. Sem lista na prefeitura (Portal Nacional): o CÓDIGO'),
+        nomeDoServico: z.string().max(200).optional().describe('emitir: só quando a conta não tem lista de serviços; o nome que acompanha o código'),
+        descricao: z.string().max(500).optional().describe('emitir: descrição dos serviços que sai na nota (sem CPF/telefone); sem isso usa a da cobrança'),
+        observacoes: z.string().max(500).optional().describe('emitir: observações da nota'),
+        dataEmissao: z.string().optional().describe(`emitir: AAAA-MM-DD, de hoje até ${MAX_DIAS_EMISSAO} dias (nota AGENDADA)`),
+        emitirAgora: z.boolean().optional().describe('emitir: true = agenda para hoje e já pede a emissão à prefeitura'),
+        impostos: z
+          .object({
+            retemIss: z.boolean().optional().describe('o tomador retém o ISS?'),
+            iss: aliquota('alíquota do ISS (sem isso, vale a cadastrada na prefeitura para o serviço)'),
+            pis: aliquota('PIS (no Simples Nacional é 0 e não se informa)'),
+            cofins: aliquota('COFINS (no Simples Nacional é 0 e não se informa)'),
+            csll: aliquota('CSLL (no Simples Nacional é 0 e não se informa)'),
+            inss: aliquota('INSS'),
+            ir: aliquota('IR'),
+          })
+          .strict()
+          .optional(),
+        notaId: z.string().optional().describe('cancelar: a nota (inv_…); veja asaas_notas'),
+      },
+      // não é "só leitura": guarda o pedido e o código que depois autoriza uma escrita fiscal; o cliente não deve aprová-la sozinho como se fosse consulta
+      annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+    },
+    (args) => prepararNota(ctx, quem, args as PedidoDePreparo),
+  );
+  tool(
+    'asaas_confirmar_nota',
+    {
+      title: 'Confirmar nota fiscal: emitir ou cancelar (Asaas)',
+      description:
+        'PASSO 2 de 2: é AQUI que a nota é agendada/emitida (ou cancelada) no Asaas, com o código que asaas_preparar_nota devolveu. Só chame depois que a pessoa aprovou o resumo COMPLETO. ' +
+        'O código vale 15 minutos, UMA vez, e só para quem preparou; se apareceu outra nota da mesma origem (ou a nota mudou de status) desde o resumo, recusa. ' +
+        'Emitir e cancelar avisam o João no Telegram e ficam registrados. A prefeitura é quem autoriza: confira o resultado com asaas_nota. Se a resposta for erro de rede, NÃO repita às cegas: confira com asaas_notas. ' + SO_QUEM_PODE_NOTA,
+      inputSchema: { confirmacao: z.string().min(4).max(24) },
+      annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true },
+    },
+    (args) => confirmarNota(ctx, quem, args, registrar),
+  );
+}
+
+/**
  * O portão de quem escreve: só quem está na lista de escrita (MCP_ESCRITA_EMAILS, já resolvida em ids) ganha as ferramentas.
  * Fora da lista elas nem existem na sessão — não aparecem e não podem ser chamadas. Devolve se registrou.
  */
@@ -254,6 +378,9 @@ export function registrarEscritaAsaasSePermitido(
   quem: { email?: string; clientId?: string } = {},
 ): boolean {
   if (!escritores.has(usuario)) return false;
-  registrarEscritaAsaas(server, asaas, esc, { id: usuario, ...(quem.email ? { email: quem.email } : {}), ...(quem.clientId ? { clientId: quem.clientId } : {}) }, auditar);
+  const eles = { id: usuario, ...(quem.email ? { email: quem.email } : {}), ...(quem.clientId ? { clientId: quem.clientId } : {}) };
+  registrarEscritaAsaas(server, asaas, esc, eles, auditar);
+  // nota fiscal: escrita em DOIS passos (preparar → confirmar), pelo mesmo portão e a mesma lista de quem escreve
+  registrarNotasFiscaisAsaas(server, asaas, esc, eles, auditar);
   return true;
 }
