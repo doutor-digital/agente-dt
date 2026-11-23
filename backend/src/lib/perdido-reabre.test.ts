@@ -11,6 +11,7 @@ import {
   ehPerdidoDoComercial,
   ehRecusaOuEncerramento,
   notaCartaoReaberto,
+  trechoDaFala,
   pacienteEmTratamentoNaFranquia,
   pedeParaSair,
   perdidoReabreEstado,
@@ -308,6 +309,13 @@ test('SÓ NO PAPEL: a fala vai cortada em 140 caracteres e numa linha só', asyn
   assert.ok(v.endsWith('…') && !v.includes('\n'));
 });
 
+test('a fala cortada não parte emoji ao meio (por caractere, não por unidade UTF-16)', () => {
+  const v = trechoDaFala('😀'.repeat(200));
+  assert.equal(Array.from(v).length, 141);
+  assert.doesNotMatch(v, /[\ud800-\udbff](?![\udc00-\udfff])/);
+  assert.match(notaCartaoReaberto('😀'.repeat(200), null), /😀…"/);
+});
+
 test('SÓ NO PAPEL também registra por que NÃO reabriria (é isso que se confere antes de ligar)', async () => {
   const { deps, reg, pedido } = fake({ estado: () => 'seco' });
   const r = await portaPerdidoReabre(pedido({ lead: cartao({ _embedded: { tags: [{ id: 1, name: 'NO_FOLLOW_UP' }], contacts: [] } }) }), deps);
@@ -357,7 +365,7 @@ test('recusa curta e encerramento: "pode encerrar", "não quero", "não tenho in
     assert.equal(ehRecusaOuEncerramento(t), true, t);
   }
   // pacientes de verdade, mesmo com "não" no meio
-  for (const t of ['Ver horários', 'Quanto custa?', 'Não quero cirurgia, quero saber o valor da consulta', 'Quero ver horários, não tenho interesse em cirurgia', 'Não consigo ir de manhã, tem à tarde?', 'não tenho plano, é particular?', 'Pode ser amanhã?', 'Pode marcar para terça']) {
+  for (const t of ['Ver horários', 'Quanto custa?', 'Não quero cirurgia, quero saber o valor da consulta', 'Quero ver horários, não tenho interesse em cirurgia', 'Não consigo ir de manhã, tem à tarde?', 'não tenho plano, é particular?', 'Pode ser amanhã?', 'Pode marcar para terça', 'Pode fechar para terça', 'Pode fechar o agendamento', 'Pode finalizar a marcação', 'Não quero ir de manhã', 'Não quero pagar sinal', 'Não quero cirurgia, quanto custa?', 'Não tenho interesse nesse horário', 'Pode encerrar o agendamento de terça']) {
     assert.equal(ehRecusaOuEncerramento(t), false, t);
   }
 });
@@ -366,7 +374,7 @@ test('código de confirmação de remetente automático (Facebook etc.) não é 
   for (const t of ['FB-12345 é seu código de confirmação do Facebook', '123456 é o seu código de confirmação do Facebook', 'Seu código de verificação do Instagram é 884412', 'Your Facebook code is 551234', 'fb-48213', 'Codigo de confirmacao 4455']) {
     assert.equal(ehCodigoDeVerificacao(t), true, t);
   }
-  for (const t of ['Ver horários', 'Meu CEP é 88000000', 'Quero marcar às 15:30', 'Meu telefone é 47999990000', 'o código da consulta qual é?']) {
+  for (const t of ['Ver horários', 'Meu CEP é 88000000', 'Quero marcar às 15:30', 'Meu telefone é 47999990000', 'o código da consulta qual é?', 'Meu CEP é 88000-000, qual o código da unidade?', 'Quero a confirmação para 2026', 'Prometa que atende às 15:30 de 2026']) {
     assert.equal(ehCodigoDeVerificacao(t), false, t);
   }
 });

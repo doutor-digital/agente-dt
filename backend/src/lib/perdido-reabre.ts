@@ -93,11 +93,12 @@ export function ehRecusaOuEncerramento(texto: string): boolean {
     .replace(/\s+/g, ' ')
     .trim();
   if (!t) return false;
-  const palavras = t.split(' ').length;
-  if (/^(sim |ok |pode |por favor )*(pode )?(encerrar|encerra|fechar|finalizar|arquivar)\b/.test(t) && palavras <= 6) return true;
-  if (/^(ja )?(nao tenho (mais )?interesse|sem interesse|nao me interessa)\b/.test(t) && palavras <= 6) return true;
-  if (/^(nao|no)( quero( mais)?| preciso( mais)?| obrigad[oa]| valeu)( obrigad[oa])?$/.test(t) && palavras <= 4) return true;
-  if (/^(nao )?(obrigad[oa] )?nao (quero|tenho interesse)\b/.test(t) && palavras <= 5) return true;
+  // só "encerrar" (o que o sênior mediu): "pode fechar para terça" / "pode finalizar a marcação" são paciente querendo marcar
+  if (/^(sim |ok |por favor )*(pode )?(encerrar|encerra)( por favor| tudo| o atendimento| a conversa)?$/.test(t)) return true;
+  if (/^(ja )?(nao tenho (mais )?interesse|sem interesse|nao me interessa)( mais| obrigad[oa])?$/.test(t)) return true;
+  // "não quero" SOLTO ("não quero cirurgia", "não quero ir de manhã" são paciente)
+  if (/^(nao|no)( quero( mais)?| preciso( mais)?| obrigad[oa]| valeu)( obrigad[oa])?$/.test(t)) return true;
+  if (/^(nao )?(obrigad[oa] )?nao (quero|tenho interesse)( mais| obrigad[oa])?$/.test(t)) return true;
   return false;
 }
 
@@ -108,7 +109,10 @@ export function ehRecusaOuEncerramento(texto: string): boolean {
 export function ehCodigoDeVerificacao(texto: string): boolean {
   const t = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
   if (/^\s*(fb|ig|wa)[-\s]?\d{4,8}\b/.test(t)) return true;
-  return /\b\d{4,8}\b/.test(t) && /\b(codigo|code|confirmacao|verificacao|verification|confirmation)\b/.test(t) && /(facebook|instagram|meta|whatsapp|codigo|code)/.test(t);
+  // "seu código ... 123456" / "<número> é o seu código de confirmação do Facebook": o remetente automático se anuncia
+  if (/\b(seu|your)\s+(codigo|code)\b[^.\d]{0,40}\d{4,8}\b/.test(t)) return true;
+  if (/^\s*(codigo|code)\s+(de\s+)?(confirmacao|verificacao|verification)[^.\d]{0,10}\d{4,8}\s*$/.test(t)) return true;
+  return /\b\d{4,8}\b/.test(t) && /\b(facebook|instagram|whatsapp)\b/.test(t) && /\b(codigo|code|confirmacao|verificacao|verification|confirmation)\b/.test(t);
 }
 
 /** O que o Whisper devolve quando o áudio não tem fala: não é o paciente respondendo. */
@@ -135,17 +139,17 @@ export function pacienteEmTratamentoNaFranquia(s: SinalDaFranquia | null): strin
 
 /** A fala do paciente em uma linha, até 140 caracteres (a mesma que a nota do cartão leva). */
 export function trechoDaFala(mensagem: string): string {
-  const t = mensagem.replace(/\s+/g, ' ').trim();
-  return t.length > 140 ? `${t.slice(0, 140)}…` : t;
+  const letras = Array.from(mensagem.replace(/\s+/g, ' ').trim()); // por caractere, não por unidade UTF-16: não parte emoji ao meio
+  return letras.length > 140 ? `${letras.slice(0, 140).join('')}…` : letras.join('');
 }
 
 /** A nota que fica no cartão. Curta: a equipe lê no celular. */
 export function notaCartaoReaberto(mensagem: string, motivoDaPerda: string | null): string {
-  const t = mensagem.replace(/\s+/g, ' ').trim();
+  const t = trechoDaFala(mensagem);
   return (
     '↩ Cartão reaberto: o paciente respondeu em PERDIDO. Voltou para EM QUALIFICAÇÃO e a Sofia atende.' +
     `${motivoDaPerda ? ` Motivo da perda: ${motivoDaPerda}.` : ''}` +
-    `${t ? ` Disse: "${t.slice(0, 140)}${t.length > 140 ? '…' : ''}"` : ''}`
+    `${t ? ` Disse: "${t}"` : ''}`
   );
 }
 
