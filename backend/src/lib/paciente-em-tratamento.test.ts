@@ -136,6 +136,18 @@ test('consultarFranquia: paciente com tratamento ativo → sinal de paciente; fi
   assert.equal((await consultarFranquia(unitOk, '123')).tipo, 'indisponivel');
 });
 
+test('consultarFranquia: "não achei" e "só lead" só valem com o índice FRESCO (vazio ou vencido = indisponível)', async () => {
+  const idx = (entradas: Array<{ origem: 'paciente' | 'lead'; id: number }>, fresco: boolean, idadeHoras: number | null) => async () => ({ entradas: entradas.map((e) => ({ chave: '99999999', criado: null, ...e })), fresco, idadeHoras });
+  assert.deepEqual(await consultarFranquia(unitOk, '21988889999', { indice: idx([], true, 3) }), { tipo: 'nao_achou' });
+  assert.deepEqual(await consultarFranquia(unitOk, '21988889999', { indice: idx([{ origem: 'lead', id: 1 }], true, 3) }), { tipo: 'lead' });
+  const vazio = await consultarFranquia(unitOk, '21988889999', { indice: idx([], false, null) });
+  assert.equal(vazio.tipo, 'indisponivel');
+  const vencido = await consultarFranquia(unitOk, '21988889999', { indice: idx([], false, 40) });
+  assert.equal(vencido.tipo, 'indisponivel');
+  assert.match(vencido.tipo === 'indisponivel' ? vencido.motivo : '', /vencido \(40 h\)/);
+  assert.equal((await consultarFranquia(unitOk, '21988889999', { indice: idx([{ origem: 'lead', id: 1 }], false, 40) })).tipo, 'indisponivel');
+});
+
 test('o timeout total é de no máximo 3 s', () => {
   assert.ok(TIMEOUT_FRANQUIA_MS <= 3000);
 });

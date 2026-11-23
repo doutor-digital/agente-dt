@@ -85,6 +85,7 @@ import { esquemaDaUnidade as esquemaKommoDaUnidade } from '../lib/kommo-schema.j
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from '../lib/etapa-permitida.js';
 import { etapaCalada, notaSofiaCalada, REGRA_NOTA_CALADA, sofiaCaladaLiberada } from '../lib/sofia-calada.js';
 import { portaPacienteEmTratamento } from '../lib/paciente-em-tratamento-porta.js';
+import { portaPerdidoReabre } from '../lib/perdido-reabre.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
 import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
@@ -1678,7 +1679,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     if (allowedStatusIds.length > 0 || pausedStages.size > 0 || caladaAtiva) {
       const kommo = createKommoClient(unit);
       const lead = await kommo.getLead(leadId);
-      const sid = lead.status_id;
+      let sid = lead.status_id;
       const pid = lead.pipeline_id;
 
       // GANHO / ALTA / TRATAMENTO CANCELADO, pelo NOME da etapa (142/143 se repetem nos dois funis):
@@ -1731,7 +1732,45 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           logger.warn({ err: String(err), traceId, leadId, unit: unit.slug }, 'allowlist: não li os funis da conta (142/143 seguem pelo id)');
         }
       }
-      if (allowedStatusIds.length > 0 && !etapaPermitida(allowedStatusIds, sid, pid, funis)) {
+      let foraDaAllowlist = allowedStatusIds.length > 0 && !etapaPermitida(allowedStatusIds, sid, pid, funis);
+      // O paciente respondeu num cartão em PERDIDO (chave `perdido-responde-reabre`, lib/perdido-reabre.ts): o cartão volta para
+      // EM QUALIFICAÇÃO e o turno SEGUE, a Sofia responde a esta mesma mensagem. Desligada: não lê nem escreve nada. Em "só no papel" decide
+      // e registra, o turno é pulado como sempre. Nunca lança.
+      if (foraDaAllowlist) {
+        const reabertura = await portaPerdidoReabre({
+          unit,
+          leadId,
+          lead,
+          humanMessage: semAReferencia(humanMessage),
+          contactId,
+          isChatMessage,
+          retomada: !!args.retomada,
+          allowedStatusIds,
+          funis,
+          pausedStages,
+          kommo,
+        });
+        if (reabertura) {
+          const destino = reabertura.para?.nome ?? 'EM QUALIFICAÇÃO';
+          await recorder.step({
+            kind: reabertura.reabriu ? 'KOMMO_ACTION' : 'THINKING',
+            title: reabertura.reabriu
+              ? `↩ Cartão reaberto: o paciente respondeu em PERDIDO — movido para ${destino}, a Sofia segue`
+              : reabertura.decisao === 'reabrir'
+                ? reabertura.motivo === 'falha_ao_mover'
+                  ? `⚠️ Respondeu em PERDIDO e o cartão devia reabrir, mas o Kommo recusou mover para ${destino} (${reabertura.detalhe ?? 'sem detalhe'})`
+                  : `🧪 (só no papel) o cartão reabriria: o paciente respondeu em PERDIDO → ${destino}`
+                : `PERDIDO: o paciente respondeu, mas o cartão não reabre — ${reabertura.motivo}${reabertura.detalhe ? ` (${reabertura.detalhe})` : ''}`,
+            payload: { leadId, reason: reabertura.reabriu ? 'perdido_reaberto' : 'perdido_nao_reaberto', estado: reabertura.estado, decisao: reabertura.decisao, motivo: reabertura.motivo, detalhe: reabertura.detalhe ?? null, para: reabertura.para ?? null },
+          });
+          if (reabertura.reabriu && reabertura.para) {
+            sid = reabertura.para.statusId;
+            lead.status_id = reabertura.para.statusId; // o cartão lido antes do movimento não pode seguir dizendo PERDIDO
+            foraDaAllowlist = false;
+          }
+        }
+      }
+      if (foraDaAllowlist) {
         await finishWidgetSilently();
         const totalLatency = Math.round(performance.now() - requestStart);
         await recorder.step({

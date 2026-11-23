@@ -879,6 +879,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/paciente-em-tratamento.ts',
   },
   {
+    id: 'perdido-responde-reabre',
+    chave: 'PERDIDO_REABRE_SLUGS',
+    nome: 'Paciente respondeu em PERDIDO: o cartão volta e a Sofia assume',
+    oQueFaz:
+      'Quando o paciente responde num cartão em PERDIDO do funil COMERCIAL (por exemplo, toca num botão do robô de reativação), o cartão volta para EM QUALIFICAÇÃO, ganha uma nota («Cartão reaberto: o paciente respondeu em PERDIDO») e a Sofia responde essa mesma mensagem.',
+    pegadinha:
+      'Só vale onde PERDIDO não está nas etapas em que a Sofia atende e EM QUALIFICAÇÃO está (se não estiver, o cartão não anda). NÃO reabre: etiqueta de não contatar (NO_FOLLOW_UP, NAO_PERTURBAR, opt-out, CURRÍCULO), motivo de perda encerrado (Outra cidade, Clicou por engano, Outra patologia, Plano de Saúde, Sem interesse…) — o mesmo critério da régua de reativação —, «Pausar IA» marcado, ◷ Retomar em, consulta futura, equipe que falou com o paciente (mesma regra da pausa-equipe, mesmo com ela desligada), telefone de paciente com tratamento ativo ou sessão futura na franquia (franquia fora do ar = o cartão fica) ou marcado como não-paciente. Também não reabre "ok, obrigado", "sair" e turno refeito depois de um deploy (a etapa não se mexe). Freio anti-vaivém: reaberto e fechado de novo (por quem for), o cartão só reabre outra vez depois de 24 h. Fora do horário da IA o turno nem chega aqui: o paciente reabre ao escrever dentro do horário. O 143 do funil TRATAMENTO (TRATAMENTO CANCELADO) nunca reabre. Conta do Kommo dividida entre unidades (Petrópolis/Caxias) fica de fora. Em "só no papel" decide, registra na tela e no histórico da execução (com o motivo de cada cartão que NÃO reabriria) e não toca no Kommo.',
+    risco: 'move-cartao',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/perdido-reabre.ts',
+  },
+  {
     id: 'ia-so-numeros-de-teste',
     chave: 'IA_SO_NUMEROS_DE_TESTE_SLUGS',
     nome: 'IA em piloto: só responde os números de teste',
