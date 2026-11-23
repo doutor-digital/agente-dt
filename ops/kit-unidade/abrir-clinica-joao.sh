@@ -304,13 +304,16 @@ n=1
 falta() { echo "  $n. $1"; n=$((n+1)); }
 if [ "$MODO" = "demonstracao" ]; then
   falta "NÚMERO/MODELOS: não se aplicam (demonstração: caixa API, modelos em seco). Para virar clínica de verdade: modo real, número e WABA no questionário, e rodar este comando de novo."
+elif [ "$SO_CRM" = "1" ]; then
+  falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
+  falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar; precisam da WABA acessível ao Kapso)."
 else
   falta "NÚMERO: conectar o número oficial ao Kapso (coexistência ou número novo) — quem tem o celular da clínica."
   falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar)."
 fi
 falta "ADMINISTRADORES DA DOUTOR DIGITAL: o kit os põe na conta nova se já existirem no CRM de referência; se ele AVISOU que alguém não estava, rode criar-usuario-dd-joao.sh (README) e confira na conta."
 falta "ATENDENTES: cada uma aceita o convite por e-mail e define a senha; só então cria as 10 pastas dela. (Se o e-mail do CRM ainda não foi ligado — uma vez só para todas as clínicas — o convite não sai: ligar-email-crm-joao.sh, no README.)"
-falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
+[ "$SO_CRM" = "1" ] || falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
 falta "CONFERIR NO CRM: abrir https://$SUB.doutordigitalconsultoria.com/ (o certificado sai no primeiro acesso)."
 if [ "$SO_CRM" = "1" ]; then
   falta "SOFIA NO CRM: o --so-crm NÃO criou nem ligou robô (a Sofia da unidade segue só pelo Kommo). Dar IA ao CRM é decisão à parte, depois do teste de prompt."

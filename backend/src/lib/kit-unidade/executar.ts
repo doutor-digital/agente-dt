@@ -111,6 +111,11 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
       registrar('nada-a-fazer');
       continue;
     }
+    // --so-crm NUNCA cria nem liga robô: nem lendo (soLer), nem perguntando (plano velho que dizia «criar»)
+    if (o.soCrm && p.id === 'robo-sofia') {
+      registrar('nada-a-fazer', ['--so-crm: robô Sofia NÃO criado nem ligado (a Sofia da unidade segue só pelo Kommo)']);
+      continue;
+    }
     if (p.acao === 'bloqueado') {
       registrar('bloqueado', p.avisos);
       continue;
@@ -228,7 +233,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'automacoes-seco': {
       const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
-      const novas = automacoesEmSeco(q).filter((a) => !ja.has(a.id)).map((a) => a.id);
+      const novas = automacoesEmSeco(q, !!o.soCrm).filter((a) => !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
@@ -307,13 +312,14 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       if (gerente && (cfg?.gerenteId == null || o.sobrescrever)) parcial.gerenteId = gerente;
       if (execucao.celularId && (cfg?.usuarioCelularId == null || o.sobrescrever)) parcial.usuarioCelularId = execucao.celularId;
       if (Object.keys(parcial).length) await banco.gravarConfigChatwoot(unitId, parcial, false);
-      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (reinício do serviço)'];
+      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (a cada ~60 s, sem reiniciar)'];
     }
     case 'webhook':
       return passoWebhook(x, execucao);
     case 'dashboard-app':
       return passoDashboardApp(x, execucao);
     case 'robo-sofia':
+      if (o.soCrm) return ['--so-crm: robô Sofia NÃO criado nem ligado (a Sofia da unidade segue só pelo Kommo)'];
       return passoRobo(q, x, execucao, !!o.ligarRobo);
     case 'modelos':
       return passoModelos(q, x);

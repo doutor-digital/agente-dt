@@ -492,6 +492,10 @@ test('--so-crm (unidade que já existe, ex.: Marabá): a flag vai ao seco, ao --
   assert.doesNotMatch(r.stdout, /--ligar-robo|nasce inativa|TESTE DA SOFIA/);
   assert.match(r.stdout, /PRONTO: o CRM de «doutor-hernia-teste» está montado.*NADA foi escrito em units/);
   assert.match(r.stdout, /SOFIA NO CRM: o --so-crm NÃO criou nem ligou robô/);
+  // o resumo não manda gravar franquia numa unidade no ar e trata o número como decisão separada (pode cortar a entrada de leads da Kommo)
+  assert.doesNotMatch(r.stdout, /FRANQUIA: gravar/);
+  assert.match(r.stdout, /NÚMERO \(decisão SEPARADA, fora do --so-crm\).*CORTAR a entrada de leads da Kommo/);
+  assert.doesNotMatch(r.stdout, /NÚMERO: conectar o número oficial/);
   // sem a flag: igual a antes
   const e2 = ambiente();
   e2.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
