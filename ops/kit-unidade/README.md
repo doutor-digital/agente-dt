@@ -35,6 +35,17 @@ Faz, parando no primeiro erro (e dizendo o que fazer): leva o kit → conferênc
 Clínica real: o questionário privado (`KIT_PRIVADO_DIR`) segue sozinho para a VPS, modo 600. Não cole token nem senha em lugar nenhum: o comando não pede nenhum.
 O roteiro passo a passo abaixo continua valendo (é o que o comando encadeia).
 
+## Unidade que JÁ EXISTE e está no ar (Kommo + Sofia): `--so-crm`
+O kit foi feito para unidade NOVA. Numa unidade que já existe ele só preenche campo VAZIO, e numa unidade **ATIVA** ele RECUSA (nenhum passo de banco roda, e os de Chatwoot que dependem deles ficam bloqueados).
+`--sobrescrever` NÃO é a saída: ele troca também persona, fontes e prompt da Sofia que a equipe já ajustou. Para dar o CRM (Chatwoot) a uma unidade que já está no ar, use **`--so-crm`**:
+
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm --so-conferir   # só olha
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm                 # o caminho todo (depois de ler o plano)
+
+O que muda: a linha de `units` é só LIDA (para achar o id) — nem campo vazio é escrito — e a Sofia da unidade (persona, fontes, prompt, aprendizados) não é tocada. O resto roda como sempre:
+`unit_chatwoot` (config), conta/caixa/time/atendentes no Chatwoot, `unit_chatwoot_caixa`, automações do Chatwoot em SECO. Unidade que não existe: recusa (nunca cria linha vazia). Não combina com `--sobrescrever` nem com `--do-formulario`.
+O questionário deve repetir o que a unidade já tem (endereço, agenda, preços): o que diferir NÃO é gravado, mas vai para os textos dos modelos da Meta (`unit_chatwoot.dados_modelos`), então confira-os com o dono. Com `assistente: { quer: false }` o CRM nasce sem robô nem automação de IA (a Sofia segue só pelo Kommo); para dar IA ao CRM depois, `quer: true` e rodar de novo com `--so-crm`.
+
 ## O franqueado preenche sozinho: o formulário (link com código)
 Em vez de você perguntar tudo ao dono da clínica, mande um link. Do seu computador (o script faz o ssh; precisa de terminal):
 

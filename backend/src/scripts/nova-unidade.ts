@@ -7,6 +7,8 @@
  *   npx tsx src/scripts/nova-unidade.ts <questionario.yaml> --aplicar --sim     # sem perguntar (só depois de ler o plano)
  *   ... --sobrescrever                                                          # troca também o que a unidade JÁ tem preenchido e deixa tocar numa unidade ATIVA
  *     (sem a flag: numa unidade que existe só se preenche campo VAZIO, e a ATIVA é recusada)
+ *   ... --so-crm                                                                # unidade que JÁ EXISTE (pode estar ATIVA): monta só o CRM dela (unit_chatwoot, caixa, conta do Chatwoot,
+ *     automações em seco); NÃO escreve em units (nem campo vazio) e NÃO mexe na Sofia dela. Não combina com --sobrescrever.
  *   npx tsx src/scripts/nova-unidade.ts --gerar-schema                          # regrava ops/kit-unidade/questionario.schema.json
  *
  * Fase 2: o --aplicar executa o banco E o Chatwoot (conta própria da clínica pela API de plataforma, etiquetas, atributos, automações, mensagens
@@ -233,7 +235,7 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--so-crm] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
     process.exit(2);
   }
   const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
@@ -243,12 +245,16 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const q = lido.q;
+  if (flags.has('--so-crm') && flags.has('--sobrescrever')) {
+    console.error('--so-crm não combina com --sobrescrever: um nunca escreve em units, o outro troca o que já está preenchido (inclusive persona, fontes e prompt).');
+    process.exit(2);
+  }
   console.log('Questionário (campos sensíveis mascarados):');
   console.log(JSON.stringify(questionarioMascarado(q), null, 2));
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), soCrm: flags.has('--so-crm'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');
@@ -265,6 +271,7 @@ async function main(): Promise<void> {
     molde,
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
     sobrescrever: flags.has('--sobrescrever'),
+    soCrm: flags.has('--so-crm'),
     reimportarAprendizados: flags.has('--reimportar-aprendizados'),
     externas: await portasExternas(),
     ligarRobo: flags.has('--ligar-robo'),

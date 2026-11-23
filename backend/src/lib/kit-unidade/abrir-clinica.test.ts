@@ -476,3 +476,31 @@ test('clínica SEM assistente: o cofre vai com --sem-ia (do resumo do importador
   assert.equal(rc.status, 0, rc.stdout);
   assert.ok(c.chamadas().filter((l) => l.includes('cofre-para-servico-joao.sh')).every((l) => l.includes("'TESTE' --sem-ia") || l.includes("'TESTE' --so-conferir --sem-ia")), c.chamadas().join('\n'));
 });
+
+test('--so-crm (unidade que já existe, ex.: Marabá): a flag vai ao seco, ao --aplicar e à dica do robô; sem a flag nada disso a leva; não combina com --do-formulario', () => {
+  const e = ambiente();
+  e.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  const r = e.rodar(['doutor-hernia-teste', '--so-crm'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /modo --so-crm: a unidade já existe/);
+  assert.deepEqual(
+    scriptsDoKit(e.chamadas()).filter((x) => x.startsWith('nova-unidade')),
+    ["nova-unidade 'doutor-hernia-teste' --so-conferir", "nova-unidade 'doutor-hernia-teste' --so-crm", "nova-unidade 'doutor-hernia-teste' --aplicar --so-crm"],
+  );
+  assert.match(r.stdout, /--aplicar --ligar-robo --so-crm/);
+  // sem a flag: igual a antes
+  const e2 = ambiente();
+  e2.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  e2.rodar(['doutor-hernia-teste'], { entrada: 'aplicar\n' });
+  assert.ok(!e2.chamadas().some((l) => l.includes('--so-crm')));
+  // --so-conferir mostra o comando completo (com a flag) e não envia nada
+  const e3 = ambiente();
+  e3.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  const c = e3.rodar(['doutor-hernia-teste', '--so-crm', '--so-conferir']);
+  assert.equal(c.status, 0, c.stdout + c.stderr);
+  assert.match(c.stdout, /abrir-clinica-joao\.sh doutor-hernia-teste --so-crm/);
+  // --so-crm não vai com o formulário
+  const f = ambiente().rodar(['doutor-hernia-teste', '--so-crm', '--do-formulario', 'abc123def']);
+  assert.notEqual(f.status, 0);
+  assert.match(f.stdout, /--so-crm não combina com --do-formulario/);
+});

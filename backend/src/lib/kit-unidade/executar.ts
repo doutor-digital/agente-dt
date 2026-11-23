@@ -68,6 +68,8 @@ export interface OpcoesDeExecucao {
   sobrescreverPrompt?: boolean;
   /** troca também os campos JÁ preenchidos de uma unidade que existe (e deixa tocar numa unidade ATIVA). Sem isto só se preenche campo vazio. */
   sobrescrever?: boolean;
+  /** `--so-crm`: a unidade já existe (pode estar ATIVA) e o kit monta SÓ o CRM dela; a linha de `units` e a Sofia dela não são escritas. Não combina com `sobrescrever`. */
+  soCrm?: boolean;
   /** repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `sobrescrever` NÃO mexe nos aprendizados que a clínica já administra em /aprendizados. */
   reimportarAprendizados?: boolean;
   /** escreve uma linha para quem está acompanhando */
@@ -90,6 +92,7 @@ export interface Resultado {
 }
 
 export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeExecucao): Promise<Resultado[]> {
+  if (o.soCrm && o.sobrescrever) throw new Error('--so-crm não combina com --sobrescrever (um nunca escreve em units, o outro troca o que já está preenchido)');
   const resultados: Resultado[] = [];
   const deu = new Map<string, SituacaoDoPasso>();
   let unitId: string | null = null;
@@ -175,13 +178,22 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
   const { banco } = o;
   const x = o.externas as PortasExternas;
   const garantirUnidade = async (): Promise<string> => {
-    const id = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
+    // --so-crm nunca cria a unidade (nem vazia): ela tem de existir
+    const achada = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id;
+    if (!achada && o.soCrm) throw new Error(`a unidade ${q.unidade.slug} não existe: --so-crm só vale para unidade que já existe`);
+    const id = achada ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
     definirUnitId(id);
     return id;
   };
   switch (p.id) {
     case 'unidade': {
       const atual = await banco.lerUnidade(q.unidade.slug);
+      if (o.soCrm) {
+        if (o.sobrescrever) throw new Error('--so-crm não combina com --sobrescrever');
+        if (!atual) throw new Error(`a unidade ${q.unidade.slug} não existe: --so-crm só vale para unidade que já existe`);
+        definirUnitId(atual.id);
+        return [`--so-crm: unidade ${atual.id}${atual.ativa ? ' (ATIVA)' : ''} só lida; nenhum campo de units foi escrito`];
+      }
       if (atual?.ativa && !o.sobrescrever) throw new Error(`a unidade ${q.unidade.slug} já está ATIVA: o script não mexe numa unidade no ar sem --sobrescrever`);
       const novos = camposDaUnidade(q);
       const { gravar, preservados } = atual ? aGravar(atual.campos, novos, !!o.sobrescrever) : { gravar: novos, preservados: [] as string[] };
@@ -221,6 +233,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
+      if (o.soCrm) return ['--so-crm: a Sofia da unidade (persona, fontes, prompt e aprendizados) não foi tocada'];
       if (q.assistente?.quer === false) return ['a clínica NÃO quer a assistente: Sofia não configurada (nada gravado)'];
       const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
