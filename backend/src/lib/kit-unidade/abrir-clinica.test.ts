@@ -487,7 +487,11 @@ test('--so-crm (unidade que já existe, ex.: Marabá): a flag vai ao seco, ao --
     scriptsDoKit(e.chamadas()).filter((x) => x.startsWith('nova-unidade')),
     ["nova-unidade 'doutor-hernia-teste' --so-conferir", "nova-unidade 'doutor-hernia-teste' --so-crm", "nova-unidade 'doutor-hernia-teste' --aplicar --so-crm"],
   );
-  assert.match(r.stdout, /--aplicar --ligar-robo --so-crm/);
+  // o --so-crm não cria robô: nada de dica de --ligar-robo, o cofre só leva a chave da conta (--sem-ia) e o resumo não diz «nasce inativa»
+  assert.ok(scriptsDoKit(e.chamadas()).includes("cofre-para-servico 'TESTE' --so-conferir --sem-ia"));
+  assert.doesNotMatch(r.stdout, /--ligar-robo|nasce inativa|TESTE DA SOFIA/);
+  assert.match(r.stdout, /PRONTO: o CRM de «doutor-hernia-teste» está montado.*NADA foi escrito em units/);
+  assert.match(r.stdout, /SOFIA NO CRM: o --so-crm NÃO criou nem ligou robô/);
   // sem a flag: igual a antes
   const e2 = ambiente();
   e2.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);

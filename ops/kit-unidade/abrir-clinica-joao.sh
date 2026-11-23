@@ -287,7 +287,7 @@ remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar$FLAG_CRM"
 
 # ── 7. subdomínio e chaves ──────────────────────────────────────────────────────────────────────────────
 # clínica SEM assistente (assistente.quer: false): não há robô Sofia, então o cofre só leva a chave da conta
-SEM_IA=""; [ "$QUER_IA" = "false" ] && SEM_IA=" --sem-ia"
+SEM_IA=""; { [ "$QUER_IA" = "false" ] || [ "$SO_CRM" = "1" ]; } && SEM_IA=" --sem-ia"   # --so-crm também não cria robô: o cofre só leva a chave da conta
 passo "7a. as chaves da conta estão no cofre?" "se faltar chave, uma etapa do passo 6b ficou sem rodar (você respondeu «não» a ela?): rode o comando de novo e responda s. Se disser valor DIFERENTE no .env, confira à mão (não troco sozinho). Clínica sem IA confere só a chave da conta (--sem-ia). O proxy ainda NÃO foi mexido."
 remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF' --so-conferir$SEM_IA"
 passo "7b. subdomínio no proxy" "na VPS: bash $DESTINO/ops/kit-unidade/regra-traefik-joao.sh $SUB --so-conferir"
@@ -299,7 +299,7 @@ remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF'$SEM_IA"
 PASSO="resumo"; AJUDA=""
 trap - ERR INT TERM
 echo
-echo "━━ PRONTO: «$SLUG» está criada no CRM ($TIPO). O que ainda FALTA (nada disso é automático):"
+if [ "$SO_CRM" = "1" ]; then echo "━━ PRONTO: o CRM de «$SLUG» está montado (--so-crm: a unidade já existia e NADA foi escrito em units nem na Sofia dela). O que ainda FALTA (nada disso é automático):"; else echo "━━ PRONTO: «$SLUG» está criada no CRM ($TIPO). O que ainda FALTA (nada disso é automático):"; fi
 n=1
 falta() { echo "  $n. $1"; n=$((n+1)); }
 if [ "$MODO" = "demonstracao" ]; then
@@ -312,6 +312,11 @@ falta "ADMINISTRADORES DA DOUTOR DIGITAL: o kit os põe na conta nova se já exi
 falta "ATENDENTES: cada uma aceita o convite por e-mail e define a senha; só então cria as 10 pastas dela. (Se o e-mail do CRM ainda não foi ligado — uma vez só para todas as clínicas — o convite não sai: ligar-email-crm-joao.sh, no README.)"
 falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
 falta "CONFERIR NO CRM: abrir https://$SUB.doutordigitalconsultoria.com/ (o certificado sai no primeiro acesso)."
+if [ "$SO_CRM" = "1" ]; then
+  falta "SOFIA NO CRM: o --so-crm NÃO criou nem ligou robô (a Sofia da unidade segue só pelo Kommo). Dar IA ao CRM é decisão à parte, depois do teste de prompt."
+  falta "AUTOMAÇÕES do Chatwoot ficam em SECO por 24 h; a unidade JÁ ESTAVA no ar e segue ativa pelo Kommo — nada a ativar na tela da unidade. Ligue as automações do CRM uma por vez, só depois de combinar com o Kommo quem manda cada lembrete (os dois mandando = paciente com mensagem em dobro)."
+else
 falta "TESTE DA SOFIA: rodar os testes de prompt da unidade e o dono ler as respostas ANTES de ligar."
-falta "SÓ DEPOIS DO TESTE, ligar o robô:  ssh -t -i $CHAVE $VPS \"cd $DESTINO && bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar --ligar-robo$FLAG_CRM\""
+falta "SÓ DEPOIS DO TESTE, ligar o robô:  ssh -t -i $CHAVE $VPS \"cd $DESTINO && bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar --ligar-robo\""
 falta "AUTOMAÇÕES ficam em SECO por 24 h; a unidade nasce inativa — ativar na tela da unidade quando tudo estiver de pé."
+fi

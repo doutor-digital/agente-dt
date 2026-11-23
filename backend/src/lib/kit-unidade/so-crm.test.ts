@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { executarPlano, type BancoPorta, type ConfigGravada } from './executar.js';
-import { montarPlano, textoDoPlano, type EstadoAtual } from './plano.js';
+import { conflitoDoSoCrm, montarPlano, textoDoPlano, type EstadoAtual } from './plano.js';
 import { lerQuestionario, type Questionario } from './questionario.js';
 import { camposDaSofia, camposDaUnidade } from './molde-sofia.js';
 import { lerYamlOuJson } from './yaml-minimo.js';
@@ -122,10 +122,28 @@ test('--so-crm com unidade que NÃO existe: bloqueado (nunca cria unidade vazia)
   assert.ok(passo(p, 'unidade').avisos.some((a) => /não existe/.test(a)));
 });
 
-test('--so-crm no seco offline (sem banco): não finge que cria a unidade e avisa que exige unidade existente', () => {
-  const p = montarPlano(questionario(), {}, { molde: MOLDE, soCrm: true });
-  assert.equal(passo(p, 'unidade').acao, 'nada');
+test('--so-crm sem ler o banco (seco offline, ou a leitura falhou): o passo fica BLOQUEADO — não parece limpo, e o --aplicar não segue', async () => {
+  const q = questionario();
+  const p = montarPlano(q, {}, { molde: MOLDE, soCrm: true });
+  assert.equal(passo(p, 'unidade').acao, 'bloqueado');
   assert.ok(passo(p, 'unidade').avisos.some((a) => /exige que a unidade já exista/.test(a)));
+  const u = unidadeAtiva(q);
+  const res = await executarPlano(p, q, { banco: u.banco, molde: MOLDE, soCrm: true, dizer: () => undefined, confirmar: async () => true });
+  assert.equal(sit(res, 'unidade'), 'bloqueado');
+  assert.equal(sit(res, 'config-chatwoot'), 'bloqueado', 'quem depende da unidade não roda');
+  assert.equal(u.escritas.length, 0);
+});
+
+test('--so-crm avisa onde o questionário DIFERE da unidade viva (os textos dos modelos da Meta usam o do questionário) e NÃO cria robô', () => {
+  const q = questionario();
+  const u = unidadeAtiva(q);
+  const p = montarPlano(q, u.estadoAtual(), { molde: MOLDE, soCrm: true });
+  const aviso = passo(p, 'unidade').avisos.find((a) => /DIFERE de units em/.test(a));
+  assert.ok(aviso, 'avisa a divergência');
+  assert.match(aviso!, /clinicAddress/);
+  assert.match(aviso!, /dados_modelos/);
+  assert.equal(passo(p, 'robo-sofia').acao, 'nada');
+  assert.match(passo(p, 'robo-sofia').itens[0]!, /NÃO é criado nem ligado/);
 });
 
 test('--aplicar --so-crm sobre unidade ATIVA com campos vazios: NENHUMA escrita em units, na Sofia nem nos aprendizados; o CRM é gravado (config, automações em seco)', async () => {
@@ -163,17 +181,25 @@ test('plano VELHO (feito sem a flag, unidade ativada depois): o EXECUTOR com --s
 test('--so-crm numa unidade que não existe: o executor FALHA e não cria nem a linha vazia', async () => {
   const q = questionario();
   const u = unidadeAtiva(q);
-  u.banco.lerUnidade = async () => null;
-  const plano = montarPlano(q, {}, { molde: MOLDE, soCrm: true });
+  const plano = montarPlano(q, u.estadoAtual(), { molde: MOLDE, soCrm: true }); // plano velho: a unidade existia quando ele foi feito
+  u.banco.lerUnidade = async () => null; // e agora não existe mais
   const res = await executarPlano(plano, q, { banco: u.banco, molde: MOLDE, soCrm: true, dizer: () => undefined, confirmar: async () => true });
   assert.ok(res.some((r) => r.situacao === 'falhou'));
   assert.ok(!u.escritas.some((e) => e[0] === 'gravarUnidade'), 'nunca cria unidade');
 });
 
-test('--so-crm e --sobrescrever não combinam: o executor recusa antes de qualquer passo', async () => {
+test('--so-crm não combina com --sobrescrever, --sobrescrever-prompt, --reimportar-aprendizados nem --ligar-robo: o plano e o executor recusam (uma regra só, conflitoDoSoCrm)', async () => {
   const q = questionario();
   const u = unidadeAtiva(q);
+  assert.equal(conflitoDoSoCrm({ soCrm: true }), null);
+  assert.equal(conflitoDoSoCrm({ sobrescrever: true }), null, 'sem --so-crm não há conflito (a regra é do modo)');
+  for (const [flag, texto] of [['sobrescrever', '--sobrescrever'], ['sobrescreverPrompt', '--sobrescrever-prompt'], ['reimportarAprendizados', '--reimportar-aprendizados'], ['ligarRobo', '--ligar-robo']] as const) {
+    assert.match(conflitoDoSoCrm({ soCrm: true, [flag]: true })!, new RegExp(`não combina com ${texto}`));
+  }
+  assert.throws(() => montarPlano(q, u.estadoAtual(), { molde: MOLDE, soCrm: true, sobrescrever: true }), /não combina com --sobrescrever/);
   const plano = montarPlano(q, u.estadoAtual(), { molde: MOLDE, soCrm: true });
-  await assert.rejects(executarPlano(plano, q, { banco: u.banco, molde: MOLDE, soCrm: true, sobrescrever: true, dizer: () => undefined, confirmar: async () => true }), /não combina com --sobrescrever/);
+  for (const extra of [{ sobrescrever: true }, { sobrescreverPrompt: true }, { reimportarAprendizados: true }, { ligarRobo: true }]) {
+    await assert.rejects(executarPlano(plano, q, { banco: u.banco, molde: MOLDE, soCrm: true, ...extra, dizer: () => undefined, confirmar: async () => true }), /não combina com/);
+  }
   assert.equal(u.escritas.length, 0);
 });

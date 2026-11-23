@@ -31,7 +31,7 @@ import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
 import { lerAdminsDD, listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
 import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
-import { montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
+import { conflitoDoSoCrm, montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
 import { esquemaJson } from '../lib/kit-unidade/schema-json.js';
 
@@ -245,8 +245,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const q = lido.q;
-  if (flags.has('--so-crm') && flags.has('--sobrescrever')) {
-    console.error('--so-crm não combina com --sobrescrever: um nunca escreve em units, o outro troca o que já está preenchido (inclusive persona, fontes e prompt).');
+  const conflito = conflitoDoSoCrm({ soCrm: flags.has('--so-crm'), sobrescrever: flags.has('--sobrescrever'), sobrescreverPrompt: flags.has('--sobrescrever-prompt'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), ligarRobo: flags.has('--ligar-robo') });
+  if (conflito) {
+    console.error(conflito);
     process.exit(2);
   }
   console.log('Questionário (campos sensíveis mascarados):');

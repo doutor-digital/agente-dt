@@ -11,7 +11,7 @@ import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, pa
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
-import { automacoesEmSeco, type Passo, type Plano } from './plano.js';
+import { automacoesEmSeco, conflitoDoSoCrm, type Passo, type Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 /** O banco, como o executor o enxerga. A implementação real (prisma) está em `scripts/nova-unidade.ts`. */
@@ -92,7 +92,8 @@ export interface Resultado {
 }
 
 export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeExecucao): Promise<Resultado[]> {
-  if (o.soCrm && o.sobrescrever) throw new Error('--so-crm não combina com --sobrescrever (um nunca escreve em units, o outro troca o que já está preenchido)');
+  const conflito = conflitoDoSoCrm(o);
+  if (conflito) throw new Error(conflito);
   const resultados: Resultado[] = [];
   const deu = new Map<string, SituacaoDoPasso>();
   let unitId: string | null = null;
@@ -189,7 +190,6 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'unidade': {
       const atual = await banco.lerUnidade(q.unidade.slug);
       if (o.soCrm) {
-        if (o.sobrescrever) throw new Error('--so-crm não combina com --sobrescrever');
         if (!atual) throw new Error(`a unidade ${q.unidade.slug} não existe: --so-crm só vale para unidade que já existe`);
         definirUnitId(atual.id);
         return [`--so-crm: unidade ${atual.id}${atual.ativa ? ' (ATIVA)' : ''} só lida; nenhum campo de units foi escrito`];

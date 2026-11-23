@@ -115,6 +115,16 @@ function configAEscrever(hoje: NonNullable<EstadoAtual['banco']>['configChatwoot
 /** As automações do Chatwoot que nascem em SECO. Clínica SEM assistente não ganha a de IA (chatwoot-ia). UM lugar só: o plano e o executor usam esta lista. */
 export const automacoesEmSeco = (q: Questionario) => AUTOMACOES.filter((a) => a.id.startsWith('chatwoot-') && a.temSeco && !(q.assistente?.quer === false && a.id === 'chatwoot-ia'));
 
+/**
+ * `--so-crm` é o modo que NUNCA escreve em `units` nem mexe na Sofia da unidade: não combina com nenhuma flag que faz isso (ou que liga o robô). UM lugar só: o CLI, o plano e o executor chamam esta.
+ * Devolve o motivo (texto pronto) ou null.
+ */
+export function conflitoDoSoCrm(o: { soCrm?: boolean; sobrescrever?: boolean; sobrescreverPrompt?: boolean; reimportarAprendizados?: boolean; ligarRobo?: boolean }): string | null {
+  if (!o.soCrm) return null;
+  const ruins = [o.sobrescrever && '--sobrescrever', o.sobrescreverPrompt && '--sobrescrever-prompt', o.reimportarAprendizados && '--reimportar-aprendizados', o.ligarRobo && '--ligar-robo'].filter(Boolean);
+  return ruins.length ? `--so-crm não combina com ${ruins.join(', ')}: ele nunca escreve em units nem mexe na Sofia ou no robô da unidade (essas flags fazem exatamente isso)` : null;
+}
+
 export interface OpcoesDoPlano {
   /** texto do molde da Sofia (ops/kit-unidade/molde-sofia/bloco-conversa.md); null = não achei o arquivo */
   molde: string | null;
@@ -132,6 +142,8 @@ export interface OpcoesDoPlano {
 }
 
 export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: OpcoesDoPlano): Plano {
+  const conflito = conflitoDoSoCrm(opcoes);
+  if (conflito) throw new Error(conflito);
   const slug = q.unidade.slug;
   const config = configChatwootDoQuestionario(q);
   const passos: Passo[] = [];
@@ -147,12 +159,13 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const { gravar: aEscrever, preservados } = aGravar(existente?.campos ?? null, campos, sobrescrever);
   const ativa = existente?.campos.isActive === true;
   const soCrm = !!opcoes.soCrm;
+  const divergentes = existente ? Object.keys(aGravar(existente.campos, campos, true).gravar) : [];
   add({
     id: 'unidade',
     sistema: 'banco',
     titulo: `Unidade «${q.unidade.nome}» em units (identidade, agenda, pagamento — sem segredo)`,
     // --so-crm: a linha de units não é escrita; só importa que a unidade exista (os passos seguintes usam o id dela)
-    acao: soCrm ? (b && !existente ? 'bloqueado' : 'nada') : !b ? 'criar' : !existente ? 'criar' : ativa && !sobrescrever ? 'bloqueado' : Object.keys(aEscrever).length ? 'alterar' : 'nada',
+    acao: soCrm ? (!b || !existente ? 'bloqueado' : 'nada') : !b ? 'criar' : !existente ? 'criar' : ativa && !sobrescrever ? 'bloqueado' : Object.keys(aEscrever).length ? 'alterar' : 'nada',
     itens: soCrm
       ? [`--so-crm: a unidade ${slug} é só LIDA (para achar o id): nenhum campo de units é escrito, nem vazio${ativa ? ' (ela está ATIVA e segue como está)' : ''}`]
       : !existente
@@ -164,7 +177,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     avisos: [
       ...(b ? [] : [NAO_CONSULTADO]),
       ...(soCrm && b && !existente ? [`a unidade ${slug} não existe: --so-crm só vale para unidade que já existe (crie a unidade sem a flag)`] : []),
-      ...(soCrm && !b ? ['--so-crm exige que a unidade já exista; sem ler o banco o seco não confere isso'] : []),
+      ...(soCrm && !b ? ['--so-crm exige que a unidade já exista, e sem ler o banco isso não dá para conferir: o passo fica BLOQUEADO (rode o seco com acesso ao banco, sem --offline)'] : []),
+      ...(soCrm && existente && divergentes.length ? [`o questionário DIFERE de units em: ${divergentes.join(', ')} — units NÃO é escrita, mas os textos dos modelos da Meta (unit_chatwoot.dados_modelos) e os preços/endereço das mensagens prontas usam o do QUESTIONÁRIO: confira com o dono`] : []),
       ...(ativa && !sobrescrever && !soCrm ? [`a unidade ${slug} está ATIVA (no ar): o script NÃO mexe nela sem --sobrescrever — nenhum passo de banco roda. Para montar SÓ o CRM dela sem tocar em units, use --so-crm (--sobrescrever troca persona, fontes e prompt: NÃO use numa unidade no ar)`] : []),
       ...(preservados.length && !(ativa && !sobrescrever) && !soCrm ? [`já preenchidos e diferentes do questionário (ficam como estão; --sobrescrever troca): ${preservados.join(', ')}`] : []),
     ],
@@ -439,8 +453,9 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     id: 'robo-sofia',
     sistema: 'chatwoot',
     titulo: 'Robô Sofia (Agent Bot) criado na conta; ligado na caixa só com --ligar-robo',
-    acao: semIA || caixaExiste?.robo ? 'nada' : 'criar',
-    itens: semIA ? ['a clínica não quer a assistente: o robô Sofia NÃO é criado'] : ['POST agent_bots (token do robô vai para o cofre como CHATWOOT_SOFIA_BOT_TOKEN_<SUFIXO>)', 'POST inboxes/<caixa>/set_agent_bot — só com --ligar-robo, DEPOIS do teste da Sofia (passo «sofia») e de ligar a automação chatwoot-ia'],
+    acao: semIA || soCrm || caixaExiste?.robo ? 'nada' : 'criar',
+    itens: soCrm ? ['--so-crm: o robô Sofia NÃO é criado nem ligado (a Sofia da unidade segue só pelo Kommo). Dar IA ao CRM é decisão à parte, depois de testar-prompt']
+      : semIA ? ['a clínica não quer a assistente: o robô Sofia NÃO é criado'] : ['POST agent_bots (token do robô vai para o cofre como CHATWOOT_SOFIA_BOT_TOKEN_<SUFIXO>)', 'POST inboxes/<caixa>/set_agent_bot — só com --ligar-robo, DEPOIS do teste da Sofia (passo «sofia») e de ligar a automação chatwoot-ia'],
     execucao: semIA ? 'manual' : 'sim',
     avisos: semIA ? [] : ['a Sofia só fala quando a automação chatwoot-ia estiver ligada; o robô na caixa é o canal por onde ela responde'],
     depende: ['caixa', 'sofia'],
@@ -495,7 +510,7 @@ function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number;
   if (x.ausentes.length) r.push(`SEGREDOS: colocar no ambiente do serviço e no arquivo de segredos da VPS: ${x.ausentes.join(', ')}`);
   r.push('FRANQUIA: gravar o token da API da franquia em units.spine_token, ligar spine_enabled e definir os turnos por profissional (spine_staff_por_turno)');
   r.push(`ATENDENTES: ${q.chatwoot.atendentes.length} convite(s) saem por e-mail — cada uma aceita e define a senha; só depois dá para criar as pastas dela`);
-  if (x.soCrm) r.push('SOFIA: --so-crm não mexeu na Sofia da unidade (persona, fontes, prompt e aprendizados ficam como estão). O robô do CRM só existe se assistente.quer for true, e só liga com --ligar-robo depois do teste.');
+  if (x.soCrm) r.push('SOFIA: --so-crm não mexeu na Sofia da unidade (persona, fontes, prompt e aprendizados ficam como estão) e NÃO criou nem ligou robô no CRM: ela segue só pelo Kommo. IA no CRM é decisão à parte.');
   else if (q.assistente?.quer === false) r.push('SOFIA: a clínica NÃO quer a assistente virtual — nada foi configurado e não há robô nem automação de IA para ligar. (Para contratar depois: assistente.quer: true e rodar de novo.)');
   else {
     r.push(`SOFIA: rodar testar-prompt.ts --slug ${q.unidade.slug} e o dono ler as respostas ANTES de ligar prompt-da-unidade e chatwoot-ia`);
