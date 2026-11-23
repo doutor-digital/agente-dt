@@ -11,7 +11,7 @@
  *    funil COMERCIAL (o 143 do TRATAMENTO é TRATAMENTO CANCELADO e nunca reabre). Unidade que já deixa a Sofia falar em PERDIDO não passa por aqui.
  *  - move o cartão para EM QUALIFICAÇÃO do MESMO funil (achada pelo NOME no esquema da conta, nunca por id fixo) e o turno SEGUE: a
  *    Sofia responde a esta mesma mensagem (ao "Ver horários"). Se EM QUALIFICAÇÃO não estiver na lista de etapas da unidade, não move —
- *    senão o cartão andaria e a Sofia continuaria muda.
+ *    senão o cartão andaria e a Sofia continuaria muda. O mesmo vale se EM QUALIFICAÇÃO tem a IA pausada por regra global (`pause_in_stages`).
  *  - deixa uma nota no cartão e guarda uma marca de 24 h: é um freio ANTI-VAIVÉM, não uma trava de decisão humana. Se alguém (equipe, robô do
  *    Kommo, perda-ia) fechar o cartão de novo logo depois, a próxima fala não o reabre e não empilha nota em cima de nota; passado 1 dia, o
  *    paciente que responde reabre outra vez. (Não dá para saber QUEM fechou sem ler o histórico de eventos do Kommo; 7 dias travaria o paciente
@@ -122,6 +122,7 @@ export type MotivoDeNaoReabrir =
   | 'esquema_ilegivel'
   | 'sem_etapa_de_qualificacao'
   | 'qualificacao_fora_da_lista'
+  | 'qualificacao_pausada_por_regra_global'
   | 'ja_reaberto_recentemente'
   | 'cartao'
   | 'motivos_de_perda_ilegiveis'
@@ -212,6 +213,8 @@ export interface PedidoDeReabertura {
   /** as etapas que a unidade deixa a Sofia atender (`kommoAllowedStatusIds`) e os funis da conta, se lidos */
   allowedStatusIds: readonly number[];
   funis: FunisDaConta | null;
+  /** regras globais `pause_in_stages` (`*:status` ou `funil:status`): a Sofia fica muda na etapa de destino se ela estiver aqui */
+  pausedStages?: ReadonlySet<string>;
   kommo?: KommoClient;
 }
 
@@ -253,6 +256,9 @@ export async function portaPerdidoReabre(p: PedidoDeReabertura, deps: DepsDaReab
     if (!idQualificacao) return nao(estado, 'sem_etapa_de_qualificacao', `o funil ${funil} não tem a etapa ${ETAPA.QUALIFICACAO}`);
     if (!etapaPermitida(p.allowedStatusIds, idQualificacao, lead.pipeline_id, p.funis)) {
       return nao(estado, 'qualificacao_fora_da_lista', `${ETAPA.QUALIFICACAO} (${idQualificacao}) não está nas etapas em que a Sofia atende nesta unidade`);
+    }
+    if (p.pausedStages && (p.pausedStages.has(`*:${idQualificacao}`) || p.pausedStages.has(`${lead.pipeline_id}:${idQualificacao}`))) {
+      return nao(estado, 'qualificacao_pausada_por_regra_global', `${ETAPA.QUALIFICACAO} (${idQualificacao}) tem a IA pausada por regra global (pause_in_stages)`);
     }
     const para = { statusId: idQualificacao, pipelineId: lead.pipeline_id, nome: ETAPA.QUALIFICACAO };
     if (await deps.reabertoRecentemente(unit.id, leadId)) return nao(estado, 'ja_reaberto_recentemente', 'o cartão já foi reaberto por aqui nas últimas 24 h e fechado de novo: fica (anti-vaivém)');

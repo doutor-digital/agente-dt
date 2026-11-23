@@ -434,6 +434,14 @@ test('NÃO reabre: EM QUALIFICAÇÃO fora das etapas em que a Sofia atende (o ca
   assert.match(r.detalhe ?? '', /112321351/);
 });
 
+test('NÃO reabre: EM QUALIFICAÇÃO com a IA pausada por regra global (pause_in_stages): o cartão andaria e a Sofia continuaria muda', async () => {
+  await naoReabre({ pausedStages: new Set([`*:${QUALIFICACAO}`]) }, {}, 'qualificacao_pausada_por_regra_global');
+  await naoReabre({ pausedStages: new Set([`${COMERCIAL}:${QUALIFICACAO}`]) }, {}, 'qualificacao_pausada_por_regra_global');
+  // regra de outra etapa não atrapalha
+  const { deps, pedido } = fake();
+  assert.equal((await portaPerdidoReabre(pedido({ pausedStages: new Set([`*:${ESPERA}`]) }), deps))?.reabriu, true);
+});
+
 test('NÃO reabre: funil sem a etapa EM QUALIFICAÇÃO', async () => {
   const sem = montarEsquema([], [{ id: COMERCIAL, name: 'COMERCIAL', statuses: [{ id: ENTRADA, name: 'Etapa de leads de entrada' }, { id: 143, name: 'PERDIDO' }] }]);
   await naoReabre({}, { esquema: async () => sem }, 'sem_etapa_de_qualificacao');
@@ -497,6 +505,7 @@ test('webhook: a porta roda ANTES de o turno ser pulado por etapa fora da lista,
   assert.match(bloco, /if \(foraDaAllowlist\) \{\s*const reabertura = await portaPerdidoReabre/);
   assert.match(bloco, /if \(reabertura\.reabriu && reabertura\.para\) \{\s*sid = reabertura\.para\.statusId;\s*lead\.status_id = reabertura\.para\.statusId;[^\n]*\n\s*foraDaAllowlist = false;/);
   assert.match(bloco, /retomada: !!args\.retomada/);
+  assert.match(bloco, /pausedStages,/);
   // o turno continua pulado quando não reabriu
   assert.match(fonte.slice(porta, pula + 200), /if \(foraDaAllowlist\) \{\s*await finishWidgetSilently\(\);/);
 });

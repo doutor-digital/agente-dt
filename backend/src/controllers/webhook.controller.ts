@@ -1747,6 +1747,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           retomada: !!args.retomada,
           allowedStatusIds,
           funis,
+          pausedStages,
           kommo,
         });
         if (reabertura) {
