@@ -49,6 +49,7 @@ import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
+import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, semArquivo, type Arquivo, type LeituraCrua } from '../lib/funil-leitura.js';
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import {
@@ -258,15 +259,39 @@ export async function sessaoDaAtendente(req: Request, res: Response): Promise<At
   return { c: r.ctx, sessao, nome: r.quem.nome, id: r.quem.id, papel: r.quem.papel, email: r.quem.email };
 }
 
+/** As definições dos atributos mudam raramente (a administradora cria uma etapa nova): 60 s por conta bastam e tiram um pedido de cada abertura. Falha NÃO fica guardada (senão o quadro ficaria sem etapas). */
+const definicoesGuardadas = new Map<number, { ate: number; v: unknown[] }>();
+/** Sobe a cada escrita na conta: a leitura que já estava em andamento quando alguém escreveu não guarda o que trouxe (nasceu velha). */
+const geracaoDasDefinicoes = new Map<number, number>();
 async function definicoes(a: Acesso): Promise<unknown[]> {
+  const conta = a.c.conta!.conta;
+  const g = definicoesGuardadas.get(conta);
+  if (g && g.ate > Date.now()) return g.v;
+  const geracao = geracaoDasDefinicoes.get(conta) ?? 0;
   // attribute_model=0: atributo de CONVERSA
-  const d = await cw(a, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => []);
-  return Array.isArray(d) ? d : [];
+  let falhou = false;
+  const d = await cw(a, 'GET', 'custom_attribute_definitions', { query: { attribute_model: '0' } }).catch(() => { falhou = true; return []; });
+  const v = Array.isArray(d) ? d : [];
+  if (!falhou && v.length && (geracaoDasDefinicoes.get(conta) ?? 0) === geracao) definicoesGuardadas.set(conta, { ate: Date.now() + 60_000, v });
+  return v;
 }
 
-/** Chama o Chatwoot com o login da pessoa (menu/aba) ou, só no link avulso do João, com o token da conta. */
+/** Alguém escreveu na conta pelo funil: a leitura das caixas, as definições e as respostas prontas das telas (Oportunidades, Marketing, Gestor) já não valem. */
+function invalidarConta(conta: number): void {
+  leituraDoFunil.invalidar(conta);
+  definicoesGuardadas.delete(conta);
+  geracaoDasDefinicoes.set(conta, (geracaoDasDefinicoes.get(conta) ?? 0) + 1);
+  for (const k of [...prontas.keys()]) if (/^(op|mk|gs)\|/.test(k) && k.split('|')[1] === String(conta)) prontas.delete(k);
+}
+
+/** Chama o Chatwoot com o login da pessoa (menu/aba) ou, só no link avulso do João, com o token da conta. Escrever invalida a leitura guardada da conta. */
 function cw(a: Acesso, metodo: 'GET' | 'POST' | 'PATCH' | 'DELETE', caminho: string, o: { corpo?: unknown; query?: Record<string, string> } = {}) {
-  return chamar(a.c, metodo, caminho, { ...o, sessao: a.sessao });
+  const p = chamar(a.c, metodo, caminho, { ...o, sessao: a.sessao });
+  if (metodo === 'GET') return p;
+  // invalida antes (quem já estava lendo não guarda o que veio) e depois (o Chatwoot já aplicou a escrita: a próxima leitura vê o novo)
+  const conta = a.c.conta?.conta;
+  if (conta) invalidarConta(conta);
+  return p.finally(() => { if (conta) invalidarConta(conta); });
 }
 
 function falhou(res: Response, e: unknown, oQue: string, extra: Record<string, unknown> = {}): void {
@@ -308,62 +333,53 @@ async function paginasDasCaixas(a: Acesso, caixa: number, arquivo: Arquivo = 'fo
   return (await lerCaixas(a, caixa, MAX_PAGINAS, false, 1, arquivo)).paginas;
 }
 
+export { semArquivo, type Arquivo };
+
 /**
- * Conversas de ARQUIVO (histórico unificado no canal oficial, ninguém mexeu depois — `ehArquivo`): 'fora' = some da tela
- * (Hoje, Marketing, Gestor); 'com-etapa' = só as que têm etapa (quadro do funil e Oportunidades).
+ * A leitura crua guardada por conta e conjunto de caixas (a mesma serve ao quadro, ao Hoje, às Oportunidades e a todas as atendentes que
+ * enxergam as mesmas caixas). Fresca por 20 s; até 2 min serve na hora e relê em segundo plano. Escrita do servidor invalida (ver `cw`).
+ * As páginas guardadas NÃO podem ser alteradas por quem as recebe (`semArquivo` devolve cópia quando muda algo).
  */
-export type Arquivo = 'fora' | 'com-etapa';
-export function semArquivo(pg: any, arquivo: Arquivo): any {
-  const lista = pg?.data?.payload;
-  if (!Array.isArray(lista)) return pg;
-  const fica = lista.filter((c: any) => !ehArquivo(c) || (arquivo === 'com-etapa' && arquivoComEtapa(c)));
-  return fica.length === lista.length ? pg : { ...pg, data: { ...pg.data, payload: fica } };
-}
+const leituraDoFunil = new MemoriaDeLeitura<LeituraCrua>(FUNIL_FRESCO_MS, FUNIL_VELHO_MS, Date.now, (e) => logger.warn({ err: String(e) }, 'funil: não consegui renovar a leitura das caixas em segundo plano (segue a antiga)'));
+/** Só para teste. */
+export const _esquecerLeituraDoFunil = (): void => { leituraDoFunil.esquecerTudo(); definicoesGuardadas.clear(); prontas.clear(); };
 
 /** As caixas (e as páginas de cada uma) que a pessoa lê; `cortou` = alguma caixa tinha mais conversas que o teto de páginas. */
 async function lerCaixas(a: Acesso, caixa: number, maxPaginas: number, soDeUnidades = false, lote = 1, arquivo: Arquivo = 'fora'): Promise<{ paginas: unknown[]; cortou: boolean }> {
-  let ids: number[];
+  const t0 = Date.now();
+  const conta = a.c.conta!.conta;
   const vale = (id: number) => Number.isInteger(id) && !CAIXAS_HISTORICO.has(id) && (!soDeUnidades || !!CAIXAS_REGUA[id]);
-  if (Number.isInteger(caixa) && caixa > 0) ids = vale(caixa) ? [caixa] : [];
-  else {
+  // quais caixas a pessoa enxerga: por pessoa, 45 s. É o que decide quem pode compartilhar a leitura guardada — inclusive com `?caixa=N`:
+  // a leitura guardada NÃO passa pelo Chatwoot com o login de quem pede, então a caixa pedida precisa estar entre as DELA (antes, o Chatwoot
+  // recusava com o login da pessoa; agora recusamos aqui, devolvendo vazio)
+  const visiveis = await memo(`inbox|${conta}|${a.logadoId ?? a.logado ?? 'chave'}`, VALE_TELA_MS, async () => {
     const r = (await cw(a, 'GET', 'inboxes')) as any;
-    ids = (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => Number(i.id)).filter(vale);
-  }
-  const paginas: unknown[] = [];
-  let cortou = false;
-  for (const id of ids) {
-    // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
-    // dezenas de segundos); o quadro e o Hoje leem uma por vez (o Chatwoot atende em fila; ver paginasDasCaixas)
-    for (let p = 1; p <= maxPaginas; p += lote) {
-      const numeros = Array.from({ length: Math.min(lote, maxPaginas - p + 1) }, (_, i) => p + i);
-      const lidas = (await Promise.all(numeros.map((n) => cw(a, 'GET', 'conversations', { query: { status: 'all', assignee_type: 'all', inbox_id: String(id), page: String(n) } })))) as any[];
-      let acabou = false;
-      for (const pg of lidas) {
-        // o fim da caixa se mede pela página CRUA (25 por página); o arquivo sai depois
-        const crua: any[] = Array.isArray((pg as any)?.data?.payload) ? (pg as any).data.payload : [];
-        if (crua.length < 25) acabou = true;
-        // a lista vem pela última atividade (mais nova primeiro) e o arquivo é sempre mais velho que as conversas vivas: página
-        // cheia só de arquivo = dali para trás é tudo arquivo — quem não mostra arquivo para de ler (sem «cortou» falso)
-        // vale para os dois modos (14/11: o quadro lia até 40 páginas e ficou lento com as 919 conversas do canal oficial; nenhum
-        // arquivo tem etapa ainda) — o arquivo com etapa que estiver nessa página ainda entra
-        if (crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
-        paginas.push(semArquivo(pg, arquivo));
-      }
-      if (acabou) break;
-      if (p + lote - 1 >= maxPaginas) cortou = true;
-    }
-  }
-  return { paginas, cortou };
+    return (Array.isArray(r?.payload) ? r.payload : []).map((i: any) => Number(i.id)).filter((n: number) => Number.isInteger(n) && n > 0);
+  });
+  const ids: number[] = Number.isInteger(caixa) && caixa > 0 ? (vale(caixa) && visiveis.includes(caixa) ? [caixa] : []) : visiveis.filter(vale);
+  const tInboxes = Date.now() - t0;
+  // `lote` páginas por vez (as telas de gestão pedem 4: as páginas não dependem umas das outras e 600 conversas em fila levariam
+  // dezenas de segundos); o quadro e o Hoje leem uma por vez (o Chatwoot atende em fila; ver paginasDasCaixas)
+  const { valor, de } = await leituraDoFunil.obter(conta, `${ids.join(',')}|${maxPaginas}|${lote}`, () => lerPaginasCruas((caminho, query) => cw(a, 'GET', caminho, { query }), ids, maxPaginas, lote));
+  const ms = Date.now() - t0;
+  // o tempo de cada parte no log (como na aba Automações): a leitura lenta aparece com o motivo, sem dado de paciente
+  if (ms > 2000) logger.warn({ conta, caixas: ids.length, pedidos: valor.pedidos, paginas: valor.paginas.length, de, ms: { total: ms, caixas: tInboxes, leitura: ms - tInboxes } }, 'funil: leitura das caixas demorou');
+  return { paginas: valor.paginas.map((pg) => semArquivo(pg, arquivo)), cortou: valor.cortou };
 }
 
 export async function funilQuadroHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
   try {
+    const t0 = Date.now();
     const defs = await definicoes(a);
     const lista = etapasDoAtributo(defs);
+    const tDefs = Date.now() - t0;
     const paginas = await paginasDasCaixas(a, Number(req.query.caixa), 'com-etapa');
+    const tPaginas = Date.now() - t0 - tDefs;
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
+    // o tempo de cada parte no log (como na aba Automações): quadro lento aparece com o motivo
+    if (Date.now() - t0 > 2000) logger.warn({ conta: a.c.conta!.conta, paginas: paginas.length, ms: { definicoes: tDefs, leitura: tPaginas, tarefas: Date.now() - t0 - tDefs - tPaginas } }, 'funil: quadro demorou');
     res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
     falhou(res, e, 'quadro');

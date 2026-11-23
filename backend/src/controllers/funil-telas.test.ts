@@ -40,6 +40,8 @@ const PERFIS: Record<string, unknown> = {
   admin: { id: 1, name: 'Suzanne', email: 's@dd.com', accounts: [{ id: 1, role: 'administrator' }] },
   agente: { id: 2, name: 'Bia', email: 'bia@dd.com', accounts: [{ id: 1, role: 'agent' }] },
   ana: { id: 3, name: 'Ana', email: 'ana@dd.com', accounts: [{ id: 1, role: 'agent' }] },
+  // atende só a caixa 5: NÃO enxerga a 3
+  so5: { id: 4, name: 'Sol', email: 'sol@dd.com', accounts: [{ id: 1, role: 'agent' }] },
 };
 const chamadas: Array<{ url: string; headers: Record<string, string> }> = [];
 let graph: ((url: string) => unknown) | null = null;
@@ -52,7 +54,7 @@ globalThis.fetch = (async (url: string | URL | Request, init?: RequestInit) => {
   const json = (v: unknown, status = 200) => new Response(JSON.stringify(v), { status });
   if (u.startsWith('https://graph.facebook.com')) return graph ? json(graph(u)) : json({ error: { code: 190 } }, 400);
   if (u.endsWith('/api/v1/profile')) return PERFIS[headers['access-token'] ?? ''] ? json(PERFIS[headers['access-token']!]) : json({}, 401);
-  if (u.includes('/inboxes')) return json({ payload: [{ id: 3, name: 'WhatsApp' }, { id: 4, name: 'Histórico' }] });
+  if (u.includes('/inboxes')) return json({ payload: headers['access-token'] === 'so5' ? [{ id: 5, name: 'Outra' }] : [{ id: 3, name: 'WhatsApp' }, { id: 4, name: 'Histórico' }] });
   if (u.includes('/conversations?')) return json({ data: { payload: new URL(u).searchParams.get('inbox_id') === '3' ? CONVERSAS : [] } });
   if (u.includes('/messages')) {
     mensagensDe.push(u);
@@ -66,10 +68,11 @@ const { prisma } = await import('../lib/prisma.js');
 const falsoPrisma = {
   chatwootReguaVisto: { findMany: async () => [], findFirst: async () => null },
   unit: { findUnique: async () => null },
+  funilTarefa: { findMany: async () => [] },
 };
 for (const [k, v] of Object.entries(falsoPrisma)) Object.defineProperty(prisma, k, { value: v, configurable: true });
 
-const { semArquivo, funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
+const { _esquecerLeituraDoFunil, funilQuadroHandler, funilNotaHandler, semArquivo, funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
 const { corsDoAssistente } = await import('./assistente.controller.js');
 
 function resp() {
@@ -241,6 +244,7 @@ test('menu.js: PARSEIA, tem os cinco itens na ordem, sem lista de e-mails nem ha
 
 test('campanha da conversa longa (não deu para ler até o começo) não é guardada como «sem campanha»', async () => {
   CONVERSAS.push(conversa(501), conversa(502)); // conversas só deste teste (as outras já têm a campanha guardada)
+  _esquecerLeituraDoFunil(); // o teste mexeu no Chatwoot de mentira: a leitura guardada das caixas (20 s) não vale mais
   mensagensLongas = true;
   mensagensDe.length = 0;
   const r1 = resp();
@@ -262,6 +266,7 @@ test('campanha da conversa longa (não deu para ler até o começo) não é guar
   await funilMarketingHandler(pedido('ana', { periodo: 'semana' }), asRes(resp()));
   assert.equal(mensagensDe.length, lidas, 'já guardada: não pergunta ao Chatwoot de novo');
   CONVERSAS.length -= 2;
+  _esquecerLeituraDoFunil();
 });
 
 test('página (todas as telas) PARSEIA, sem marcador sobrando; as novas só falam com a página-mãe e nunca mandam nada ao paciente', () => {
@@ -304,4 +309,91 @@ test('UNIFICAÇÃO: o filtro do funil tira o arquivo do histórico (Hoje/gestão
   assert.deepEqual(semArquivo(pg, 'com-etapa').data.payload.map((c: any) => c.id), [1, 3, 4]);
   assert.equal(semArquivo(pg, 'fora').data.meta.all_count, 4, 'não mexe no resto da página');
   assert.equal(semArquivo({ data: { payload: [{ id: 9, labels: [] }] } }, 'fora').data.payload.length, 1);
+});
+
+// ── 23/11: a aba «Funil» lia ~14 páginas em fila a cada abertura (≈11 s) — agora a leitura fica guardada ───────────────
+
+const paginasLidas = () => chamadas.filter((c) => /\/conversations\?/.test(c.url)).length;
+const quadro = async (quem: string, query: Record<string, string> = {}) => {
+  const r = resp();
+  await funilQuadroHandler(pedido(quem, query), asRes(r));
+  assert.equal(r.codigo, 200, `${quem}: ${JSON.stringify(r.corpo)}`);
+  return r.corpo;
+};
+
+test('quadro: a 2ª abertura (e a de OUTRA atendente das mesmas caixas) não relê o Chatwoot; o que a tela mostra é igual', async () => {
+  _esquecerLeituraDoFunil();
+  chamadas.length = 0;
+  const q1 = await quadro('agente');
+  const primeiras = paginasLidas();
+  assert.ok(primeiras > 0);
+  const q2 = await quadro('agente');
+  const q3 = await quadro('admin'); // outra pessoa, mesmas caixas: a leitura é compartilhada
+  assert.equal(paginasLidas(), primeiras, 'nenhuma página nova: a leitura guardada serviu');
+  assert.deepEqual(q2.colunas, q1.colunas);
+  assert.deepEqual(q3.colunas, q1.colunas, 'as mesmas colunas e conversas para quem enxerga as mesmas caixas');
+  assert.equal(q1.total, CONVERSAS.length);
+  // e a leitura de cada uma continua sendo com o login da PRÓPRIA pessoa
+  assert.ok(chamadas.filter((c) => c.url.includes('/inboxes')).every((c) => ['agente', 'admin'].includes(c.headers['access-token'] ?? '')));
+});
+
+test('quadro: depois de 20 s serve o velho NA HORA e relê UMA vez em segundo plano; depois de 2 min espera a leitura nova', async () => {
+  _esquecerLeituraDoFunil();
+  await quadro('agente');
+  const base = paginasLidas();
+  mock.timers.tick(30_000);
+  await quadro('agente');
+  await quadro('admin');
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  const depoisDoVelho = paginasLidas();
+  assert.ok(depoisDoVelho > base, 'a releitura em segundo plano aconteceu');
+  const porLeitura = depoisDoVelho - base;
+  await quadro('agente'); // já renovada: fresca de novo
+  assert.equal(paginasLidas(), depoisDoVelho);
+  mock.timers.tick(200_000);
+  await quadro('agente'); // passou de 2 min: lê de novo e espera
+  assert.equal(paginasLidas(), depoisDoVelho + porLeitura);
+});
+
+test('quadro: escrever (nota, mover, atribuir…) invalida: quem acabou de mover nunca vê o quadro velho', async () => {
+  _esquecerLeituraDoFunil();
+  await quadro('admin');
+  const base = paginasLidas();
+  await quadro('admin');
+  assert.equal(paginasLidas(), base, 'guardado');
+  const r = resp();
+  await funilNotaHandler({ ...pedido('admin'), body: { conversaId: 1, texto: 'ligou' } } as unknown as Request, asRes(r));
+  assert.equal(r.codigo, 200, JSON.stringify(r.corpo));
+  const lidasDepoisDoMover = paginasLidas();
+  await quadro('admin');
+  assert.ok(paginasLidas() > lidasDepoisDoMover, 'releu depois da escrita');
+});
+
+test('quadro: a leitura guardada NÃO vaza caixa para quem não a enxerga (nem com ?caixa=N), e a caixa pedida precisa ser das DELA', async () => {
+  _esquecerLeituraDoFunil();
+  await quadro('admin'); // enche a leitura guardada da caixa 3 (login da administradora)
+  chamadas.length = 0;
+  const so5 = await quadro('so5');
+  assert.equal(so5.total, 0, 'quem só atende a caixa 5 não recebe conversa da caixa 3');
+  const pedida = await quadro('so5', { caixa: '3' });
+  assert.equal(pedida.total, 0, '?caixa=3 também não: a leitura guardada não passa pelo Chatwoot com o login dela');
+  assert.ok(!chamadas.some((c) => /inbox_id=3/.test(c.url)), 'nenhuma página da caixa 3 foi lida (nem vinda da memória)');
+  const dela = await quadro('admin', { caixa: '3' });
+  assert.equal(dela.total, CONVERSAS.length, 'quem enxerga a caixa recebe');
+  const lixo = await quadro('admin', { caixa: '99' });
+  assert.equal(lixo.total, 0, 'caixa que não existe: vazio, sem criar leitura guardada');
+});
+
+test('Oportunidades (resposta pronta de 45 s) também se refaz depois de uma escrita', async () => {
+  _esquecerLeituraDoFunil();
+  const oportunidades = () => funilOportunidadesHandler(pedido('admin'), asRes(resp()));
+  await oportunidades();
+  const base = paginasLidas();
+  await oportunidades();
+  assert.equal(paginasLidas(), base, 'guardada');
+  await funilNotaHandler({ ...pedido('admin'), body: { conversaId: 1, texto: 'ligou' } } as unknown as Request, asRes(resp()));
+  const depoisDaNota = paginasLidas();
+  await oportunidades();
+  assert.ok(paginasLidas() > depoisDaNota, 'a tela refez a leitura depois da escrita');
 });
