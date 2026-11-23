@@ -931,7 +931,7 @@ export function mascararPedido(entrada: Record<string, any>, conhecidos?: readon
   const extras = conhecidos ? Object.keys(entrada).filter((k) => !conhecidos.includes(k)) : [];
   const a = Object.fromEntries(Object.entries(entrada).filter(([k]) => !extras.includes(k)));
   const novo = a.novoCliente as { nome?: string; email?: string; telefone?: string; endereco?: unknown } | undefined;
-  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, nome, externalReference, destino, contaBancaria, ...resto } = a;
+  const { cpfCnpj, email, telefone, endereco, novoCliente, descricao, observacoes, nome, externalReference, destino, contaBancaria, ...resto } = a;
   const semCartao = Object.fromEntries(Object.entries(resto).filter(([k]) => !(CAMPOS_DE_CARTAO.test(k) && k !== 'forma')));
   const tinhaCartao = Object.keys(resto).length !== Object.keys(semCartao).length;
   return {
@@ -949,6 +949,8 @@ export function mascararPedido(entrada: Record<string, any>, conhecidos?: readon
     ...(contaBancaria ? { temContaBancaria: true } : {}),
     // o texto da cobrança pode trazer o motivo do tratamento: o registro guarda só o tamanho (o texto fica no Asaas, pelo id)
     ...(descricao !== undefined ? { descricaoCaracteres: String(descricao).length } : {}),
+    // observações da nota fiscal: mesmo tratamento da descrição (podem trazer o motivo do tratamento)
+    ...(observacoes !== undefined ? { observacoesCaracteres: String(observacoes).length } : {}),
     ...(novoCliente
       ? { novoCliente: { nome: novo?.nome ? abreviarNome(novo.nome) : undefined, ...(novo?.email ? { email: mascararEmail(novo.email) } : {}), ...(novo?.telefone ? { telefone: mascararTelefone(novo.telefone) } : {}), ...(novo?.endereco ? { temEndereco: true } : {}) } }
       : {}),

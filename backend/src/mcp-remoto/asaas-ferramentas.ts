@@ -14,6 +14,7 @@ import { asaasCobranca, type ContextoAsaas } from './asaas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
 import { contaDeEscrita, criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
 import { PADRAO_TETOS } from './asaas-limites.js';
+import { asaasNota, asaasNotas, STATUS_DO_FILTRO } from './asaas-notas.js';
 import { confirmarNota, MAX_DIAS_EMISSAO, prepararNota, type PedidoDePreparo } from './asaas-notas-escrita.js';
 import { executar } from './ferramenta.js';
 
@@ -249,12 +250,60 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
 
 /**
  * Nota fiscal (NFS-e): a ESCRITA em DOIS passos, diferente do resto do Asaas (que é direto). Preparar mostra o resumo e devolve um código;
- * só o confirmar, com o ok da pessoa, chama o Asaas. A leitura (asaas_notas, asaas_nota, asaas_dados_fiscais) está em `asaas-notas.ts`.
+ * só o confirmar, com o ok da pessoa, chama o Asaas. Também só para quem escreve: as leituras que trazem o link do PDF/XML (asaas_notas, asaas_nota). A lógica de leitura está em `asaas-notas.ts` (e asaas_dados_fiscais, liberada a quem tem o Asaas, é registrada lá).
  */
 export function registrarNotasFiscaisAsaas(server: McpServer, asaas: ContextoAsaas, esc: EstadoEscritaAsaas, quem: Quem, auditar: Auditar): void {
   const ctx: CtxEscrita = { asaas, esc };
   const registrar: Registrar = (evento, argumentos, ok, erro) => auditar({ ferramenta: evento, argumentos, ok, ms: 0, ...(erro ? { erro } : {}) });
   const tool = ferramentaSegura(server, auditar);
+  // as duas leituras que trazem o link do PDF/XML (CPF, endereço e serviço do paciente) só existem para quem escreve, e só nas clínicas liberadas, como asaas_cobranca
+  const umaUnidade = z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra")');
+  const dia = (o: string) => z.string().optional().describe(`${o}, AAAA-MM-DD`);
+  server.registerTool(
+    'asaas_notas',
+    {
+      title: 'Notas fiscais de serviço (Asaas)',
+      description:
+        'Notas fiscais de serviço (NFS-e) do Asaas de UMA clínica, com filtro por período (data de EMISSÃO), status, cobrança (pay_…), cliente (cus_…) ou referência. ' +
+        'Devolve número, status em português, valor, data, tomador, descrição curta e os links do PDF e do XML quando a nota já foi emitida; mais o total por status. ' +
+        'É preciso ao menos um filtro. Status: SCHEDULED (agendada), SYNCHRONIZED (enviada à prefeitura), AUTHORIZED (emitida), PROCESSING_CANCELLATION, CANCELED, CANCELLATION_DENIED, ERROR. ' +
+        'Para saber se a clínica PODE emitir, use asaas_dados_fiscais. Só leitura: emitir e cancelar são asaas_preparar_nota → asaas_confirmar_nota. ' +
+        'Só para quem tem permissão de escrita (o link do PDF/XML mostra CPF, endereço e o serviço do paciente).',
+      inputSchema: {
+        unidade: umaUnidade,
+        inicio: dia('início do período de emissão'),
+        fim: dia('fim do período de emissão'),
+        status: z.enum(STATUS_DO_FILTRO).optional(),
+        cobrancaId: z.string().optional().describe('notas desta cobrança (pay_…)'),
+        clienteId: z.string().optional().describe('notas deste cliente/tomador (cus_…)'),
+        referencia: z.string().optional().describe('externalReference da nota'),
+        maxItens: z.number().int().min(0).max(100).optional().describe('notas detalhadas na resposta (padrão 30); o total e o resumo por status contam todas'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) =>
+      executarSeguro('asaas_notas', args, auditar, async () => {
+        contaDeEscrita(asaas, esc, args.unidade);
+        return asaasNotas(asaas, args);
+      }),
+  );
+  server.registerTool(
+    'asaas_nota',
+    {
+      title: 'Uma nota fiscal (Asaas)',
+      description:
+        'Uma nota fiscal de serviço pelo id (inv_…), completa: número, status e o motivo (se deu erro), valor, deduções, data, tomador, serviço municipal, descrição, observações, ' +
+        'impostos e retenções, RPS, código de verificação e os links do PDF e do XML. Use para conferir o resultado depois de emitir ou cancelar. ' +
+        'Só para quem tem permissão de escrita (o link do PDF/XML mostra CPF, endereço e o serviço do paciente).',
+      inputSchema: { unidade: umaUnidade, notaId: z.string().min(4).describe('inv_…') },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) =>
+      executarSeguro('asaas_nota', args, auditar, async () => {
+        contaDeEscrita(asaas, esc, args.unidade);
+        return asaasNota(asaas, args);
+      }),
+  );
   const aliquota = (o: string) => z.number().min(0).max(100).optional().describe(`${o}, em % (ex. 2 ou 2.5)`);
   tool(
     'asaas_preparar_nota',

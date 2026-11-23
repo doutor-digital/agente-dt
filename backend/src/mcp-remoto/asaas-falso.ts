@@ -69,6 +69,10 @@ export interface Opc {
   semListaDeServicos?: boolean;
   /** GET /fiscalInfo/municipalOptions devolve supportsCancellation=false */
   prefeituraNaoCancela?: boolean;
+  /** a listagem de notas ignora o filtro externalReference (o Asaas devolve notas de outros pedidos) */
+  listaIgnoraReferencia?: boolean;
+  /** POST /invoices CRIA a nota e depois falha (resposta perdida): a nota existe, o conector não viu o id */
+  falhaDepoisDeCriarNota?: Error;
   /** POST /invoices/{id}/authorize devolve este status (padrão SCHEDULED: quem autoriza é a prefeitura, depois) */
   statusAoEmitir?: string;
   /** POST /invoices/{id}/cancel devolve este status (padrão PROCESSING_CANCELLATION) */
@@ -156,7 +160,7 @@ export function asaasFalso(o: Opc = {}) {
           const certas = notas.filter(
             (n) =>
               (!q.payment || n.payment === q.payment) && (!q.customer || n.customer === q.customer) && (!q.status || n.status === q.status) &&
-              (!q.externalReference || n.externalReference === q.externalReference) && (!q['effectiveDate[Ge]'] || String(n.effectiveDate) >= q['effectiveDate[Ge]']) &&
+              (!q.externalReference || o.listaIgnoraReferencia || n.externalReference === q.externalReference) && (!q['effectiveDate[Ge]'] || String(n.effectiveDate) >= q['effectiveDate[Ge]']) &&
               (!q['effectiveDate[Le]'] || String(n.effectiveDate) <= q['effectiveDate[Le]']),
           );
           const de = Number(query.offset ?? 0);
@@ -275,6 +279,7 @@ export function asaasFalso(o: Opc = {}) {
                   ...(corpo!.externalReference ? { externalReference: String(corpo!.externalReference) } : {}),
                 };
                 notas.push(n);
+                if (o.falhaDepoisDeCriarNota) throw o.falhaDepoisDeCriarNota;
                 return n as T;
               }
               const nfe = caminho.match(/^\/invoices\/([^/]+)\/(authorize|cancel)$/);

@@ -215,7 +215,7 @@ test('preparar emitir: serviço municipal nunca é palpite — inexistente e amb
   await recusa(preparar(semLista, { servico: 'medicina' }), /não tem a lista de serviços municipais .* informe o CÓDIGO/s);
   await recusa(preparar(semLista, { servico: 'medicina' }), /Nada foi preparado/);
   // sem lista, o ISS não vem da prefeitura: a pessoa informa
-  await recusa(preparar(semLista, { servico: '4.01' }), /iss \(alíquota do ISS em %; a prefeitura desta conta não informa\)/);
+  await recusa(preparar(semLista, { servico: '4.01' }), /iss \(alíquota do ISS em %; a prefeitura desta conta não informa, ou informa 0\)/);
   const ok = await preparar(semLista, { servico: '4.01', nomeDoServico: 'Serviços médicos', impostos: { retemIss: false, iss: 2, inss: 0, ir: 0 } });
   assert.deepEqual(ok.resumo.servicoMunicipal, { codigo: '4.01', nome: 'Serviços médicos', origem: 'código informado por quem pediu (esta conta não tem lista da prefeitura)' });
 });
@@ -342,7 +342,7 @@ test('confirmar emitir AGORA: se o pedido de emissão falha, a nota fica agendad
   assert.match(r.atencao, /AGENDADA para hoje.*NÃO emita de novo/s);
   assert.equal(m.f.posts().filter((c) => c.caminho === '/invoices').length, 1);
   assert.match(m.avisos[0]!, /NOTA FISCAL AGENDADA/);
-  assert.match(m.avisos[0]!, /emissão imediata FALHOU/);
+  assert.match(m.avisos[0]!, /emissão imediata foi RECUSADO/);
 });
 
 test('confirmar emitir: data aprovada que ficou para trás (resumo à noite, ok depois da meia-noite) NÃO emite com data de ontem', async () => {
@@ -434,6 +434,92 @@ test('confirmar emitir: se o registro não grava (banco fora), nada é enviado a
   assert.equal(m.f.posts().length, 0);
 });
 
+// ------------------------------------------------------------------ recuperação após resposta perdida
+
+test('confirmar emitir: resposta do POST perdida e a busca devolve nota de OUTRO pedido — não é a nossa: nada é autorizado, nenhum id alheio é gravado ou avisado', async () => {
+  const alheia: Nf = { ...AUTORIZADA, id: 'inv_000000000555', status: 'SCHEDULED', payment: 'pay_outropaciente1', customer: 'cus_outrapessoa11', externalReference: 'dd-nf-aaaaaaaaaaaa' };
+  const m = base({
+    notas: [alheia],
+    listaIgnoraReferencia: true,
+    falhas: [{ metodo: 'POST', caminho: /^\/invoices$/, erro: new ErroHttp('sem resposta do Asaas em /invoices', null) }],
+  });
+  const { confirmacao } = await preparar(m, { dataEmissao: undefined, emitirAgora: true });
+  await recusa(confirmar(m, confirmacao), /a nota PODE ter sido criada/);
+  assert.deepEqual(m.f.posts().map((c) => `${c.metodo} ${c.caminho}`), ['POST /invoices'], 'nenhum /authorize, em nota nenhuma');
+  assert.equal(alheia.status, 'SCHEDULED');
+  assert.ok(!tudo(m.eventos).includes('inv_000000000555') && !m.avisos.join('\n').includes('inv_000000000555'), 'id alheio no registro ou no Telegram');
+  assert.match(m.avisos[0]!, /RESULTADO INCERTO/);
+});
+
+test('confirmar emitir: resposta do POST perdida, mas a nota FOI criada (a referência bate): recupera o id certo e só então autoriza', async () => {
+  const alheia: Nf = { ...AUTORIZADA, id: 'inv_000000000555', status: 'SCHEDULED', payment: 'pay_outropaciente1', externalReference: 'dd-nf-aaaaaaaaaaaa' };
+  const m = base({ notas: [alheia], falhaDepoisDeCriarNota: new ErroHttp('sem resposta do Asaas em /invoices', null) });
+  const { confirmacao } = await preparar(m, { dataEmissao: undefined, emitirAgora: true });
+  const r = await confirmar(m, confirmacao);
+  const nossa = m.f.notas.find((n) => n.externalReference === `dd-nf-${confirmacao.toLowerCase()}`)!;
+  assert.equal(r.nota.id, nossa.id);
+  assert.deepEqual(m.f.posts().map((c) => `${c.metodo} ${c.caminho}`), ['POST /invoices', `POST /invoices/${nossa.id}/authorize`]);
+  assert.equal(alheia.status, 'SCHEDULED', 'a nota do outro paciente não foi tocada');
+});
+
+test('confirmar emitir AGORA: pedido de emissão SEM resposta é "resultado incerto" (pode ter sido emitida); recusa explícita do Asaas é "recusado"', async () => {
+  const incerto = base({ falhas: [{ metodo: 'POST', caminho: /\/authorize$/, erro: new ErroHttp('sem resposta do Asaas em /invoices/x/authorize', null) }] });
+  const a = await preparar(incerto, { dataEmissao: undefined, emitirAgora: true });
+  const r = await confirmar(incerto, a.confirmacao);
+  assert.match(r.atencao, /RESULTADO INCERTO.*pode ter sido emitida.*asaas_nota inv_/s);
+  assert.doesNotMatch(r.atencao, /FALHOU/);
+  assert.match(incerto.avisos[0]!, /EMISSÃO COM RESULTADO INCERTO/);
+  assert.match(incerto.avisos[0]!, /PODE ter sido emitida/);
+  assert.doesNotMatch(incerto.avisos[0]!, /FALHOU/);
+  assert.equal(incerto.eventos.filter((e) => e.evento === EVENTO_NOTA).at(-1)!.args.emissaoImediataIncerta, true);
+
+  const recusado = base({ falhas: [{ metodo: 'POST', caminho: /\/authorize$/, erro: new ErroHttp('Asaas 400 em /invoices/x/authorize: nota em processamento', 400) }] });
+  const b = await preparar(recusado, { dataEmissao: undefined, emitirAgora: true });
+  const r2 = await confirmar(recusado, b.confirmacao);
+  assert.match(r2.atencao, /Asaas recusou o pedido de emissão imediata/);
+  assert.match(recusado.avisos[0]!, /RECUSADO/);
+});
+
+test('confirmar: mensagens depois do código gasto dizem "prepare de novo", nunca "tente em instantes"', async () => {
+  const falhas: NonNullable<Parameters<typeof montar>[0]>['falhas'] = [];
+  const m = base({ falhas });
+  const { confirmacao } = await preparar(m);
+  falhas.push({ metodo: 'GET', caminho: /^\/invoices$/, erro: new ErroHttp('Asaas 500', 500) });
+  const erro = await confirmar(m, confirmacao).then(() => null, (e: Error) => e);
+  assert.ok(erro);
+  assert.match(erro.message, /o código foi gasto: prepare a nota de novo/);
+  assert.doesNotMatch(erro.message, /^[^;]*tente em instantes/);
+  // erro definitivo do Asaas: também avisa que o código foi gasto
+  const rec = base({ falhas: [{ metodo: 'POST', caminho: /^\/invoices$/, erro: new ErroHttp('Asaas 400 em /invoices: município inválido', 400) }] });
+  const p = await preparar(rec);
+  await recusa(confirmar(rec, p.confirmacao), /município inválido — o código foi gasto: ajuste o pedido e prepare de novo/);
+  // no preparar (o código ainda não existe), "tente em instantes" continua certo
+  const sem = base({ falhas: [{ metodo: 'GET', caminho: /^\/invoices$/, erro: new ErroHttp('Asaas 500', 500) }] });
+  await recusa(preparar(sem), /tente em instantes/);
+});
+
+test('ISS: 0 vindo da prefeitura NÃO vale como cadastrado (a pessoa informa); 0 informado pela pessoa vale', async () => {
+  const m = base({ servicos: [{ id: '10', description: '4.01 - Medicina', issTax: 0 }] });
+  await recusa(preparar(m), /iss \(alíquota do ISS em %; a prefeitura desta conta não informa, ou informa 0\)/);
+  const ok = await preparar(m, { impostos: { retemIss: false, iss: 0, inss: 0, ir: 0 } });
+  assert.deepEqual(ok.resumo.impostos.iss, { valor: '0%', origem: 'informado por quem pediu' });
+});
+
+test('leitura: nome de TODOS os tomadores listados (até 100), e se algum nome não vier a resposta avisa', async () => {
+  const clientes: Cli[] = Array.from({ length: 45 }, (_, i) => ({ id: `cus_${String(i).padStart(8, '0')}`, name: `Paciente ${i}`, cpfCnpj: CPF_DIGITOS }));
+  const notas: Nf[] = clientes.map((c, i) => ({ ...AUTORIZADA, id: `inv_${String(i).padStart(9, '0')}`, customer: c.id, payment: `pay_x${i}00000` }));
+  const m = base({ clientes, notas });
+  const r = await asaasNotas(m.asaas, { unidade: 'serra', status: 'AUTHORIZED', maxItens: 100 });
+  assert.equal(r.itens.length, 45);
+  assert.ok(r.itens.every((i) => !!i.tomador.nome), 'tomador sem nome');
+  assert.equal((r as { avisoNomes?: string }).avisoNomes, undefined);
+  // um cliente que o Asaas não acha: o nome falta, e isso aparece
+  const sem = base({ clientes: clientes.slice(1), notas });
+  const r2 = (await asaasNotas(sem.asaas, { unidade: 'serra', status: 'AUTHORIZED', maxItens: 100 })) as { avisoNomes?: string; itens: Array<{ tomador: { nome: string | null } }> };
+  assert.match(r2.avisoNomes!, /não consegui ler o nome de 1 tomador/);
+  assert.equal(r2.itens.filter((i) => i.tomador.nome === null).length, 1);
+});
+
 // ------------------------------------------------------------------ cancelar
 
 test('preparar cancelar: mostra a nota e o aviso do prazo da prefeitura, e não escreve; só nota cancelável passa', async () => {
@@ -509,7 +595,7 @@ async function conectar(m: M, usuario: string, escritores: Set<string>, registro
 }
 const texto = (r: any) => String(r.content?.[0]?.text ?? '');
 
-test('protocolo: quem pode escrever vê as 5 ferramentas de nota (3 leituras + preparar/confirmar); quem não pode vê só as leituras e não emite', async () => {
+test('protocolo: quem pode escrever vê as 5 ferramentas de nota; quem não pode vê SÓ asaas_dados_fiscais (as notas trazem link de PDF/XML com dado do paciente)', async () => {
   const m = base({ notas: [AUTORIZADA] });
   const joao = await conectar(m, 'u-joao', new Set(['u-joao']));
   const nomes = (await joao.listTools()).tools.map((t) => t.name).filter((n) => /nota|fiscais/.test(n)).sort();
@@ -521,18 +607,36 @@ test('protocolo: quem pode escrever vê as 5 ferramentas de nota (3 leituras + p
   assert.equal(por.get('asaas_preparar_nota')!.annotations?.readOnlyHint, false, 'preparar guarda o código de uma escrita fiscal: não se passa por consulta');
   assert.equal(por.get('asaas_confirmar_nota')!.annotations?.readOnlyHint, false);
   for (const leitura of ['asaas_notas', 'asaas_nota', 'asaas_dados_fiscais']) assert.equal(por.get(leitura)!.annotations?.readOnlyHint, true, leitura);
-
-  const fora = await conectar(m, 'u-fora', new Set(['u-joao']));
-  assert.deepEqual((await fora.listTools()).tools.map((t) => t.name).sort(), ['asaas_dados_fiscais', 'asaas_nota', 'asaas_notas']);
-  const tentativa = await fora.callTool({ name: 'asaas_preparar_nota', arguments: { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
-  assert.equal((tentativa as { isError?: boolean }).isError, true);
-  const confirma = await fora.callTool({ name: 'asaas_confirmar_nota', arguments: { confirmacao: 'ABCDEF123456' } }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
-  assert.equal((confirma as { isError?: boolean }).isError, true);
-  assert.equal(m.f.posts().length, 0);
-  // a leitura funciona para quem não escreve
-  const lista = await fora.callTool({ name: 'asaas_notas', arguments: { unidade: 'serra', status: 'AUTHORIZED' } });
+  for (const leitura of ['asaas_notas', 'asaas_nota']) assert.match(por.get(leitura)!.description!, /Só para quem tem permissão de escrita/, leitura);
+  const lista = await joao.callTool({ name: 'asaas_notas', arguments: { unidade: 'serra', status: 'AUTHORIZED' } });
   assert.notEqual(lista.isError, true);
   assert.equal(JSON.parse(texto(lista)).notas, 1);
+  assert.notEqual((await joao.callTool({ name: 'asaas_nota', arguments: { unidade: 'serra', notaId: AUTORIZADA.id } })).isError, true);
+
+  const fora = await conectar(m, 'u-fora', new Set(['u-joao']));
+  assert.deepEqual((await fora.listTools()).tools.map((t) => t.name).filter((n) => /nota|fiscais/.test(n)).sort(), ['asaas_dados_fiscais']);
+  for (const [nome, args] of [
+    ['asaas_preparar_nota', { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id }],
+    ['asaas_confirmar_nota', { confirmacao: 'ABCDEF123456' }],
+    ['asaas_notas', { unidade: 'serra', status: 'AUTHORIZED' }],
+    ['asaas_nota', { unidade: 'serra', notaId: AUTORIZADA.id }],
+  ] as const) {
+    const r = await fora.callTool({ name: nome, arguments: args }).catch((e) => ({ isError: true, content: [{ text: String(e) }] }));
+    assert.equal((r as { isError?: boolean }).isError, true, nome);
+  }
+  assert.equal(m.f.posts().length, 0);
+  // a leitura de dados fiscais continua aberta
+  assert.notEqual((await fora.callTool({ name: 'asaas_dados_fiscais', arguments: { unidade: 'serra' } })).isError, true);
+});
+
+test('protocolo: asaas_notas e asaas_nota também só funcionam nas clínicas com a escrita LIBERADA (como asaas_cobranca)', async () => {
+  const m = base({ notas: [AUTORIZADA] }, { unidades: () => new Set() });
+  const joao = await conectar(m, 'u-joao', new Set(['u-joao']));
+  for (const [nome, args] of [['asaas_notas', { unidade: 'serra', status: 'AUTHORIZED' }], ['asaas_nota', { unidade: 'serra', notaId: AUTORIZADA.id }]] as const) {
+    const r = await joao.callTool({ name: nome, arguments: args });
+    assert.equal(r.isError, true, nome);
+    assert.match(texto(r), /DESLIGADA para doutor-hernia-serra/);
+  }
 });
 
 test('protocolo: preparar → confirmar de ponta a ponta; o registro sai mascarado e campo que não existe (cartão, typo em impostos) é recusado', async () => {
@@ -560,6 +664,13 @@ test('protocolo: preparar → confirmar de ponta a ponta; o registro sai mascara
   assert.equal(m.f.posts().length, 1);
   const aud = tudo(registros);
   assert.ok(!aud.includes('4111111111111111') && !aud.includes(CPF_DIGITOS));
+  // observações e descrição da nota não vão inteiras para o registro (podem trazer o motivo do tratamento)
+  const obs = await joao.callTool({ name: 'asaas_preparar_nota', arguments: { ...args, observacoes: 'Paciente em tratamento de hérnia de disco L4-L5', descricao: 'Consulta de avaliação ortopédica' } });
+  assert.notEqual(obs.isError, true, texto(obs));
+  const gravado = tudo(registros.filter((r) => r.ferramenta === 'asaas_preparar_nota'));
+  assert.ok(!gravado.includes('hérnia') && !gravado.includes('ortopédica'), 'texto da nota no registro');
+  assert.match(gravado, /"observacoesCaracteres":47/);
+  assert.match(gravado, /"descricaoCaracteres":32/);
 });
 
 test('producao.ts liga a leitura de notas e a escrita de notas só pelos portões testados', () => {

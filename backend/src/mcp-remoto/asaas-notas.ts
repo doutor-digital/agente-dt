@@ -214,10 +214,10 @@ export async function asaasDadosFiscais(ctx: ContextoAsaas, a: { unidade: string
 
 const FILTROS_DA_LISTA = ['inicio', 'fim', 'status', 'cobrancaId', 'clienteId', 'referencia'] as const;
 
-/** O nome de cada tomador (cliente do Asaas), uma leitura por cliente e no máximo `teto`, em lotes de 6 (o ritmo da conta é do `asaasGet`); quem falhar fica sem nome. */
-async function nomesDosClientes(c: ContaAsaas, ids: string[], teto = 30): Promise<Map<string, string | null>> {
+/** O nome de cada tomador (cliente do Asaas), uma leitura por cliente distinto, em lotes de 6 (o ritmo da conta é do `asaasGet`); quem falhar fica sem nome (e a resposta avisa). */
+async function nomesDosClientes(c: ContaAsaas, ids: string[]): Promise<Map<string, string | null>> {
   const nomes = new Map<string, string | null>();
-  const unicos = [...new Set(ids.filter(Boolean))].slice(0, teto);
+  const unicos = [...new Set(ids.filter(Boolean))];
   for (let i = 0; i < unicos.length; i += 6) {
     await Promise.all(
       unicos.slice(i, i + 6).map(async (id) => {
@@ -296,6 +296,7 @@ export async function asaasNotas(
   const max = a.maxItens ?? 30;
   const mostradas = itens.slice(0, max);
   const nomes = await nomesDosClientes(c, mostradas.map((n) => n.customer ?? ''));
+  const semNome = [...nomes.values()].filter((n) => n === null).length;
   const porStatus: Record<string, { quantidade: number; valor: number }> = {};
   for (const n of itens) {
     const o = (porStatus[STATUS_NOTA[n.status ?? ''] ?? n.status ?? '(sem status)'] ??= { quantidade: 0, valor: 0 });
@@ -310,6 +311,7 @@ export async function asaasNotas(
     porStatus,
     truncado,
     ...(itens.length === 0 ? { aviso: 'nenhuma nota com esses filtros. Se a clínica nunca emitiu, veja asaas_dados_fiscais para saber se ela pode emitir.' } : {}),
+    ...(semNome ? { avisoNomes: `não consegui ler o nome de ${semNome} tomador${semNome === 1 ? '' : 'es'}: nesses itens só vem o id do cliente (use asaas_cliente)` } : {}),
     itens: mostradas.map((n) => mostrarNota(n, nomes.get(n.customer ?? ''), false)),
   };
 }
@@ -342,45 +344,12 @@ export async function asaasNota(ctx: ContextoAsaas, a: { unidade: string; notaId
 // ----------------------------------------------------------------- ferramentas (leitura)
 
 const umaUnidade = z.string().min(1).describe('UMA clínica: slug ou nome curto ("serra")');
-const data = (o: string) => z.string().optional().describe(`${o}, AAAA-MM-DD`);
-
-/** As três leituras de nota fiscal. Ligadas para quem tem o Asaas, como as outras `asaas_*` de leitura. */
+/**
+ * `asaas_dados_fiscais`: a única leitura de nota liberada a quem tem o Asaas (não traz dado de paciente). `asaas_notas` e `asaas_nota` devolvem
+ * o link do PDF/XML da nota, que abre CPF, endereço e o serviço prestado do paciente: essas duas só existem para quem escreve no Asaas e só nas
+ * clínicas liberadas (como `asaas_cobranca`), registradas em `registrarNotasFiscaisAsaas` (`asaas-ferramentas.ts`).
+ */
 export function registrarLeituraNotasAsaas(server: McpServer, ctx: ContextoAsaas, auditar?: Auditar): void {
-  server.registerTool(
-    'asaas_notas',
-    {
-      title: 'Notas fiscais de serviço (Asaas)',
-      description:
-        'Notas fiscais de serviço (NFS-e) do Asaas de UMA clínica, com filtro por período (data de EMISSÃO), status, cobrança (pay_…), cliente (cus_…) ou referência. ' +
-        'Devolve número, status em português, valor, data, tomador, descrição curta e os links do PDF e do XML quando a nota já foi emitida; mais o total por status. ' +
-        'É preciso ao menos um filtro. Status: SCHEDULED (agendada), SYNCHRONIZED (enviada à prefeitura), AUTHORIZED (emitida), PROCESSING_CANCELLATION, CANCELED, CANCELLATION_DENIED, ERROR. ' +
-        'Para saber se a clínica PODE emitir, use asaas_dados_fiscais. Só leitura: emitir e cancelar são asaas_preparar_nota → asaas_confirmar_nota.',
-      inputSchema: {
-        unidade: umaUnidade,
-        inicio: data('início do período de emissão'),
-        fim: data('fim do período de emissão'),
-        status: z.enum(STATUS_DO_FILTRO).optional(),
-        cobrancaId: z.string().optional().describe('notas desta cobrança (pay_…)'),
-        clienteId: z.string().optional().describe('notas deste cliente/tomador (cus_…)'),
-        referencia: z.string().optional().describe('externalReference da nota'),
-        maxItens: z.number().int().min(0).max(100).optional().describe('notas detalhadas na resposta (padrão 30); o total e o resumo por status contam todas'),
-      },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    (args) => executar('asaas_notas', args, auditar, () => asaasNotas(ctx, args)),
-  );
-  server.registerTool(
-    'asaas_nota',
-    {
-      title: 'Uma nota fiscal (Asaas)',
-      description:
-        'Uma nota fiscal de serviço pelo id (inv_…), completa: número, status e o motivo (se deu erro), valor, deduções, data, tomador, serviço municipal, descrição, observações, ' +
-        'impostos e retenções, RPS, código de verificação e os links do PDF e do XML. Use para conferir o resultado depois de emitir ou cancelar.',
-      inputSchema: { unidade: umaUnidade, notaId: z.string().min(4).describe('inv_…') },
-      annotations: { readOnlyHint: true, openWorldHint: true },
-    },
-    (args) => executar('asaas_nota', args, auditar, () => asaasNota(ctx, args)),
-  );
   server.registerTool(
     'asaas_dados_fiscais',
     {
@@ -388,7 +357,7 @@ export function registrarLeituraNotasAsaas(server: McpServer, ctx: ContextoAsaas
       description:
         'Diz se a clínica TEM informações fiscais cadastradas no Asaas (sem elas não emite nota): regime (Simples Nacional), CNAE, cidade da prestação, se há acesso à prefeitura, ' +
         'se a prefeitura aceita cancelar pela integração, e a lista de serviços municipais (id, descrição e alíquota de ISS) que a clínica pode usar na nota. "servico" filtra a lista pelo nome. ' +
-        'Se a prefeitura não tem lista (Portal Nacional), avisa: aí o código do serviço é informado à mão. Não mostra usuário nem senha da prefeitura. Consulte antes de asaas_preparar_nota.',
+        'Se a prefeitura não tem lista (Portal Nacional), avisa: aí o código do serviço é informado à mão. Não mostra usuário nem senha da prefeitura. Para quem pode emitir nota, consulte antes de asaas_preparar_nota.',
       inputSchema: { unidade: umaUnidade, servico: z.string().optional().describe('parte do nome ou código do serviço, para filtrar a lista'), maxServicos: z.number().int().min(1).max(100).optional() },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },

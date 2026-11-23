@@ -107,16 +107,18 @@ type Origem = { tipo: 'cobranca' | 'cliente'; id: string };
  * todas; do cliente (nota avulsa), as do mesmo valor com a mesma data de emissão (conferida aqui também, não só pelo filtro do Asaas). Lê todas as
  * páginas. Quem não consegue conferir não emite: nota repetida é problema fiscal.
  */
-export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, origem: Origem, valor: number, dataEmissao: string): Promise<NotaAsaas[]> {
+export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, origem: Origem, valor: number, dataEmissao: string, fase: 'preparar' | 'confirmar' = 'preparar'): Promise<NotaAsaas[]> {
+  // no confirmar o código JÁ foi gasto: "tente em instantes" seria falso
+  const depois = fase === 'confirmar' ? 'o código foi gasto: prepare a nota de novo em instantes' : 'tente em instantes';
   const q = origem.tipo === 'cobranca' ? { payment: origem.id } : { customer: origem.id, 'effectiveDate[Ge]': dataEmissao, 'effectiveDate[Le]': dataEmissao };
   let lidas: { itens: NotaAsaas[]; truncado: boolean };
   try {
     lidas = await paginar<NotaAsaas>(ctx, c, '/invoices', q);
   } catch (e) {
     if (httpStatus(e) === 401) throw e;
-    throw new ErroDeEntrada('não consegui conferir se já existe nota desta origem (o Asaas não respondeu à listagem): por segurança nada foi feito; tente em instantes');
+    throw new ErroDeEntrada(`não consegui conferir se já existe nota desta origem (o Asaas não respondeu à listagem): por segurança nada foi feito; ${depois}`);
   }
-  if (lidas.truncado) throw new ErroDeEntrada('esta origem tem notas demais para eu conferir se já existe uma igual: por segurança nada foi feito. Confira no painel do Asaas.');
+  if (lidas.truncado) throw new ErroDeEntrada(`esta origem tem notas demais para eu conferir se já existe uma igual: por segurança nada foi feito. Confira no painel do Asaas.${fase === 'confirmar' ? ' O código foi gasto.' : ''}`);
   const ativas = lidas.itens.filter((n) => notaVale(n.status));
   return origem.tipo === 'cobranca' ? ativas : ativas.filter((n) => n.effectiveDate === dataEmissao && Math.round((Number(n.value) || 0) * 100) === Math.round(valor * 100));
 }
@@ -164,7 +166,8 @@ function definirImpostos(p: ImpostosPedidos, servico: ServicoMunicipal | null, s
     mostrar.retemIss = { valor: p.retemIss ? 'sim' : 'não', origem: informado };
   }
 
-  const issDaPrefeitura = servico?.iss ?? null;
+  // ISS 0 vindo da prefeitura é raro e chutar 0 é o que não pode: vale como "não informado", e a pessoa diz a alíquota
+  const issDaPrefeitura = servico?.iss && servico.iss > 0 ? servico.iss : null;
   if (p.iss !== undefined) {
     const v = percentual(p.iss, 'iss');
     taxes.iss = v;
@@ -173,7 +176,7 @@ function definirImpostos(p: ImpostosPedidos, servico: ServicoMunicipal | null, s
   } else if (issDaPrefeitura !== null) {
     taxes.iss = issDaPrefeitura;
     mostrar.iss = { valor: pct(issDaPrefeitura), origem: 'cadastro do serviço na prefeitura (Asaas)' };
-  } else faltam.push('iss (alíquota do ISS em %; a prefeitura desta conta não informa)');
+  } else faltam.push('iss (alíquota do ISS em %; a prefeitura desta conta não informa, ou informa 0)');
 
   for (const [chave, rotulo] of [['inss', 'INSS'], ['ir', 'IR']] as const) {
     if (p[chave] === undefined) faltam.push(`${chave} (alíquota de ${rotulo} em %; se não há retenção, informe 0)`);
@@ -415,7 +418,7 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
       const hoje = diaLocal(esc.agora(), fusoDe(c));
       if (p.dataEmissao! < hoje) throw new ErroDeEntrada(`a data de emissão aprovada (${dataBR(p.dataEmissao!)}) já passou (hoje é ${dataBR(hoje)}): não emiti. Prepare de novo. Nada foi feito.`);
       // outra nota apareceu desde o resumo? então a pessoa aprovou outra situação
-      const agora = await notasAtivasDaOrigem(asaas, c, origem, p.valor!, p.dataEmissao!);
+      const agora = await notasAtivasDaOrigem(asaas, c, origem, p.valor!, p.dataEmissao!, 'confirmar');
       const novas = agora.filter((n) => !(p.jaExistiam ?? []).includes(n.id));
       if (novas.length) throw new ErroDeEntrada(`desde o resumo apareceu outra nota ativa para esta origem (${novas.map((n) => n.id).join(', ')}): não emiti. Veja com asaas_notas e prepare de novo. Nada foi feito.`);
       const referencia = `dd-nf-${a.confirmacao.trim().toLowerCase()}`;
@@ -428,30 +431,38 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
       } catch (e) {
         const s = sanear(e);
         const incerto = podeTerGravado(e);
-        // a referência é única deste pedido: se o Asaas gravou, ela acha a nota
-        if (incerto) criada = (await melhorEsforco(() => c.fonte.get<{ data?: NotaAsaas[] }>('/invoices', { externalReference: referencia, limit: 5 }), 8000))?.data?.find((n) => !!n.id) ?? null;
+        // a referência é única deste pedido: se o Asaas gravou, ela acha a nota. SÓ vale a nota cuja referência é a nossa: outra, de outro pedido, nunca é "a nossa"
+        if (incerto) criada = (await melhorEsforco(() => c.fonte.get<{ data?: NotaAsaas[] }>('/invoices', { externalReference: referencia, limit: 5 }), 8000))?.data?.find((n) => !!n.id && n.externalReference === referencia) ?? null;
         if (!criada) {
           registrar(EVENTO_NOTA, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
           if (incerto) avisar(aviso('NOTA FISCAL COM RESULTADO INCERTO', { ...(p.valor !== undefined ? { valor: p.valor } : {}), detalhe: 'O Asaas não confirmou o agendamento: a nota PODE ter sido criada. Conferir no painel.' }));
-          throw incerto ? new Error(`${s.message} — a nota PODE ter sido criada: confira com asaas_notas antes de repetir.`) : s;
+          throw incerto ? new Error(`${s.message} — a nota PODE ter sido criada: confira com asaas_notas antes de repetir.`) : new Error(`${s.message} — o código foi gasto: ajuste o pedido e prepare de novo.`);
         }
       }
       let status = criada.status;
       let falhaAoEmitir: string | undefined;
+      /** o pedido de emissão pode ter chegado ao Asaas (sem resposta ou 5xx): aí NÃO dá para dizer que falhou */
+      let emissaoIncerta = false;
       if (p.emitirAgora) {
         try {
           const r = await c.escrita.enviar<NotaAsaas>('POST', `/invoices/${criada.id}/authorize`);
           status = r?.status ?? status;
         } catch (e) {
           falhaAoEmitir = sanear(e).message;
+          emissaoIncerta = podeTerGravado(e);
         }
       }
-      registrar(EVENTO_NOTA, { ...base, idAsaas: criada.id, status: status ?? null, ...(falhaAoEmitir ? { emissaoImediataFalhou: true } : {}) }, true, falhaAoEmitir);
+      registrar(
+        EVENTO_NOTA,
+        { ...base, idAsaas: criada.id, status: status ?? null, ...(emissaoIncerta ? { emissaoImediataIncerta: true } : falhaAoEmitir ? { emissaoImediataFalhou: true } : {}) },
+        true,
+        falhaAoEmitir,
+      );
       avisar(
-        aviso(p.emitirAgora && !falhaAoEmitir ? 'NOTA FISCAL: EMISSÃO PEDIDA' : 'NOTA FISCAL AGENDADA', {
+        aviso(emissaoIncerta ? 'NOTA FISCAL AGENDADA, EMISSÃO COM RESULTADO INCERTO' : p.emitirAgora && !falhaAoEmitir ? 'NOTA FISCAL: EMISSÃO PEDIDA' : 'NOTA FISCAL AGENDADA', {
           ...(p.valor !== undefined ? { valor: p.valor } : {}),
           id: criada.id,
-          detalhe: `${origem.tipo === 'cobranca' ? `cobrança ${origem.id}` : `cliente ${origem.id}`} · emissão ${p.dataEmissao ? dataBR(p.dataEmissao) : '?'}${falhaAoEmitir ? ' · a emissão imediata FALHOU, a nota ficou agendada' : ''}`,
+          detalhe: `${origem.tipo === 'cobranca' ? `cobrança ${origem.id}` : `cliente ${origem.id}`} · emissão ${p.dataEmissao ? dataBR(p.dataEmissao) : '?'}${emissaoIncerta ? ' · o pedido de emissão imediata NÃO foi confirmado: a nota PODE ter sido emitida. Conferir no painel antes de qualquer coisa' : falhaAoEmitir ? ' · o pedido de emissão imediata foi RECUSADO, a nota ficou agendada' : ''}`,
         }),
       );
       const tomador = (await melhorEsforco(() => clienteDaNota(c, criada!, origem), 4000)) ?? null;
@@ -459,9 +470,11 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
         conta: cabecalho,
         notaCriada: true,
         nota: mostrarNota({ ...criada, status }, tomador, false),
-        ...(falhaAoEmitir
-          ? { atencao: `a nota foi AGENDADA para hoje, mas o pedido de emissão imediata falhou (${falhaAoEmitir}). O Asaas deve emiti-la sozinho na data; confira com asaas_nota. NÃO emita de novo.` }
-          : { aviso: 'Quem autoriza a nota é a prefeitura, e isso pode levar um tempo: confira o status e os links do PDF/XML com asaas_nota.' }),
+        ...(emissaoIncerta
+          ? { atencao: `RESULTADO INCERTO: a nota foi agendada, mas o pedido de emissão imediata não teve resposta (${falhaAoEmitir}) e pode ter sido emitida. Confira com asaas_nota ${criada.id} antes de qualquer coisa. NÃO emita de novo.` }
+          : falhaAoEmitir
+            ? { atencao: `a nota foi AGENDADA para hoje, mas o Asaas recusou o pedido de emissão imediata (${falhaAoEmitir}). O Asaas deve emiti-la sozinho na data; confira com asaas_nota ${criada.id}. NÃO emita de novo.` }
+            : { aviso: 'Quem autoriza a nota é a prefeitura, e isso pode levar um tempo: confira o status e os links do PDF/XML com asaas_nota.' }),
         registro: 'Registrado com quem pediu e quem aprovou o resumo.',
       };
     }
@@ -488,7 +501,7 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
       if (!r) {
         registrar(EVENTO_NOTA, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
         if (incerto) avisar(aviso('CANCELAMENTO DE NOTA COM RESULTADO INCERTO', { ...(p.valor ? { valor: p.valor } : {}), id, detalhe: 'O Asaas não confirmou: o cancelamento PODE ter sido pedido. Conferir no painel.' }));
-        throw incerto ? new Error(`${s.message} — o cancelamento PODE ter sido pedido: confira com asaas_nota antes de repetir.`) : s;
+        throw incerto ? new Error(`${s.message} — o cancelamento PODE ter sido pedido: confira com asaas_nota antes de repetir.`) : new Error(`${s.message} — o código foi gasto: prepare de novo se quiser tentar outra vez.`);
       }
     }
     const statusAgora = r?.status ?? null;
