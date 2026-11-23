@@ -7,7 +7,9 @@ import {
   DEPS_DA_REABERTURA,
   ID_PERDIDO_REABRE,
   JANELA_DA_REABERTURA_MS,
+  ehCodigoDeVerificacao,
   ehPerdidoDoComercial,
+  ehRecusaOuEncerramento,
   notaCartaoReaberto,
   pacienteEmTratamentoNaFranquia,
   pedeParaSair,
@@ -23,7 +25,7 @@ import { conferirEquipe, type DepsPausaEquipe } from './pausa-equipe.js';
 import type { MensagemOficial } from '../services/kommo-talks.service.js';
 import type { KommoClient, KommoLead } from '../services/kommo.service.js';
 import type { Simulacao } from './so-no-papel.js';
-import type { SinalDaFranquia } from './paciente-em-tratamento.js';
+import { consultarFranquia, type SinalDaFranquia } from './paciente-em-tratamento.js';
 
 /**
  * O caso do Jairo (Timbó, lead 6624948, 22–23/11/2026): cartão em PERDIDO do COMERCIAL, o robô de reativação do Kommo mandou os botões
@@ -294,6 +296,16 @@ test('SÓ NO PAPEL: decide "reabriria", registra na tela e NÃO toca no Kommo (n
   assert.equal(reg.simulacoes[0].acao, 'moveria');
   assert.equal(reg.simulacoes[0].alvo, 'EM QUALIFICAÇÃO');
   assert.equal(reg.simulacoes[0].leadId, 6624948);
+  assert.equal(reg.simulacoes[0].valor, 'Ver horários', 'a tela mostra o que o paciente disse');
+});
+
+test('SÓ NO PAPEL: a fala vai cortada em 140 caracteres e numa linha só', async () => {
+  const longa = `Bom dia\n\n${'quero ver os horários '.repeat(20)}`;
+  const { deps, reg, pedido } = fake({ estado: () => 'seco' });
+  await portaPerdidoReabre(pedido({ humanMessage: longa }), deps);
+  const v = String(reg.simulacoes[0].valor);
+  assert.equal(v.length, 141);
+  assert.ok(v.endsWith('…') && !v.includes('\n'));
 });
 
 test('SÓ NO PAPEL também registra por que NÃO reabriria (é isso que se confere antes de ligar)', async () => {
@@ -338,6 +350,30 @@ test('NÃO reabre: cortesia pura ("ok, obrigado"), pedido de sair, mensagem sem 
   await naoReabre({ humanMessage: '   ' }, {}, 'sem_conteudo');
   await naoReabre({ humanMessage: '[áudio sem fala detectada]' }, {}, 'sem_conteudo');
   await naoReabre({ isChatMessage: false }, {}, 'sem_conteudo');
+});
+
+test('recusa curta e encerramento: "pode encerrar", "não quero", "não tenho interesse", "não, obrigado" (com e sem acento)', () => {
+  for (const t of ['Pode encerrar', 'pode encerrar!', 'Sim, pode encerrar', 'pode encerrar por favor', 'Encerrar', 'Não quero', 'nao quero', 'Não quero mais', 'Não tenho interesse', 'nao tenho interesse', 'Já não tenho interesse', 'Sem interesse', 'Não, obrigado', 'nao obrigada', 'Não obrigado.', 'Não preciso mais']) {
+    assert.equal(ehRecusaOuEncerramento(t), true, t);
+  }
+  // pacientes de verdade, mesmo com "não" no meio
+  for (const t of ['Ver horários', 'Quanto custa?', 'Não quero cirurgia, quero saber o valor da consulta', 'Quero ver horários, não tenho interesse em cirurgia', 'Não consigo ir de manhã, tem à tarde?', 'não tenho plano, é particular?', 'Pode ser amanhã?', 'Pode marcar para terça']) {
+    assert.equal(ehRecusaOuEncerramento(t), false, t);
+  }
+});
+
+test('código de confirmação de remetente automático (Facebook etc.) não é o paciente', () => {
+  for (const t of ['FB-12345 é seu código de confirmação do Facebook', '123456 é o seu código de confirmação do Facebook', 'Seu código de verificação do Instagram é 884412', 'Your Facebook code is 551234', 'fb-48213', 'Codigo de confirmacao 4455']) {
+    assert.equal(ehCodigoDeVerificacao(t), true, t);
+  }
+  for (const t of ['Ver horários', 'Meu CEP é 88000000', 'Quero marcar às 15:30', 'Meu telefone é 47999990000', 'o código da consulta qual é?']) {
+    assert.equal(ehCodigoDeVerificacao(t), false, t);
+  }
+});
+
+test('NÃO reabre: recusa/encerramento e código de verificação (pela porta)', async () => {
+  for (const t of ['Pode encerrar', 'Não tenho interesse', 'não, obrigado']) await naoReabre({ humanMessage: t }, {}, 'recusa_ou_encerramento');
+  await naoReabre({ humanMessage: 'FB-12345 é seu código de confirmação do Facebook' }, {}, 'codigo_de_verificacao');
 });
 
 test('NÃO reabre: turno refeito depois de um deploy (a etapa não se mexe)', async () => {
@@ -398,16 +434,46 @@ test('NÃO reabre: franquia sem resposta (o erro caro é reabrir quem está em t
   await naoReabre({}, { franquia: async () => ({ tipo: 'indisponivel', motivo: 'timeout' }) as SinalDaFranquia }, 'franquia_sem_resposta');
 });
 
-test('reabre: paciente que só avaliou/terminou, lead da franquia e telefone que a franquia não conhece', async () => {
-  for (const sinal of [
-    { tipo: 'paciente', idClient: 1, tratamentoAtivo: false, sessaoFutura: false },
-    { tipo: 'lead' },
-    { tipo: 'nao_achou' },
-  ] as SinalDaFranquia[]) {
-    const { deps, reg, pedido } = fake({ franquia: async () => sinal });
-    assert.equal((await portaPerdidoReabre(pedido(), deps))?.reabriu, true, JSON.stringify(sinal));
+/** O índice de telefones da franquia como o banco o devolve: `fresco` vem do status da última carga completa. */
+const indice = (entradas: Array<{ origem: 'paciente' | 'lead'; id: number | null }>, fresco: boolean, idadeHoras: number | null = fresco ? 2 : null) => async () => ({
+  entradas: entradas.map((e) => ({ chave: '99990000', criado: null, ...e })),
+  fresco,
+  idadeHoras,
+});
+const ficha = (tratamentoAtivo: boolean) => async () => ({
+  schedules: tratamentoAtivo
+    ? [{ idSchedule: 1, idTreatment: 1, idStatus: 42, statusName: 'Atendido', clientName: null, categoryName: 'Sessão', physicalTherapist: null, dateAttendanceUtc: new Date(Date.now() - 3 * 86_400_000).toISOString(), dateAttendanceLocal: null, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false }]
+    : [],
+  treatments: [{ idTreatment: 1, idStatus: tratamentoAtivo ? 45 : 46, statusName: null, typeName: null }],
+});
+const franquiaPeloIndice = (ind: ReturnType<typeof indice>, f = ficha(false)) => (u: Unit, tel: string) => consultarFranquia(u as never, tel, { indice: ind, ficha: f });
+
+test('reabre: com o índice FRESCO, paciente que só avaliou/terminou, lead da franquia e telefone que a franquia não conhece', async () => {
+  const casos = [
+    franquiaPeloIndice(indice([{ origem: 'paciente', id: 1 }], true)),
+    franquiaPeloIndice(indice([{ origem: 'lead', id: 3 }], true)),
+    franquiaPeloIndice(indice([], true)),
+  ];
+  for (const franquia of casos) {
+    const { deps, reg, pedido } = fake({ franquia });
+    assert.equal((await portaPerdidoReabre(pedido(), deps))?.reabriu, true);
     assert.equal(reg.moves.length, 1);
   }
+});
+
+test('ÍNDICE VAZIO (nunca carregado): "não achei" não prova que não é paciente — o cartão FICA', async () => {
+  const { r } = await naoReabre({}, { franquia: franquiaPeloIndice(indice([], false, null)) }, 'franquia_sem_resposta');
+  assert.match(r.detalhe ?? '', /ainda não carregado/);
+});
+
+test('ÍNDICE VENCIDO (> 36 h): "não achei" e "só lead" não provam nada — o cartão FICA', async () => {
+  const vazio = await naoReabre({}, { franquia: franquiaPeloIndice(indice([], false, 40)) }, 'franquia_sem_resposta');
+  assert.match(vazio.r.detalhe ?? '', /vencido \(40 h\)/);
+  await naoReabre({}, { franquia: franquiaPeloIndice(indice([{ origem: 'lead', id: 3 }], false, 40)) }, 'franquia_sem_resposta');
+});
+
+test('índice vencido que ACHA o paciente em tratamento continua segurando o cartão (achado positivo vale)', async () => {
+  await naoReabre({}, { franquia: franquiaPeloIndice(indice([{ origem: 'paciente', id: 9 }], false, 40), ficha(true)) }, 'paciente_em_tratamento');
 });
 
 test('unidade SEM franquia conectada: não pergunta à franquia e reabre', async () => {

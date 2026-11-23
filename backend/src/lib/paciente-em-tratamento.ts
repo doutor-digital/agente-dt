@@ -143,8 +143,14 @@ export async function consultarFranquia(
   });
   try {
     return await comTimeout((async (): Promise<SinalDaFranquia> => {
-      const ind = entradaDoIndice((await lerIndice(unit.id, chave)).entradas);
-      if (ind.tipo !== 'paciente') return ind;
+      const resposta = await lerIndice(unit.id, chave);
+      const ind = entradaDoIndice(resposta.entradas);
+      if (ind.tipo !== 'paciente') {
+        // «não achei» / «só lead» só vale com o índice FRESCO: vazio (nunca carregado) ou vencido (> 36 h) não prova que o telefone não é de paciente.
+        // Quem chama decide o que fazer com «indisponivel» (a Sofia responde como sempre; a reabertura de PERDIDO deixa o cartão onde está).
+        if (!resposta.fresco) return { tipo: 'indisponivel', motivo: resposta.idadeHoras == null ? 'índice de telefones da franquia ainda não carregado' : `índice de telefones vencido (${resposta.idadeHoras} h)` };
+        return ind;
+      }
       const ficha = await lerFicha(ind.idClient);
       if (!ficha) return { tipo: 'indisponivel', motivo: 'ficha do paciente não veio' };
       return sinalDaFicha(ind.idClient, ficha, (deps.agora ?? (() => new Date()))());

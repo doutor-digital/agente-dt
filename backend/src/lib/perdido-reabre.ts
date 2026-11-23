@@ -79,6 +79,38 @@ export function pedeParaSair(texto: string): boolean {
   return PALAVRA_DE_SAIR.test(t) || FRASE_DE_SAIR.test(t);
 }
 
+/**
+ * "pode encerrar", "não quero", "não tenho interesse", "não, obrigado" (com ou sem acento): o paciente está RECUSANDO ou encerrando — responder à
+ * recusa com a Sofia não é reabrir lead. Só vale em mensagem CURTA: "não quero cirurgia, quero saber o preço" é paciente. Medido pelo sênior em 30 d:
+ * ~28 "Pode encerrar" em Bebedouro (resposta ao robô de encerramento).
+ */
+export function ehRecusaOuEncerramento(texto: string): boolean {
+  const t = texto
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!t) return false;
+  const palavras = t.split(' ').length;
+  if (/^(sim |ok |pode |por favor )*(pode )?(encerrar|encerra|fechar|finalizar|arquivar)\b/.test(t) && palavras <= 6) return true;
+  if (/^(ja )?(nao tenho (mais )?interesse|sem interesse|nao me interessa)\b/.test(t) && palavras <= 6) return true;
+  if (/^(nao|no)( quero( mais)?| preciso( mais)?| obrigad[oa]| valeu)( obrigad[oa])?$/.test(t) && palavras <= 4) return true;
+  if (/^(nao )?(obrigad[oa] )?nao (quero|tenho interesse)\b/.test(t) && palavras <= 5) return true;
+  return false;
+}
+
+/**
+ * Código de confirmação de remetente automático (Facebook, Instagram…): "FB-12345 é seu código de confirmação do Facebook",
+ * "Seu código é 123456". Não é o paciente: ~15 em 30 d em Olímpia/Bebedouro (medido pelo sênior).
+ */
+export function ehCodigoDeVerificacao(texto: string): boolean {
+  const t = texto.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+  if (/^\s*(fb|ig|wa)[-\s]?\d{4,8}\b/.test(t)) return true;
+  return /\b\d{4,8}\b/.test(t) && /\b(codigo|code|confirmacao|verificacao|verification|confirmation)\b/.test(t) && /(facebook|instagram|meta|whatsapp|codigo|code)/.test(t);
+}
+
 /** O que o Whisper devolve quando o áudio não tem fala: não é o paciente respondendo. */
 const AUDIO_SEM_FALA = /^\s*\[áudio sem fala detectada\]\s*$/i;
 
@@ -101,6 +133,12 @@ export function pacienteEmTratamentoNaFranquia(s: SinalDaFranquia | null): strin
   return `paciente da franquia (idClient ${s.idClient}) com ${por}`;
 }
 
+/** A fala do paciente em uma linha, até 140 caracteres (a mesma que a nota do cartão leva). */
+export function trechoDaFala(mensagem: string): string {
+  const t = mensagem.replace(/\s+/g, ' ').trim();
+  return t.length > 140 ? `${t.slice(0, 140)}…` : t;
+}
+
 /** A nota que fica no cartão. Curta: a equipe lê no celular. */
 export function notaCartaoReaberto(mensagem: string, motivoDaPerda: string | null): string {
   const t = mensagem.replace(/\s+/g, ' ').trim();
@@ -119,6 +157,8 @@ export type MotivoDeNaoReabrir =
   | 'sem_conteudo'
   | 'cortesia'
   | 'pediu_para_sair'
+  | 'recusa_ou_encerramento'
+  | 'codigo_de_verificacao'
   | 'esquema_ilegivel'
   | 'sem_etapa_de_qualificacao'
   | 'qualificacao_fora_da_lista'
@@ -249,6 +289,8 @@ export async function portaPerdidoReabre(p: PedidoDeReabertura, deps: DepsDaReab
     if (!texto || AUDIO_SEM_FALA.test(texto)) return nao(estado, 'sem_conteudo');
     if (pedeParaSair(texto)) return nao(estado, 'pediu_para_sair');
     if (ehRespostaDeCortesia(texto)) return nao(estado, 'cortesia');
+    if (ehRecusaOuEncerramento(texto)) return nao(estado, 'recusa_ou_encerramento');
+    if (ehCodigoDeVerificacao(texto)) return nao(estado, 'codigo_de_verificacao');
     if (await deps.contaDividida(unit.id)) return nao(estado, 'conta_dividida');
 
     // 2. para onde vai: EM QUALIFICAÇÃO do mesmo funil, pelo nome — e a Sofia tem de poder falar lá
@@ -307,6 +349,8 @@ export async function portaPerdidoReabre(p: PedidoDeReabertura, deps: DepsDaReab
         acao: 'moveria',
         alvo: ETAPA.QUALIFICACAO,
         deEtapa: ETAPA.PERDIDO,
+        // o que ele disse (cortado, no mesmo tamanho da nota do cartão): a tela mostra a fala ao lado da decisão
+        valor: trechoDaFala(p.humanMessage),
         motivo: 'o paciente respondeu em PERDIDO',
       });
       return { estado, reabriu: false, decisao: 'reabrir', motivo: 'reabrir', para };
