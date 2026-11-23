@@ -5,6 +5,9 @@
 #
 #   bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-conferir   # só olha: não envia nada nem muda nada na VPS (localmente só atualiza o `git fetch`)
 #   bash ops/kit-unidade/abrir-clinica-joao.sh <slug>                 # o caminho todo (pergunta UMA vez «aplicar?» depois de mostrar o plano)
+#   bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm [--so-conferir]
+#        # a unidade JÁ EXISTE no agente (pode estar ATIVA, no ar pelo Kommo): monta só o CRM dela (conta, caixa, time, atendentes, automações em seco) e NÃO escreve em units
+#        # (nem campo vazio) nem mexe na Sofia dela. Sem esta flag o kit RECUSA unidade ativa; --sobrescrever (do nova-unidade) trocaria persona, fontes e prompt: não use numa unidade no ar.
 #   bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --do-formulario <id|código|slug> [--set caminho=valor]... [--refazer]
 #        # o franqueado já preencheu o formulário (https://agente.../nova-clinica/<codigo>): o questionário é GERADO na VPS a partir dele (modo 600), sem arquivo
 #        # local. O que ele não soube dizer (ids do Kapso e do WhatsApp Business…) você completa com --set; --refazer regera o arquivo (o antigo fica guardado ao lado).
@@ -43,19 +46,22 @@ SO_CONFERIR=0
 FORM_REF=""
 REFAZER=0
 SETS=()
+SO_CRM=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --so-conferir) SO_CONFERIR=1 ;;
     --refazer) REFAZER=1 ;;
+    --so-crm) SO_CRM=1 ;;
     --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^([A-Za-z0-9][A-Za-z0-9_-]{2,59}|[A-Za-z0-9_-]{24})$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
     --set) shift; [[ "${1:-}" =~ ^[a-z_]+(\.[a-z_]+)?=[A-Za-z0-9_.+-]+$ ]] || { echo "--set precisa ser caminho=valor, sem espaço (ex.: --set whatsapp.waba_id=123)"; exit 2; }; SETS+=("$1") ;;
-    -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
+    -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --so-crm, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
     *) if [ -z "$SLUG" ]; then SLUG="$1"; else echo "mais de um slug: $SLUG e $1"; exit 2; fi ;;
   esac
   shift
 done
+[ "$SO_CRM" = "1" ] && [ -n "$FORM_REF" ] && { echo "--so-crm não combina com --do-formulario (o formulário é de clínica NOVA; a unidade que já existe usa o questionário privado)"; exit 2; }
 [ -z "$FORM_REF" ] && { [ "${#SETS[@]}" -gt 0 ] || [ "$REFAZER" = "1" ]; } && { echo "--set e --refazer só valem com --do-formulario"; exit 2; }
-[ -n "$SLUG" ] || { echo "uso: bash ops/kit-unidade/abrir-clinica-joao.sh <slug> [--so-conferir] [--do-formulario <ref> [--set k=v]... [--refazer]]   (ex.: clinica-demonstracao)"; exit 2; }
+[ -n "$SLUG" ] || { echo "uso: bash ops/kit-unidade/abrir-clinica-joao.sh <slug> [--so-conferir] [--so-crm] [--do-formulario <ref> [--set k=v]... [--refazer]]   (ex.: clinica-demonstracao)"; exit 2; }
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$ ]] || { echo "slug inválido: $SLUG (minúsculas, dígitos e hífen)"; exit 2; }
 [[ "$DESTINO" =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "DESTINO inválido: $DESTINO"; exit 2; }
 [[ "$VPS" =~ ^[A-Za-z0-9._@-]+$ ]] || { echo "VPS inválida: $VPS"; exit 2; }
@@ -109,8 +115,11 @@ if ! git diff --quiet origin/main -- ops/kit-unidade; then
 fi
 
 SUB=""; SUF=""; MODO=""; QUER_IA=""; TIPO="clínica de verdade"; REAL=1
+FLAG_CRM=""; [ "$SO_CRM" = "1" ] && FLAG_CRM=" --so-crm"
 mostrar_clinica() {
   echo "clínica: $SLUG · $TIPO · subdomínio $SUB.doutordigitalconsultoria.com · sufixo das chaves $SUF"
+  [ "$SO_CRM" = "1" ] && echo "modo --so-crm: a unidade já existe; só o CRM dela é montado (units e a Sofia dela NÃO são escritas)"
+  return 0
 }
 if [ -n "$FORM_REF" ]; then
   echo "questionário: será GERADO na VPS a partir do formulário $FORM_REF (privado, modo 600; não passa pelo GitHub nem por esta máquina)"
@@ -202,7 +211,7 @@ if [ "$SO_CONFERIR" = "1" ]; then
   sondar "Platform App (token do Chatwoot)" "test -s /root/segredos/chatwoot-platform.token"
   sondar "chave da conta no cofre (CHATWOOT_API_TOKEN_$SUF)" "test -s '/root/segredos/kit/CHATWOOT_API_TOKEN_$SUF'"
   echo
-  echo "SÓ CONFERIR: nada foi enviado nem mudado. Para abrir a clínica de verdade:  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG"
+  echo "SÓ CONFERIR: nada foi enviado nem mudado. Para abrir a clínica de verdade:  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG$FLAG_CRM"
   trap - ERR INT TERM
   exit 0
 fi
@@ -252,7 +261,7 @@ remoto "bash ops/kit-unidade/regra-traefik-joao.sh '$SUB' --so-conferir"
 
 # ── 4. plano em seco ────────────────────────────────────────────────────────────────────────────────────
 passo "4. plano em SECO (nada é gravado)" "leia a mensagem acima: o questionário tem campo inválido (a mensagem diz qual). Corrija e rode de novo."
-remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG'"
+remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG'$FLAG_CRM"
 
 # ── 5. a ÚNICA pergunta ─────────────────────────────────────────────────────────────────────────────────
 PASSO="5. aplicar?"; AJUDA=""
@@ -274,11 +283,11 @@ fi
 passo "6a. Platform App (cria só se ainda não existir)" "na VPS: bash $DESTINO/ops/kit-unidade/criar-platform-app-joao.sh --so-conferir  (ele diz o que está errado)."
 remoto "bash ops/kit-unidade/criar-platform-app-joao.sh"
 passo "6b. criar a clínica no CRM (perguntas por etapa)" "veja o RELATÓRIO FINAL acima. Se alguma etapa saiu RECUSADA (você respondeu «não»), BLOQUEADA ou NÃO RODOU, a clínica NÃO está pronta e eu NÃO mexi no proxy: rode o MESMO comando de novo e responda s às etapas que faltam (o que já existe é reconhecido). Código 1 = uma etapa FALHOU."
-remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar"
+remoto "bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar$FLAG_CRM"
 
 # ── 7. subdomínio e chaves ──────────────────────────────────────────────────────────────────────────────
 # clínica SEM assistente (assistente.quer: false): não há robô Sofia, então o cofre só leva a chave da conta
-SEM_IA=""; [ "$QUER_IA" = "false" ] && SEM_IA=" --sem-ia"
+SEM_IA=""; { [ "$QUER_IA" = "false" ] || [ "$SO_CRM" = "1" ]; } && SEM_IA=" --sem-ia"   # --so-crm também não cria robô: o cofre só leva a chave da conta
 passo "7a. as chaves da conta estão no cofre?" "se faltar chave, uma etapa do passo 6b ficou sem rodar (você respondeu «não» a ela?): rode o comando de novo e responda s. Se disser valor DIFERENTE no .env, confira à mão (não troco sozinho). Clínica sem IA confere só a chave da conta (--sem-ia). O proxy ainda NÃO foi mexido."
 remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF' --so-conferir$SEM_IA"
 passo "7b. subdomínio no proxy" "na VPS: bash $DESTINO/ops/kit-unidade/regra-traefik-joao.sh $SUB --so-conferir"
@@ -290,19 +299,27 @@ remoto "bash ops/kit-unidade/cofre-para-servico-joao.sh '$SUF'$SEM_IA"
 PASSO="resumo"; AJUDA=""
 trap - ERR INT TERM
 echo
-echo "━━ PRONTO: «$SLUG» está criada no CRM ($TIPO). O que ainda FALTA (nada disso é automático):"
+if [ "$SO_CRM" = "1" ]; then echo "━━ PRONTO: o CRM de «$SLUG» está montado (--so-crm: a unidade já existia e NADA foi escrito em units nem na Sofia dela). O que ainda FALTA (nada disso é automático):"; else echo "━━ PRONTO: «$SLUG» está criada no CRM ($TIPO). O que ainda FALTA (nada disso é automático):"; fi
 n=1
 falta() { echo "  $n. $1"; n=$((n+1)); }
 if [ "$MODO" = "demonstracao" ]; then
   falta "NÚMERO/MODELOS: não se aplicam (demonstração: caixa API, modelos em seco). Para virar clínica de verdade: modo real, número e WABA no questionário, e rodar este comando de novo."
+elif [ "$SO_CRM" = "1" ]; then
+  falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
+  falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar; precisam da WABA acessível ao Kapso)."
 else
   falta "NÚMERO: conectar o número oficial ao Kapso (coexistência ou número novo) — quem tem o celular da clínica."
   falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar)."
 fi
 falta "ADMINISTRADORES DA DOUTOR DIGITAL: o kit os põe na conta nova se já existirem no CRM de referência; se ele AVISOU que alguém não estava, rode criar-usuario-dd-joao.sh (README) e confira na conta."
 falta "ATENDENTES: cada uma aceita o convite por e-mail e define a senha; só então cria as 10 pastas dela. (Se o e-mail do CRM ainda não foi ligado — uma vez só para todas as clínicas — o convite não sai: ligar-email-crm-joao.sh, no README.)"
-falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
+[ "$SO_CRM" = "1" ] || falta "FRANQUIA: gravar o token da API da franquia (units.spine_token), ligar spine_enabled e definir os turnos por profissional."
 falta "CONFERIR NO CRM: abrir https://$SUB.doutordigitalconsultoria.com/ (o certificado sai no primeiro acesso)."
+if [ "$SO_CRM" = "1" ]; then
+  falta "SOFIA NO CRM: o --so-crm NÃO criou nem ligou robô (a Sofia da unidade segue só pelo Kommo). Dar IA ao CRM é decisão à parte, depois do teste de prompt."
+  falta "AUTOMAÇÕES do Chatwoot ficam em SECO por 24 h; a unidade JÁ ESTAVA no ar e segue ativa pelo Kommo — nada a ativar na tela da unidade. Ligue as automações do CRM uma por vez, só depois de combinar com o Kommo quem manda cada lembrete (os dois mandando = paciente com mensagem em dobro)."
+else
 falta "TESTE DA SOFIA: rodar os testes de prompt da unidade e o dono ler as respostas ANTES de ligar."
 falta "SÓ DEPOIS DO TESTE, ligar o robô:  ssh -t -i $CHAVE $VPS \"cd $DESTINO && bash ops/kit-unidade/nova-unidade-joao.sh '$SLUG' --aplicar --ligar-robo\""
 falta "AUTOMAÇÕES ficam em SECO por 24 h; a unidade nasce inativa — ativar na tela da unidade quando tudo estiver de pé."
+fi

@@ -11,7 +11,7 @@ import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, pa
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
-import { automacoesEmSeco, type Passo, type Plano } from './plano.js';
+import { automacoesEmSeco, conflitoDoSoCrm, type Passo, type Plano } from './plano.js';
 import { configChatwootDoQuestionario, type Questionario } from './questionario.js';
 
 /** O banco, como o executor o enxerga. A implementação real (prisma) está em `scripts/nova-unidade.ts`. */
@@ -68,6 +68,8 @@ export interface OpcoesDeExecucao {
   sobrescreverPrompt?: boolean;
   /** troca também os campos JÁ preenchidos de uma unidade que existe (e deixa tocar numa unidade ATIVA). Sem isto só se preenche campo vazio. */
   sobrescrever?: boolean;
+  /** `--so-crm`: a unidade já existe (pode estar ATIVA) e o kit monta SÓ o CRM dela; a linha de `units` e a Sofia dela não são escritas. Não combina com `sobrescrever`. */
+  soCrm?: boolean;
   /** repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `sobrescrever` NÃO mexe nos aprendizados que a clínica já administra em /aprendizados. */
   reimportarAprendizados?: boolean;
   /** escreve uma linha para quem está acompanhando */
@@ -90,6 +92,8 @@ export interface Resultado {
 }
 
 export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeExecucao): Promise<Resultado[]> {
+  const conflito = conflitoDoSoCrm(o);
+  if (conflito) throw new Error(conflito);
   const resultados: Resultado[] = [];
   const deu = new Map<string, SituacaoDoPasso>();
   let unitId: string | null = null;
@@ -105,6 +109,11 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
     const soLer = p.acao === 'nada' && p.sistema === 'chatwoot' && PASSOS_EXTERNOS.has(p.id) && !!o.externas;
     if (p.acao === 'nada' && !soLer) {
       registrar('nada-a-fazer');
+      continue;
+    }
+    // --so-crm NUNCA cria nem liga robô: nem lendo (soLer), nem perguntando (plano velho que dizia «criar»)
+    if (o.soCrm && p.id === 'robo-sofia') {
+      registrar('nada-a-fazer', ['--so-crm: robô Sofia NÃO criado nem ligado (a Sofia da unidade segue só pelo Kommo)']);
       continue;
     }
     if (p.acao === 'bloqueado') {
@@ -175,13 +184,21 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
   const { banco } = o;
   const x = o.externas as PortasExternas;
   const garantirUnidade = async (): Promise<string> => {
-    const id = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
+    // --so-crm nunca cria a unidade (nem vazia): ela tem de existir
+    const achada = unitIdAtual() ?? (await banco.lerUnidade(q.unidade.slug))?.id;
+    if (!achada && o.soCrm) throw new Error(`a unidade ${q.unidade.slug} não existe: --so-crm só vale para unidade que já existe`);
+    const id = achada ?? (await banco.gravarUnidade(q.unidade.slug, q.unidade.nome, {})).id;
     definirUnitId(id);
     return id;
   };
   switch (p.id) {
     case 'unidade': {
       const atual = await banco.lerUnidade(q.unidade.slug);
+      if (o.soCrm) {
+        if (!atual) throw new Error(`a unidade ${q.unidade.slug} não existe: --so-crm só vale para unidade que já existe`);
+        definirUnitId(atual.id);
+        return [`--so-crm: unidade ${atual.id}${atual.ativa ? ' (ATIVA)' : ''} só lida; nenhum campo de units foi escrito`];
+      }
       if (atual?.ativa && !o.sobrescrever) throw new Error(`a unidade ${q.unidade.slug} já está ATIVA: o script não mexe numa unidade no ar sem --sobrescrever`);
       const novos = camposDaUnidade(q);
       const { gravar, preservados } = atual ? aGravar(atual.campos, novos, !!o.sobrescrever) : { gravar: novos, preservados: [] as string[] };
@@ -216,11 +233,12 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'automacoes-seco': {
       const id = await garantirUnidade();
       const ja = new Set(await banco.automacoesDaUnidade(id));
-      const novas = automacoesEmSeco(q).filter((a) => !ja.has(a.id)).map((a) => a.id);
+      const novas = automacoesEmSeco(q, !!o.soCrm).filter((a) => !ja.has(a.id)).map((a) => a.id);
       if (novas.length) await banco.criarAutomacoesEmSeco(id, novas);
       return [novas.length ? `em seco: ${novas.join(', ')}` : 'nenhuma a criar'];
     }
     case 'sofia': {
+      if (o.soCrm) return ['--so-crm: a Sofia da unidade (persona, fontes, prompt e aprendizados) não foi tocada'];
       if (q.assistente?.quer === false) return ['a clínica NÃO quer a assistente: Sofia não configurada (nada gravado)'];
       const id = await garantirUnidade();
       const { campos, avisos } = camposDaSofia(q, o.molde);
@@ -294,13 +312,14 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       if (gerente && (cfg?.gerenteId == null || o.sobrescrever)) parcial.gerenteId = gerente;
       if (execucao.celularId && (cfg?.usuarioCelularId == null || o.sobrescrever)) parcial.usuarioCelularId = execucao.celularId;
       if (Object.keys(parcial).length) await banco.gravarConfigChatwoot(unitId, parcial, false);
-      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (reinício do serviço)'];
+      return [ja.includes(caixa) ? `caixa ${caixa} já estava registrada` : `caixa ${caixa} registrada (tipo cloud)`, ...(q.whatsapp.modo === 'demonstracao' ? ['ATENÇÃO: a caixa da demonstração é canal API mas fica registrada como «cloud» (não existe tipo «api»): NÃO ligue as automações do Chatwoot nesta clínica — a régua tentaria mandar modelo por um canal que não é WhatsApp'] : []), Object.keys(parcial).length ? `gravei ${Object.keys(parcial).join(' e ')}` : 'gerente e usuário do celular já estavam gravados', 'a unidade passa a valer para o servidor quando ele relê a configuração (a cada ~60 s, sem reiniciar)'];
     }
     case 'webhook':
       return passoWebhook(x, execucao);
     case 'dashboard-app':
       return passoDashboardApp(x, execucao);
     case 'robo-sofia':
+      if (o.soCrm) return ['--so-crm: robô Sofia NÃO criado nem ligado (a Sofia da unidade segue só pelo Kommo)'];
       return passoRobo(q, x, execucao, !!o.ligarRobo);
     case 'modelos':
       return passoModelos(q, x);

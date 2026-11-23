@@ -7,6 +7,7 @@
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug>                        # 1) SECO: mostra o PLANO (não grava nada)
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar              # 2) executa etapa por etapa, perguntando antes de cada uma
 #   bash ops/kit-unidade/nova-unidade-joao.sh <slug> --aplicar --ligar-robo # 3) (só depois do teste da Sofia) liga o robô na caixa
+#   ... --so-crm   # unidade que JÁ EXISTE e pode estar ATIVA (ex.: Marabá): monta só o CRM dela; NÃO escreve em units nem mexe na Sofia dela (sem a flag o kit recusa unidade ativa)
 #
 # ONDE RODAR: na VPS, de /root/kit (a VPS não tem cópia do repositório: leve a pasta com ops/kit-unidade/levar-kit-para-vps.sh, na sua máquina). Os caminhos
 # vêm do endereço deste arquivo, então funciona de /root/kit/ops/kit-unidade.
@@ -28,7 +29,7 @@ set -euo pipefail
 umask 077
 
 SLUG="${1:-}"
-[ -n "$SLUG" ] || { echo "uso: nova-unidade-joao.sh <slug> [--so-conferir] [--aplicar] [--sim] [--ligar-robo] [--sobrescrever] [--reimportar-aprendizados]"; exit 2; }
+[ -n "$SLUG" ] || { echo "uso: nova-unidade-joao.sh <slug> [--so-conferir] [--aplicar] [--sim] [--ligar-robo] [--so-crm] [--sobrescrever] [--reimportar-aprendizados]"; exit 2; }
 shift || true
 SO_CONFERIR=0
 ARGS=()
