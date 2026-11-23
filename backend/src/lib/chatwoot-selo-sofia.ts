@@ -7,15 +7,16 @@
  *  Tudo some sozinho quando a etiqueta sai (a equipe assumiu, a Sofia passou, a conversa foi resolvida).
  *
  * Como detecta (lido do código do Chatwoot 4.19.1, ConversationCard.vue / CardLabels.vue / Label.vue):
- *  - LISTA: o cartão (`.conversation`, nos dois layouts, o condensado e o expandido) desenha as etiquetas da conversa como `.label` com o
- *    nome da etiqueta num <span>. O script procura esse texto, igual a `sofia-atendendo`, dentro de cada cartão. Zero requisição.
+ *  - LISTA: o cartão (`.conversation`, nos dois layouts) desenha as etiquetas da conversa com o nome num <span>: como `.label` no condensado
+ *    (ui/Label.vue) e como `[data-label]` SEM `.label` no expandido (components-next/label/Label.vue, via CardLabelsV5). O script procura os
+ *    dois e compara o texto, igual a `sofia-atendendo`, dentro de cada cartão. Zero requisição.
  *    O selo e a faixa são só CSS (um atributo `data-dd-sofia` no cartão + `::after`): o script não cria nenhum nó dentro do cartão que o
  *    Vue mantém, então a lista virtualizada do Chatwoot não tropeça.
  *  - CONVERSA ABERTA: as etiquetas dela ficam num painel que pode estar fechado, então o script lê as etiquetas da conversa selecionada
  *    no estado (store) do próprio Chatwoot, sem requisição. Se um dia o Chatwoot esconder esse estado, cai na API do próprio Chatwoot
  *    (`GET /api/v1/accounts/{conta}/conversations/{id}`, com a sessão do cookie, como o menu e o guia fazem), no máximo uma vez a cada 20 s e
  *    só com a aba à vista.
- *  - Reage a mudanças do DOM com um MutationObserver com freio (uma passada leve a cada 400 ms no máximo); não há setInterval.
+ *  - Reage a mudanças do DOM com um MutationObserver com freio (uma passada leve a cada 400 ms no máximo; só mudança de estrutura, sem characterData); não há setInterval.
  *
  * Chave: `CHATWOOT_SELO_SOFIA=0` tira o selo do `menu.js` (vale em até 5 min, o cache do navegador). Padrão: ligado.
  * Bloco INDEPENDENTE dentro do `menu.js` (`;try{ … }catch(e){}`): se falhar ao executar, o menu, a assistente e o guia seguem.
@@ -32,7 +33,7 @@ const SELO_JS = String.raw`(function(){
   var ETIQUETA = __ETIQUETA__, ROXO = '#7C3AED';
   var ATTR = 'data-dd-sofia', BARRA = 'data-dd-sofia-barra', ESTILO = 'data-dd-sofia-estilo';
   var TEXTO_SELO = '🤖 Sofia atendendo', TEXTO_BARRA = '🤖 A Sofia (IA) está atendendo esta conversa';
-  var api = { buscando: false, ultima: 0, conversa: null, tem: false };
+  var api = { buscando: false, ultima: 0, chave: null, pronto: false, tem: false, retry: null };
   var espera = null;
 
   function sessao(){
@@ -46,11 +47,14 @@ const SELO_JS = String.raw`(function(){
   // a cor do selo e da barra é a mesma nos dois temas (roxo com letra branca, contraste 5,7:1); o fundo leve é translúcido: serve no claro e no escuro
   function css(){
     var leve = 'linear-gradient(rgba(124,58,237,.10),rgba(124,58,237,.10))';
-    return '.conversation[' + ATTR + ']{box-shadow:inset 5px 0 0 ' + ROXO + ';background-image:' + leve + '}'
-      + '.conversation[' + ATTR + '="c"]{padding-top:18px}'
+    return '.conversation[' + ATTR + ']{position:relative;box-shadow:inset 5px 0 0 ' + ROXO + ';background-image:' + leve + '}'
+      + '.conversation[' + ATTR + '="c"],.conversation[' + ATTR + '="h"]{padding-top:18px}'
       + '.conversation[' + ATTR + ']::after{content:"' + TEXTO_SELO + '";position:absolute;z-index:2;pointer-events:none;white-space:nowrap;'
       + 'font:600 12px/18px Inter,-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;color:#fff;background:' + ROXO + ';padding:0 9px;border-radius:0 0 8px 8px}'
+      // c = condensado (avatar de 32 px: o selo começa no nome); h = condensado SEM avatar (conversas anteriores no painel do contato)
       + '.conversation[' + ATTR + '="c"]::after{top:0;left:52px}'
+      + '.conversation[' + ATTR + '="h"]::after{top:0;left:20px}'
+      // e = expandido (linha de 48 px): o selo fica na faixa de 0 a 14 px, acima da caixinha de seleção e dos ícones (que começam em ~16 px)
       + '.conversation[' + ATTR + '="e"]::after{top:0;left:6px;font-size:11px;line-height:14px;padding:0 6px}'
       + '[' + BARRA + ']{flex:none;display:flex;align-items:center;gap:6px;width:100%;box-sizing:border-box;padding:4px 12px;min-height:24px;'
       + 'background:' + ROXO + ';color:#fff;font:600 12px/16px Inter,-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif}';
@@ -61,17 +65,23 @@ const SELO_JS = String.raw`(function(){
     (document.head || document.documentElement).appendChild(st);
   }
 
-  // ── LISTA: o cartão tem a pílula «sofia-atendendo»? (o texto exato do nome da etiqueta, dentro de um .label) ──────────────────
+  // ── LISTA: o cartão tem a pílula «sofia-atendendo»? (o texto exato do nome da etiqueta, dentro da pílula) ──────────────────
   function cartaoTemEtiqueta(card){
-    var ls = card.querySelectorAll('.label');
+    // a pílula é .label no cartão condensado (ui/Label.vue) e [data-label] SEM .label no expandido (components-next/label/Label.vue)
+    var ls = card.querySelectorAll('.label, [data-label]');
     for (var i = 0; i < ls.length; i++) { if (String(ls[i].textContent || '').replace(/\s+/g, ' ').trim() === ETIQUETA) return true; }
     return false;
+  }
+  function modoDoCartao(c){
+    if (!c.querySelector('.conversation--user')) return 'e';
+    var av = c.firstElementChild; // o 1º filho guarda o avatar; sem ele (hide-thumbnail) o texto começa mais à esquerda
+    return av && av.children && av.children.length === 0 ? 'h' : 'c';
   }
   function marcarCartoes(){
     var cards = document.querySelectorAll('.conversation');
     for (var i = 0; i < cards.length; i++) {
       var c = cards[i], tem = cartaoTemEtiqueta(c);
-      var modo = tem ? (c.querySelector('.conversation--user') ? 'c' : 'e') : null;
+      var modo = tem ? modoDoCartao(c) : null;
       if (modo) { if (c.getAttribute(ATTR) !== modo) c.setAttribute(ATTR, modo); }
       else if (c.hasAttribute(ATTR)) c.removeAttribute(ATTR);
     }
@@ -87,21 +97,29 @@ const SELO_JS = String.raw`(function(){
       return chat.labels;
     } catch (e) { return null; }
   }
+  // reserva pela API: no máximo 1 GET a cada 20 s no total. Trocou de conversa dentro da janela: esquece a resposta da anterior e agenda UMA
+  // nova tentativa para o que falta da janela (um timer só, sem setInterval); com a aba escondida espera ela voltar (visibilitychange)
   function perguntarApi(id){
     var s = sessao(), conta = contaDaUrl();
-    if (!s || !conta || api.buscando || document.visibilityState !== 'visible' || Date.now() - api.ultima < 20000) return;
+    if (!s || !conta || api.buscando) return;
+    var falta = 20000 - (Date.now() - api.ultima);
+    if (falta > 0) { if (!api.retry) api.retry = setTimeout(function(){ api.retry = null; agendar(); }, falta); return; }
+    if (document.visibilityState !== 'visible') return;
+    var chave = conta + '/' + id;
     api.buscando = true; api.ultima = Date.now();
     fetch('/api/v1/accounts/' + conta + '/conversations/' + id, { headers: { 'access-token': s.token, client: s.client, uid: s.uid } })
       .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function(j){ var ls = j && Array.isArray(j.labels) ? j.labels : []; api.conversa = id; api.tem = ls.indexOf(ETIQUETA) >= 0; agendar(); })
+      .then(function(j){ if (api.chave !== chave) return; var ls = j && Array.isArray(j.labels) ? j.labels : []; api.tem = ls.indexOf(ETIQUETA) >= 0; api.pronto = true; })
       .catch(function(){})
-      .then(function(){ api.buscando = false; });
+      .then(function(){ api.buscando = false; agendar(); });
   }
   function conversaTemEtiqueta(id){
     var ls = etiquetasDoEstado(id);
     if (ls) return ls.indexOf(ETIQUETA) >= 0;
+    var chave = (contaDaUrl() || '') + '/' + id;
+    if (api.chave !== chave) { api.chave = chave; api.pronto = false; api.tem = false; } // outra conversa: a resposta da anterior não vale
     perguntarApi(id);
-    return api.conversa === id ? api.tem : false;
+    return api.pronto ? api.tem : false;
   }
   function tirarBarra(){ var b = document.querySelector('[' + BARRA + ']'); if (b) b.remove(); }
   function barra(){
@@ -123,7 +141,8 @@ const SELO_JS = String.raw`(function(){
   }
   // freio: no máximo uma passada a cada 400 ms, por mais que o Chatwoot mexa na tela (o Vue mexe muito)
   function agendar(){ if (!espera) espera = setTimeout(passar, 400); }
-  new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+  new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('visibilitychange', agendar);
   agendar();
 })();`;
 

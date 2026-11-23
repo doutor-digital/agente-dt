@@ -31,7 +31,7 @@ test('o bloco: ligado por padrão, «0» desliga; parseia; só lê; nada de dado
   assert.doesNotMatch(js, /method:\s*'(POST|PUT|PATCH|DELETE)'/i);
   assert.doesNotMatch(js, /localStorage|sessionStorage|XMLHttpRequest/);
   // sem relógio curto: nada de setInterval; o freio do observador é de 400 ms
-  assert.doesNotMatch(js, /setInterval/);
+  assert.doesNotMatch(js, /setInterval\(/);
   assert.match(js, /new MutationObserver/);
   assert.match(js, /setTimeout\(passar, 400\)/);
   // textos do pedido do João
@@ -118,6 +118,7 @@ class No {
   }
 }
 function casa(n: No, sel: string): boolean {
+  if (sel.includes(',')) return sel.split(',').some((x) => casa(n, x.trim()));
   if (sel.startsWith('.')) return n.classes.includes(sel.slice(1));
   const a = sel.match(/^\[([\w-]+)\]$/);
   if (a) return n.hasAttribute(a[1]);
@@ -126,7 +127,7 @@ function casa(n: No, sel: string): boolean {
   return false;
 }
 
-function mundo(labelsDoEstado: string[] | null, idUrl: number | null) {
+function mundo(labelsDoEstado: string[] | null, idUrl: number | null, rede?: (url: string) => Promise<unknown>) {
   const body = new No('body');
   const head = new No('head');
   const html = new No('html');
@@ -138,12 +139,18 @@ function mundo(labelsDoEstado: string[] | null, idUrl: number | null) {
     head,
     documentElement: html,
     visibilityState: 'visible',
+    addEventListener: () => {},
     createElement: (t: string) => new No(t),
     getElementById: (id: string) => (id === 'app' ? { __vue_app__: { config: { globalProperties: { $store: { getters: { getSelectedChat: labelsDoEstado ? selecionada : null } } } } } } : null),
   });
   doc.querySelectorAll = (s: string) => html.querySelectorAll(s);
   doc.querySelector = (s: string) => html.querySelector(s);
-  const timers: Array<() => void> = [];
+  const timers: Array<{ f: () => void; ms: number }> = [];
+  const atrasos: number[] = [];
+  const relogio = { t: 1_000_000 };
+  const sessaoCookie = encodeURIComponent(JSON.stringify({ 'access-token': 'a', client: 'c', uid: 'u' }));
+  doc.cookie = `cw_d_session_info=${sessaoCookie}`;
+  const idsBuscados: string[] = [];
   const loc = { pathname: idUrl ? `/app/accounts/2/conversations/${idUrl}` : '/app/accounts/2/dashboard' };
   let observador: (() => void) | null = null;
   class MO {
@@ -154,29 +161,64 @@ function mundo(labelsDoEstado: string[] | null, idUrl: number | null) {
   }
   const janela: any = {};
   janela.top = janela;
-  const rodar = (js: string) => new Function('window', 'document', 'location', 'MutationObserver', 'setTimeout', 'fetch', js)(
+  const rodar = (js: string) => new Function('window', 'document', 'location', 'MutationObserver', 'setTimeout', 'fetch', 'Date', js)(
     janela,
     doc,
     loc,
     MO,
-    (f: () => void) => timers.push(f),
-    () => Promise.reject(new Error('sem rede no teste')),
+    (f: () => void, ms: number) => {
+      atrasos.push(ms);
+      return timers.push({ f, ms });
+    },
+    (url: string) => {
+      idsBuscados.push(url);
+      return rede ? rede(url) : Promise.reject(new Error('sem rede no teste'));
+    },
+    { now: () => relogio.t },
   );
+  // passa(): roda só os timers curtos (o freio de 400 ms); a tentativa da API (segundos) só dispara quando o teste mandar (disparar)
   const passa = () => {
-    const t = timers.splice(0);
-    t.forEach((f) => f());
+    const curtos = timers.filter((t) => t.ms <= 400);
+    curtos.forEach((t) => timers.splice(timers.indexOf(t), 1));
+    curtos.forEach((t) => t.f());
   };
-  return { doc, body, rodar, passa, selecionada, loc, avisar: () => observador?.() };
+  const disparar = () => {
+    const longos = timers.splice(0);
+    longos.forEach((t) => t.f());
+  };
+  return { doc, body, rodar, passa, disparar, longosPendentes: () => timers.filter((t) => t.ms > 400).length, selecionada, loc, atrasos, relogio, idsBuscados, avisar: () => observador?.() };
 }
 
-function cartao(nome: string, etiquetas: string[], compacto = true) {
+/** Cartão CONDENSADO (ConversationCard.vue + ui/Label.vue): o 1º filho guarda o avatar; a pílula é `.label`. `semAvatar` = hide-thumbnail. */
+function cartao(nome: string, etiquetas: string[], semAvatar = false) {
   const c = new No('div', 'conversation');
-  if (compacto) c.add(new No('h4', 'conversation--user', nome));
-  const lab = c.add(new No('div'));
+  const av = c.add(new No('div', 'relative'));
+  if (!semAvatar) av.add(new No('span', 'avatar'));
+  const corpo = c.add(new No('div', 'flex-1'));
+  corpo.add(new No('h4', 'conversation--user', nome));
+  const lab = corpo.add(new No('div'));
   for (const e of etiquetas) {
     const l = lab.add(new No('div', 'inline-flex label'));
     l.add(new No('span', 'label-color-dot'));
     l.add(new No('span', '', ` ${e} `));
+  }
+  return c;
+}
+
+/** Cartão EXPANDIDO do 4.19.1 (ConversationCardExpanded.vue → CardLabelsV5.vue → components-next/label/Label.vue): a pílula é `div[data-label]`, SEM `.label`. */
+function cartaoExpandido(nome: string, etiquetas: string[]) {
+  const c = new No('div', 'conversation relative grid');
+  const esquerda = c.add(new No('div', 'flex'));
+  esquerda.add(new No('div', 'checkbox'));
+  esquerda.add(new No('h4', 'text-heading-3', nome)); // no expandido o nome NÃO tem a classe conversation--user
+  const dir = c.add(new No('div', 'flex'));
+  const caixa = dir.add(new No('div', 'flex', ''));
+  caixa.attrs['data-labels-container'] = '';
+  for (const e of etiquetas) {
+    const l = caixa.add(new No('div', 'rounded-lg inline-flex bg-n-label-color'));
+    l.attrs['data-label'] = '';
+    l.add(new No('span', 'rounded-sm'));
+    l.add(new No('span', 'whitespace-nowrap text-label-small', `\n      ${e}\n    `));
   }
   return c;
 }
@@ -186,7 +228,9 @@ test('lista: o cartão com a pílula «sofia-atendendo» é marcado (condensado 
   const lista = m.body.add(new No('div'));
   const a = lista.add(cartao('Maria', ['quente', 'sofia-atendendo']));
   const b = lista.add(cartao('João', ['alta']));
-  const c = lista.add(cartao('Ana', ['sofia-atendendo'], false));
+  const c = lista.add(cartaoExpandido('Ana', ['alta', 'sofia-atendendo']));
+  const f = lista.add(cartao('Pedro (conversas anteriores)', ['sofia-atendendo'], true));
+  const g = lista.add(cartaoExpandido('Caio', ['alta']));
   // uma mensagem de paciente que só diz o nome da etiqueta NÃO conta: só a pílula (.label)
   const d = lista.add(cartao('Rui', []));
   d.add(new No('p', '', 'sofia-atendendo'));
@@ -196,12 +240,14 @@ test('lista: o cartão com a pílula «sofia-atendendo» é marcado (condensado 
   m.passa();
   assert.equal(a.getAttribute('data-dd-sofia'), 'c');
   assert.equal(b.getAttribute('data-dd-sofia'), null);
-  assert.equal(c.getAttribute('data-dd-sofia'), 'e');
+  assert.equal(c.getAttribute('data-dd-sofia'), 'e', 'o expandido (div[data-label], sem .label) também é marcado');
+  assert.equal(f.getAttribute('data-dd-sofia'), 'h', 'condensado sem avatar (painel do contato): selo mais à esquerda');
+  assert.equal(g.getAttribute('data-dd-sofia'), null);
   assert.equal(d.getAttribute('data-dd-sofia'), null);
   assert.equal(e.getAttribute('data-dd-sofia'), null);
   assert.ok(m.doc.querySelector('style[data-dd-sofia-estilo]'), 'o CSS entrou uma vez');
   // a etiqueta sai do cartão (o Vue refaz as pílulas)
-  a.children[1].children = [];
+  a.children[1].children[1].children = [];
   m.avisar();
   m.passa();
   assert.equal(a.getAttribute('data-dd-sofia'), null, 'a marca some sozinha');
@@ -241,4 +287,61 @@ test('fora das contas do Chatwoot (login, por exemplo) o bloco não mexe em nada
   m.passa();
   assert.equal(wrap.children.length, 0);
   assert.equal(m.doc.querySelector('style[data-dd-sofia-estilo]'), null);
+});
+
+const soltar = async () => {
+  for (let i = 0; i < 4; i++) await new Promise((r) => setImmediate(r));
+};
+
+test('reserva pela API: trocou de conversa dentro da janela de 20 s → esquece a resposta da anterior e agenda UMA nova tentativa para o que falta', async () => {
+  const etiquetas: Record<string, string[]> = {
+    '/api/v1/accounts/2/conversations/1': ['sofia-atendendo'],
+    '/api/v1/accounts/2/conversations/2': ['sofia-atendendo', 'quente'],
+  };
+  const m = mundo(null, 1, async (url) => ({ ok: true, json: async () => ({ labels: etiquetas[url] ?? [] }) }));
+  const wrap = m.body.add(new No('div', 'conversation-details-wrap'));
+  m.rodar(S.seloSofiaJs({}));
+  m.passa(); // 1ª passada: pergunta pela conversa 1
+  await soltar();
+  m.passa();
+  assert.deepEqual(m.idsBuscados, ['/api/v1/accounts/2/conversations/1']);
+  assert.equal(wrap.querySelectorAll('[data-dd-sofia-barra]').length, 1, 'a conversa 1 mostra a barra pela API');
+
+  // 5 s depois o usuário abre a conversa 2: dentro da janela de 20 s
+  m.relogio.t += 5000;
+  m.loc.pathname = '/app/accounts/2/conversations/2';
+  m.atrasos.length = 0;
+  m.avisar();
+  m.passa();
+  m.avisar();
+  m.passa();
+  assert.equal(m.idsBuscados.length, 1, 'ainda não pergunta (janela)');
+  assert.equal(wrap.querySelectorAll('[data-dd-sofia-barra]').length, 0, 'a resposta da conversa 1 não vale para a 2');
+  // um timer só, que vence exatamente quando a janela de 20 s (contada do último GET) acaba; várias passadas não criam outros
+  assert.equal(m.longosPendentes(), 1, 'UMA tentativa agendada, mesmo com várias passadas');
+  assert.deepEqual(m.atrasos.filter((ms) => ms > 400), [], 'e nenhum timer novo foi criado depois da troca de conversa');
+
+  // passou o tempo: o timer dispara, pergunta pela conversa 2 e a barra aparece
+  m.relogio.t += 15000;
+  m.disparar(); // o timer da tentativa → agenda a passada
+  m.passa(); // a passada → pergunta
+  await soltar();
+  m.passa();
+  assert.deepEqual(m.idsBuscados, ['/api/v1/accounts/2/conversations/1', '/api/v1/accounts/2/conversations/2']);
+  assert.equal(wrap.querySelectorAll('[data-dd-sofia-barra]').length, 1, 'a barra da conversa 2 aparece depois da tentativa');
+});
+
+test('reserva pela API: a resposta que chega tarde de uma conversa antiga não vale para a conversa nova', async () => {
+  let solta: (v: unknown) => void = () => {};
+  const m = mundo(null, 1, () => new Promise((r) => (solta = r)));
+  const wrap = m.body.add(new No('div', 'conversation-details-wrap'));
+  m.rodar(S.seloSofiaJs({}));
+  m.passa(); // pergunta pela 1 (a resposta ainda não veio)
+  m.loc.pathname = '/app/accounts/2/conversations/2';
+  m.avisar();
+  m.passa(); // conversa 2: a chave mudou
+  solta({ ok: true, json: async () => ({ labels: ['sofia-atendendo'] }) }); // chega a resposta da 1
+  await soltar();
+  m.passa();
+  assert.equal(wrap.querySelectorAll('[data-dd-sofia-barra]').length, 0, 'a etiqueta da conversa 1 não aparece na 2');
 });
