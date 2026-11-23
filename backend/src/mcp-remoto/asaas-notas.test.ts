@@ -61,6 +61,9 @@ test('leitura: asaas_notas exige um filtro, valida os campos e é de UMA clínic
   await recusa(asaasNotas(m.asaas, { unidade: 'serra' }), /pelo menos um filtro/);
   await recusa(asaasNotas(m.asaas, { unidade: 'serra', inicio: '2026-10-31', fim: '2026-10-01' }), /fim antes do início/);
   await recusa(asaasNotas(m.asaas, { unidade: 'serra', status: 'PAGA' }), /status "PAGA" não existe/);
+  // enviada à prefeitura e ainda sem autorização: tem de dar para filtrar
+  assert.equal((await asaasNotas(m.asaas, { unidade: 'serra', status: 'SYNCHRONIZED' })).notas, 0);
+  assert.equal(m.f.consultas.at(-1)!.query.status, 'SYNCHRONIZED');
   await recusa(asaasNotas(m.asaas, { unidade: 'serra', cobrancaId: 'abc' }), /cobrancaId inválido/);
   await recusa(asaasNotas(m.asaas, { unidade: 'todas', status: 'ERROR' }), /UMA clínica/);
   const vazio = await asaasNotas(m.asaas, { unidade: 'serra', status: 'CANCELED' });

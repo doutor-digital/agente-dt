@@ -26,8 +26,8 @@ export const STATUS_NOTA: Record<string, string> = {
   CANCELLATION_DENIED: 'cancelamento NEGADO pela prefeitura (a nota continua valendo)',
   ERROR: 'erro na emissão',
 };
-/** Os status que o filtro da listagem aceita (a lista da doc oficial). */
-export const STATUS_DO_FILTRO = ['SCHEDULED', 'AUTHORIZED', 'PROCESSING_CANCELLATION', 'CANCELED', 'CANCELLATION_DENIED', 'ERROR'] as const;
+/** Os status do filtro da listagem: os da referência da API mais SYNCHRONIZED ("enviada à prefeitura"), que o guia de notas lista e a nota assume enquanto espera a autorização. */
+export const STATUS_DO_FILTRO = ['SCHEDULED', 'SYNCHRONIZED', 'AUTHORIZED', 'PROCESSING_CANCELLATION', 'CANCELED', 'CANCELLATION_DENIED', 'ERROR'] as const;
 /**
  * A nota ainda vale (ou vai valer) para o fisco? Tudo que não é CANCELED nem ERROR: agendada, enviada, emitida, cancelando e cancelamento NEGADO
  * (a nota continua valendo). Lista invertida de propósito: um status que o Asaas criar amanhã conta como ativo, e o aviso de nota repetida não some.
@@ -353,7 +353,7 @@ export function registrarLeituraNotasAsaas(server: McpServer, ctx: ContextoAsaas
       description:
         'Notas fiscais de serviço (NFS-e) do Asaas de UMA clínica, com filtro por período (data de EMISSÃO), status, cobrança (pay_…), cliente (cus_…) ou referência. ' +
         'Devolve número, status em português, valor, data, tomador, descrição curta e os links do PDF e do XML quando a nota já foi emitida; mais o total por status. ' +
-        'É preciso ao menos um filtro. Status: SCHEDULED (agendada), AUTHORIZED (emitida), PROCESSING_CANCELLATION, CANCELED, CANCELLATION_DENIED, ERROR. ' +
+        'É preciso ao menos um filtro. Status: SCHEDULED (agendada), SYNCHRONIZED (enviada à prefeitura), AUTHORIZED (emitida), PROCESSING_CANCELLATION, CANCELED, CANCELLATION_DENIED, ERROR. ' +
         'Para saber se a clínica PODE emitir, use asaas_dados_fiscais. Só leitura: emitir e cancelar são asaas_preparar_nota → asaas_confirmar_nota.',
       inputSchema: {
         unidade: umaUnidade,
