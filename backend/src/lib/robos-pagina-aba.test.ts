@@ -49,7 +49,7 @@ class El {
 }
 
 /** Sobe a página com um servidor de mentira; `respostas` = o que o GET das automações devolve, uma por pedido (a última se repete). */
-async function subirPagina(respostas: Array<Record<string, unknown> | 'erro'>) {
+async function subirPagina(respostas: Array<Record<string, unknown> | 'erro' | (() => Promise<Record<string, unknown>>)>) {
   const html = paginaDosRobos(CW);
   const script = html.slice(html.indexOf('<script>') + 8, html.lastIndexOf('</script>'));
   const els = new Map<string, El>();
@@ -59,10 +59,7 @@ async function subirPagina(respostas: Array<Record<string, unknown> | 'erro'>) {
   const timers: Array<{ ms: number; fn: () => void; vivo: boolean }> = [];
   const mensagens: Array<(e: unknown) => void> = [];
   const pai = { postMessage() {} };
-  const automacao = (i: number) => {
-    const r = respostas[Math.min(i, respostas.length - 1)]!;
-    return r;
-  };
+  const automacao = (i: number) => respostas[Math.min(i, respostas.length - 1)]!;
   const fetchFalso = async (url: string) => {
     pedidos.push(url);
     const json = (v: unknown, ok = true) => ({ ok, status: ok ? 200 : 500, json: async () => v });
@@ -70,11 +67,12 @@ async function subirPagina(respostas: Array<Record<string, unknown> | 'erro'>) {
     if (url.includes('/robos/automacoes')) {
       const n = pedidos.filter((p) => p.includes('/robos/automacoes')).length - 1;
       const r = automacao(n);
+      if (typeof r === 'function') return json(await r());
       return r === 'erro' ? json({ error: 'não consegui ler as automações agora' }, false) : json(r);
     }
     return json({ pode: true, robos: [] });
   };
-  const FD = class extends Date { static now() { return agora; } constructor(...a: unknown[]) { super(...(a.length ? (a as [number]) : [agora])); } };
+  const FD = class extends Date { static now() { return agora; } constructor(a?: number | string | Date) { super(a === undefined ? agora : (a as number)); } };
   const contexto: Record<string, unknown> = {
     document: { getElementById: pegar, createElement: (t: string) => new El(t), createElementNS: (_n: string, t: string) => new El(t), createTextNode: (t: string) => { const e = new El('#text'); e.textContent = t; return e; }, addEventListener() {}, removeEventListener() {}, referrer: '' },
     window: { parent: pai, addEventListener: (t: string, f: (e: unknown) => void) => { if (t === 'message') mensagens.push(f); }, open() {}, innerWidth: 1200 },
@@ -99,10 +97,11 @@ async function subirPagina(respostas: Array<Record<string, unknown> | 'erro'>) {
     dispararNovaTentativa: async () => { for (const t of timers.filter((x) => x.vivo && x.ms === 4000)) { t.vivo = false; t.fn(); } await soltar(); },
     novaTentativaPendente: () => timers.some((t) => t.vivo && t.ms === 4000),
     texto: (id: string) => pegar(id).textContent,
+    unidades: () => pegar('unidadeNome').textContent,
   };
 }
 
-const completa = (o: Record<string, unknown> = {}) => ({ pode: true, automacoes: [], parcial: [], historicoEm: '2026-11-23T18:00:00.000Z', historicoIdadeMs: 1000, historicoVelho: false, nativas: { regras: [], lidas: true, link: null }, ...o });
+const completa = (o: Record<string, unknown> = {}) => ({ pode: true, automacoes: [], parcial: [], historicoEm: '2026-11-23T18:00:00.000Z', historicoIdadeMs: 1000, historicoVelho: false, historicoValeMs: 60_000, nativas: { regras: [], lidas: true, link: null }, ...o });
 
 test('entrar de novo na aba NÃO busca outra vez quando a última resposta veio completa e recente', async () => {
   const p = await subirPagina([completa()]);
@@ -172,4 +171,51 @@ test('o aviso vermelho de «estado desatualizado» some quando a leitura seguint
   assert.match(p.texto('avisos'), /desatualizado/);
   await p.dispararNovaTentativa();
   assert.equal(p.texto('avisos'), '', 'leitura seguinte completa: o aviso sai');
+});
+
+test('o aviso de estado só promete «tentando de novo» quando há tentativa agendada; esgotadas as 2, manda trocar de aba', async () => {
+  const p = await subirPagina([completa({ parcial: ['estado'] })]);
+  await p.clicar('mAuto');
+  assert.match(p.texto('avisos'), /Estou tentando de novo/);
+  await p.dispararNovaTentativa();
+  await p.dispararNovaTentativa();
+  assert.equal(p.pedidosAuto(), 3);
+  assert.doesNotMatch(p.texto('avisos'), /Estou tentando de novo/, 'sem tentativa agendada, não promete');
+  assert.match(p.texto('avisos'), /troque de aba e volte/);
+  assert.equal(p.novaTentativaPendente(), false);
+  // quem obedece («troque de aba e volte») ganha mais 2 tentativas
+  await p.clicar('mRobos');
+  await p.clicar('mAuto');
+  assert.equal(p.pedidosAuto(), 4);
+  assert.equal(p.novaTentativaPendente(), true);
+});
+
+test('o banner de ERRO também some quando a leitura seguinte dá certo', async () => {
+  const p = await subirPagina(['erro', completa()]);
+  await p.clicar('mAuto');
+  assert.match(p.texto('avisos'), /não consegui ler as automações/);
+  await p.clicar('mRobos');
+  await p.clicar('mAuto');
+  assert.equal(p.texto('avisos'), '');
+});
+
+test('resposta antiga que chega DEPOIS de uma mais nova é descartada (não sobrescreve a tela)', async () => {
+  let soltaA!: (v: Record<string, unknown>) => void;
+  const lenta = () => new Promise<Record<string, unknown>>((r) => { soltaA = r; });
+  const velha = completa({ parcial: ['estado'] });
+  const p = await subirPagina([lenta, completa()]);
+  await p.clicar('mAuto'); // pedido 1 (lento) em voo; AUTO ainda nulo
+  await p.clicar('mRobos');
+  await p.clicar('mAuto'); // AUTO nulo de novo: pedido 2, que responde na hora
+  assert.equal(p.pedidosAuto(), 2);
+  soltaA(velha); // a 1ª só chega agora
+  await new Promise((r) => setImmediate(r));
+  await new Promise((r) => setImmediate(r));
+  assert.equal(p.texto('avisos'), '', 'a resposta velha (com aviso de estado) não pode aparecer por cima da nova');
+});
+
+test('mudar o estado de uma automação (ação do usuário) zera as tentativas sozinhas gastas', async () => {
+  const fonteDaPagina = paginaDosRobos(CW);
+  assert.match(fonteDaPagina, /carregarAuto\(true\); toast/, 'gravar recarrega como ação do usuário');
+  assert.match(fonteDaPagina, /if \(MODO === 'auto'\) carregarAuto\(true\); return carregar\(\)/, 'trocar de unidade também');
 });

@@ -15,7 +15,7 @@ import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
 import { paginaDosRobos } from '../lib/robos-pagina.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
-import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, HISTORICO_RECENTE_MS, type ParteQueFalhou } from '../lib/robos-automacoes.js';
+import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, HISTORICO_RECENTE_MS, MEMORIA_DO_HISTORICO_MS, type ParteQueFalhou } from '../lib/robos-automacoes.js';
 import { estadoGravado, panoramaDaUnidade, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexerNosRobos, visaoDosRobos, type Aprovados } from '../lib/robos-estado.js';
 
@@ -198,7 +198,8 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     ]);
     // os tetos deixam a aba sempre abaixo de 2 s: o estouro de uma parte NÃO pode passar calado (é o que a prova pós-deploy lê no log)
     const total = Date.now() - inicio;
-    if (parcial.length || total > 2000) logger.warn({ unit: r.unit.slug, parcial, total, historicoIdadeMs: hist.em === null ? null : Date.now() - hist.em, ms: { login: msLogin, ...ms } }, parcial.length ? 'robos: aba Automações incompleta (parte estourou o teto)' : 'robos: aba Automações demorou');
+    const idadeDoHistorico = hist.em === null ? null : Date.now() - hist.em;
+    if (parcial.length || total > 2000) logger.warn({ unit: r.unit.slug, parcial, total, historicoIdadeMs: idadeDoHistorico, ms: { login: msLogin, ...ms } }, parcial.length ? 'robos: aba Automações incompleta (parte estourou o teto)' : 'robos: aba Automações demorou');
     const conta = contaChatwootDaUnidade(r.unit.slug);
     res.set('Cache-Control', 'no-store').json({
       unidade: { slug: r.unit.slug, nome: r.unit.name },
@@ -209,8 +210,9 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
       // quando o histórico («últimas ações») foi lido: a leitura fica guardada (fresca 1 min, servida como velha até 2 min; mais de 10 s = «velho» para a tela); a tela diz «histórico das HH:MM»
       historicoEm: hist.em === null ? null : new Date(hist.em).toISOString(),
       // idade na hora de responder: a tela soma o tempo que a resposta ficou com ela e recarrega ao entrar na aba quando passa do minuto guardado
-      historicoIdadeMs: hist.em === null ? null : Date.now() - hist.em,
-      historicoVelho: hist.em !== null && Date.now() - hist.em > HISTORICO_RECENTE_MS,
+      historicoIdadeMs: idadeDoHistorico,
+      historicoValeMs: MEMORIA_DO_HISTORICO_MS,
+      historicoVelho: idadeDoHistorico !== null && idadeDoHistorico > HISTORICO_RECENTE_MS,
       nativas: { ...nativas, link: conta ? `${conta.url}/app/accounts/${conta.conta}/settings/automation/list` : null },
     });
   } catch (e) {
