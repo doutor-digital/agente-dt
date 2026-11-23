@@ -15,7 +15,7 @@ import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
 import { paginaDosRobos } from '../lib/robos-pagina.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
-import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, type ParteQueFalhou } from '../lib/robos-automacoes.js';
+import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, MEMORIA_DO_HISTORICO_MS, type ParteQueFalhou } from '../lib/robos-automacoes.js';
 import { estadoGravado, panoramaDaUnidade, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexerNosRobos, visaoDosRobos, type Aprovados } from '../lib/robos-estado.js';
 
@@ -188,14 +188,17 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     const ms: Record<string, number> = {};
     const medir = <T>(nome: string, p: Promise<T>): Promise<T> => p.finally(() => { ms[nome] = Date.now() - t0; });
     const parcial: ParteQueFalhou[] = [];
+    let historicoEm: number | null = null;
     // estourou: a aba segue com o estado que o servidor já tinha (a própria tela que muda um interruptor já o recarrega) e AVISA
     if (!(await medir('recarregar', comTeto(recarregarAutomacoes().then(() => true), TETO_DO_RECARREGAR_MS, false)))) parcial.push('estado');
     const [automacoes, nativas] = await Promise.all([
       // o teto de cada leitura do banco (histórico e «quem mexeu», juntas) fica dentro de `automacoesDaUnidade`
-      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug, { aoFalhar: (parte) => parcial.push(parte) })),
+      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug, { aoFalhar: (parte) => parcial.push(parte), aoLerHistorico: (lidoEm) => { historicoEm = lidoEm; } })),
       medir('nativas', comTeto(regrasNativas(r.unit.slug), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
     ]);
-    if (Date.now() - inicio > 2000) logger.warn({ unit: r.unit.slug, ms: { login: msLogin, ...ms } }, 'robos: aba Automações demorou');
+    // os tetos deixam a aba sempre abaixo de 2 s: o estouro de uma parte NÃO pode passar calado (é o que a prova pós-deploy lê no log)
+    const total = Date.now() - inicio;
+    if (parcial.length || total > 2000) logger.warn({ unit: r.unit.slug, parcial, total, historicoIdadeMs: historicoEm === null ? null : Date.now() - historicoEm, ms: { login: msLogin, ...ms } }, parcial.length ? 'robos: aba Automações incompleta (parte estourou o teto)' : 'robos: aba Automações demorou');
     const conta = contaChatwootDaUnidade(r.unit.slug);
     res.set('Cache-Control', 'no-store').json({
       unidade: { slug: r.unit.slug, nome: r.unit.name },
@@ -203,6 +206,9 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
       automacoes,
       // o que não deu para ler dentro do teto ('ultimas' = histórico das automações, 'mudancas' = quem mexeu por último): a tela avisa em vez de dizer «sem registro»
       parcial,
+      // quando o histórico («últimas ações») foi lido: a leitura fica guardada (até 1 min fresca, até 2 min servida como velha); a tela diz «histórico das HH:MM»
+      historicoEm: historicoEm === null ? null : new Date(historicoEm).toISOString(),
+      historicoVelho: historicoEm !== null && Date.now() - historicoEm > MEMORIA_DO_HISTORICO_MS,
       nativas: { ...nativas, link: conta ? `${conta.url}/app/accounts/${conta.conta}/settings/automation/list` : null },
     });
   } catch (e) {

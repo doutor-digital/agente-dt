@@ -485,8 +485,10 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     }
     var ac = el('div', 'acoes24'); ac.appendChild(el('h3', null, 'Últimas ações'));
     var parcial = (AUTO && AUTO.parcial) || [];
-    if (a.origem === 'catalogo' && a.ultimas.length) a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); });
+    var hhmm = AUTO && AUTO.historicoEm ? new Date(AUTO.historicoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (a.origem === 'catalogo' && a.ultimas.length) { a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); }); if (hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Histórico das ' + hhmm + '.')); }
     else if (a.origem === 'catalogo' && parcial.indexOf('ultimas') >= 0) ac.appendChild(el('div', 'tri-ajuda', 'Não consegui ler o histórico agora (o servidor está lento). Abra a aba de novo em instantes.'));
+    else if (a.origem === 'catalogo' && AUTO && AUTO.historicoVelho && hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Nada no histórico das ' + hhmm + '. Pode haver ações mais novas: abra a aba de novo em instantes.'));
     else ac.appendChild(el('div', 'tri-ajuda', a.origem === 'catalogo' ? 'Sem registro: o log do servidor não guardou nada desta automação para esta unidade.' : 'Sem registro nesta tela.'));
     card.appendChild(ac);
     box.appendChild(card); tela.appendChild(box);

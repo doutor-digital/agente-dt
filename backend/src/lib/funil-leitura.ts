@@ -102,6 +102,11 @@ export class MemoriaDeLeitura<T> {
     for (const k of this.entradas.keys()) if (k.startsWith(`${conta}|`)) this.entradas.delete(k);
   }
 
+  /** Esquece as entradas cuja chave (conta|…) o teste aceita; leitura em andamento dessas chaves também não é guardada. */
+  invalidarSe(testa: (chave: string) => boolean): void {
+    for (const k of [...this.entradas.keys()]) if (testa(k)) this.entradas.delete(k);
+  }
+
   esquecerTudo(): void {
     this.entradas.clear();
   }

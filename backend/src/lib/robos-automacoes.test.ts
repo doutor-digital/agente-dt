@@ -20,12 +20,16 @@ const fonte = (rel: string) => readFileSync(fileURLToPath(new URL(rel, import.me
 
 function bancoFalso(o: { mudancas?: Array<{ automacao: string; por: string | null; em: Date }>; ultimas?: Record<string, import('./robos-automacoes.js').UltimaAcao[]>; semUnidade?: boolean } = {}) {
   const gravacoes: Array<{ unit: { id: string }; automacao: string; estado: string; por: string }> = [];
+  const esquecidos: string[] = [];
   const banco: import('./robos-automacoes.js').BancoDasAutomacoes = {
     async mudancas() {
       return o.mudancas ?? [];
     },
     async ultimasDe() {
-      return o.ultimas ?? {};
+      return { porId: o.ultimas ?? {}, lidoEm: Date.now() };
+    },
+    esquecerHistorico(slug) {
+      esquecidos.push(slug);
     },
     async unidade(slug) {
       return o.semUnidade ? null : { id: 'u1', slug };
@@ -34,7 +38,7 @@ function bancoFalso(o: { mudancas?: Array<{ automacao: string; por: string | nul
       gravacoes.push({ unit, automacao, estado, por });
     },
   };
-  return { banco, gravacoes };
+  return { banco, gravacoes, esquecidos };
 }
 
 const SLUG = 'doutor-hernia-parauapebas';
@@ -111,7 +115,7 @@ test('aba «Automações» não espera o histórico lento: UMA busca, com teto (
   banco.ultimasDe = async (ids) => {
     buscas++;
     await new Promise((r) => setTimeout(r, 40));
-    return Object.fromEntries(ids.map((id) => [id, [{ em: '2026-11-15T12:00:00.000Z', nivel: 'info', texto: `${id}: ciclo`, resumo: '' }]]));
+    return { porId: Object.fromEntries(ids.map((id) => [id, [{ em: '2026-11-15T12:00:00.000Z', nivel: 'info', texto: `${id}: ciclo`, resumo: '' }]])), lidoEm: Date.now() };
   };
   const l = await A.automacoesDaUnidade(banco, SLUG, { env: {}, tetoMs: 150 });
   assert.equal(buscas, 1, 'o log é lido UMA vez para todas as automações (eram 14 buscas na mesma janela)');
@@ -152,48 +156,6 @@ test('23/11: erro do banco (não só demora) também vira «parte vazia + aviso�
   assert.deepEqual(ok, []);
 });
 
-test('23/11: a memória curta junta pedidos seguidos numa busca só, expira, e erro não fica guardado', async () => {
-  const memoria = new Map<string, import('./robos-automacoes.js').EntradaDaMemoria<number>>();
-  let agora = 1_000;
-  let buscas = 0;
-  const buscar = async () => ++buscas;
-  const [a, b, c] = await Promise.all([1, 2, 3].map(() => A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora)));
-  assert.deepEqual([a, b, c], [1, 1, 1], 'três aberturas da aba ao mesmo tempo = uma busca (a tela dispara várias de uma vez)');
-  agora += 59_000;
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora), 1);
-  agora += 2_000;
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora), 2, 'passou o prazo: busca de novo');
-  assert.equal(await A.comMemoriaCurta(memoria, 'outra', 60_000, buscar, () => agora), 3, 'chave (unidade) diferente não se mistura');
-  let tentativas = 0;
-  const falha = () => { tentativas++; return Promise.reject(new Error('x')); };
-  await assert.rejects(A.comMemoriaCurta(memoria, 'e', 60_000, falha, () => agora));
-  await new Promise((r) => setImmediate(r));
-  await assert.rejects(A.comMemoriaCurta(memoria, 'e', 60_000, falha, () => agora));
-  assert.equal(tentativas, 2, 'erro não fica na memória: a próxima abertura tenta de novo');
-});
-
-test('23/11: passou o prazo, o valor velho serve NA HORA e uma busca nova corre em segundo plano (quem abre a aba de vez em quando não paga a leitura fria)', async () => {
-  const memoria = new Map<string, import('./robos-automacoes.js').EntradaDaMemoria<number>>();
-  let agora = 0;
-  let buscas = 0;
-  let solta!: (n: number) => void;
-  const buscar = () => (++buscas === 1 ? Promise.resolve(1) : new Promise<number>((r) => { solta = r; }));
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1);
-  agora = 120_000; // velho (passou os 60 s), mas dentro dos 15 min
-  const t0 = Date.now();
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1, 'devolve o velho sem esperar a busca nova (que ainda não terminou)');
-  assert.ok(Date.now() - t0 < 50);
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 1);
-  assert.equal(buscas, 2, 'UMA renovação em segundo plano, não uma por pedido');
-  solta(2);
-  await new Promise((r) => setImmediate(r));
-  assert.equal(await A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000), 2, 'a renovação terminou: já vem o novo');
-  agora += 1_000_000; // velho demais (>15 min): busca de verdade e espera
-  const p = A.comMemoriaCurta(memoria, 'k', 60_000, buscar, () => agora, 900_000);
-  solta(3);
-  assert.equal(await p, 3);
-});
-
 test('23/11: a busca do histórico agrupa por automação, limita a 5 por automação e vem da consulta única (SQL provado em produção, só leitura)', async () => {
   const { prisma } = await import('./prisma.js');
   const antes = (prisma as any).$queryRaw;
@@ -208,9 +170,20 @@ test('23/11: a busca do histórico agrupa por automação, limita a 5 por automa
   };
   try {
     const ids = Object.keys(A.DO_CATALOGO);
-    const [r1, r2] = await Promise.all([A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5), A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5)]);
+    A._esquecerHistoricoGuardado();
+    const [h1, h2] = await Promise.all([A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5), A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5)]);
     assert.equal(chamadas, 1, 'duas aberturas juntas = uma consulta ao banco');
-    assert.equal(r1, r2);
+    assert.equal(h1, h2);
+    assert.ok(Math.abs(Date.now() - h1.lidoEm) < 5000, 'a leitura carrega a hora em que foi feita');
+    const r1 = h1.porId;
+    await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
+    assert.equal(chamadas, 1, 'guardada');
+    A.esquecerHistoricoDaUnidade('outra-unidade');
+    await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
+    assert.equal(chamadas, 1, 'esquecer OUTRA unidade não mexe nesta');
+    A.esquecerHistoricoDaUnidade('unidade-de-teste-memoria');
+    await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
+    assert.equal(chamadas, 2, 'gravar o estado de uma automação da unidade faz o histórico ser relido');
     assert.deepEqual(Object.keys(r1).sort(), ['chatwoot-agenda', 'chatwoot-regua']);
     assert.equal(r1['chatwoot-agenda']!.length, 2);
     assert.equal(r1['chatwoot-agenda']![0]!.resumo, 'agenda 12 · gravadas 3');
@@ -234,6 +207,10 @@ test('23/11: a busca do log é UMA consulta (não uma por automação), da unida
   assert.match(ctl, /parcial\.push\('estado'\)/, 'o recarregar que estourou o teto também avisa (estado possivelmente velho)');
   assert.match(ctl, /\n\s+parcial,/, 'a resposta leva o aviso do que não foi lido');
   assert.match(fonte('./robos-pagina.ts'), /parcial\.indexOf\('ultimas'\)/, 'a tela diz que não leu em vez de «sem registro»');
+  assert.match(fonte('./robos-pagina.ts'), /'Histórico das ' \+ hhmm/, 'a tela marca a hora da leitura do histórico');
+  assert.match(fonte('./robos-pagina.ts'), /AUTO\.historicoVelho && hhmm\) ac\.appendChild\(el\('div', 'tri-ajuda', 'Nada no histórico das '/, 'histórico velho e vazio não diz «Sem registro»');
+  assert.match(ctl, /parcial\.length \|\| total > 2000/, 'estouro de parte loga mesmo com a aba abaixo de 2 s');
+  assert.match(ctl, /historicoVelho:/);
 });
 
 test('«últimas ações»: o que o log guardou; sem log, «sem registro» (nada inventado); quem mexeu por último', async () => {
@@ -355,4 +332,28 @@ test('os comportamentos da Sofia listados valem no caminho do Chatwoot; os «só
   // tudo o que a tela lista do catálogo existe no catálogo
   for (const id of Object.keys(A.DO_CATALOGO)) assert.ok(automacaoPorId(id), id);
   assert.ok(panoramaDaUnidade(SLUG, {}).length > 0);
+});
+
+test('23/11 (sênior): mudar o estado de uma automação esquece o histórico guardado da unidade; recusa não esquece', async () => {
+  const { banco, esquecidos, gravacoes } = bancoFalso();
+  const ok = await A.mudarAutomacao(banco, { slug: SLUG, id: 'chatwoot-agenda', estado: 'seco', papel: 'administrator', por: 'Suzanne', estadoAtual: () => 'desligado' });
+  assert.equal(ok.ok, true);
+  assert.deepEqual(esquecidos, [SLUG]);
+  const recusa = await A.mudarAutomacao(banco, { slug: SLUG, id: 'chatwoot-agenda', estado: 'seco', papel: 'agent', por: 'Bia', estadoAtual: () => 'desligado' });
+  assert.equal(recusa.ok, false);
+  assert.deepEqual(esquecidos, [SLUG], 'quem não pôde mudar não esvazia a memória');
+  assert.equal(gravacoes.length, 1);
+});
+
+test('23/11 (sênior): o histórico velho serve só até 2 min e traz a hora da leitura; a aba repassa a hora', async () => {
+  assert.equal(A.HISTORICO_VELHO_SERVE_MS, 120_000);
+  const { banco } = bancoFalso();
+  const lido = Date.now() - 90_000;
+  banco.ultimasDe = async () => ({ porId: {}, lidoEm: lido });
+  let visto: number | null = null;
+  await A.automacoesDaUnidade(banco, SLUG, { env: {}, aoLerHistorico: (t) => { visto = t; } });
+  assert.equal(visto, lido);
+  const lib = fonte('./robos-automacoes.ts');
+  assert.match(lib, /ESPERA_APOS_FALHA_MS/, 'a renovação que falha usa a espera do funil (MemoriaDeLeitura)');
+  assert.doesNotMatch(lib, /comMemoriaCurta/, 'uma memória só (a mesma do funil)');
 });
