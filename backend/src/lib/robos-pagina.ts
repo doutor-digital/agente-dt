@@ -178,7 +178,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
-  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], DADOS = null, PODE = false, ENV = null, atual = null, aba = 'ed', busca = '', MODO = 'robos', AUTO = null, autoAtual = null;
+  var CW = __ORIGEM_CW__, S = null, U = null, UNIDADES = [], DADOS = null, PODE = false, ENV = null, atual = null, aba = 'ed', busca = '', MODO = 'robos', AUTO = null, autoAtual = null, AUTO_EM = 0, tAuto = null, tentandoAuto = false, tentativasAuto = 0, avisoAuto = false, autoSeq = 0;
   var $ = function(id){ return document.getElementById(id); };
   var NS = 'http://www.w3.org/2000/svg';
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
@@ -187,7 +187,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   function ic(id){ var s = document.createElementNS(NS, 'svg'), u = document.createElementNS(NS, 'use'); u.setAttribute('href', '#' + id); s.appendChild(u); return s; }
   var tToast = null;
   function toast(txt, erro){ var t = $('toast'); t.textContent = txt; t.className = 'toast' + (erro ? ' erro' : ''); t.hidden = false; clearTimeout(tToast); tToast = setTimeout(function(){ t.hidden = true; }, 4200); }
-  function aviso(txt, erro){ var a = $('avisos'); a.textContent = ''; if (txt) a.appendChild(el('div', 'aviso' + (erro ? ' erro' : ''), txt)); }
+  function aviso(txt, erro){ avisoAuto = false; var a = $('avisos'); a.textContent = ''; if (txt) a.appendChild(el('div', 'aviso' + (erro ? ' erro' : ''), txt)); }
 
   // ── servidor (com o login do Chatwoot de quem está usando) ──
   /*__CONTA_JS__*/
@@ -476,7 +476,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       });
       card.appendChild(tri);
       card.appendChild(el('div', 'tri-ajuda', 'Ligada: faz de verdade. Só no papel: decide e deixa registro, sem mexer em nada. Desligada: não faz nada.' + (a.exigeSecoAntes ? ' Para ligar, ela precisa ter rodado antes em «Só no papel».' : '') + (PODE ? '' : ' Você pode ver; só quem administra o CRM muda.')));
-      card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : 'Ninguém mexeu pela tela: vale o padrão do servidor.'));
+      card.appendChild(el('div', 'tri-ajuda', a.mudou ? 'Última alteração pela tela: ' + (a.mudou.por || 'alguém') + ', ' + quando(a.mudou.em) + '.' : (((AUTO && AUTO.parcial) || []).indexOf('mudancas') >= 0 ? 'Não consegui ler quem mexeu por último agora (o servidor está lento).' : 'Ninguém mexeu pela tela: vale o padrão do servidor.')));
     } else if (a.origem === 'nativa') {
       card.appendChild(el('div', 'tri-ajuda', 'Regra automática do CRM' + (a.evento ? ' (evento: ' + a.evento + ')' : '') + '. Para mudar, use Configurações > Automação.'));
       if (AUTO.nativas && AUTO.nativas.link) { var ab = el('button', 'bt sec', 'Abrir a tela de Automação'); ab.type = 'button'; ab.addEventListener('click', function(){ window.open(AUTO.nativas.link, '_blank', 'noopener'); }); card.appendChild(ab); }
@@ -484,7 +484,11 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
       card.appendChild(el('div', 'tri-ajuda', a.nota || 'Somente leitura.'));
     }
     var ac = el('div', 'acoes24'); ac.appendChild(el('h3', null, 'Últimas ações'));
-    if (a.origem === 'catalogo' && a.ultimas.length) a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); });
+    var parcial = (AUTO && AUTO.parcial) || [];
+    var hhmm = AUTO && AUTO.historicoEm ? new Date(AUTO.historicoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+    if (a.origem === 'catalogo' && a.ultimas.length) { a.ultimas.forEach(function(x){ ac.appendChild(acaoDe(x)); }); if (hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Histórico das ' + hhmm + '.')); }
+    else if (a.origem === 'catalogo' && parcial.indexOf('ultimas') >= 0) ac.appendChild(el('div', 'tri-ajuda', 'Não consegui ler o histórico agora (o servidor está lento).' + (tentandoAuto ? ' Tentando de novo sozinho…' : ' Para tentar de novo, troque de aba e volte.')));
+    else if (a.origem === 'catalogo' && AUTO && AUTO.historicoVelho && hhmm) ac.appendChild(el('div', 'tri-ajuda', 'Nada no histórico das ' + hhmm + '. Pode haver ações mais novas (o histórico é lido a cada minuto).'));
     else ac.appendChild(el('div', 'tri-ajuda', a.origem === 'catalogo' ? 'Sem registro: o log do servidor não guardou nada desta automação para esta unidade.' : 'Sem registro nesta tela.'));
     card.appendChild(ac);
     box.appendChild(card); tela.appendChild(box);
@@ -496,12 +500,33 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     $('nome').textContent = autoAtual ? autoAtual.nome : 'Automações';
     listaAuto(); viewAuto();
   }
-  async function carregarAuto(){
-    try {
-      AUTO = await api('GET', '/api/public/robos/automacoes?slug=' + enc(U.slug)); PODE = !!AUTO.pode;
+  // quantos ms tem o histórico que a tela está mostrando: a idade que o servidor disse + o tempo que a resposta já ficou aqui
+  function idadeDoHistorico(){ return AUTO && AUTO.historicoIdadeMs != null ? AUTO.historicoIdadeMs + (Date.now() - AUTO_EM) : 0; }
+  // a resposta vale ser buscada de novo ao entrar na aba: não veio, veio incompleta (parte estourou o teto) ou o histórico já passou do minuto em que o servidor o guarda
+  function autoPedeRecarga(){ return !AUTO || !!AUTO.erro || (AUTO.parcial || []).length > 0 || idadeDoHistorico() > (AUTO.historicoValeMs || 60000); }
+  // doUsuario = entrou na aba, trocou de unidade ou mudou um estado: zera as tentativas sozinhas; o timer chama sem isso
+  async function carregarAuto(doUsuario){
+    clearTimeout(tAuto); tentandoAuto = false;
+    if (doUsuario) tentativasAuto = 0;
+    var eu = ++autoSeq, slug = U.slug;
+    var nova, falhou = null;
+    try { nova = await api('GET', '/api/public/robos/automacoes?slug=' + enc(slug)); } catch (e) { falhou = e; }
+    // resposta que chegou depois de outra mais nova (ou de trocar de unidade) é descartada: não pode sobrescrever o que a tela já mostra
+    if (eu !== autoSeq || !U || U.slug !== slug) return;
+    if (falhou) { AUTO = { automacoes: [], nativas: { regras: [], lidas: false, link: null }, pode: false, erro: true }; }
+    else { AUTO = nova; PODE = !!AUTO.pode; }
+    AUTO_EM = Date.now();
+    // incompleta ou com histórico velho: tenta sozinha mais 2 vezes (o servidor termina a leitura em segundo plano e a próxima já vem pronta)
+    var vaiTentar = !AUTO.erro && autoPedeRecarga() && tentativasAuto < 2;
+    if (vaiTentar) { tentativasAuto++; tentandoAuto = true; tAuto = setTimeout(function(){ tentandoAuto = false; if (MODO === 'auto') carregarAuto(false); }, 4000); }
+    // o aviso desta leitura (erro ou estado possivelmente velho) sai quando a leitura seguinte dá certo; qualquer outro aviso() zera a marca
+    if (falhou) { aviso(falhou.message, true); avisoAuto = true; }
+    else if ((AUTO.parcial || []).indexOf('estado') >= 0) { aviso('O servidor está lento: o estado das automações pode estar desatualizado.' + (vaiTentar ? ' Estou tentando de novo.' : ' Para tentar de novo, troque de aba e volte.'), true); avisoAuto = true; }
+    else if (avisoAuto) aviso('');
+    if (!falhou) {
       var itens = itensDeAuto(), ant = autoAtual ? autoAtual.id : lerGuardado('robos:auto');
       autoAtual = itens.filter(function(a){ return a.id === ant; })[0] || itens[0] || null;
-    } catch (e) { aviso(e.message, true); AUTO = { automacoes: [], nativas: { regras: [], lidas: false, link: null }, pode: false }; }
+    }
     if (MODO === 'auto') tudoAuto();
   }
   function confirmar(a, alvo){
@@ -517,14 +542,14 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     fim.appendChild(can); fim.appendChild(ok); pe.appendChild(fim); nd.appendChild(pe); veu.appendChild(nd); raiz.appendChild(veu);
   }
   async function gravarAuto(a, alvo, confirmado){
-    try { await api('POST', '/api/public/robos/automacoes/' + enc(a.id), { slug: U.slug, estado: alvo, confirmar: confirmado === true }); await carregarAuto(); toast('«' + a.nome + '»: ' + ROT_ESTADO[alvo] + '.'); }
+    try { await api('POST', '/api/public/robos/automacoes/' + enc(a.id), { slug: U.slug, estado: alvo, confirmar: confirmado === true }); await carregarAuto(true); toast('«' + a.nome + '»: ' + ROT_ESTADO[alvo] + '.'); }
     catch (e) { toast(e.message, true); if (/NÃO TEM VOLTA/.test(e.message)) confirmar(a, alvo); }
   }
   function mudarAuto(a, alvo){ if (!PODE) return; if (a.semVolta && alvo === 'ligado') { confirmar(a, alvo); return; } gravarAuto(a, alvo, false); }
   function trocarModo(m){
     MODO = m; busca = ''; $('busca').value = '';
     $('mRobos').setAttribute('aria-pressed', String(m === 'robos')); $('mAuto').setAttribute('aria-pressed', String(m === 'auto'));
-    if (m === 'auto') { if (!AUTO) carregarAuto(); tudoAuto(); } else tudo();
+    if (m === 'auto') { if (autoPedeRecarga()) carregarAuto(true); tudoAuto(); } else tudo();
   }
   $('mRobos').addEventListener('click', function(){ trocarModo('robos'); });
   $('mAuto').addEventListener('click', function(){ trocarModo('auto'); });
@@ -552,7 +577,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
   $('busca').addEventListener('input', function(ev){ busca = ev.target.value.toLowerCase(); if (MODO === 'auto') listaAuto(); else desenharLista(); });
 
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
-  function escolherUnidade(u){ U = u; guardar('robos:unidade', u.slug); $('unidadeNome').textContent = u.nome; atual = null; ENV = null; AUTO = null; autoAtual = null; if (MODO === 'auto') carregarAuto(); return carregar().then(function(){ aviso(''); }).catch(function(e){ aviso(e.message, true); }); }
+  function escolherUnidade(u){ U = u; guardar('robos:unidade', u.slug); $('unidadeNome').textContent = u.nome; atual = null; ENV = null; AUTO = null; autoAtual = null; if (MODO === 'auto') carregarAuto(true); return carregar().then(function(){ aviso(''); }).catch(function(e){ aviso(e.message, true); }); }
   async function entrar(){
     try {
       var r = await api('GET', '/api/public/testar-ia/unidades');

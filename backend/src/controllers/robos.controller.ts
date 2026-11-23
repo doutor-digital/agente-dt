@@ -15,7 +15,7 @@ import { TEXTOS_PARAU } from '../lib/chatwoot-regua-textos.js';
 import { chatDoChatwoot } from '../lib/chatwoot-regua-worker.js';
 import { paginaDosRobos } from '../lib/robos-pagina.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
-import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao } from '../lib/robos-automacoes.js';
+import { automacoesDaUnidade, bancoDasAutomacoes, comTeto, mudarAutomacao, HISTORICO_RECENTE_MS, MEMORIA_DO_HISTORICO_MS, type ParteQueFalhou } from '../lib/robos-automacoes.js';
 import { estadoGravado, panoramaDaUnidade, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { bancoDosRobos, caixasDaUnidade, enviadosDaUnidade, mudarRobo, podeMexerNosRobos, visaoDosRobos, type Aprovados } from '../lib/robos-estado.js';
 
@@ -151,8 +151,13 @@ interface RegraNativa {
   evento: string;
 }
 
-/** Teto de cada parte da aba «Automações»: estourou, a parte aparece vazia (regras nativas: só o link) e a aba abre. */
-const TETO_DA_ABA_MS = 5000;
+/**
+ * Teto de cada parte da aba «Automações»: estourou, a parte aparece vazia (regras nativas: só o link; histórico e «quem mexeu»: aviso na tela) e a
+ * aba abre. Pior caso: recarregar (0,5 s) + as partes que correm juntas (1,2 s do banco, 1,5 s das regras nativas) ≈ 2 s, fora o login. Em 23/11/2026 a aba levou 5,5–7,3 s porque o
+ * histórico (14 buscas na mesma janela do log) não tinha teto aqui nem para «quem mexeu», que esperava na fila do mesmo pool.
+ */
+const TETO_DA_ABA_MS = 1500;
+const TETO_DO_RECARREGAR_MS = 500;
 
 /** As regras nativas do Chatwoot (Configurações → Automação), só leitura. Falhou ao ler: lista vazia + o link. */
 async function regrasNativas(slug: string): Promise<{ regras: RegraNativa[]; lidas: boolean }> {
@@ -182,17 +187,32 @@ export async function robosAutomacoesHandler(req: Request, res: Response): Promi
     const t0 = Date.now();
     const ms: Record<string, number> = {};
     const medir = <T>(nome: string, p: Promise<T>): Promise<T> => p.finally(() => { ms[nome] = Date.now() - t0; });
-    await medir('recarregar', comTeto(recarregarAutomacoes(), TETO_DA_ABA_MS, undefined));
+    const parcial: ParteQueFalhou[] = [];
+    const hist: { em: number | null } = { em: null };
+    // estourou: a aba segue com o estado que o servidor já tinha (a própria tela que muda um interruptor já o recarrega) e AVISA
+    if (!(await medir('recarregar', comTeto(recarregarAutomacoes().then(() => true), TETO_DO_RECARREGAR_MS, false)))) parcial.push('estado');
     const [automacoes, nativas] = await Promise.all([
-      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug)),
+      // o teto de cada leitura do banco (histórico e «quem mexeu», juntas) fica dentro de `automacoesDaUnidade`
+      medir('automacoes', automacoesDaUnidade(bancoDasAutomacoes(), r.unit.slug, { aoFalhar: (parte) => parcial.push(parte), aoLerHistorico: (lidoEm) => { hist.em = lidoEm; } })),
       medir('nativas', comTeto(regrasNativas(r.unit.slug), TETO_DA_ABA_MS, { regras: [] as RegraNativa[], lidas: false })),
     ]);
-    if (Date.now() - inicio > 2000) logger.warn({ unit: r.unit.slug, ms: { login: msLogin, ...ms } }, 'robos: aba Automações demorou');
+    // os tetos deixam a aba sempre abaixo de 2 s: o estouro de uma parte NÃO pode passar calado (é o que a prova pós-deploy lê no log)
+    const total = Date.now() - inicio;
+    const idadeDoHistorico = hist.em === null ? null : Date.now() - hist.em;
+    if (parcial.length || total > 2000) logger.warn({ unit: r.unit.slug, parcial, total, historicoIdadeMs: idadeDoHistorico, ms: { login: msLogin, ...ms } }, parcial.length ? 'robos: aba Automações incompleta (parte estourou o teto)' : 'robos: aba Automações demorou');
     const conta = contaChatwootDaUnidade(r.unit.slug);
     res.set('Cache-Control', 'no-store').json({
       unidade: { slug: r.unit.slug, nome: r.unit.name },
       pode: podeMexerNosRobos(r.a.papel),
       automacoes,
+      // o que não deu para ler dentro do teto ('ultimas' = histórico das automações, 'mudancas' = quem mexeu por último): a tela avisa em vez de dizer «sem registro»
+      parcial,
+      // quando o histórico («últimas ações») foi lido: a leitura fica guardada (fresca 1 min, servida como velha até 2 min; mais de 10 s = «velho» para a tela); a tela diz «histórico das HH:MM»
+      historicoEm: hist.em === null ? null : new Date(hist.em).toISOString(),
+      // idade na hora de responder: a tela soma o tempo que a resposta ficou com ela e recarrega ao entrar na aba quando passa do minuto guardado
+      historicoIdadeMs: idadeDoHistorico,
+      historicoValeMs: MEMORIA_DO_HISTORICO_MS,
+      historicoVelho: idadeDoHistorico !== null && idadeDoHistorico > HISTORICO_RECENTE_MS,
       nativas: { ...nativas, link: conta ? `${conta.url}/app/accounts/${conta.conta}/settings/automation/list` : null },
     });
   } catch (e) {
