@@ -182,8 +182,13 @@ test('23/11: a busca do histórico agrupa por automação, limita a 5 por automa
     await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
     assert.equal(chamadas, 1, 'esquecer OUTRA unidade não mexe nesta');
     A.esquecerHistoricoDaUnidade('unidade-de-teste-memoria');
-    await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
-    assert.equal(chamadas, 2, 'gravar o estado de uma automação da unidade faz o histórico ser relido');
+    const velho = await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
+    assert.equal(velho.lidoEm, h1.lidoEm, 'serve o velho NA HORA (não paga a leitura fria na cara de quem acabou de mudar)');
+    await new Promise((r) => setImmediate(r));
+    assert.equal(chamadas, 2, 'e a renovação em segundo plano foi disparada');
+    await new Promise((r) => setImmediate(r));
+    const novo = await A.ultimasDoLog(ids, 'unidade-de-teste-memoria', 5);
+    assert.ok(novo.lidoEm >= h1.lidoEm);
     assert.deepEqual(Object.keys(r1).sort(), ['chatwoot-agenda', 'chatwoot-regua']);
     assert.equal(r1['chatwoot-agenda']!.length, 2);
     assert.equal(r1['chatwoot-agenda']![0]!.resumo, 'agenda 12 · gravadas 3');
@@ -211,6 +216,7 @@ test('23/11: a busca do log é UMA consulta (não uma por automação), da unida
   assert.match(fonte('./robos-pagina.ts'), /AUTO\.historicoVelho && hhmm\) ac\.appendChild\(el\('div', 'tri-ajuda', 'Nada no histórico das '/, 'histórico velho e vazio não diz «Sem registro»');
   assert.match(ctl, /parcial\.length \|\| total > 2000/, 'estouro de parte loga mesmo com a aba abaixo de 2 s');
   assert.match(ctl, /historicoVelho:/);
+  assert.equal(A.HISTORICO_RECENTE_MS, 10_000);
 });
 
 test('«últimas ações»: o que o log guardou; sem log, «sem registro» (nada inventado); quem mexeu por último', async () => {
@@ -334,7 +340,7 @@ test('os comportamentos da Sofia listados valem no caminho do Chatwoot; os «só
   assert.ok(panoramaDaUnidade(SLUG, {}).length > 0);
 });
 
-test('23/11 (sênior): mudar o estado de uma automação esquece o histórico guardado da unidade; recusa não esquece', async () => {
+test('23/11 (sênior): mudar o estado de uma automação marca o histórico da unidade como velho; recusa não mexe', async () => {
   const { banco, esquecidos, gravacoes } = bancoFalso();
   const ok = await A.mudarAutomacao(banco, { slug: SLUG, id: 'chatwoot-agenda', estado: 'seco', papel: 'administrator', por: 'Suzanne', estadoAtual: () => 'desligado' });
   assert.equal(ok.ok, true);

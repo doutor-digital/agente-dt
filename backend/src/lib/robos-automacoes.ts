@@ -133,7 +133,7 @@ export interface BancoDasAutomacoes {
   mudancas(slug: string, ids: string[]): Promise<Array<{ automacao: string; por: string | null; em: Date }>>;
   /** para cada id, as últimas linhas do log do servidor que começam com `<id>:` e são desta unidade — UMA busca para todos os ids (o log é grande); `lidoEm` = quando o log foi lido (a leitura fica guardada) */
   ultimasDe(ids: string[], slug: string, quantas: number): Promise<HistoricoLido>;
-  /** esquece o histórico guardado da unidade (alguém acabou de mudar o estado de uma automação) */
+  /** marca o histórico guardado da unidade como velho (alguém acabou de mudar o estado de uma automação) */
   esquecerHistorico?(slug: string): void;
   unidade(slug: string): Promise<{ id: string; slug: string } | null>;
   gravar(unit: { id: string }, automacao: string, estado: Estado, por: string): Promise<void>;
@@ -270,7 +270,7 @@ export async function mudarAutomacao(
   const unit = await banco.unidade(p.slug);
   if (!unit) return { ok: false, status: 404, erro: 'unidade não encontrada' };
   await banco.gravar(unit, id, p.estado, `${p.por.slice(0, 70) || 'administrador'} (Chatwoot)`);
-  // quem acabou de mudar o estado vai conferir o histórico: a leitura guardada da unidade não vale mais
+  // quem acabou de mudar o estado vai conferir o histórico: a leitura guardada da unidade passa a velha (a próxima abertura renova)
   banco.esquecerHistorico?.(p.slug);
   return { ok: true, id, estado: p.estado };
 }
@@ -300,9 +300,12 @@ const memoriaDoHistorico = new MemoriaDeLeitura<HistoricoLido>(
 );
 /** Só para teste. */
 export const _esquecerHistoricoGuardado = (): void => memoriaDoHistorico.esquecerTudo();
+/** Alguém mudou o estado de uma automação da unidade: o histórico guardado passa a «velho» (serve já, marcado com a hora, e a próxima abertura renova em segundo plano). Não joga fora: a leitura fria passaria do teto. */
 export function esquecerHistoricoDaUnidade(slug: string): void {
-  memoriaDoHistorico.invalidarSe((k) => k.startsWith(`0|${slug}|`));
+  memoriaDoHistorico.envelhecerSe((k) => k.startsWith(`0|${slug}|`));
 }
+/** Leitura do histórico com menos que isto é «de agora»: só aí uma automação vazia pode dizer «sem registro»; mais velha, a tela diz «nada no histórico das HH:MM». */
+export const HISTORICO_RECENTE_MS = 10_000;
 
 /** UMA leitura do log para todas as automações da unidade: as `quantas` mais recentes de cada `<id>:` dos últimos DIAS_DO_HISTORICO dias. */
 export async function ultimasDoLog(ids: string[], slug: string, quantas: number): Promise<HistoricoLido> {

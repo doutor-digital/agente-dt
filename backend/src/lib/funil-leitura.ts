@@ -102,9 +102,12 @@ export class MemoriaDeLeitura<T> {
     for (const k of this.entradas.keys()) if (k.startsWith(`${conta}|`)) this.entradas.delete(k);
   }
 
-  /** Esquece as entradas cuja chave (conta|…) o teste aceita; leitura em andamento dessas chaves também não é guardada. */
-  invalidarSe(testa: (chave: string) => boolean): void {
-    for (const k of [...this.entradas.keys()]) if (testa(k)) this.entradas.delete(k);
+  /**
+   * Faz as entradas cuja chave o teste aceita deixarem de ser «frescas»: o valor ainda serve na hora (marcado como velho) e a PRÓXIMA leitura dispara
+   * a renovação em segundo plano. Para o que mudou mas não vale a pena pagar a leitura fria na cara de quem pediu.
+   */
+  envelhecerSe(testa: (chave: string) => boolean): void {
+    for (const [k, e] of this.entradas) if (testa(k) && e.valor !== undefined) e.em = Math.min(e.em, this.agora() - this.frescoMs);
   }
 
   esquecerTudo(): void {

@@ -193,3 +193,17 @@ test('memória: entrada vencida não fica guardada para sempre', async () => {
   await m.obter(99, 'a', buscar);
   assert.ok((m as any).entradas.size < 5, 'as vencidas saíram');
 });
+
+test('memória: envelhecerSe tira o «fresco» das entradas pedidas (serve na hora como velho e renova na próxima), sem mexer nas outras', async () => {
+  const { m } = memoria();
+  let n = 0;
+  const buscar = async () => ++n;
+  await m.obter(1, 'unidade-a|x', buscar);
+  await m.obter(1, 'unidade-b|x', buscar);
+  m.envelhecerSe((k) => k.startsWith('1|unidade-a|'));
+  assert.deepEqual(await m.obter(1, 'unidade-a|x', buscar), { valor: 1, de: 'velho' });
+  await new Promise((r) => setImmediate(r));
+  assert.equal(n, 3, 'a renovação da unidade A foi disparada');
+  assert.deepEqual(await m.obter(1, 'unidade-b|x', buscar), { valor: 2, de: 'fresco' }, 'a B não foi afetada');
+  assert.equal((await m.obter(1, 'unidade-a|x', buscar)).valor, 3, 'a A já vem renovada');
+});
