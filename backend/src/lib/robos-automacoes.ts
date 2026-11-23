@@ -22,6 +22,7 @@ import { automacaoPorId, type Automacao } from './automacoes.js';
 import { ehEstado, gravarEstadoDaAutomacao, panoramaDaUnidade, type Estado } from './automacoes-estado.js';
 import { podeMexerNosRobos } from './robos-estado.js';
 import { tokenDoRobo } from './chatwoot-sofia-bot.js';
+import { seloDaSofiaLigado } from './chatwoot-selo-sofia.js';
 
 export type GrupoDaAutomacao = 'sofia' | 'agenda' | 'mensagens' | 'rastreio' | 'organizacao' | 'avisos' | 'nativas';
 
@@ -82,6 +83,7 @@ export const FIXAS: readonly FixaSomenteLeitura[] = [
   { id: 'fixa-pausa-celular', grupo: 'sofia', nome: 'A Sofia cala quando a equipe responde (inclusive pelo celular)', oQueFaz: 'Se alguém da equipe respondeu depois da última mensagem do paciente, a Sofia não responde por cima. A resposta pelo celular da unidade recebe a etiqueta «respondeu-pelo-celular».', estado: null },
   { id: 'fixa-resolver', grupo: 'organizacao', nome: 'Campos obrigatórios ao resolver a conversa', oQueFaz: 'Ao clicar em «Resolver», o CRM pede os campos que faltam no cartão (motivo, etapa…) antes de fechar a conversa.', estado: (e) => e.CHATWOOT_RESOLVER_OBRIGATORIO !== '0', variavel: 'CHATWOOT_RESOLVER_OBRIGATORIO' },
   { id: 'fixa-guia-etapa', grupo: 'organizacao', nome: 'Guia «O que fazer agora» na conversa (com a aula em vídeo)', oQueFaz: 'No painel da direita da conversa, os passos da Etapa atual e o botão da aula, que abre o vídeo por cima da conversa sem sair do CRM. As caixinhas dos passos são só visuais: não gravam nada.', estado: (e) => e.CHATWOOT_GUIA_ETAPA !== '0', variavel: 'CHATWOOT_GUIA_ETAPA' },
+  { id: 'fixa-selo-sofia', grupo: 'organizacao', nome: 'Selo «🤖 Sofia atendendo» na lista e barra roxa na conversa', oQueFaz: 'Na lista de conversas, o cartão com a etiqueta «sofia-atendendo» ganha faixa roxa e o selo «🤖 Sofia atendendo»; na conversa aberta, uma barra roxa no topo. Só visual: não grava nada e some quando a etiqueta sai.', estado: (e) => seloDaSofiaLigado(e), variavel: 'CHATWOOT_SELO_SOFIA' },
   { id: 'fixa-atalhos', grupo: 'organizacao', nome: 'Atalhos ⚡ Mensagens prontas e 📋 Modelos do WhatsApp', oQueFaz: 'Botões na caixa de resposta para chamar as mensagens prontas e os modelos do WhatsApp sem sair da conversa.', estado: (e) => e.CHATWOOT_ATALHOS !== '0', variavel: 'CHATWOOT_ATALHOS' },
   { id: 'fixa-perdido-motivo', grupo: 'organizacao', nome: 'Botões «Perdido: motivo» (etiqueta vira etapa)', oQueFaz: 'A macro «Perdido: motivo» põe uma etiqueta e o servidor grava Etapa = Perdido e o motivo no cartão, tirando a etiqueta.', estado: null },
   { id: 'fixa-etiqueta-anuncio', grupo: 'rastreio', nome: 'Etiqueta «anuncio» na conversa que veio de anúncio', oQueFaz: 'Quando o anúncio «Clique para o WhatsApp» é comprovado, a conversa recebe a etiqueta «anuncio».', estado: (e) => e.CHATWOOT_ETIQUETA_ANUNCIO !== '0', variavel: 'CHATWOOT_ETIQUETA_ANUNCIO' },
