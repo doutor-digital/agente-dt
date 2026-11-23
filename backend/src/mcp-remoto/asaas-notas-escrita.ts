@@ -19,7 +19,7 @@
 import { ErroDeEntrada, somarDias, validarData } from '../franquia-mcp/travas.js';
 import { dinheiro, diaLocal, EVENTO_OPERACAO, textoDoAviso } from './asaas-limites.js';
 import {
-  cabecalhoDaConta, clientePorId, comAvisos, contaDeEscrita, dataBR, descricaoValida, ErroSemId, fusoDe, mascararDoc, mascararEmail, melhorEsforco, podeTerGravado, reservar, sanear, valorValido,
+  cabecalhoDaConta, clientePorId, comAvisos, conferirTravas, contaDeEscrita, dataBR, descricaoValida, ErroSemId, fusoDe, mascararDoc, mascararEmail, melhorEsforco, podeTerGravado, reservar, sanear, valorValido,
   type ClienteAsaas, type CtxEscrita, type Quem, type Registrar,
 } from './asaas-escrita.js';
 import {
@@ -119,9 +119,9 @@ export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, ori
     for (const q of consultas) {
       const r = await paginar<NotaAsaas>(ctx, c, '/invoices', q);
       for (const n of r.itens) {
-        // da busca por parcelamento só entram a nota do parcelamento INTEIRO (sem cobrança) ou a desta mesma cobrança: a nota da parcela 1 não é repetida da parcela 2
-        // (e, se o Asaas ignorasse o filtro, não entraria a conta toda)
-        if ('installment' in q && n.payment && n.payment !== origem.id) continue;
+        // da busca por parcelamento só entram a nota DESTA cobrança ou a do parcelamento INTEIRO (sem cobrança E com o `installment` IGUAL ao desta cobrança): a nota da
+        // parcela 1 não é repetida da parcela 2, e, se o Asaas ignorasse o filtro, nenhuma avulsa da conta (de outro paciente, sem parcelamento) entraria
+        if ('installment' in q && (n.payment ? n.payment !== origem.id : n.installment !== origem.parcelamento)) continue;
         // da busca por cobrança, só as notas DESTA cobrança (o Asaas ignorando o filtro não pode trazer nota de outra)
         if ('payment' in q && n.payment !== origem.id) continue;
         if (!lidas.itens.some((x) => x.id === n.id)) lidas.itens.push(n);
@@ -144,11 +144,12 @@ export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, ori
 export const DIAS_NOTA_AVULSA_RECENTE = 60;
 
 /**
- * Ao emitir pela COBRANÇA: o mesmo cliente já tem nota AVULSA (sem cobrança nem parcelamento) do mesmo valor nos últimos 60 dias? Só AVISA (a avulsa pode ser de
+ * Ao emitir pela COBRANÇA: o mesmo cliente já tem nota AVULSA (sem cobrança nem parcelamento) do mesmo valor nos últimos 60 dias (contados de HOJE)? Só AVISA (a avulsa pode ser de
  * outro serviço): nunca bloqueia, e se a leitura falhar devolve um aviso em vez de erro.
  */
-export async function avisoDeNotaAvulsaRecente(ctx: ContextoAsaas, c: ContaAsaas, clienteId: string, valor: number, dataEmissao: string): Promise<string | null> {
-  const desde = somarDias(dataEmissao, -DIAS_NOTA_AVULSA_RECENTE);
+export async function avisoDeNotaAvulsaRecente(ctx: ContextoAsaas, c: ContaAsaas, clienteId: string, valor: number, hoje: string): Promise<string | null> {
+  // a janela conta de HOJE (e não da data de emissão pedida): nota agendada para daqui a 90 dias ainda tem de enxergar a avulsa de ontem
+  const desde = somarDias(hoje, -DIAS_NOTA_AVULSA_RECENTE);
   let lidas: { itens: NotaAsaas[]; truncado: boolean };
   try {
     lidas = await paginar<NotaAsaas>(ctx, c, '/invoices', { customer: clienteId, 'effectiveDate[Ge]': desde });
@@ -353,7 +354,7 @@ async function prepararEmissao({ asaas, esc }: CtxEscrita, c: Conta, quem: Quem,
   }
 
   if (origem.tipo === 'cobranca') {
-    const avulsa = await avisoDeNotaAvulsaRecente(asaas, c, tomador.id, valor, emissao.data);
+    const avulsa = await avisoDeNotaAvulsaRecente(asaas, c, tomador.id, valor, hoje);
     if (avulsa) avisos.push(avulsa);
   }
 
@@ -426,6 +427,11 @@ async function prepararCancelamento({ esc }: CtxEscrita, c: Conta, quem: Quem, a
   if (!CANCELAVEIS.has(status)) {
     throw new ErroDeEntrada(`a nota ${id} ${POR_QUE_NAO_CANCELA[status] ?? `está com o status "${status || 'desconhecido'}", que não permite cancelar`}. Nada foi preparado.`);
   }
+  // o limite de cancelamentos por hora já no resumo (sem reservar): a pessoa não aprova um resumo que vai falhar no confirmar com o código gasto. O confirmar reserva de verdade.
+  await conferirTravas(esc, c, { tipo: 'cancelamento', valor: Number(nota.value) || 0, noTeto: 0 }).catch((e) => {
+    if (e instanceof ErroDeEntrada) throw new ErroDeEntrada(`${e.message.replace(/ Nada foi feito\.$/, '')} Nada foi preparado.`);
+    throw e;
+  });
   const avisos: string[] = [...avisosDaConta];
   const cancelaPelaApi = status === 'AUTHORIZED' ? await prefeituraCancelaPelaApi(c) : null;
   if (cancelaPelaApi === false) avisos.push('a prefeitura desta conta NÃO aceita cancelamento automático pela integração: o Asaas deve recusar, e o cancelamento terá de ser feito no portal da prefeitura');
