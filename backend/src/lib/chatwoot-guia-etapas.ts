@@ -76,7 +76,8 @@ export const GUIA_DAS_ETAPAS: Readonly<Record<EtapaDoCrm, GuiaDaEtapa>> = {
   Agendado: {
     // o robô «Pré-pagamento» (chatwoot-regua.ts) cobra quando «Pagamento antecipado» = Sim e a etiqueta «pagou-antecipado» NÃO está:
     // o campo quer dizer «vai pagar antes», não «já pagou» (23/11: o texto antigo mandava marcar quem já pagou — o robô cobraria de novo)
-    passos: ['Confira Data, Hora (HH:MM) e Situação da consulta', 'Vai pagar antes? Marque «Pagamento antecipado»: o robô manda o Pix', 'Pagou? Ponha a etiqueta «pagou-antecipado» e o robô para de cobrar', 'Lembretes saem sozinhos. Combinou tudo? Pode Resolver'],
+    // (o robô só dispara até 12 h depois de entrar em Agendado e com a Situação da consulta = Agendado; ele PERGUNTA se quer os dados do Pix — não manda a chave)
+    passos: ['Confira Data, Hora (HH:MM) e Situação da consulta', 'Vai pagar antes? Marque «Pagamento antecipado»: o robô pergunta se quer o Pix', 'Pagou? Ponha a etiqueta «pagou-antecipado» e o robô para de cobrar', 'Lembretes saem sozinhos. Combinou tudo? Pode Resolver'],
     aula: A.marcarConsulta,
   },
   Confirmado: {
