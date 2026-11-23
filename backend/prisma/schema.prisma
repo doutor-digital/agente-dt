@@ -483,6 +483,15 @@ model Unit {
    * não está em businessHoursDays continua fechado, esteja aqui ou não.
    */
   businessHoursByDay    Json?    @map("business_hours_by_day")
+  /**
+   * Expediente da clínica — quando a EQUIPE atende; a IA atende todo o resto (noite, fim de
+   * semana e feriado nacional, emendados). Precisão de minuto:
+   * `{"mon":{"start":"06:30","end":"18:00"},...,"fri":{...}}`; dia ausente = sem expediente.
+   * Nulo (a maioria das unidades) = vale a janela de businessHoursStart/End/ByDay, como sempre.
+   * Com expediente válido, ele manda e businessHoursStart/End/Days/ByDay deixam de ser lidos
+   * (só businessHoursEnabled e o fuso continuam valendo). Ver lib/expediente.ts.
+   */
+  businessHoursExpediente Json?  @map("business_hours_expediente")
 
   // FOLLOW-UP — instruções pra IA mencionar follow-up (real scheduling fica pra depois).
   followUpEnabled    Boolean @default(false) @map("follow_up_enabled")

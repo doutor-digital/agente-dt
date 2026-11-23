@@ -61,6 +61,7 @@ import { renderAnuncioDeOrigem } from './anuncio-de-origem.js';
 import { renderOfertaDaCampanha, type OfertaVigente } from './oferta-da-campanha.js';
 import { ofertaDoLead } from '../lib/disparo/oferta.js';
 import { logger } from '../lib/logger.js';
+import { descreverExpediente, dentroDoExpediente, lerExpediente } from '../lib/expediente.js';
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
@@ -175,11 +176,28 @@ export function checkBusinessHours(unit: Unit, now: Date = new Date()): Business
     timeZone: tz,
     weekday: 'short',
     hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   }).formatToParts(now);
   const weekday = (parts.find((p) => p.type === 'weekday')?.value ?? '').toLowerCase().slice(0, 3);
   const hourStr = parts.find((p) => p.type === 'hour')?.value ?? '0';
   const hour = Number(hourStr) % 24;
+
+  // Expediente da clínica (Caxias e Petrópolis): a IA atende quando a clínica está FECHADA — noite,
+  // fim de semana e feriado, emendados, com precisão de minuto. Quando a unidade tem um, ele manda
+  // e a janela antiga abaixo nem é lida. AQUI o feriado nacional é justamente o que abre a IA o dia
+  // inteiro (não há expediente em feriado) — o contrário do comentário lá de cima, que vale só para
+  // a janela antiga. Sem expediente (ou torto), o caminho antigo segue idêntico.
+  const expediente = lerExpediente(unit.businessHoursExpediente, unit.slug);
+  if (expediente) {
+    const minuto = hour * 60 + (Number(parts.find((p) => p.type === 'minute')?.value ?? '0') % 60);
+    return {
+      enabled: true,
+      isOpen: !dentroDoExpediente(expediente, weekday, minuto, feriadoHoje),
+      outOfHoursMessage: unit.outOfHoursMessage,
+    };
+  }
+
   const allowedDays = new Set(unit.businessHoursDays);
 
   // Duas perguntas, porque o turno da noite não cabe num dia só:
@@ -1503,6 +1521,13 @@ function renderWelcomeCoupon(unit: Unit): string {
 
 function renderBusinessHours(unit: Unit): string {
   if (!unit.businessHoursEnabled) return '';
+  const expediente = lerExpediente(unit.businessHoursExpediente, unit.slug);
+  if (expediente) {
+    return xmlBlock('horario_comercial', `- A equipe da clínica atende: ${descreverExpediente(expediente)} (${unit.businessHoursTimezone}),
+  exceto feriados nacionais. Esta IA atende todo o resto: à noite, nos fins de semana e nos feriados nacionais.
+- Quando o cliente escrever no horário da equipe, esta IA NÃO responde. Você não precisa
+  se preocupar com isso — apenas responda normalmente quando estiver no ar.`);
+  }
   const days = unit.businessHoursDays.join(', ');
   return xmlBlock('horario_comercial', `- Atendimento ativo: ${days}, das ${unit.businessHoursStart}h às ${unit.businessHoursEnd}h
   (${unit.businessHoursTimezone}).

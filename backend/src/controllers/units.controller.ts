@@ -1,3 +1,4 @@
+import { interpretarExpediente } from '../lib/expediente.js';
 import type { Request, Response } from 'express';
 import { z } from 'zod';
 import { USD_BRL } from '../lib/cambio.js';
@@ -201,6 +202,18 @@ const unitInputBase = {
     )
     .optional(),
   outOfHoursMessage: z.string().max(1000).nullable().optional(),
+  // Expediente da clínica (a IA atende o resto): {"mon":{"start":"06:30","end":"18:00"},...}. Mesma validação da leitura.
+  businessHoursExpediente: z
+    .unknown()
+    .refine(
+      (v) => {
+        if (v === undefined || v === null) return true;
+        const r = interpretarExpediente(v);
+        return r.ok && r.expediente !== null;
+      },
+      { message: 'expediente inválido: use {"mon":{"start":"06:30","end":"18:00"},...} com dias sun..sat e HH:MM, fim depois do início' },
+    )
+    .optional(),
   followUpEnabled: z.boolean().optional(),
   followUpAfterHours: z.coerce.number().int().min(1).max(720).optional(),
   followUpMessage: z.string().max(500).nullable().optional(),
@@ -372,7 +385,7 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
 
     const newName = `${source.name} (cópia)`.slice(0, 120);
 
-    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, spineStaffPorTurno, ...rest } = source;
+    const { id: _id, slug: _slug, name: _name, createdAt: _c, updatedAt: _u, pipelineIntents, spineDayHours, businessHoursByDay, businessHoursExpediente, spineStaffPorTurno, ...rest } = source;
     const cloned = await prisma.unit.create({
       data: {
         ...rest,
@@ -382,6 +395,8 @@ export async function cloneUnitHandler(req: Request, res: Response): Promise<voi
         spineDayHours: spineDayHours === null ? Prisma.DbNull : (spineDayHours as Prisma.InputJsonValue),
         businessHoursByDay:
           businessHoursByDay === null ? Prisma.DbNull : (businessHoursByDay as Prisma.InputJsonValue),
+        businessHoursExpediente:
+          businessHoursExpediente === null ? Prisma.DbNull : (businessHoursExpediente as Prisma.InputJsonValue),
         spineStaffPorTurno:
           spineStaffPorTurno === null ? Prisma.DbNull : (spineStaffPorTurno as Prisma.InputJsonValue),
       },
