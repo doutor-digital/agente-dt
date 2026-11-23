@@ -3,8 +3,9 @@
  *
  * PERMITIDO (método + rota): cadastrar e editar cliente; criar e editar cobrança (boleto, Pix, cartão por link, parcelado);
  * cancelar (excluir) cobrança pendente; estornar cobrança recebida; transferir (Pix/conta) — esta última só chega aqui depois
- * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`; e CRIAR link de pagamento (só o POST: é o sinal da
- * consulta que a Sofia manda ao paciente, `lib/sinal-pix.ts`).
+ * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`; CRIAR link de pagamento (só o POST: é o sinal da
+ * consulta que a Sofia manda ao paciente, `lib/sinal-pix.ts`); e NOTA FISCAL de serviço (NFS-e): agendar, emitir e cancelar — só pelo
+ * preparar → confirmar do conector (`mcp-remoto/asaas-notas-escrita.ts`). Editar nota (PUT) não existe aqui.
  *
  * PROIBIDO SEMPRE (não existe rota, então não há o que configurar): dados bancários da clínica, chaves de API, webhooks, usuários
  * do Asaas, antecipação, empréstimo, pagamento de contas (bill payment), assinatura, exclusão de cliente. A leitura continua em
@@ -23,6 +24,7 @@ export type MetodoDeEscrita = 'POST' | 'PUT' | 'DELETE';
 // ids com o prefixo certo do Asaas (cus_ cliente, pay_ cobrança): "/payments/webhook" ou "/customers/myAccount" não são rotas de escrita
 const CLIENTE = 'cus_[A-Za-z0-9]{6,40}';
 const COBRANCA = 'pay_[A-Za-z0-9]{6,40}';
+const NOTA = 'inv_[A-Za-z0-9]{6,40}';
 /** As ÚNICAS rotas em que este cliente escreve (método + caminho inteiro, sem query). */
 export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho: RegExp; nome: string }> = [
   { metodo: 'POST', caminho: /^\/customers$/, nome: 'cadastrar cliente' },
@@ -36,6 +38,10 @@ export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho:
   { metodo: 'POST', caminho: /^\/paymentLinks$/, nome: 'criar link de pagamento (sinal da consulta)' },
   // Sofia 2.0 (11/11/2026): o sinal sai como Pix copia-e-cola de valor fixo, sem formulário (o link pedia nome, CPF, e-mail: idoso desiste)
   { metodo: 'POST', caminho: /^\/pix\/qrCodes\/static$/, nome: 'criar Pix copia-e-cola de valor fixo (sinal da consulta)' },
+  // NFS-e (23/11/2026): agendar a nota, antecipar a emissão e cancelar. Só o POST; editar (PUT) e excluir não existem.
+  { metodo: 'POST', caminho: /^\/invoices$/, nome: 'agendar nota fiscal' },
+  { metodo: 'POST', caminho: new RegExp(`^/invoices/${NOTA}/authorize$`), nome: 'emitir nota fiscal' },
+  { metodo: 'POST', caminho: new RegExp(`^/invoices/${NOTA}/cancel$`), nome: 'cancelar nota fiscal' },
 ];
 
 export function rotaPermitida(metodo: string, caminho: string): boolean {

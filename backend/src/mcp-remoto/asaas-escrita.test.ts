@@ -572,7 +572,8 @@ test('o portão de quem escreve: fora da lista de escrita as ferramentas nem exi
   assert.deepEqual(vazia.nomes, []);
   const dentro = await listar('u-joao', new Set(['u-joao']));
   assert.equal(dentro.registrou, true);
-  assert.deepEqual(dentro.nomes, FERRAMENTAS);
+  // a escrita direta + a nota fiscal (dois passos, pelo mesmo portão)
+  assert.deepEqual(dentro.nomes, [...FERRAMENTAS, 'asaas_confirmar_nota', 'asaas_preparar_nota'].sort());
   assert.equal(m.f.chamadas.length, 0);
 });
 

@@ -22,6 +22,7 @@ import { limparTexto } from '../lib/integracoes/asaas-escrita.js';
 import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
 import { resolverContasAsaas, type ContaAsaas, type ContextoAsaas, type EscritaAsaas } from './asaas.js';
+import { PendentesNota } from './asaas-notas-pendentes.js';
 import {
   arredondar, cancelamentosPorHora, conferirTetos, dinheiro, diaLocal, mascararDoc, mascararEmail, soDigitos, EVENTO_CLIENTE, EVENTO_COBRANCA, EVENTO_OPERACAO, FUSO_PADRAO, lerDestinos, tetoEspecificoDe, tetoPorDia, tetoPorOperacao, textoDoAviso,
   type DestinosLidos, type Livro, type Porteiro, type TetoEspecifico, type TipoDeLancamento, type TipoDeSaida,
@@ -301,6 +302,8 @@ export interface EstadoEscritaAsaas {
   nomes: Map<string, { nome: string; ate: number }>;
   /** operações uma por vez EM CADA CONTA neste processo (contas diferentes não esperam umas pelas outras); entre processos quem segura é o porteiro */
   filas: Map<string, Promise<unknown>>;
+  /** nota fiscal (emitir/cancelar): pedidos preparados à espera do ok da pessoa (código de uso único, 15 min) */
+  notas: PendentesNota;
 }
 
 /** Sem porteiro (nem nos testes) a escrita não anda: tetos que não conseguem ler o banco não são tetos. */
@@ -343,6 +346,7 @@ export function criarEscritaAsaas(
     porteiro: o.porteiro ?? PORTEIRO_AUSENTE,
     nomes: new Map(),
     filas: new Map(),
+    notas: new PendentesNota(o.agora ?? Date.now),
   };
 }
 
@@ -519,6 +523,10 @@ export interface ClienteAsaas {
   phone?: string;
   notificationDisabled?: boolean;
   deleted?: boolean;
+  /** endereço do cadastro (a nota fiscal do tomador costuma exigir) */
+  postalCode?: string;
+  address?: string;
+  addressNumber?: string;
 }
 
 export type ContaDeEscrita = ContaAsaas & { escrita: EscritaAsaas };

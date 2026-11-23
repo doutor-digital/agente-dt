@@ -83,7 +83,7 @@ async function comCache<T>(ctx: ContextoAsaas, chave: string, ttl: number, fn: (
 }
 
 /** Listagem do Asaas (offset/limit 100, `hasMore`), com teto de páginas. */
-async function paginar<T>(ctx: ContextoAsaas, c: ContaAsaas, caminho: string, query: Record<string, string | number | undefined>): Promise<{ itens: T[]; truncado: boolean }> {
+export async function paginar<T>(ctx: ContextoAsaas, c: ContaAsaas, caminho: string, query: Record<string, string | number | undefined>): Promise<{ itens: T[]; truncado: boolean }> {
   const itens: T[] = [];
   for (let p = 0; p < ctx.maxPaginas; p++) {
     const r = await c.fonte.get<{ data?: T[]; hasMore?: boolean }>(caminho, { ...query, offset: p * 100, limit: 100 });

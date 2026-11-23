@@ -13,7 +13,7 @@ export class ErroHttp extends Error {
   }
 }
 
-export interface Cli { id: string; name: string; cpfCnpj: string; email?: string; mobilePhone?: string; notificationDisabled?: boolean; deleted?: boolean }
+export interface Cli { id: string; name: string; cpfCnpj: string; email?: string; mobilePhone?: string; notificationDisabled?: boolean; deleted?: boolean; postalCode?: string; address?: string; addressNumber?: string }
 export interface Pg {
   id: string;
   customer?: string;
@@ -29,9 +29,50 @@ export interface Pg {
   [k: string]: unknown;
 }
 
+/** Nota fiscal (NFS-e) do Asaas falso: os campos da doc oficial (GET /v3/invoices/{id}). */
+export interface Nf {
+  id: string;
+  status: string;
+  customer?: string;
+  payment?: string;
+  installment?: string;
+  value: number;
+  deductions?: number;
+  effectiveDate?: string;
+  serviceDescription?: string;
+  observations?: string;
+  externalReference?: string;
+  municipalServiceId?: string | null;
+  municipalServiceCode?: string | null;
+  municipalServiceName?: string;
+  number?: string | null;
+  pdfUrl?: string | null;
+  xmlUrl?: string | null;
+  statusDescription?: string | null;
+  taxes?: Record<string, unknown>;
+  [k: string]: unknown;
+}
+export interface ServicoMunicipal { id: string; description: string; issTax?: number }
+
 export interface Opc {
   clientes?: Cli[];
   pagamentos?: Pg[];
+  /** notas fiscais que já existem na conta */
+  notas?: Nf[];
+  /** GET /fiscalInfo/ responde 404: a clínica não tem dado fiscal cadastrado */
+  semDadoFiscal?: boolean;
+  /** campos de GET /fiscalInfo/ (mescla com um cadastro padrão: Simples Nacional, certificado enviado) */
+  dadoFiscal?: Record<string, unknown>;
+  /** serviços municipais da prefeitura (padrão: dois, com ISS) */
+  servicos?: ServicoMunicipal[];
+  /** a prefeitura / Portal Nacional não tem lista: o Asaas responde 400 "não está habilitado" */
+  semListaDeServicos?: boolean;
+  /** GET /fiscalInfo/municipalOptions devolve supportsCancellation=false */
+  prefeituraNaoCancela?: boolean;
+  /** POST /invoices/{id}/authorize devolve este status (padrão SCHEDULED: quem autoriza é a prefeitura, depois) */
+  statusAoEmitir?: string;
+  /** POST /invoices/{id}/cancel devolve este status (padrão PROCESSING_CANCELLATION) */
+  statusAoCancelar?: string;
   /** falha por método + rota (a primeira que casa) */
   falhas?: Array<{ metodo: string; caminho: RegExp; erro: Error }>;
   falhaNoPagamento?: Error;
@@ -58,8 +99,15 @@ export interface Chamada { metodo: string; caminho: string; corpo?: Record<strin
 export function asaasFalso(o: Opc = {}) {
   const clientes = [...(o.clientes ?? [])];
   const pagamentos: Pg[] = [...(o.pagamentos ?? [])];
+  const notas: Nf[] = [...(o.notas ?? [])];
+  const servicos: ServicoMunicipal[] = o.servicos ?? [
+    { id: '3544', description: '4.08 - Terapia ocupacional, fisioterapia e fonoaudiologia', issTax: 2 },
+    { id: '2360', description: '4.01 - Medicina e biomedicina', issTax: 3 },
+  ];
   const chamadas: Chamada[] = [];
   const gets: string[] = [];
+  /** cada leitura com a query que foi (para conferir o nome do filtro que vai ao Asaas) */
+  const consultas: Array<{ caminho: string; query: Record<string, string | number | undefined> }> = [];
   let seq = 0;
   const falhar = (metodo: string, caminho: string) => {
     const f = o.falhas?.find((x) => x.metodo === metodo && x.caminho.test(caminho));
@@ -72,6 +120,7 @@ export function asaasFalso(o: Opc = {}) {
     fonte: {
       async get<T>(caminho: string, query: Record<string, string | number | undefined> = {}): Promise<T> {
         gets.push(caminho);
+        consultas.push({ caminho, query: { ...query } });
         falhar('GET', caminho);
         if (caminho === '/myAccount/commercialInfo') {
           if (o.semNomeDaConta) throw new ErroHttp('Asaas 404', 404);
@@ -88,6 +137,37 @@ export function asaasFalso(o: Opc = {}) {
           const c = clientes.find((x) => x.id === m[1]);
           if (!c) throw new ErroHttp('Asaas 404 em /customers', 404);
           return c as T;
+        }
+        if (caminho === '/fiscalInfo/') {
+          if (o.semDadoFiscal) throw new ErroHttp('Asaas 404 em /fiscalInfo/', 404);
+          return { object: 'customerFiscalInfo', email: 'fiscal@clinica.com.br', municipalInscription: '21779501', simplesNacional: true, cnae: '8630503', specialTaxRegime: '1', serviceListItem: '4.01', username: 'usuario-da-prefeitura', passwordSent: false, accessTokenSent: false, certificateSent: true, serviceProvisionCityDefaultType: 'MY_ACCOUNT_CITY', ...(o.dadoFiscal ?? {}) } as T;
+        }
+        if (caminho === '/fiscalInfo/municipalOptions') return { authenticationType: 'CERTIFICATE', supportsCancellation: !o.prefeituraNaoCancela } as T;
+        if (caminho === '/fiscalInfo/services') {
+          if (o.semListaDeServicos) throw new ErroHttp('Asaas 400 em /fiscalInfo/services: O código de serviços municipais não está habilitado para esta conta.', 400);
+          const filtro = String(query.description ?? '').toLowerCase();
+          const certos = servicos.filter((x) => !filtro || x.description.toLowerCase().includes(filtro));
+          const de = Number(query.offset ?? 0);
+          const lim = Number(query.limit ?? 100);
+          return { data: certos.slice(de, de + lim), hasMore: de + lim < certos.length, totalCount: certos.length } as T;
+        }
+        if (caminho === '/invoices') {
+          const q = query as Record<string, string | undefined>;
+          const certas = notas.filter(
+            (n) =>
+              (!q.payment || n.payment === q.payment) && (!q.customer || n.customer === q.customer) && (!q.status || n.status === q.status) &&
+              (!q.externalReference || n.externalReference === q.externalReference) && (!q['effectiveDate[Ge]'] || String(n.effectiveDate) >= q['effectiveDate[Ge]']) &&
+              (!q['effectiveDate[Le]'] || String(n.effectiveDate) <= q['effectiveDate[Le]']),
+          );
+          const de = Number(query.offset ?? 0);
+          const lim = Number(query.limit ?? 10);
+          return { object: 'list', data: certas.slice(de, de + lim), hasMore: de + lim < certas.length, totalCount: certas.length } as T;
+        }
+        const nf = caminho.match(/^\/invoices\/([^/]+)$/);
+        if (nf) {
+          const x = notas.find((y) => y.id === nf[1]);
+          if (!x) throw new ErroHttp('Asaas 404 em /invoices', 404);
+          return x as T;
         }
         if (caminho === '/payments') return { data: pagamentos.filter((p) => p.externalReference === query.externalReference) } as T;
         if (/^\/payments\/[^/]+\/refunds$/.test(caminho)) {
@@ -176,13 +256,41 @@ export function asaasFalso(o: Opc = {}) {
                   return p as T;
                 }
               }
+              if (metodo === 'POST' && caminho === '/invoices') {
+                const n: Nf = {
+                  id: `inv_00000${++seq}9999`,
+                  status: 'SCHEDULED',
+                  value: corpo!.value as number,
+                  deductions: corpo!.deductions as number,
+                  effectiveDate: String(corpo!.effectiveDate),
+                  serviceDescription: String(corpo!.serviceDescription),
+                  observations: String(corpo!.observations ?? ''),
+                  municipalServiceId: (corpo!.municipalServiceId as string | undefined) ?? null,
+                  municipalServiceCode: (corpo!.municipalServiceCode as string | undefined) ?? null,
+                  municipalServiceName: String(corpo!.municipalServiceName ?? ''),
+                  taxes: corpo!.taxes as Record<string, unknown>,
+                  ...(corpo!.payment ? { payment: String(corpo!.payment), customer: pagamentos.find((p) => p.id === corpo!.payment)?.customer } : {}),
+                  ...(corpo!.customer ? { customer: String(corpo!.customer) } : {}),
+                  ...(corpo!.installment ? { installment: String(corpo!.installment) } : {}),
+                  ...(corpo!.externalReference ? { externalReference: String(corpo!.externalReference) } : {}),
+                };
+                notas.push(n);
+                return n as T;
+              }
+              const nfe = caminho.match(/^\/invoices\/([^/]+)\/(authorize|cancel)$/);
+              if (metodo === 'POST' && nfe) {
+                const n = notas.find((x) => x.id === nfe[1]);
+                if (!n) throw new ErroHttp('Asaas 404 em /invoices', 404);
+                n.status = nfe[2] === 'authorize' ? (o.statusAoEmitir ?? 'SCHEDULED') : (o.statusAoCancelar ?? 'PROCESSING_CANCELLATION');
+                return n as T;
+              }
               if (metodo === 'POST' && caminho === '/transfers') return { id: `tra_${++seq}`, status: o.statusDaTransferencia ?? 'PENDING', value: corpo!.value } as T;
               throw new Error(`escrita não simulada: ${metodo} ${caminho}`);
             },
           },
         }),
   };
-  return { conta, clientes, pagamentos, chamadas, gets, posts: () => chamadas.filter((c) => c.metodo !== 'GET') };
+  return { conta, clientes, pagamentos, notas, chamadas, gets, consultas, posts: () => chamadas.filter((c) => c.metodo !== 'GET') };
 }
 
 export const AGORA = Date.parse('2026-10-28T15:00:00-03:00');

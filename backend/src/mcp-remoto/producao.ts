@@ -44,6 +44,7 @@ import { asaasEscrever } from '../lib/integracoes/asaas-escrita.js';
 import { finalDaChave, impressaoDaChave } from '../lib/integracoes/cofre.js';
 import { criarEscritaAsaas } from './asaas-escrita.js';
 import { registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
+import { registrarLeituraNotasAsaas } from './asaas-notas.js';
 import { porteiroPrisma } from './auditoria.js';
 import { enviarTelegram } from '../lib/telegram.js';
 import { criarContextoConvenia, registrarFerramentasConvenia, type ContaConvenia } from './convenia.js';
@@ -648,6 +649,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasKommo(server, kommo, auditar);
       registrarFerramentasBling(server, bling, kommo, auditar);
       registrarFerramentasAsaas(server, asaas, auditar);
+      // nota fiscal (NFS-e): só a leitura (asaas_notas, asaas_nota, asaas_dados_fiscais); emitir e cancelar, em dois passos, vêm junto da escrita do Asaas, mais abaixo
+      registrarLeituraNotasAsaas(server, asaas, auditar);
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarFerramentasZenfisio(server, zenfisio, auditar);
