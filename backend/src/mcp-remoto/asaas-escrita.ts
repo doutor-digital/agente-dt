@@ -53,6 +53,19 @@ export function unidadesComEscrita(e: NodeJS.ProcessEnv = process.env): Set<stri
   );
 }
 
+/**
+ * Unidades em que a NOTA FISCAL (preparar/confirmar emissão e cancelamento) está LIGADA: slugs separados por vírgula em ASAAS_NOTAS_UNIDADES, mesmo formato
+ * e mesma regra de ASAAS_ESCRITA_UNIDADES (ausente ou vazia = desligada em todas; "*" não vale). Exige estar TAMBÉM em ASAAS_ESCRITA_UNIDADES. A leitura não depende dela.
+ */
+export function unidadesComNotas(e: NodeJS.ProcessEnv = process.env): Set<string> {
+  return new Set(
+    (e.ASAAS_NOTAS_UNIDADES ?? '')
+      .split(',')
+      .map((s) => s.trim().toLowerCase())
+      .filter((s) => s && !s.includes('*')),
+  );
+}
+
 // ----------------------------------------------------------------- validação e máscaras
 
 
@@ -290,6 +303,8 @@ export interface EstadoEscritaAsaas {
   cancelamentosPorHora: () => number;
   /** unidades com a escrita ligada (ASAAS_ESCRITA_UNIDADES) */
   unidades: () => Set<string>;
+  /** unidades com a NOTA FISCAL (emitir/cancelar) ligada (ASAAS_NOTAS_UNIDADES); vale junto com `unidades` */
+  unidadesNotas: () => Set<string>;
   /** destinos de transferência permitidos da clínica (ASAAS_TRANSFERENCIA_DESTINOS) */
   destinos: (slug: string) => DestinosLidos;
   /** manda o aviso (Telegram); devolve se saiu. Nunca lança. */
@@ -325,6 +340,7 @@ export function criarEscritaAsaas(
     porHora?: () => number;
     cancelamentosPorHora?: () => number;
     unidades?: () => Set<string>;
+    unidadesNotas?: () => Set<string>;
     destinos?: (slug: string) => DestinosLidos;
     alertar?: (texto: string) => Promise<boolean>;
     esperaLinhaMs?: number;
@@ -339,6 +355,7 @@ export function criarEscritaAsaas(
     porHora: o.porHora ?? (() => cobrancasPorHora()),
     cancelamentosPorHora: o.cancelamentosPorHora ?? (() => cancelamentosPorHora()),
     unidades: o.unidades ?? (() => unidadesComEscrita()),
+    unidadesNotas: o.unidadesNotas ?? (() => unidadesComNotas()),
     destinos: o.destinos ?? ((slug) => lerDestinos(slug)),
     // o servidor passa o Telegram de verdade (producao.ts); sem isso o aviso não sai, e o teste de producao.ts garante a ligação
     alertar: o.alertar ?? (async () => false),

@@ -159,7 +159,7 @@ export function asaasFalso(o: Opc = {}) {
           const q = query as Record<string, string | undefined>;
           const certas = notas.filter(
             (n) =>
-              (!q.payment || n.payment === q.payment) && (!q.customer || n.customer === q.customer) && (!q.status || n.status === q.status) &&
+              (!q.payment || n.payment === q.payment) && (!q.installment || n.installment === q.installment) && (!q.customer || n.customer === q.customer) && (!q.status || n.status === q.status) &&
               (!q.externalReference || o.listaIgnoraReferencia || n.externalReference === q.externalReference) && (!q['effectiveDate[Ge]'] || String(n.effectiveDate) >= q['effectiveDate[Ge]']) &&
               (!q['effectiveDate[Le]'] || String(n.effectiveDate) <= q['effectiveDate[Le]']),
           );
@@ -391,6 +391,7 @@ export function montar(o: Opc = {}, op: Parameters<typeof criarEscritaAsaas>[0] 
   const esc = criarEscritaAsaas({
     agora: () => relogio.t,
     unidades: () => new Set(['doutor-hernia-serra']),
+    unidadesNotas: () => new Set(['doutor-hernia-serra']),
     tetoEspecifico: () => ({ operacao: Infinity, dia: Infinity }),
     porteiro: porteiroEmMemoria(banco, agoraDe, (evento, args) => intencoes.push({ evento, args: { ...args, chamadasAteAgora: f.posts().length } })),
     alertar: async (t) => {

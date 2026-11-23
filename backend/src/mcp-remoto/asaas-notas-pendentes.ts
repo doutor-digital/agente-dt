@@ -22,7 +22,8 @@ export interface PedidoDeNota {
   corpo?: Record<string, unknown>;
   /** emitir: emitir já (POST …/authorize depois de agendar) em vez de esperar a data */
   emitirAgora?: boolean;
-  origem?: { tipo: 'cobranca' | 'cliente'; id: string };
+  /** `parcelamento`: a cobrança é parcela (ins_…): a nota do parcelamento inteiro também conta como repetida */
+  origem?: { tipo: 'cobranca' | 'cliente'; id: string; parcelamento?: string };
   valor?: number;
   dataEmissao?: string;
   /** emitir: as notas ativas que já existiam na prévia (a pessoa foi avisada); nota NOVA que aparecer depois derruba a confirmação */

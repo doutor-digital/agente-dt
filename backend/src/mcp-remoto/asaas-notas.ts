@@ -172,18 +172,19 @@ export async function acharServicoMunicipal(ctx: ContextoAsaas, c: ContaAsaas, p
   if (!p) throw new ErroDeEntrada('informe o serviço municipal (id, código ou parte do nome; veja asaas_dados_fiscais)');
   const porNome = await listarServicos(c, p);
   if (!porNome.disponivel) return null;
+  // entrada só com dígitos: o ID exato, na lista inteira, vem ANTES de qualquer "descrição contém" (um serviço com esses dígitos no texto não pode ganhar do id)
+  if (/^\d+$/.test(p)) {
+    const todos = await paginar<{ id?: unknown; description?: unknown; issTax?: unknown }>(ctx, c, '/fiscalInfo/services', {});
+    const doId = todos.itens.map(paraServico).filter((s) => s.id === p);
+    if (doId.length === 1) return doId[0]!;
+  }
   const certos = (xs: ServicoMunicipal[]) => {
     const exatos = xs.filter((s) => s.id === p || codigoDoServico(s.descricao) === p);
     if (exatos.length === 1) return exatos;
     const lista = exatos.length ? exatos : xs.filter((s) => norm(s.descricao).includes(norm(p)));
     return lista;
   };
-  let achados = certos(porNome.servicos);
-  // o id numérico não aparece na descrição: o filtro por nome não acha; varre a lista inteira (com teto)
-  if (!achados.length && /^\d+$/.test(p)) {
-    const todos = await paginar<{ id?: unknown; description?: unknown; issTax?: unknown }>(ctx, c, '/fiscalInfo/services', {});
-    achados = certos(todos.itens.map(paraServico));
-  }
+  const achados = certos(porNome.servicos);
   if (achados.length === 1) return achados[0]!;
   const opcoes = (achados.length ? achados : (await listarServicos(c, undefined, 25).then((r) => (r.disponivel ? r.servicos : [])))).slice(0, 25).map((s) => `${s.id}: ${s.descricao}`).join(' | ');
   throw new ErroDeEntrada(`serviço municipal "${p}" ${achados.length > 1 ? 'é ambíguo (vários servem)' : 'não existe na lista desta prefeitura'}. Opções: ${opcoes || '(a lista veio vazia)'}. Nada foi preparado.`);

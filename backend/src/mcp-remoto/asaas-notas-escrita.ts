@@ -100,7 +100,7 @@ async function notaPorId(c: ContaAsaas, id: string): Promise<NotaAsaas> {
   return n;
 }
 
-type Origem = { tipo: 'cobranca' | 'cliente'; id: string };
+type Origem = { tipo: 'cobranca' | 'cliente'; id: string; parcelamento?: string };
 
 /**
  * As notas que JÁ existem e valem (tudo menos cancelada e com erro; nota de cancelamento negado continua valendo) para esta origem: da cobrança,
@@ -110,10 +110,17 @@ type Origem = { tipo: 'cobranca' | 'cliente'; id: string };
 export async function notasAtivasDaOrigem(ctx: ContextoAsaas, c: ContaAsaas, origem: Origem, valor: number, dataEmissao: string, fase: 'preparar' | 'confirmar' = 'preparar'): Promise<NotaAsaas[]> {
   // no confirmar o código JÁ foi gasto: "tente em instantes" seria falso
   const depois = fase === 'confirmar' ? 'o código foi gasto: prepare a nota de novo em instantes' : 'tente em instantes';
-  const q = origem.tipo === 'cobranca' ? { payment: origem.id } : { customer: origem.id, 'effectiveDate[Ge]': dataEmissao, 'effectiveDate[Le]': dataEmissao };
-  let lidas: { itens: NotaAsaas[]; truncado: boolean };
+  // cobrança que é parcela: a nota do PARCELAMENTO inteiro (só tem `installment`, não `payment`) também é repetida
+  const consultas = origem.tipo === 'cobranca'
+    ? [{ payment: origem.id }, ...(origem.parcelamento ? [{ installment: origem.parcelamento }] : [])]
+    : [{ customer: origem.id, 'effectiveDate[Ge]': dataEmissao, 'effectiveDate[Le]': dataEmissao }];
+  const lidas: { itens: NotaAsaas[]; truncado: boolean } = { itens: [], truncado: false };
   try {
-    lidas = await paginar<NotaAsaas>(ctx, c, '/invoices', q);
+    for (const q of consultas) {
+      const r = await paginar<NotaAsaas>(ctx, c, '/invoices', q);
+      for (const n of r.itens) if (!lidas.itens.some((x) => x.id === n.id)) lidas.itens.push(n);
+      lidas.truncado ||= r.truncado;
+    }
   } catch (e) {
     if (httpStatus(e) === 401) throw e;
     throw new ErroDeEntrada(`não consegui conferir se já existe nota desta origem (o Asaas não respondeu à listagem): por segurança nada foi feito; ${depois}`);
@@ -209,8 +216,19 @@ function definirImpostos(p: ImpostosPedidos, servico: ServicoMunicipal | null, s
 
 // ----------------------------------------------------------------- preparar
 
+/** A conta da escrita do Asaas E ligada para nota fiscal (ASAAS_NOTAS_UNIDADES): as duas listas, senão responde em português que a nota não está ligada. */
+export function contaDeNota(asaas: CtxEscrita['asaas'], esc: CtxEscrita['esc'], unidade: unknown) {
+  const c = contaDeEscrita(asaas, esc, unidade);
+  if (!esc.unidadesNotas().has(c.slug.toLowerCase())) {
+    throw new ErroDeEntrada(
+      `A nota fiscal NÃO está ligada na clínica ${c.slug}: emitir e cancelar nota pelo conector ainda não foi liberado para ela (o João liga no servidor, em ASAAS_NOTAS_UNIDADES, com o slug da clínica). Nada foi feito.`,
+    );
+  }
+  return c;
+}
+
 export async function prepararNota({ asaas, esc }: CtxEscrita, quem: Quem, a: PedidoDePreparo) {
-  const c = contaDeEscrita(asaas, esc, a.unidade);
+  const c = contaDeNota(asaas, esc, a.unidade);
   return a.acao === 'cancelar' ? prepararCancelamento({ asaas, esc }, c, quem, a) : prepararEmissao({ asaas, esc }, c, quem, a);
 }
 
@@ -237,13 +255,13 @@ async function prepararEmissao({ asaas, esc }: CtxEscrita, c: Conta, quem: Quem,
   let aCobranca: Pagamento | undefined;
   if (a.cobrancaId) {
     aCobranca = await pagamentoPorId(c, a.cobrancaId.trim());
-    origem = { tipo: 'cobranca', id: aCobranca.id };
+    origem = { tipo: 'cobranca', id: aCobranca.id, ...(aCobranca.installment ? { parcelamento: aCobranca.installment } : {}) };
     if (!aCobranca.customer) throw new ErroDeEntrada(`a cobrança ${aCobranca.id} não tem cliente no Asaas: não há tomador para a nota`);
     tomador = await clientePorId(c, aCobranca.customer);
     valorBase = Number(aCobranca.value);
     descricaoBase = aCobranca.description ?? undefined;
     if (aCobranca.status === 'REFUNDED' || aCobranca.status === 'REFUND_REQUESTED' || aCobranca.status === 'REFUND_IN_PROGRESS') avisos.push(`a cobrança está "${aCobranca.status}": confirme com a pessoa que a nota deve sair mesmo assim`);
-    if (aCobranca.installment) avisos.push('esta cobrança é uma parcela de um parcelamento: a nota sai só para o valor informado aqui, não para o parcelamento inteiro');
+    if (aCobranca.installment) avisos.push(`esta cobrança é uma parcela de um parcelamento (${aCobranca.installment}): a nota sai só para o valor informado aqui, não para o parcelamento inteiro. Nota já emitida para o parcelamento inteiro também conta como repetida`);
   } else {
     tomador = await clientePorId(c, a.clienteId!.trim());
     origem = { tipo: 'cliente', id: tomador.id };
@@ -297,7 +315,7 @@ async function prepararEmissao({ asaas, esc }: CtxEscrita, c: Conta, quem: Quem,
   const jaExistem = await notasAtivasDaOrigem(asaas, c, origem, valor, emissao.data);
   if (jaExistem.length) {
     const quais = jaExistem.map((n) => `${n.id} (${STATUS_NOTA[n.status ?? ''] ?? n.status}${n.number ? `, nº ${n.number}` : ''}, ${dinheiro(Number(n.value) || 0)}, emissão ${n.effectiveDate ? dataBR(n.effectiveDate) : '?'})`).join('; ');
-    avisos.unshift(`ATENÇÃO, NOTA REPETIDA: ${origem.tipo === 'cobranca' ? 'esta cobrança' : 'este cliente, neste valor e nesta data,'} JÁ TEM nota fiscal ativa: ${quais}. Emitir de novo gera uma SEGUNDA nota. Só confirme se a pessoa quer isso mesmo.`);
+    avisos.unshift(`ATENÇÃO, NOTA REPETIDA: ${origem.tipo === 'cobranca' ? (origem.parcelamento ? 'esta cobrança (ou o parcelamento dela)' : 'esta cobrança') : 'este cliente, neste valor e nesta data,'} JÁ TEM nota fiscal ativa: ${quais}. Emitir de novo gera uma SEGUNDA nota. Só confirme se a pessoa quer isso mesmo.`);
   }
 
   const corpo: Record<string, unknown> = {
@@ -358,7 +376,9 @@ const POR_QUE_NAO_CANCELA: Record<string, string> = {
 };
 
 async function prepararCancelamento({ esc }: CtxEscrita, c: Conta, quem: Quem, a: PedidoDePreparo) {
-  const extras = (['cobrancaId', 'clienteId', 'valor', 'deducoes', 'servico', 'nomeDoServico', 'descricao', 'observacoes', 'dataEmissao', 'emitirAgora', 'impostos'] as const).filter((k) => a[k] !== undefined);
+  // valor neutro (vazio, false, objeto vazio) é o que o modelo manda "por padrão": não é pedido de emissão e não derruba o cancelamento
+  const neutro = (v: unknown) => v === undefined || v === null || v === '' || v === false || (typeof v === 'object' && Object.keys(v as object).length === 0);
+  const extras = (['cobrancaId', 'clienteId', 'valor', 'deducoes', 'servico', 'nomeDoServico', 'descricao', 'observacoes', 'dataEmissao', 'emitirAgora', 'impostos'] as const).filter((k) => !neutro(a[k]));
   if (extras.length) throw new ErroDeEntrada(`para cancelar informe só a notaId; estes campos são de emissão e não valem aqui: ${extras.join(', ')}`);
   const id = idDaNota(a.notaId);
   const { cabecalho, avisos: avisosDaConta } = await cabecalhoDaConta(c, esc);
@@ -402,7 +422,7 @@ async function prepararCancelamento({ esc }: CtxEscrita, c: Conta, quem: Quem, a
 export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: { confirmacao: string }, registrar: Registrar) {
   const p = esc.notas.tirar(a.confirmacao, quem.id);
   // a conta de novo: se a escrita foi desligada (ou a clínica saiu do conector) desde o resumo, nada é gravado
-  const c = contaDeEscrita(asaas, esc, p.unidade);
+  const c = contaDeNota(asaas, esc, p.unidade);
   return comAvisos(esc, c.slug, async (avisar) => {
     const { cabecalho } = await cabecalhoDaConta(c, esc);
     const aviso = (titulo: string, extra: { valor?: number; id?: string; detalhe?: string }) => textoDoAviso({ titulo, conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, ...extra });
@@ -462,7 +482,7 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
         aviso(emissaoIncerta ? 'NOTA FISCAL AGENDADA, EMISSÃO COM RESULTADO INCERTO' : p.emitirAgora && !falhaAoEmitir ? 'NOTA FISCAL: EMISSÃO PEDIDA' : 'NOTA FISCAL AGENDADA', {
           ...(p.valor !== undefined ? { valor: p.valor } : {}),
           id: criada.id,
-          detalhe: `${origem.tipo === 'cobranca' ? `cobrança ${origem.id}` : `cliente ${origem.id}`} · emissão ${p.dataEmissao ? dataBR(p.dataEmissao) : '?'}${emissaoIncerta ? ' · o pedido de emissão imediata NÃO foi confirmado: a nota PODE ter sido emitida. Conferir no painel antes de qualquer coisa' : falhaAoEmitir ? ' · o pedido de emissão imediata foi RECUSADO, a nota ficou agendada' : ''}`,
+          detalhe: `${origem.tipo === 'cobranca' ? `cobrança ${origem.id}` : `cliente ${origem.id}`} · emissão ${p.dataEmissao ? dataBR(p.dataEmissao) : '?'}${emissaoIncerta ? ' · o pedido de emissão imediata NÃO foi confirmado: a nota PODE ter sido emitida. Conferir no painel antes de qualquer coisa' : falhaAoEmitir ? ` · a nota foi criada e ficou agendada; a emissão imediata foi RECUSADA: ${falhaAoEmitir}` : ''}`,
         }),
       );
       const tomador = (await melhorEsforco(() => clienteDaNota(c, criada!, origem), 4000)) ?? null;
@@ -473,7 +493,7 @@ export async function confirmarNota({ asaas, esc }: CtxEscrita, quem: Quem, a: {
         ...(emissaoIncerta
           ? { atencao: `RESULTADO INCERTO: a nota foi agendada, mas o pedido de emissão imediata não teve resposta (${falhaAoEmitir}) e pode ter sido emitida. Confira com asaas_nota ${criada.id} antes de qualquer coisa. NÃO emita de novo.` }
           : falhaAoEmitir
-            ? { atencao: `a nota foi AGENDADA para hoje, mas o Asaas recusou o pedido de emissão imediata (${falhaAoEmitir}). O Asaas deve emiti-la sozinho na data; confira com asaas_nota ${criada.id}. NÃO emita de novo.` }
+            ? { atencao: `a nota foi criada e ficou agendada para hoje; a emissão imediata foi recusada: ${falhaAoEmitir}. O Asaas deve emiti-la sozinho na data; confira com asaas_nota ${criada.id}. NÃO emita de novo.` }
             : { aviso: 'Quem autoriza a nota é a prefeitura, e isso pode levar um tempo: confira o status e os links do PDF/XML com asaas_nota.' }),
         registro: 'Registrado com quem pediu e quem aprovou o resumo.',
       };

@@ -40,7 +40,7 @@ const endereco = z.object({
 const SO_QUEM_PODE =
   'Faz DIRETO, sem pedir confirmação: confira o pedido com a pessoa ANTES de chamar (clínica, cliente, valor). Só quem tem permissão de escrita vê esta ferramenta, e só nas clínicas liberadas no servidor.';
 const SO_QUEM_PODE_NOTA =
-  'Só quem tem permissão de escrita vê esta ferramenta, e só nas clínicas liberadas no servidor (as mesmas da escrita do Asaas), uma clínica por vez.';
+  'Só quem tem permissão de escrita vê esta ferramenta, e só nas clínicas liberadas no servidor para escrita (ASAAS_ESCRITA_UNIDADES) E ligadas para nota fiscal (ASAAS_NOTAS_UNIDADES; fora dela responde que a nota não está ligada), uma clínica por vez.';
 const PROIBIDO =
   'Este conector NUNCA: altera dados bancários da clínica, chaves de API, webhooks ou usuários do Asaas; faz antecipação ou empréstimo; paga contas (boleto de terceiros); recebe número de cartão pelo chat.';
 

@@ -9,6 +9,7 @@ import { registrarEscritaAsaasSePermitido } from './asaas-ferramentas.js';
 import { ErroHttp, montar, type Cli, type Nf, type Pg } from './asaas-falso.js';
 import { asaasDadosFiscais, asaasNota, asaasNotas, registrarLeituraNotasAsaas } from './asaas-notas.js';
 import { confirmarNota, EVENTO_NOTA, prepararNota, type PedidoDePreparo } from './asaas-notas-escrita.js';
+import { unidadesComNotas } from './asaas-escrita.js';
 
 const Q = { id: 'u1', email: 'joao@exemplo.com' };
 const OUTRO = { id: 'u2', email: 'ana@exemplo.com' };
@@ -339,10 +340,10 @@ test('confirmar emitir AGORA: se o pedido de emissão falha, a nota fica agendad
   const { confirmacao } = await preparar(m, { dataEmissao: undefined, emitirAgora: true });
   const r = await confirmar(m, confirmacao);
   assert.equal(r.notaCriada, true);
-  assert.match(r.atencao, /AGENDADA para hoje.*NÃO emita de novo/s);
+  assert.match(r.atencao, /a nota foi criada e ficou agendada para hoje; a emissão imediata foi recusada: Asaas 400.*NÃO emita de novo/s);
   assert.equal(m.f.posts().filter((c) => c.caminho === '/invoices').length, 1);
   assert.match(m.avisos[0]!, /NOTA FISCAL AGENDADA/);
-  assert.match(m.avisos[0]!, /emissão imediata foi RECUSADO/);
+  assert.match(m.avisos[0]!, /emissão imediata foi RECUSADA: Asaas 400/);
 });
 
 test('confirmar emitir: data aprovada que ficou para trás (resumo à noite, ok depois da meia-noite) NÃO emite com data de ontem', async () => {
@@ -476,8 +477,8 @@ test('confirmar emitir AGORA: pedido de emissão SEM resposta é "resultado ince
   const recusado = base({ falhas: [{ metodo: 'POST', caminho: /\/authorize$/, erro: new ErroHttp('Asaas 400 em /invoices/x/authorize: nota em processamento', 400) }] });
   const b = await preparar(recusado, { dataEmissao: undefined, emitirAgora: true });
   const r2 = await confirmar(recusado, b.confirmacao);
-  assert.match(r2.atencao, /Asaas recusou o pedido de emissão imediata/);
-  assert.match(recusado.avisos[0]!, /RECUSADO/);
+  assert.match(r2.atencao, /a nota foi criada e ficou agendada para hoje; a emissão imediata foi recusada: Asaas 400 em/);
+  assert.match(recusado.avisos[0]!, /a nota foi criada e ficou agendada; a emissão imediata foi RECUSADA: Asaas 400/);
 });
 
 test('confirmar: mensagens depois do código gasto dizem "prepare de novo", nunca "tente em instantes"', async () => {
@@ -571,6 +572,77 @@ test('confirmar cancelar: nota que mudou de status desde o resumo NÃO é cancel
   const p = await prepararNota(rede.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id }) as any;
   await recusa(confirmar(rede, p.confirmacao), /o cancelamento PODE ter sido pedido/);
   assert.match(rede.avisos[0]!, /CANCELAMENTO DE NOTA COM RESULTADO INCERTO/);
+});
+
+// ------------------------------------------------------------------ revisão 2: serviço por id, parcelamento, chave própria, neutros
+
+test('serviço municipal: entrada só com números é o ID exato, mesmo que o número apareça na descrição de outro serviço', async () => {
+  const m = base({ servicos: [{ id: '3544', description: '4.01 - Medicina', issTax: 2 }, { id: '9', description: '5.02 - Ref. 3544 especial', issTax: 7 }] });
+  const r = await preparar(m, { servico: '3544' });
+  assert.equal(r.resumo.servicoMunicipal.id, '3544');
+  assert.equal(r.resumo.impostos.iss.valor, '2%', 'a alíquota é a do serviço de id 3544, não a do outro');
+  // sem id igual, o "contém" continua valendo (e um único serviço serve)
+  const so = base({ servicos: [{ id: '9', description: '5.02 - Ref. 3544 especial', issTax: 7 }] });
+  assert.equal((await preparar(so, { servico: '3544' })).resumo.servicoMunicipal.id, '9');
+});
+
+test('parcelamento: nota já emitida do parcelamento INTEIRO (só tem installment) conta como repetida, no preparar e no recheck do confirmar', async () => {
+  const parcela = { ...COBRANCA, installment: 'ins_000000123456' };
+  const doParcelamento: Nf = { ...AUTORIZADA, id: 'inv_000000000444', payment: undefined, installment: 'ins_000000123456' };
+  const m = base({ pagamentos: [parcela], notas: [doParcelamento] });
+  const r = await preparar(m);
+  assert.match(r.avisos[0], /ATENÇÃO, NOTA REPETIDA: esta cobrança \(ou o parcelamento dela\) JÁ TEM.*inv_000000000444/s);
+  assert.ok(r.avisos.some((x: string) => /parcela de um parcelamento \(ins_000000123456\)/.test(x)));
+  assert.ok(m.f.consultas.some((c) => c.caminho === '/invoices' && c.query.installment === 'ins_000000123456'), 'consultou por installment');
+  // a nota do parcelamento aparece DEPOIS do resumo: o confirmar recusa
+  const novo = base({ pagamentos: [parcela] });
+  const p = await preparar(novo);
+  assert.ok(!p.avisos.some((x: string) => /REPETIDA/.test(x)));
+  novo.f.notas.push({ ...doParcelamento });
+  await recusa(confirmar(novo, p.confirmacao), /apareceu outra nota ativa .*inv_000000000444/s);
+  assert.equal(novo.f.posts().length, 0);
+  // cobrança sem parcelamento: não consulta por installment
+  const simples = base();
+  await preparar(simples);
+  assert.ok(!simples.f.consultas.some((c) => c.query.installment !== undefined));
+});
+
+test('chave própria da nota fiscal: ASAAS_NOTAS_UNIDADES (mesmo formato da escrita) liga/desliga emitir e cancelar; as DUAS listas são exigidas; a leitura não muda', async () => {
+  assert.deepEqual([...unidadesComNotas({})], []);
+  assert.deepEqual([...unidadesComNotas({ ASAAS_NOTAS_UNIDADES: ' doutor-hernia-serra , Doutor-Hernia-Timbo ' })].sort(), ['doutor-hernia-serra', 'doutor-hernia-timbo']);
+  assert.deepEqual([...unidadesComNotas({ ASAAS_NOTAS_UNIDADES: '*,todas' })].filter((x) => x.includes('*')), []);
+
+  // escrita do Asaas ligada, nota fiscal NÃO: preparar responde em português, nada é preparado nem escrito
+  const sem = base({ notas: [AUTORIZADA] }, { unidadesNotas: () => new Set() });
+  await recusa(preparar(sem), /A nota fiscal NÃO está ligada na clínica doutor-hernia-serra.*ASAAS_NOTAS_UNIDADES/s);
+  await recusa(prepararNota(sem.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id }), /A nota fiscal NÃO está ligada/);
+  assert.equal(sem.esc.notas.pendentes, 0);
+  assert.equal(sem.f.posts().length, 0);
+  // nota ligada, escrita do Asaas NÃO: continua recusando (exige as duas)
+  const soNota = base({}, { unidades: () => new Set() });
+  await recusa(preparar(soNota), /DESLIGADA para doutor-hernia-serra/);
+  // desligada DEPOIS do resumo: o confirmar não escreve
+  let ligada = true;
+  const m = base({}, { unidadesNotas: () => (ligada ? new Set(['doutor-hernia-serra']) : new Set()) });
+  const { confirmacao } = await preparar(m);
+  ligada = false;
+  await recusa(confirmar(m, confirmacao), /A nota fiscal NÃO está ligada/);
+  assert.equal(m.f.posts().length, 0);
+  // a leitura não depende da chave da nota: asaas_notas e asaas_dados_fiscais seguem funcionando
+  const joao = await conectar(sem, 'u-joao', new Set(['u-joao']));
+  assert.notEqual((await joao.callTool({ name: 'asaas_notas', arguments: { unidade: 'serra', status: 'AUTHORIZED' } })).isError, true);
+  assert.notEqual((await joao.callTool({ name: 'asaas_dados_fiscais', arguments: { unidade: 'serra' } })).isError, true);
+  const prep = await joao.callTool({ name: 'asaas_preparar_nota', arguments: { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id } });
+  assert.equal(prep.isError, true);
+  assert.match(texto(prep), /A nota fiscal NÃO está ligada/);
+});
+
+test('cancelar: valores neutros que o modelo manda (emitirAgora false, impostos vazio, texto vazio) são ignorados; pedido de emissão de verdade ainda é recusado', async () => {
+  const m = base({ notas: [AUTORIZADA] });
+  const ok = (await prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id, emitirAgora: false, impostos: {}, descricao: '', observacoes: '' } as PedidoDePreparo)) as any;
+  assert.match(ok.confirmacao, /^[0-9A-F]{12}$/);
+  await recusa(prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id, emitirAgora: true }), /são de emissão e não valem aqui: emitirAgora/);
+  await recusa(prepararNota(m.ctx, Q, { unidade: 'serra', acao: 'cancelar', notaId: AUTORIZADA.id, impostos: { ir: 1 } }), /impostos/);
 });
 
 // ------------------------------------------------------------------ rotas e protocolo
