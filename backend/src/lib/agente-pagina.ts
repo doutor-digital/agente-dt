@@ -556,18 +556,18 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     <div class="janela-rodape" id="dlgRodape"></div>
   </div>
 </dialog>
-<dialog class="janela estreita" id="dlgPausa" aria-labelledby="pausaTitulo">
+<dialog class="janela estreita" id="dlgPausa" aria-labelledby="jpTitulo">
   <div class="janela-in">
-    <div class="janela-cab"><div><h3 id="pausaTitulo">Pausar a Sofia da clínica</h3><div class="meta" id="pausaUnidade"></div></div><button class="bt" id="pausaFechar" type="button">Cancelar</button></div>
+    <div class="janela-cab"><div><h3 id="jpTitulo">Pausar a Sofia da clínica</h3><div class="meta" id="jpUnidade"></div></div><button class="bt" id="jpFechar" type="button">Cancelar</button></div>
     <div class="janela-corpo">
-      <div class="aviso" id="pausaAviso" style="margin-top:14px"></div>
-      <label class="rot" for="pausaQuanto">Até quando?</label>
-      <select class="sel" id="pausaQuanto" style="width:100%"><option value="1">Por 1 hora</option><option value="2">Por 2 horas</option><option value="4">Por 4 horas</option><option value="8">Por 8 horas</option><option value="24">Por 24 horas</option><option value="outro">Escolher o dia e a hora</option></select>
-      <div id="pausaOutro" hidden><label class="rot" for="pausaAte">Dia e hora para a Sofia voltar <span>horário do seu computador</span></label><input class="sel" type="datetime-local" id="pausaAte" style="width:100%"></div>
-      <label class="rot" for="pausaMotivo">Motivo <span id="cntMotivo">0/200</span></label>
-      <input type="text" id="pausaMotivo" maxlength="200" placeholder="Ex.: o doutor atrasou, falta de energia, reunião da equipe">
-      <div class="aviso erro" id="pausaErro" hidden style="margin-top:10px"></div>
-      <div class="acoes" style="margin-bottom:16px"><span class="meta">Em nome de <b id="pausaQuem"></b></span><button class="bt pri" id="pausaConfirma" type="button">Pausar a Sofia</button></div>
+      <div class="aviso" id="jpAviso" style="margin-top:14px"></div>
+      <label class="rot" for="jpQuanto">Até quando?</label>
+      <select class="sel" id="jpQuanto" style="width:100%"><option value="1">Por 1 hora</option><option value="2">Por 2 horas</option><option value="4">Por 4 horas</option><option value="8">Por 8 horas</option><option value="24">Por 24 horas</option><option value="outro">Escolher o dia e a hora</option></select>
+      <div id="jpOutro" hidden><label class="rot" for="jpAte">Dia e hora para a Sofia voltar <span>horário do seu computador</span></label><input class="sel" type="datetime-local" id="jpAte" style="width:100%"></div>
+      <label class="rot" for="jpMotivo">Motivo <span id="jpCnt">0/200</span></label>
+      <input type="text" id="jpMotivo" maxlength="200" placeholder="Ex.: o doutor atrasou, falta de energia, reunião da equipe">
+      <div class="aviso erro" id="jpErro" hidden style="margin-top:10px"></div>
+      <div class="acoes" style="margin-bottom:16px"><span class="meta">Em nome de <b id="jpQuem"></b></span><button class="bt pri" id="jpConfirma" type="button">Pausar a Sofia</button></div>
     </div>
   </div>
 </dialog>
@@ -763,7 +763,7 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
       desenharGraficos(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       if (!KM) desenharRevisar(p.paraRevisar || [], nr);
-      if (!KM) { carregarBlocos(); carregarPausa(); }
+      if (!KM) carregarBlocos();
     } catch (e) { if (eu !== seqPainel || !U || U.slug !== slug) return; painelVazio(); erroEm($('grandes'), e.message); }
     contarPausadas();
   }
@@ -1111,7 +1111,7 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
 
   // ── pausar e religar a Sofia da clínica (só no CRM; só administradora ou gerente da conta muda, as outras pessoas só veem o estado) ──
   // No Kommo a aba «Pausar» já faz isso com o código da unidade.
-  var PAUSA = null, seqPausa = 0;
+  var PAUSA = null, seqPausa = 0, tVence = null;
   async function carregarPausa(){
     if (KM || !U) return;
     var eu = ++seqPausa, slug = U.slug, nova = null;
@@ -1119,19 +1119,22 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     if (eu !== seqPausa || !U || U.slug !== slug) return; // a resposta é de uma unidade que a pessoa já deixou
     PAUSA = nova; desenharFaixa();
   }
+  window.addEventListener('focus', function(){ if (!KM && PAUSA) carregarPausa(); });
   // o servidor respondeu sobre a unidade pedida? (senão a resposta é de outra e não pinta nada)
   function daUnidadeAtual(r){ return !!r && !!U && r.slug === U.slug; }
   function horaDaPausa(iso){ if (!iso) return ''; try { return new Date(iso).toLocaleString('pt-BR', { timeZone: (PAUSA && PAUSA.tz) || undefined, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return dataHoraCurta(iso); } }
   function desenharFaixa(){
-    var f = $('faixaPausa'); f.textContent = '';
+    var f = $('faixaPausa'); f.textContent = ''; clearTimeout(tVence);
     if (KM || !PAUSA) { f.hidden = true; return; }
+    // a pausa que vence com a tela aberta: relê na hora (e ao voltar para a aba), a faixa não fica «pausada» por engano
+    if ((PAUSA.emPausa || PAUSA.agendada) && PAUSA.ate) { var ms = new Date(PAUSA.ate).getTime() - Date.now() + 1500; if (ms > 0 && ms < 2000000000) tVence = setTimeout(carregarPausa, ms); }
     f.hidden = false;
     var parada = PAUSA.emPausa, marcada = PAUSA.agendada, txt = el('div', 'txt');
     f.className = 'faixa' + (parada ? ' pausada' : '');
     f.appendChild(parada ? pilula('at', 'Sofia pausada') : marcada ? pilula('ne', 'Pausa agendada') : pilula('ok', 'Sofia atendendo'));
     if (parada) {
-      txt.appendChild(el('b', null, 'A Sofia não responde nenhuma conversa da clínica até ' + horaDaPausa(PAUSA.ate) + '.'));
-      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora.'));
+      txt.appendChild(el('b', null, 'A Sofia não responde as mensagens dos pacientes até ' + horaDaPausa(PAUSA.ate) + '.'));
+      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora. Os lembretes automáticos de consulta continuam.'));
     } else if (marcada) {
       txt.appendChild(el('b', null, 'Pausa marcada de ' + horaDaPausa(PAUSA.desde) + ' até ' + horaDaPausa(PAUSA.ate) + '.'));
       txt.appendChild(el('small', null, 'Marcada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '')));
@@ -1155,22 +1158,22 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     } catch (e) { b.disabled = false; toast(e.message, true); }
   }
   function abrirPausa(){
-    $('pausaUnidade').textContent = U.nome; $('pausaQuem').textContent = EU || 'você';
-    $('pausaAviso').textContent = 'A Sofia vai parar de responder TODAS as conversas de ' + U.nome + ' até a hora escolhida e volta sozinha nela. Quem já está falando com a equipe não muda.';
-    $('pausaQuanto').value = '2'; $('pausaOutro').hidden = true; $('pausaAte').value = ''; $('pausaMotivo').value = ''; $('cntMotivo').textContent = '0/200'; some('pausaErro');
+    $('jpUnidade').textContent = U.nome; $('jpQuem').textContent = EU || 'você';
+    $('jpAviso').textContent = 'A Sofia vai parar de responder as mensagens dos pacientes de ' + U.nome + ' até a hora escolhida e volta sozinha nela. Os lembretes automáticos de consulta continuam. Quem já está falando com a equipe não muda.';
+    $('jpQuanto').value = '2'; $('jpOutro').hidden = true; $('jpAte').value = ''; $('jpMotivo').value = ''; $('jpCnt').textContent = '0/200'; some('jpErro');
     abrirDialogo($('dlgPausa'));
-    $('pausaMotivo').focus();
+    $('jpMotivo').focus();
   }
-  $('pausaQuanto').addEventListener('change', function(){ $('pausaOutro').hidden = $('pausaQuanto').value !== 'outro'; });
-  $('pausaMotivo').addEventListener('input', function(){ $('cntMotivo').textContent = $('pausaMotivo').value.length + '/200'; });
-  $('pausaFechar').addEventListener('click', function(){ fecharDialogo($('dlgPausa')); });
-  $('pausaConfirma').addEventListener('click', async function(){
-    var b = this, motivo = $('pausaMotivo').value.trim(), q = $('pausaQuanto').value, ate, slug = U.slug;
-    some('pausaErro');
-    if (motivo.length < 3) { aviso('pausaErro', 'Escreva o motivo da pausa (uma frase curta).'); $('pausaMotivo').focus(); return; }
-    if (q === 'outro') { ate = $('pausaAte').value ? new Date($('pausaAte').value) : null; if (!ate || isNaN(ate.getTime())) { aviso('pausaErro', 'Escolha o dia e a hora em que a Sofia volta.'); $('pausaAte').focus(); return; } }
+  $('jpQuanto').addEventListener('change', function(){ $('jpOutro').hidden = $('jpQuanto').value !== 'outro'; });
+  $('jpMotivo').addEventListener('input', function(){ $('jpCnt').textContent = $('jpMotivo').value.length + '/200'; });
+  $('jpFechar').addEventListener('click', function(){ fecharDialogo($('dlgPausa')); });
+  $('jpConfirma').addEventListener('click', async function(){
+    var b = this, motivo = $('jpMotivo').value.trim(), q = $('jpQuanto').value, ate, slug = U.slug;
+    some('jpErro');
+    if (motivo.length < 3) { aviso('jpErro', 'Escreva o motivo da pausa (uma frase curta).'); $('jpMotivo').focus(); return; }
+    if (q === 'outro') { ate = $('jpAte').value ? new Date($('jpAte').value) : null; if (!ate || isNaN(ate.getTime())) { aviso('jpErro', 'Escolha o dia e a hora em que a Sofia volta.'); $('jpAte').focus(); return; } }
     else ate = new Date(Date.now() + Number(q) * 3600000);
-    if (ate.getTime() <= Date.now()) { aviso('pausaErro', 'A hora de voltar precisa estar no futuro.'); return; }
+    if (ate.getTime() <= Date.now()) { aviso('jpErro', 'A hora de voltar precisa estar no futuro.'); return; }
     b.disabled = true;
     try {
       var novo = await api('POST', '/api/public/agente/pausa', { slug: slug, ate: ate.toISOString(), motivo: motivo, confirmar: true });
@@ -1179,7 +1182,7 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     } catch (e) {
       // 409: alguém pausou antes. A faixa mostra a pausa de quem pausou, e a janela fecha com o motivo
       if (e.dados && e.dados.slug && daUnidadeAtual(e.dados)) { PAUSA = e.dados; desenharFaixa(); fecharDialogo($('dlgPausa')); toast(e.message, true); }
-      else aviso('pausaErro', e.message);
+      else aviso('jpErro', e.message);
     }
     b.disabled = false;
   });

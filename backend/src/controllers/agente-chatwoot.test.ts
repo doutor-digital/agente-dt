@@ -108,13 +108,32 @@ test('PR 2b: bloco «Por que passou para a equipe» (motivo em categoria) no CRM
 test('PR 2c: faixa e janela de pausar a Sofia — só no CRM, só quem pode vê o botão, pausar pede confirmação e motivo, resposta de outra unidade não vale', () => {
   const html = paginaDoAgente(CW);
   const js = scriptDe(html);
-  for (const id of ['faixaPausa', 'dlgPausa', 'pausaMotivo', 'pausaQuanto', 'pausaConfirma']) assert.ok(html.includes(`id="${id}"`), id);
+  for (const id of ['faixaPausa', 'dlgPausa', 'jpMotivo', 'jpQuanto', 'jpConfirma']) assert.ok(html.includes(`id="${id}"`), id);
+  // a verdade sobre o que a pausa faz: a Sofia para de responder, os lembretes automáticos de consulta continuam
+  assert.ok(js.includes('Os lembretes automáticos de consulta continuam') && !js.includes('TODAS as conversas'), 'texto honesto sobre a régua');
+  assert.ok(js.includes('tVence = setTimeout(carregarPausa') && js.includes("addEventListener('focus'"), 'a faixa se atualiza quando a pausa vence');
+  assert.equal((js.match(/carregarPausa\(\)/g) ?? []).length, 3, 'carregarPausa: definição, troca de unidade e o foco — sem chamada em dobro no painel');
   for (const rota of ["'/api/public/agente/pausa?slug='", "'/api/public/agente/pausa'", "'/api/public/agente/pausa/retomar'"]) assert.ok(js.includes(rota), rota);
   assert.ok(js.includes('confirmar: true') && js.includes('motivo.length < 3'), 'confirmação e motivo');
   assert.ok(js.includes('PAUSA.podeMudar'), 'o botão só aparece para quem pode mudar');
   assert.ok(js.includes('if (KM || !PAUSA)') && js.includes('if (KM || !U) return;') && html.includes('body.km #faixaPausa'), 'no Kommo a faixa não existe (a aba Pausar é dele)');
   assert.ok(js.includes('function daUnidadeAtual(r)') && js.includes('if (daUnidadeAtual(novo))'), 'a resposta de outra unidade não pinta a faixa');
   assert.ok(js.includes('e.dados && e.dados.slug && daUnidadeAtual(e.dados)'), '409: a faixa mostra a pausa de quem pausou antes');
+});
+
+test('ids ÚNICOS na página, no CRM e no modo Kommo (a janela de pausar não repete os da seção de pausa do Kommo)', () => {
+  for (const [nome, html] of [['CRM', paginaDoAgente(CW)], ['Kommo', paginaDoAgenteKommo('doutor-hernia-caxias')]] as const) {
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]!);
+    const repetidos = ids.filter((id, i) => ids.indexOf(id) !== i);
+    assert.deepEqual([...new Set(repetidos)], [], `${nome}: ids repetidos`);
+  }
+  // o contador e o texto da janela ligam nos campos DELA, não nos da seção escondida do Kommo
+  const js = scriptDe(paginaDoAgente(CW));
+  assert.ok(js.includes("$('jpMotivo').addEventListener('input'") && js.includes("$('jpUnidade').textContent = U.nome"));
+  // todo id citado pela janela de pausar existe na página (um id velho que sobrou daria TypeError ao clicar em «Pausar a Sofia»)
+  const html = paginaDoAgente(CW);
+  const bloco = js.slice(js.indexOf('var PAUSA = null'), js.indexOf('// ── PAUSADAS ──'));
+  for (const m of bloco.matchAll(/(?:\$|some|aviso)\('([A-Za-z0-9]+)'/g)) assert.ok(html.includes(`id="${m[1]}"`), `id «${m[1]}» citado pela janela de pausar e ausente da página`);
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
