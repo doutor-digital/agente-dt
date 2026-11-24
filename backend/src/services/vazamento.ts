@@ -330,11 +330,11 @@ const NARRA_SUJEITO = new RegExp(
 // Nome próprio de abertura ("Marcelo já confirmou…", "A Ilma já havia confirmado…"): SEM a bandeira `i`, senão `\p{Lu}` casa qualquer palavra.
 const NARRA_NOME = /^\s*(?:[AO]\s+)?\p{Lu}\p{Ll}+(?:\s+\p{Lu}\p{Ll}+)?\s+(?:j[aá]\s+|s[oó]\s+)?(?:perguntou|confirmou|respondeu|disse|comentou|mencionou|havia\s+(?:confirmado|perguntado|dito|respondido))(?![\p{L}\p{N}_])/u;
 const NARRA_RELATO = new RegExp(
-  `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|ainda\\s+n[aã]o\\s+tenho|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
+  `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|(?:tinha|havia)\\s+(?:perguntado|confirmado|respondido|mandado|enviado|dito|pedido|passado|explicado)|ainda\\s+n[aã]o\\s+tenho|n[aã]o\\s+tenho\\s+(?:a\\s+|uma\\s+)?resposta|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
   'iu',
 );
 const NARRA_DECISAO = new RegExp(
-  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:(?:vou|devo)\\s+(?:s[oó]\\s+|apenas\\s+)?(?:responder|retomar|aguardar|manter|refor[cç]ar|acolher|pedir|perguntar|seguir|continuar|insistir|tratar|parar|ignorar|reconhecer|deixar\\s+isso\\s+claro|considerar|corrigir)|respondo|mantenho|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
+  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:(?:vou|devo)\\s+(?:s[oó]\\s+|apenas\\s+)?(?:responder|retomar|aguardar|manter|refor[cç]ar|acolher|pedir|perguntar|seguir|continuar|insistir|tratar|parar|ignorar|reconhecer|deixar\\s+isso\\s+claro|considerar|corrigir)|respondo|mantenho|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas|retomar|perguntar|refazer|repetir|voltar)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
   'iu',
 );
 const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');

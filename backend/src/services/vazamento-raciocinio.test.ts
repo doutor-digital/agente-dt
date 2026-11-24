@@ -225,3 +225,27 @@ test('abertura que fala da transcrição continua sendo cortada como antes, sem 
   const m = 'A transcrição do áudio veio genérica, sem contar o que ele está sentindo. Vou pedir pra ele contar.\n\nEntendi! Me conta o que está sentindo?';
   assert.equal(cortarAberturaMetanarrativa(m), 'Entendi! Me conta o que está sentindo?');
 });
+
+// 22/11, Boa Vista, lead 1857470: foi para o paciente. Escapou por duas brechas: "tinha perguntado" não era relato
+// (só "perguntou" e "já havia") e "preciso retomar" não era decisão (só "preciso responder/seguir/manter/apenas").
+const CASO_BOA_VISTA_22_11 =
+  'A equipe já tinha perguntado sobre o tipo de dor, mas não tenho a resposta do paciente ainda, preciso retomar essa pergunta.\n\nOi! Que bom o seu interesse 😊 Me conta: sua dor é mais no pescoço/braço, ou é na lombar e desce pra perna (ciático)? Assim já entendo direito seu caso pra te explicar tudo certo.';
+
+test('Boa Vista (22/11): "tinha perguntado… preciso retomar" é pego e cortado, fica só a fala', () => {
+  assert.ok(detectarVazamento(CASO_BOA_VISTA_22_11));
+  const r = cortarAberturaMetanarrativa(CASO_BOA_VISTA_22_11);
+  assert.equal(r, 'Oi! Que bom o seu interesse 😊 Me conta: sua dor é mais no pescoço/braço, ou é na lombar e desce pra perna (ciático)? Assim já entendo direito seu caso pra te explicar tudo certo.');
+  assert.equal(detectarVazamento(r), null);
+});
+
+test('Boa Vista (22/11): as mesmas palavras faladas COM o paciente passam', () => {
+  for (const m of [
+    'A equipe já tinha perguntado sobre sua dor, preciso retomar essa pergunta com você: é no pescoço ou na lombar?',
+    'A equipe já tinha confirmado o horário, preciso perguntar só uma coisa: você vem de carro?',
+    'Eu não tenho a resposta do exame ainda, preciso perguntar pra equipe e já te falo.',
+    'A equipe tinha mandado o endereço, então preciso só confirmar: você recebeu?',
+    'O exame não tinha chegado, preciso voltar nisso amanhã com a doutora.',
+  ]) {
+    assert.equal(detectarVazamento(m), null, m);
+  }
+});
