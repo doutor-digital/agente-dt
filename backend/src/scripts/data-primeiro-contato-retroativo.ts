@@ -11,7 +11,8 @@
 import { prisma } from '../lib/prisma.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { addChangeLog } from '../services/change-log.service.js';
-import { planejarDataDoPrimeiroContato, type CartaoParaData } from '../lib/data-primeiro-contato-retroativo.js';
+import { ETAPAS_FECHADAS, planejarDataDoPrimeiroContato, type CartaoParaData } from '../lib/data-primeiro-contato-retroativo.js';
+import type { KommoClient } from '../services/kommo.service.js';
 
 const APLICAR = process.argv.includes('--aplicar');
 const FECHADOS = process.argv.includes('--incluir-fechados');
@@ -24,6 +25,28 @@ const SLUGS = (process.argv.find((a) => a.startsWith('--unidade=')) ?? '')
   .filter(Boolean);
 const PAUSA_MS = 300;
 const dormir = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const MAX_PAGINAS_POR_ETAPA = 100;
+
+/**
+ * Todos os cartões, etapa por etapa, LANÇANDO erro se qualquer página falhar: ler pela metade e gravar como se fosse tudo deixaria
+ * centenas de cartões sem a data sem ninguém saber (o `listLeads` engole o erro da 2ª página em diante).
+ */
+async function lerTodosOsCartoes(kommo: KommoClient, incluirFechados: boolean): Promise<CartaoParaData[]> {
+  const todos = new Map<number, CartaoParaData>();
+  for (const funil of await kommo.listPipelines()) {
+    for (const etapa of funil.statuses) {
+      if (!incluirFechados && ETAPAS_FECHADAS.has(etapa.id)) continue;
+      for (let pagina = 1; ; pagina++) {
+        if (pagina > MAX_PAGINAS_POR_ETAPA) throw new Error(`etapa ${funil.name}/${etapa.name} passou de ${MAX_PAGINAS_POR_ETAPA} páginas: leitura incompleta`);
+        const lote = (await kommo.listLeadsPorEtapa(funil.id, etapa.id, 250, pagina)) as CartaoParaData[];
+        for (const c of lote) todos.set(c.id, c);
+        await dormir(250);
+        if (lote.length < 250) break;
+      }
+    }
+  }
+  return [...todos.values()];
+}
 
 async function main(): Promise<void> {
   if (SLUGS.length === 0) throw new Error('falta --unidade=<slug>[,<slug>]');
@@ -37,7 +60,13 @@ async function main(): Promise<void> {
     }
     const kommo = createKommoClient(unit);
     const campos = await kommo.listarCamposDoCartao();
-    const cartoes = (await kommo.listLeads(40)) as CartaoParaData[];
+    let cartoes: CartaoParaData[];
+    try {
+      cartoes = await lerTodosOsCartoes(kommo, FECHADOS);
+    } catch (err) {
+      console.log(`=== ${slug}\n  !! leitura do Kommo falhou, NADA foi planejado nem gravado: ${String(err).slice(0, 160)}\n`);
+      continue;
+    }
     const plano = planejarDataDoPrimeiroContato(cartoes, campos, FECHADOS);
     console.log(`=== ${slug} — ${cartoes.length} cartões lidos`);
     if (!plano.campo || plano.semCampo) {

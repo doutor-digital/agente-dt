@@ -25,6 +25,8 @@ export interface ModeloDeRegra {
   valueHint?: string | null;
   examples?: string[] | null;
   updatesLeadTitle?: boolean | null;
+  /** as opções da regra NO MODELO, para avisar quando a conta de destino tem outras */
+  kommoFieldEnums?: unknown;
 }
 
 export interface CampoDaConta {
@@ -45,6 +47,11 @@ export interface PlanoDeRegras {
   criar: LeadFieldRuleInput[];
   jaExistem: Array<{ nome: string; porque: 'mesma ferramenta' | 'mesmo campo' }>;
   deFora: Array<{ nome: string; motivo: MotivoDeFora; detalhe?: string }>;
+  /**
+   * Lista cujas opções NO MODELO não existem na conta: a instrução (copiada do modelo) pode pedir um valor que a conta recusa.
+   * A regra É criada; o aviso é para quem aprova conferir. `soNoModelo` = opções do modelo que a conta não tem.
+   */
+  avisos: Array<{ nome: string; soNoModelo: string[]; naConta: string[] }>;
 }
 
 const LISTAS = new Set(['select', 'multiselect', 'radiobutton']);
@@ -79,7 +86,7 @@ export function planejarRegras(
   campos: ReadonlyArray<CampoDaConta>,
   existentes: ReadonlyArray<RegraExistente>,
 ): PlanoDeRegras {
-  const plano: PlanoDeRegras = { criar: [], jaExistem: [], deFora: [] };
+  const plano: PlanoDeRegras = { criar: [], jaExistem: [], deFora: [], avisos: [] };
   const toolsUsadas = new Set(existentes.map((e) => e.toolName));
   const camposUsados = new Set(existentes.map((e) => e.kommoFieldId));
 
@@ -114,6 +121,12 @@ export function planejarRegras(
     if (camposUsados.has(campo.id)) {
       plano.jaExistem.push({ nome: m.kommoFieldName, porque: 'mesmo campo' });
       continue;
+    }
+    if (LISTAS.has(campo.type)) {
+      const doModelo = ((m.kommoFieldEnums as Array<{ value?: string }> | null | undefined) ?? []).map((e) => e?.value).filter((v): v is string => !!v);
+      const daConta = new Set(opcoes.map((e) => normalizar(e.value)));
+      const soNoModelo = doModelo.filter((v) => !daConta.has(normalizar(v)));
+      if (soNoModelo.length > 0) plano.avisos.push({ nome: campo.name, soNoModelo, naConta: opcoes.map((e) => e.value) });
     }
     // também vale dentro da mesma rodada: dois modelos para o mesmo campo da conta não viram duas regras
     toolsUsadas.add(m.toolName);

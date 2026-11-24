@@ -179,17 +179,27 @@ async function main(): Promise<void> {
     const falhas = contagemVazia();
     let gravados = 0;
     let falhasDeGravacao = 0;
-    let semCartao = 0;
+    const naoLidos: number[] = [];
+    let errosSeguidos = 0;
+    let parouNoLote = 0;
     const descartes = { jaPreenchidos: 0, naoInformados: 0, motivoForaDaEtapa: 0 };
 
     for (let i = 0; i < conversas.length; i += LOTE) {
       const lote = conversas.slice(i, i + LOTE);
+      const comErroAntes = falhas.lotesComErro;
       const extracoes = await extrairComRetentativa(lote, (parte) => extrair(unit, regras, parte), falhas);
+      // erro de chave/limite se repetiria em todos os lotes: depois de 3 seguidos, para esta unidade (o resto fica para a próxima rodada)
+      errosSeguidos = falhas.lotesComErro > comErroAntes ? errosSeguidos + 1 : 0;
+      if (errosSeguidos >= 3) {
+        parouNoLote = i / LOTE + 1;
+        console.log(`  ! 3 lotes seguidos com erro — parei esta unidade no lote ${parouNoLote} (rode de novo depois)`);
+        break;
+      }
 
       for (const ex of extracoes) {
         const lead = await kommo.getLead(ex.leadId).catch(() => null);
         if (!lead) {
-          semCartao++;
+          naoLidos.push(ex.leadId);
           continue;
         }
         const preenchidos = new Set(
@@ -241,13 +251,14 @@ async function main(): Promise<void> {
     }
     console.log(`  → ${gravados} campos ${APLICAR ? 'gravados' : 'seriam gravados'}`);
     console.log(
-      `  descartados: ${descartes.jaPreenchidos} já tinham valor · ${descartes.naoInformados} "não informado" · ${descartes.motivoForaDaEtapa} motivo fora de Em espera/Perdido · ${semCartao} cartões não achados no Kommo`,
+      `  descartados: ${descartes.jaPreenchidos} já tinham valor · ${descartes.naoInformados} "não informado" · ${descartes.motivoForaDaEtapa} motivo fora de Em espera/Perdido · ${naoLidos.length} cartões NÃO lidos no Kommo (apagados ou erro)`,
     );
     // o que NÃO foi lido tem de aparecer: antes, lote ilegível sumia sem rastro
     console.log(
       `  falhas: ${falhas.respostasInvalidas} respostas ilegíveis (lote partido e repetido) · ${falhas.lotesComErro} lotes com erro · ${falhas.perdidas.length} conversas NÃO lidas${APLICAR ? ` · ${falhasDeGravacao} gravações recusadas` : ''}`,
     );
     if (falhas.perdidas.length > 0) console.log(`  conversas não lidas (leadId): ${falhas.perdidas.join(', ')}`);
+    if (naoLidos.length > 0) console.log(`  cartões não lidos no Kommo (leadId): ${naoLidos.join(', ')}`);
     if (falhas.erros.length > 0) console.log(`  erros: ${[...new Set(falhas.erros)].join(' | ')}`);
   }
   await prisma.$disconnect();

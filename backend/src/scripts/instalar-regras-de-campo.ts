@@ -15,13 +15,14 @@
  *
  *   node dist/scripts/instalar-regras-de-campo.js --unidade=doutor-hernia-salto,doutor-hernia-tatui
  *   node dist/scripts/instalar-regras-de-campo.js --unidade=doutor-hernia-salto,doutor-hernia-tatui --aplicar
- *   opções: --modelo=doutor-hernia-timbo  --todas
+ *   opções: --modelo=doutor-hernia-timbo  --todas  --sem=<parte do nome>[,<parte>]   (ex.: --sem=motivo não instala "Motivo do não agendamento")
  */
 import { prisma } from '../lib/prisma.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { createLeadFieldRule } from '../services/lead-field-rules.service.js';
 import { addChangeLog } from '../services/change-log.service.js';
 import { DA_CONVERSA } from '../lib/backfill-campos-regras.js';
+import { normalizar } from '../lib/franquia-sync.js';
 import { planejarRegras, type ModeloDeRegra } from '../lib/regras-de-campo-por-nome.js';
 
 const APLICAR = process.argv.includes('--aplicar');
@@ -32,6 +33,10 @@ const SLUGS = arg('unidade')
   .map((s) => s.trim())
   .filter(Boolean);
 const SLUG_MODELO = arg('modelo') || 'doutor-hernia-timbo';
+const SEM = arg('sem')
+  .split(',')
+  .map((s) => normalizar(s))
+  .filter(Boolean);
 
 async function main(): Promise<void> {
   if (SLUGS.length === 0) throw new Error('falta --unidade=<slug>[,<slug>]');
@@ -40,7 +45,9 @@ async function main(): Promise<void> {
   const modeloUnit = await prisma.unit.findUnique({ where: { slug: SLUG_MODELO } });
   if (!modeloUnit) throw new Error(`unidade-modelo ${SLUG_MODELO} não existe`);
   const todas = await prisma.leadFieldRule.findMany({ where: { unitId: modeloUnit.id, enabled: true }, orderBy: { createdAt: 'asc' } });
-  const modelo: ModeloDeRegra[] = todas.filter((r) => TODAS || DA_CONVERSA.test(r.kommoFieldName));
+  const modelo: ModeloDeRegra[] = todas
+    .filter((r) => TODAS || DA_CONVERSA.test(r.kommoFieldName))
+    .filter((r) => !SEM.some((parte) => normalizar(r.kommoFieldName).includes(parte)));
   console.log(
     `${APLICAR ? 'GRAVANDO' : 'SIMULAÇÃO (nada será gravado; use --aplicar)'} · modelo ${SLUG_MODELO}: ${modelo.length} de ${todas.length} regras habilitadas${TODAS ? ' (--todas)' : ' (só as de conversa)'}\n`,
   );
@@ -65,6 +72,9 @@ async function main(): Promise<void> {
     for (const r of plano.criar) {
       const op = r.kommoFieldEnums?.length ? ` · ${r.kommoFieldEnums.length} opções` : '';
       console.log(`  + ${r.kommoFieldName}  [${r.kommoFieldType}${op}]  campo ${r.kommoFieldId}  ferramenta ${r.toolName}`);
+    }
+    for (const a of plano.avisos) {
+      console.log(`  ? ${a.nome}: opções do modelo que a conta NÃO tem: ${a.soNoModelo.join(' | ')}  (a conta tem: ${a.naConta.join(' | ')})`);
     }
     for (const j of plano.jaExistem) console.log(`  = ${j.nome}: já existe (${j.porque})`);
     for (const f of plano.deFora) console.log(`  - ${f.nome}: FICA DE FORA — ${f.motivo}${f.detalhe ? ` (${f.detalhe})` : ''}`);

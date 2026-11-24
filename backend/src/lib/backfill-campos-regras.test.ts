@@ -76,6 +76,13 @@ test('etapaPermiteMotivo', () => {
   assert.ok(!etapaPermiteMotivo(undefined));
 });
 
+test('lerExtracoes aguenta colchete solto e cerca de código antes/depois do array', () => {
+  const arr = '[{"leadId":7,"campos":{"✎ Queixa":"dor"}}]';
+  assert.deepEqual(lerExtracoes(`Segue [resultado]:\n\`\`\`json\n${arr}\n\`\`\`\n[fim]`), [{ leadId: 7, campos: { '✎ Queixa': 'dor' } }]);
+  assert.equal(lerExtracoes('[1, 2, 3]'), null, 'array que não é de extrações não vale');
+  assert.equal(lerExtracoes('[Observação] nada aqui'), null);
+});
+
 test('lerExtracoes: array válido, vazio válido, o resto é ilegível (null)', () => {
   assert.deepEqual(lerExtracoes('texto [{"leadId":1,"campos":{"a":"b"}}] fim'), [{ leadId: 1, campos: { a: 'b' } }]);
   assert.deepEqual(lerExtracoes('[]'), []);
@@ -138,4 +145,23 @@ test('erro de chamada (chave, limite, rede): não repete, conta o lote e as conv
   assert.equal(cont.lotesComErro, 1);
   assert.equal(cont.perdidas.length, 4);
   assert.match(cont.erros[0] ?? '', /rate_limit/);
+});
+
+test('leadId que o modelo devolve e NÃO é do lote enviado é descartado (nunca grava em outro cartão)', async () => {
+  const cont = contagemVazia();
+  const r = await extrairComRetentativa(
+    conversas(3),
+    async () => [
+      { leadId: 100, campos: { '✎ Queixa': 'a' } },
+      { leadId: 999, campos: { '✎ Queixa': 'de outro cartão' } },
+      { leadId: '101' as unknown as number, campos: { '✎ Queixa': 'b' } },
+    ],
+    cont,
+  );
+  assert.deepEqual(r.map((e) => e.leadId), [100, 101]);
+});
+
+test('etapa de perda com outro feitio de nome ("Venda perdida") também vale', () => {
+  assert.ok(etapaPermiteMotivo('Venda perdida'));
+  assert.ok(etapaPermiteMotivo('Fechado - Perdido'));
 });

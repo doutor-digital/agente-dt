@@ -110,3 +110,15 @@ test('família de tipos', () => {
 test('acharCampoPorNome: nome vazio ou só símbolo não casa com nada', () => {
   assert.deepEqual(acharCampoPorNome(conta, '★'), { ausente: true });
 });
+
+test('lista cujas opções do modelo a conta não tem: a regra é criada, mas o aviso aparece', () => {
+  const m = modelo('★ Qualificação (Quente/Morno/Frio)', 'select', 'registra_qualificacao', {
+    kommoFieldEnums: [{ id: 1, value: 'Quente' }, { id: 2, value: 'Morno' }, { id: 3, value: 'Frio' }, { id: 4, value: 'Gelado' }],
+  });
+  const p = planejarRegras([m], conta, []);
+  assert.equal(p.criar.length, 1);
+  assert.deepEqual(p.avisos, [{ nome: '★ Qualificação (Quente/Morno/Frio)', soNoModelo: ['Gelado'], naConta: ['Quente', 'Morno', 'Frio'] }]);
+  // opções iguais (mesmo com acento/caixa diferente): sem aviso
+  const igual = planejarRegras([modelo('★ Qualificação (Quente/Morno/Frio)', 'select', 'x', { kommoFieldEnums: [{ id: 9, value: 'quente' }, { id: 8, value: 'MORNO' }] })], conta, []);
+  assert.equal(igual.avisos.length, 0);
+});

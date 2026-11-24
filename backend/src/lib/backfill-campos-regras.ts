@@ -42,7 +42,7 @@ export function ehCampoDeMotivo(nomeDoCampo: string): boolean {
 /** "Motivo do não agendamento" só descreve quem ficou em espera ou foi perdido. `nomeDaEtapa` = nome da etapa no Kommo. */
 export function etapaPermiteMotivo(nomeDaEtapa: string | null | undefined): boolean {
   const n = normalizar(nomeDaEtapa);
-  return n.includes('espera') || n.includes('perdido');
+  return n.includes('espera') || n.includes('perdid');
 }
 
 function opcoesDe(regra: RegraDeLeitura): string[] {
@@ -107,16 +107,39 @@ export function decidirCampos(e: {
   return d;
 }
 
-/** O array JSON da resposta do modelo. `null` = resposta que não dá para ler (sem array, JSON quebrado ou não-array). `[]` é válido. */
+function ehExtracao(x: unknown): x is Extracao {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as { leadId?: unknown; campos?: unknown };
+  return Number.isFinite(Number(o.leadId)) && !!o.campos && typeof o.campos === 'object';
+}
+
+/**
+ * O array JSON da resposta do modelo. `null` = resposta que não dá para ler. `[]` é válido.
+ * Tenta do primeiro `[` ao último `]`; se não ler (texto solto com colchete antes ou depois: "[Observação] ...", cerca de código),
+ * tenta as outras combinações e só aceita array cujos itens são `{leadId, campos}`.
+ */
 export function lerExtracoes(texto: string): Extracao[] | null {
-  const m = texto.match(/\[[\s\S]*\]/);
-  if (!m) return null;
-  try {
-    const r: unknown = JSON.parse(m[0]);
-    return Array.isArray(r) ? (r as Extracao[]) : null;
-  } catch {
-    return null;
+  const inicios: number[] = [];
+  const fins: number[] = [];
+  for (let i = 0; i < texto.length; i++) {
+    if (texto[i] === '[') inicios.push(i);
+    else if (texto[i] === ']') fins.push(i);
   }
+  let tentativas = 0;
+  for (const a of inicios) {
+    for (let k = fins.length - 1; k >= 0; k--) {
+      const b = fins[k]!;
+      if (b < a) break;
+      if (++tentativas > 60) return null;
+      try {
+        const r: unknown = JSON.parse(texto.slice(a, b + 1));
+        if (Array.isArray(r) && r.every(ehExtracao)) return r as Extracao[];
+      } catch {
+        /* próxima combinação */
+      }
+    }
+  }
+  return null;
 }
 
 export interface ContagemDeFalhas {
@@ -152,7 +175,13 @@ export async function extrairComRetentativa<C extends { leadId: number }>(
     cont.erros.push(String(err).slice(0, 160));
     return [];
   }
-  if (resposta !== null) return resposta;
+  if (resposta !== null) {
+    // só vale o que veio de uma conversa DESTE lote: id de outro cartão (modelo repetiu ou inventou) nunca vira gravação
+    const doLote = new Set(lote.map((c) => c.leadId));
+    return resposta
+      .filter((e) => ehExtracao(e) && doLote.has(Number(e.leadId)))
+      .map((e) => ({ ...e, leadId: Number(e.leadId) }));
+  }
   cont.respostasInvalidas++;
   if (lote.length === 1) {
     cont.perdidas.push(lote[0]!.leadId);
