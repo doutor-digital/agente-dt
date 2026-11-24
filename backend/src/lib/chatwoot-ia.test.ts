@@ -114,6 +114,8 @@ function portas(
     sofia?: Partial<ResultadoDaSofia>;
     /** as consultas de pé na franquia (null = não deu para conferir) */
     reais?: ConsultaReal[] | null;
+    /** campos da unidade (a pausa da recepção/painel: `pausaAte`, `pausaDesde`, `pausaPor`…) */
+    unidade?: Partial<Unit>;
   } = {},
 ) {
   const notas: Array<{ conversa: number; texto: string }> = [];
@@ -129,7 +131,7 @@ function portas(
   let lidas = 0;
   const p: PortasDaIa = {
     estado: () => o.estado ?? 'seco',
-    unidade: async () => ({ slug: 'doutor-hernia-parauapebas' }) as Unit,
+    unidade: async () => ({ slug: 'doutor-hernia-parauapebas', ...o.unidade }) as Unit,
     mensagens: async () => (leituras++ > 0 && o.depois ? o.depois : (o.mensagens ?? [msg(0, 'oi, quanto custa?')])),
     nota: async (conversa, texto) => {
       notas.push({ conversa, texto });
@@ -469,6 +471,37 @@ test('LIGADO: grava marcou (nome e dia) e Pix que saiu; a resposta com id vira r
   assert.deepEqual(eventos.map((e) => e.tipo), ['marcou', 'pix']);
   assert.equal(eventos[0]!.detalhe, '2026-11-17T09:00');
   assert.deepEqual(respostas.map((r) => r.mensagem), [500], 'só a resposta da Sofia, não o Pix');
+});
+
+test('PAUSA DA UNIDADE: com pausa ativa a Sofia do CRM NÃO responde (nem chama o modelo), registra o desfecho e tira o selo; sem pausa responde igual', async () => {
+  const em2h = new Date(Date.now() + 2 * 3_600_000);
+  const pausada = portas({ estado: 'ligado', unidade: { pausaAte: em2h, pausaDesde: null, pausaPor: 'Cleia Gerente', pausaMotivo: 'reunião sobre a Ana' } });
+  const registros: Array<{ tipo: string; nome?: string | null; detalhe?: string | null }> = [];
+  pausada.p.registrarEvento = async (e) => void registros.push({ tipo: e.tipo, nome: e.nome, detalhe: e.detalhe });
+  assert.equal(await rodarSofia(M, pausada.p, novaMemoriaDaIa()), 'pausada-pela-unidade');
+  assert.equal(pausada.sofias.length, 0, 'o modelo nem é chamado');
+  assert.equal(pausada.publicas.length, 0, 'nada vai ao paciente');
+  assert.equal(pausada.equipe.length, 0, 'e a conversa não é passada à equipe por isso');
+  assert.deepEqual(pausada.encerradas, [12], 'o selo «Sofia atendendo» sai');
+  assert.deepEqual(registros.filter((r) => r.tipo === 'decisao').map((r) => r.nome), ['pausada-pela-unidade'], 'o Registro mostra por que não respondeu');
+  assert.ok(!JSON.stringify(registros).includes('Cleia') && !JSON.stringify(registros).includes('Ana'), 'o motivo digitado e quem pausou não vão para o Registro');
+  // o selo também não nasce na 1ª mensagem
+  const nova = portas({ estado: 'ligado', unidade: { pausaAte: em2h, pausaDesde: null } });
+  await aoChegar(M, nova.p, novaMemoriaDaIa());
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(nova.comecadas, [], 'unidade pausada não ganha «Sofia atendendo»');
+
+  // pausa que JÁ acabou, pausa marcada para depois e sem pausa: a Sofia responde exatamente como sempre
+  for (const unidade of [{}, { pausaAte: new Date(Date.now() - 60_000), pausaDesde: null }, { pausaAte: new Date(Date.now() + 5 * 3_600_000), pausaDesde: new Date(Date.now() + 3_600_000) }]) {
+    const livre = portas({ estado: 'ligado', unidade });
+    assert.equal(await rodarSofia(M, livre.p, novaMemoriaDaIa()), 'enviada', JSON.stringify(unidade));
+    assert.equal(livre.sofias.length, 1);
+    assert.equal(livre.publicas.length, 1);
+    const comecar = portas({ estado: 'ligado', unidade });
+    await aoChegar(M, comecar.p, novaMemoriaDaIa());
+    await new Promise((r) => setImmediate(r));
+    assert.deepEqual(comecar.comecadas, [12], 'sem pausa o selo nasce como antes');
+  }
 });
 
 test('LIGADO: o evento do painel que EXPLODE (síncrono ou recusado) não atrapalha a resposta ao paciente', async () => {

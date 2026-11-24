@@ -56,7 +56,7 @@ test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; e
 test('Placar no modo Kommo: parseia, sem «para revisar», sem «quem agendou», consultas com «Abrir cartão»', () => {
   const html = paginaDoAgenteKommo('doutor-hernia-caxias');
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe{display:none}'));
+  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe,body.km #faixaPausa{display:none}'));
   const js = scriptDe(html);
   assert.ok(js.includes("if (!KM) desenharRevisar("), 'sem revisão no Kommo');
   assert.ok(js.includes("'Abrir cartão'") && js.includes('Ver as consultas'));
@@ -70,7 +70,7 @@ test('PR 2a: todo número do painel abre a lista (só no CRM), com o bloco do Pi
   for (const id of ['blocoPix', 'listaPix', 'dlgFiltros', 'dlgCab']) assert.ok(html.includes(`id="${id}"`), id);
   assert.ok(js.includes("'/api/public/agente/detalhe?slug='"), 'rota da lista');
   // no Kommo o card não vira botão e o bloco do Pix some (a rota é só do CRM)
-  assert.ok(js.includes('if (medida && !KM)') && js.includes('if (!KM) carregarBlocos();'), 'detalhe atrás de !KM');
+  assert.ok(js.includes('if (medida && !KM)') && /if \(!KM\) \{?\s*carregarBlocos\(\)/.test(js), 'detalhe atrás de !KM');
   assert.ok(html.includes('body.km #blocoPix'), 'bloco do Pix escondido no Kommo');
   // a página só lê valor, situação e datas do Pix: nunca o link nem a chave
   assert.ok(!/\b(linkId|paymentId|copiaECola|chavePix)\b/.test(js) && !/\bl\.pix\.(url|link)\b/.test(js), 'a página não toca link nem chave Pix');
@@ -103,6 +103,48 @@ test('PR 2b: bloco «Por que passou para a equipe» (motivo em categoria) no CRM
   for (const id of ['blocoEquipe', 'listaEquipe2', 'cEquipe']) assert.ok(html.includes(`id="${id}"`), id);
   assert.ok(js.includes('l.motivo.codigo') && js.includes('r.grupos') && js.includes("abrirDetalhe('equipe', g.codigo)"), 'motivos agrupados, clicáveis, com filtro na lista');
   assert.ok(html.includes('body.km #blocoEquipe'), 'sem o bloco no Kommo');
+});
+
+test('PR 2c: faixa e janela de pausar a Sofia — só no CRM, só quem pode vê o botão, pausar pede confirmação e motivo, resposta de outra unidade não vale', () => {
+  const html = paginaDoAgente(CW);
+  const js = scriptDe(html);
+  for (const id of ['faixaPausa', 'dlgPausa', 'jpMotivo', 'jpQuanto', 'jpConfirma']) assert.ok(html.includes(`id="${id}"`), id);
+  // a verdade sobre o que a pausa faz, POR UNIDADE: a Sofia para; com lembrete pela Kommo os lembretes da Kommo também param, os do CRM continuam
+  assert.ok(!js.includes('TODAS as conversas') && !js.includes('Os lembretes automáticos de consulta continuam'), 'nada de promessa falsa sobre a régua');
+  const fonteFrase = /function fraseLembretes\(p\)\{[\s\S]*?\n  \}/.exec(js)?.[0];
+  assert.ok(fonteFrase, 'achou fraseLembretes');
+  const frase = new Function(`${fonteFrase}; return fraseLembretes;`)() as (p: unknown) => string;
+  const so = 'Os lembretes do CRM continuam.';
+  assert.equal(frase({ lembretes: { vesperaServidor: true, vesperaRoboKommo: false, d2Servidor: false } }), `A confirmação da véspera enviada pelo nosso servidor TAMBÉM para durante a pausa. ${so}`, 'véspera pelo servidor');
+  assert.equal(frase({ lembretes: { vesperaServidor: false, vesperaRoboKommo: true, d2Servidor: false } }), `A véspera continua (é enviada pelo robô da Kommo). ${so}`, 'véspera pelo robô da Kommo');
+  assert.equal(frase({ lembretes: { vesperaServidor: true, vesperaRoboKommo: false, d2Servidor: true } }), `A confirmação da véspera e o reforço de D-2 enviados pelo nosso servidor TAMBÉM param durante a pausa. ${so}`, 'véspera + D-2');
+  assert.equal(frase({ lembretes: { vesperaServidor: false, vesperaRoboKommo: true, d2Servidor: true } }), `O reforço de D-2 enviado pelo nosso servidor TAMBÉM para durante a pausa. A véspera continua (é enviada pelo robô da Kommo). ${so}`, 'D-2 + robô da Kommo');
+  assert.equal(frase({ lembretes: { vesperaServidor: false, vesperaRoboKommo: false, d2Servidor: false } }), so, 'sem Kommo');
+  assert.equal(frase(null), so);
+  assert.ok(js.includes('fraseLembretes(PAUSA)') && (js.match(/fraseLembretes\(PAUSA\)/g) ?? []).length === 2, 'faixa E janela usam a frase');
+  assert.ok(js.includes('tVence = setTimeout(carregarPausa') && js.includes("addEventListener('focus'"), 'a faixa se atualiza quando a pausa vence');
+  assert.equal((js.match(/carregarPausa\(\)/g) ?? []).length, 3, 'carregarPausa: definição, troca de unidade e o foco — sem chamada em dobro no painel');
+  for (const rota of ["'/api/public/agente/pausa?slug='", "'/api/public/agente/pausa'", "'/api/public/agente/pausa/retomar'"]) assert.ok(js.includes(rota), rota);
+  assert.ok(js.includes('confirmar: true') && js.includes('motivo.length < 3'), 'confirmação e motivo');
+  assert.ok(js.includes('PAUSA.podeMudar'), 'o botão só aparece para quem pode mudar');
+  assert.ok(js.includes('if (KM || !PAUSA)') && js.includes('if (KM || !U) return;') && html.includes('body.km #faixaPausa'), 'no Kommo a faixa não existe (a aba Pausar é dele)');
+  assert.ok(js.includes('function daUnidadeAtual(r)') && js.includes('if (daUnidadeAtual(novo))'), 'a resposta de outra unidade não pinta a faixa');
+  assert.ok(js.includes('e.dados && e.dados.slug && daUnidadeAtual(e.dados)'), '409: a faixa mostra a pausa de quem pausou antes');
+});
+
+test('ids ÚNICOS na página, no CRM e no modo Kommo (a janela de pausar não repete os da seção de pausa do Kommo)', () => {
+  for (const [nome, html] of [['CRM', paginaDoAgente(CW)], ['Kommo', paginaDoAgenteKommo('doutor-hernia-caxias')]] as const) {
+    const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((m) => m[1]!);
+    const repetidos = ids.filter((id, i) => ids.indexOf(id) !== i);
+    assert.deepEqual([...new Set(repetidos)], [], `${nome}: ids repetidos`);
+  }
+  // o contador e o texto da janela ligam nos campos DELA, não nos da seção escondida do Kommo
+  const js = scriptDe(paginaDoAgente(CW));
+  assert.ok(js.includes("$('jpMotivo').addEventListener('input'") && js.includes("$('jpUnidade').textContent = U.nome"));
+  // todo id citado pela janela de pausar existe na página (um id velho que sobrou daria TypeError ao clicar em «Pausar a Sofia»)
+  const html = paginaDoAgente(CW);
+  const bloco = js.slice(js.indexOf('var PAUSA = null'), js.indexOf('// ── PAUSADAS ──'));
+  for (const m of bloco.matchAll(/(?:\$|some|aviso)\('([A-Za-z0-9]+)'/g)) assert.ok(html.includes(`id="${m[1]}"`), `id «${m[1]}» citado pela janela de pausar e ausente da página`);
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {

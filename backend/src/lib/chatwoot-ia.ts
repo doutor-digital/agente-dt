@@ -16,6 +16,7 @@
  * NÃO responde paciente com cartão ATIVO no Kommo da unidade (decisão 31: quem atende é o Kommo; só nota) nem quando não dá para
  * conferir o Kommo; teto de rodadas da Sofia por unidade por dia (em memória); chave na URL (o log mascara `k=`).
  */
+import { emPausa } from './pausa-unidade.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
@@ -327,6 +328,7 @@ async function vaiAtender(m: MensagemDoPaciente, lida: ConversaLida, p: PortasDa
     if (!lida.telefone) return false;
     const unit = await p.unidade(m.slug);
     if (!unit) return false;
+    if (emPausa(unit)) return false; // unidade pausada: não ganha o selo «Sofia atendendo»
     return (await p.cartaoNoKommo(unit, lida.telefone)) === null;
   };
   // a PROMESSA fica guardada: mensagens que chegam enquanto a primeira ainda consulta o Kommo esperam a mesma resposta
@@ -403,7 +405,8 @@ export type Desfecho =
   | 'ocupada'
   | 'horario-divergente'
   | 'cartao-no-kommo'
-  | 'kommo-indisponivel';
+  | 'kommo-indisponivel'
+  | 'pausada-pela-unidade';
 
 /**
  * A «assinatura» das mensagens PÚBLICAS da conversa: quantas são e qual é a última (pelo id do Chatwoot; sem id, pelo texto).
@@ -464,6 +467,8 @@ export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'horario-divergente',
   'cartao-no-kommo',
   'kommo-indisponivel',
+  // a unidade está pausada (recepção ou painel Agente): a Sofia não atende, então a etiqueta «Sofia atendendo» não pode ficar
+  'pausada-pela-unidade',
   // a última fala pública é nossa: a equipe respondeu (a pausa já teria tirado a etiqueta; se ela falhou, é aqui que sai) — se fosse a Sofia
   // mesma de outra cópia do servidor, a próxima mensagem do paciente repõe
   'equipe-respondeu',
@@ -487,6 +492,7 @@ export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'horario-divergente',
   'cartao-no-kommo',
   'kommo-indisponivel',
+  'pausada-pela-unidade',
 ]);
 
 async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
@@ -506,6 +512,14 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   if (!falas) return 'equipe-respondeu';
   const unit = await p.unidade(m.slug);
   if (!unit) return 'sem-unidade';
+  // PAUSA DA UNIDADE (colunas `pausa_*`: a página /pausa da recepção e o botão do painel Agente): a Sofia do CRM também respeita, como o Kommo. A mensagem do
+  // paciente fica sem resposta da Sofia (a equipe vê no Registro) e ela NÃO responde sozinha quando a pausa acaba. Sem pausa, nada muda.
+  if (emPausa(unit)) {
+    // texto fixo: o motivo digitado e quem pausou aparecem na faixa do painel (qualquer atendente da unidade vê), mas NÃO se repetem em cada linha do Registro
+    info.motivo = 'pausa da clínica';
+    logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: unidade pausada — a Sofia não responde`);
+    return 'pausada-pela-unidade';
+  }
 
   // a conversa como está agora: já passada à equipe, em tratamento, grupo → calada; sem telefone não dá para conferir o Kommo nem a agenda
   const lida = await p.conversa(m.conversa);

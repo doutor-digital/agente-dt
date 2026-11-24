@@ -48,7 +48,7 @@ import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
-import { estadoDoLembrete } from './lembrete-chaves.js';
+import { vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import {
   confirmacaoDaUnidade,
   ID_CONFIRMACAO_DIA_UTIL,
@@ -109,6 +109,35 @@ export function toqueDoDia(diaDaConsulta: string, hoje: string): Toque | null {
  */
 export function reforcoLiberado(slug: string, raw: string | undefined = process.env.CONFIRMACAO_D2_SLUGS): boolean {
   return automacaoLigada(slug, 'confirmacao-d2', raw);
+}
+
+/**
+ * QUAIS lembretes de consulta ESTE servidor manda para a unidade — a ÚNICA fonte da verdade (o worker decide por ela e a pausa da unidade a usa para
+ * dizer à atendente o que realmente para):
+ *  - `roda`: o worker varre a unidade (spine ligado + token da franquia) e só olha cartão do Kommo (a conversa do CRM tem régua própria);
+ *  - `vespera`: `servidor` = a confirmação D-1 sai daqui; `robo-kommo` = a chave `confirmacao-d1` saiu de «desligado» e quem manda é o robô de 24 h
+ *    do Kommo (a pausa da unidade não o alcança);
+ *  - `d2`: o reforço de D-2 sai daqui (chave `confirmacao-d2` liberada e unidade fora do «dia útil anterior», que tem um toque só);
+ *  - `daUnidade`/`diaUtil`: a regra de «dia útil anterior» (Petrópolis).
+ * Uma unidade em pausa NÃO é varrida (salvo a pausa do teto mensal), então com `roda` a pausa para o que sai daqui.
+ */
+export interface LembretesDoServidor {
+  roda: boolean;
+  vespera: 'servidor' | 'robo-kommo';
+  d2: boolean;
+  diaUtil: boolean;
+  daUnidade: ReturnType<typeof confirmacaoDaUnidade>;
+}
+export function lembretesDoServidor(unit: Pick<Unit, 'slug' | 'spineEnabled' | 'spineToken'>, env: NodeJS.ProcessEnv = process.env): LembretesDoServidor {
+  const daUnidade = confirmacaoDaUnidade(unit.slug, automacaoLigada(unit.slug, ID_CONFIRMACAO_DIA_UTIL, env.CONFIRMACAO_DIA_UTIL_SLUGS));
+  const diaUtil = daUnidade?.diaUtil === true;
+  return {
+    roda: !!unit.spineEnabled && !!unit.spineToken,
+    vespera: vesperaDoServidorDesligada(unit.slug, env) ? 'robo-kommo' : 'servidor',
+    d2: !diaUtil && reforcoLiberado(unit.slug, env.CONFIRMACAO_D2_SLUGS),
+    diaUtil,
+    daUnidade,
+  };
 }
 
 /** Ids dos Salesbots que carregam os templates aprovados, guardados em `pipeline_intents`. */
@@ -297,12 +326,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   const depois = somarDias(dia, 2);
   // Unidade no "dia útil anterior" (Petrópolis, 17/11/2026): um toque só, no último dia útil antes da consulta.
   // Sexta confirma sábado, domingo e segunda; fim de semana e feriado não confirmam nada. Sem D-2.
-  const daUnidade = confirmacaoDaUnidade(
-    unit.slug,
-    automacaoLigada(unit.slug, ID_CONFIRMACAO_DIA_UTIL, process.env.CONFIRMACAO_DIA_UTIL_SLUGS),
-  );
-  const diaUtil = daUnidade?.diaUtil === true;
-  const diasAlvo = diaUtil ? diasQueConfirmamHoje(dia) : reforcoLiberado(unit.slug) ? [amanha, depois] : [amanha];
+  const quais = lembretesDoServidor(unit);
+  const { daUnidade, diaUtil } = quais;
+  const diasAlvo = diaUtil ? diasQueConfirmamHoje(dia) : quais.d2 ? [amanha, depois] : [amanha];
   if (!diasAlvo.length) {
     ultimoEnvioPorUnidade.set(unit.id, dia);
     return;
@@ -328,7 +354,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   // Véspera pelo robô do Kommo (chave confirmacao-d1, decisão de 16/10/2026): fora de "desligado" — só no papel
   // ou ligada —, a do servidor não sai nesta unidade. O gatilho do Kommo já manda a véspera; as duas juntas
   // davam duas perguntas ao mesmo paciente (revisão de 16/10, item 5).
-  const vesperaDoKommo = estadoDoLembrete(unit.slug, 'consulta');
+  const vesperaDoKommo = quais.vespera === 'robo-kommo';
 
   for (const link of links) {
     const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
@@ -342,8 +368,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
     const diaDaConsulta = consulta.quando.slice(0, 10);
     const toque: Toque | null = diaUtil ? (diaUtilAnterior(diaDaConsulta) === dia ? 'd1' : null) : toqueDoDia(diaDaConsulta, dia);
     if (!toque) continue;
-    if (toque === 'd2' && !reforcoLiberado(unit.slug)) continue;
-    if (toque === 'd1' && vesperaDoKommo !== 'desligado') {
+    if (toque === 'd2' && !quais.d2) continue;
+    if (toque === 'd1' && vesperaDoKommo) {
       conta.robo_kommo++;
       continue;
     }

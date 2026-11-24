@@ -37,7 +37,7 @@ function codigoConfere(unit: Pick<Unit, 'pausaCodigo'>, codigo: unknown): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function estado(unit: Unit) {
+export function estado(unit: Unit) {
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
   return {
     unidade: unit.name,
@@ -61,7 +61,13 @@ const pedidoSchema = z.object({
   por: z.string().trim().max(80).nullable().optional(),
 });
 
-async function aplicarPausa(unit: Unit, body: unknown, quemPadrao: string | null): Promise<{ ok: true; unit: Unit } | { ok: false; erro: string }> {
+/** `soSeLivre`: a gravação é CONDICIONAL (só se não há pausa ativa nem marcada): duas pessoas pausando ao mesmo tempo não se sobrescrevem. */
+export async function aplicarPausa(
+  unit: Unit,
+  body: unknown,
+  quemPadrao: string | null,
+  opcoes: { soSeLivre?: boolean } = {},
+): Promise<{ ok: true; unit: Unit } | { ok: false; erro: string; conflito?: Unit }> {
   const parsed = pedidoSchema.safeParse(body);
   if (!parsed.success) return { ok: false, erro: 'pedido inválido' };
   const ate = new Date(parsed.data.ate);
@@ -69,21 +75,34 @@ async function aplicarPausa(unit: Unit, body: unknown, quemPadrao: string | null
   const erro = validarPedidoDePausa({ ate, desde });
   if (erro) return { ok: false, erro };
   const por = parsed.data.por?.trim() || quemPadrao;
-  const atualizada = await prisma.unit.update({
-    where: { id: unit.id },
-    data: { pausaAte: ate, pausaDesde: desde && desde > new Date() ? desde : null, pausaMotivo: parsed.data.motivo?.trim() || null, pausaPor: por },
-  });
+  const dados = { pausaAte: ate, pausaDesde: desde && desde > new Date() ? desde : null, pausaMotivo: parsed.data.motivo?.trim() || null, pausaPor: por };
+  let atualizada: Unit;
+  if (opcoes.soSeLivre) {
+    const r = await prisma.unit.updateMany({ where: { id: unit.id, OR: [{ pausaAte: null }, { pausaAte: { lte: new Date() } }] }, data: dados });
+    const atual = await prisma.unit.findUniqueOrThrow({ where: { id: unit.id } });
+    if (r.count === 0) return { ok: false, erro: 'A Sofia já está pausada (ou com pausa marcada). Religue antes de pausar de novo.', conflito: atual };
+    atualizada = atual;
+  } else {
+    atualizada = await prisma.unit.update({ where: { id: unit.id }, data: dados });
+  }
   const desc = descreverPausa(atualizada, atualizada.spineTimezone ?? 'America/Sao_Paulo');
   logger.info({ unit: unit.slug, por, ate, desde }, 'pausa da IA ligada pela unidade');
   void avisarJoao(`⏸️ ${unit.name}: ${desc}`, `pausa:${unit.slug}:${ate.getTime()}`, 1);
   return { ok: true, unit: atualizada };
 }
 
-async function retomar(unit: Unit, por: string | null): Promise<Unit> {
-  const atualizada = await prisma.unit.update({
-    where: { id: unit.id },
-    data: { pausaAte: null, pausaDesde: null, pausaMotivo: null, pausaPor: null },
-  });
+/** `soSeHouver`: só limpa (e só avisa) se havia pausa AINDA valendo (ativa ou marcada: `pausa_ate` no futuro, o mesmo critério de `emPausa`/`pausaAgendada`); religar uma Sofia que não estava pausada não grava nem avisa ninguém. */
+export async function retomar(unit: Unit, por: string | null, opcoes: { soSeHouver?: boolean } = {}): Promise<Unit> {
+  const dados = { pausaAte: null, pausaDesde: null, pausaMotivo: null, pausaPor: null };
+  if (opcoes.soSeHouver) {
+    const r = await prisma.unit.updateMany({ where: { id: unit.id, pausaAte: { gt: new Date() } }, data: dados });
+    const atual = await prisma.unit.findUniqueOrThrow({ where: { id: unit.id } });
+    if (r.count === 0) return atual;
+    logger.info({ unit: unit.slug, por }, 'pausa da IA desligada pela unidade');
+    void avisarJoao(`▶️ ${unit.name}: IA retomada agora${por ? ` por ${por}` : ''}.`, `retomar:${unit.slug}:${Date.now()}`, 1);
+    return atual;
+  }
+  const atualizada = await prisma.unit.update({ where: { id: unit.id }, data: dados });
   logger.info({ unit: unit.slug, por }, 'pausa da IA desligada pela unidade');
   void avisarJoao(`▶️ ${unit.name}: IA retomada agora${por ? ` por ${por}` : ''}.`, `retomar:${unit.slug}:${Date.now()}`, 1);
   return atualizada;
