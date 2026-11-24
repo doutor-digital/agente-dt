@@ -81,6 +81,22 @@ test('PR 2a: todo número do painel abre a lista (só no CRM), com o bloco do Pi
   assert.ok(scriptDe(kmHtml).includes('if (medida && !KM)'));
 });
 
+test('abrirDialogo não reabre um dialog JÁ aberto (a 2ª chamada lança em navegador antigo) e tem fallback sem showModal', () => {
+  const js = scriptDe(paginaDoAgente(CW));
+  const fonte = /function abrirDialogo\(d\)\{[^\n]*\}/.exec(js)?.[0];
+  assert.ok(fonte, 'achou abrirDialogo');
+  const abrir = new Function(`${fonte}; return abrirDialogo;`)() as (d: unknown) => void;
+  // navegador anterior à spec de 2023: showModal() num dialog aberto lança
+  const antigo = { open: false, chamadas: 0, showModal() { this.chamadas++; if (this.open) throw new Error('InvalidStateError'); this.open = true; }, setAttribute() {} };
+  abrir(antigo);
+  assert.doesNotThrow(() => { abrir(antigo); abrir(antigo); }, 'carregando, dados e cada clique de filtro chamam de novo');
+  assert.equal(antigo.chamadas, 1, 'showModal só na primeira');
+  // sem showModal: abre pelo atributo
+  const attrs: string[] = [];
+  abrir({ open: false, setAttribute: (k: string) => attrs.push(k) });
+  assert.deepEqual(attrs, ['open']);
+});
+
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
   const js = scriptDe(paginaDoAgente(CW));
   assert.equal((js.match(/innerHTML/g) ?? []).length, 0);

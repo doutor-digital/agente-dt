@@ -677,7 +677,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   }
   // cada leitura do painel/pausadas/pedidos só vale se a unidade e a vez ainda são as dela (uma resposta lenta da unidade anterior não pinta a nova)
   var seqPainel = 0, seqPausadas = 0, seqPedidos = 0;
-  function abrirDialogo(d){ if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
+  // abrir um <dialog> que JÁ está aberto lança (InvalidStateError) nos navegadores anteriores à spec de 2023: renderJanela roda a cada leitura e a cada filtro
+  function abrirDialogo(d){ if (d.open) return; if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
   function fecharDialogo(d){ if (d.close) d.close(); else d.removeAttribute('open'); }
   async function carregarPainel(){
     var eu = ++seqPainel, slug = U.slug;
@@ -796,9 +797,9 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       f.appendChild(b);
     });
     var tb = $('dlgLista'); tb.textContent = '';
-    if (cfg.carregando) { var trk = el('tr'), tdk = el('td'); tdk.colSpan = 5; var sk = el('span', 'sk'); sk.style.height = '48px'; tdk.appendChild(sk); trk.appendChild(tdk); tb.appendChild(trk); }
+    if (cfg.carregando) { var trk = el('tr'), tdk = el('td'); tdk.colSpan = (cfg.colunas || []).length + 1; var sk = el('span', 'sk'); sk.style.height = '48px'; tdk.appendChild(sk); trk.appendChild(tdk); tb.appendChild(trk); }
     var vis = (cfg.linhas || []).filter(function(l){ return cfg.filtroAtivo == null || l.filtro === cfg.filtroAtivo; });
-    if (!cfg.carregando && !vis.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', cfg.vazio || 'Nada neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
+    if (!cfg.carregando && !vis.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = (cfg.colunas || []).length + 1; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', cfg.vazio || 'Nada neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
     vis.forEach(function(l){
       var tr = el('tr');
       l.cells.forEach(function(c, i){ var td = celula(tr, cfg.colunas[i], c.v, c.cls); if (i === 0) td.style.fontWeight = '700'; });
@@ -890,7 +891,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     var st = x.situacoes || {}, sits = el('div', 'sits');
     [['pago', 'Pagos', st.pago], ['pendente', 'Pendentes', st.pendente], ['vencido', 'Vencidos', st.vencido]].forEach(function(s){
       var b = el('button', 'chip'); b.type = 'button'; b.appendChild(pilula(SIT_PIX[s[0]][0], s[1])); b.appendChild(el('span', 'n', String(s[2] || 0)));
-      b.onclick = function(){ abrirDetalhe('pix', s[0]); }; sits.appendChild(b);
+      if (!s[2]) { b.disabled = true; b.title = 'Nenhum Pix nesta situação'; } else b.onclick = function(){ abrirDetalhe('pix', s[0]); }; // 0 não abre uma lista vazia
+      sits.appendChild(b);
     });
     box.appendChild(sits);
     var cobrar = (x.linhas || []).filter(function(l){ return l.pix && (l.pix.situacao === 'pendente' || l.pix.situacao === 'vencido'); }).slice(0, 4);

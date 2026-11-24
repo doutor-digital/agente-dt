@@ -115,6 +115,15 @@ test('Pix: situação PAGO / PENDENTE / VENCIDO a partir do sinal; sem sinal = s
   assert.equal(r.total, p.pix.agora);
 });
 
+test('nome: vale o mais recente da conversa, qualquer que seja a ordem em que o banco devolve', () => {
+  const eventos = [
+    { conversa: 1, tipo: 'marcou', nome: 'Nome Antigo', detalhe: '2026-11-18T09:00', criadoEm: h(30) },
+    { conversa: 1, tipo: 'marcou', nome: 'Nome Novo', detalhe: '2026-11-19T09:00', criadoEm: h(2) },
+  ];
+  assert.equal(montarDetalhe('marcaram', { ...base, respostas: [{ conversa: 1, criadoEm: h(1) }], eventos }).linhas[0]!.nome, 'Nome Novo');
+  assert.equal(montarDetalhe('marcaram', { ...base, respostas: [{ conversa: 1, criadoEm: h(1) }], eventos: [...eventos].reverse() }).linhas[0]!.nome, 'Nome Novo');
+});
+
 test('avaliações: boas e ruins do período, com quem avaliou', () => {
   const avaliacoes = [
     { conversa: 1, nota: 'boa', quemNome: 'Bianca', texto: null, criadoEm: h(1) },

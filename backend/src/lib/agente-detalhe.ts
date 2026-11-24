@@ -84,7 +84,8 @@ export function montarDetalhe(medida: Medida, e: EntradaDoDetalhe): Detalhe {
   const t = e.agora.getTime();
   const noPeriodo = (d: Date) => d.getTime() >= j.inicio.getTime() && d.getTime() <= t;
   const nomes = new Map<number, string>();
-  for (const v of e.eventos) if (v.nome && !nomes.has(v.conversa)) nomes.set(v.conversa, v.nome);
+  // o nome mais RECENTE da conversa (a leitura do banco não vem ordenada)
+  for (const v of maisRecente(e.eventos)) if (v.nome && !nomes.has(v.conversa)) nomes.set(v.conversa, v.nome);
   const respostas = maisRecente(e.respostas.filter((r) => noPeriodo(r.criadoEm)));
   const eventos = (tipo: string) => maisRecente(e.eventos.filter((v) => v.tipo === tipo && noPeriodo(v.criadoEm)));
   /** uma linha por conversa: a mais recente de cada */
@@ -155,9 +156,9 @@ export async function detalheDaUnidade(unit: Pick<Unit, 'id' | 'slug' | 'spineTi
   ]);
   let sinais: EntradaDoDetalhe['sinais'] = [];
   if (medida === 'pix') {
-    const leads = [...new Set(eventos.filter((v) => v.tipo === 'pix').map((v) => String(BASE_LEAD_CHATWOOT + v.conversa)))].slice(0, 1000);
+    const leads = [...new Set(eventos.filter((v) => v.tipo === 'pix').map((v) => String(BASE_LEAD_CHATWOOT + v.conversa)))]; // sem teto: um teto viraria «sem registro» sem aviso
     // só as linhas DESTA unidade (unit_id) e só das conversas dos Pix do período; nunca o link (`url`) nem o id do link
-    if (leads.length) sinais = await prisma.sinalPix.findMany({ where: { unitId: unit.id, leadId: { in: leads } }, select: { leadId: true, status: true, venceEm: true, consultaEm: true, valorCentavos: true, criadoEm: true, pagoEm: true }, orderBy: { criadoEm: 'desc' }, take: 3000 });
+    if (leads.length) sinais = await prisma.sinalPix.findMany({ where: { unitId: unit.id, leadId: { in: leads } }, select: { leadId: true, status: true, venceEm: true, consultaEm: true, valorCentavos: true, criadoEm: true, pagoEm: true }, orderBy: { criadoEm: 'desc' } });
   }
   return montarDetalhe(medida, { respostas, eventos, avaliacoes, sinais, agora, periodo, fuso });
 }
