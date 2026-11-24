@@ -560,7 +560,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
           logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: horário combinado diverge da agenda, mas não consegui passar para a equipe`);
           return 'falhou';
         }
-        await evento('equipe');
+        await evento('equipe', { detalhe: 'horario-divergente' });
       }
       return 'horario-divergente';
     }
@@ -584,7 +584,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
   if (r.agendou) await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
   if (r.passouParaEquipe) {
-    await evento('equipe');
+    await evento('equipe', { detalhe: r.motivoDaPassagem ?? null });
     // a Sofia passou a conversa: a etiqueta sai (o webhook da etiqueta `esperando-humano` também conferiria, isto é só mais cedo)
     await p.encerrarAtendimento?.(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
   }

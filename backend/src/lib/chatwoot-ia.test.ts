@@ -471,15 +471,28 @@ test('LIGADO: grava marcou (nome e dia) e Pix que saiu; a resposta com id vira r
   assert.deepEqual(respostas.map((r) => r.mensagem), [500], 'só a resposta da Sofia, não o Pix');
 });
 
+test('LIGADO: a categoria do motivo da passagem vai no evento «equipe» (detalhe)', async () => {
+  const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true, motivoDaPassagem: 'convenio' } });
+  const vistos: Array<{ tipo: string; detalhe?: string | null }> = [];
+  a.p.registrarEvento = async (e) => {
+    vistos.push({ tipo: e.tipo, detalhe: e.detalhe });
+  };
+  await rodarSofia(M, a.p, novaMemoriaDaIa());
+  assert.deepEqual(vistos.filter((v) => v.tipo === 'equipe'), [{ tipo: 'equipe', detalhe: 'convenio' }]);
+});
+
 test('LIGADO: passou para a equipe conta mesmo com a resposta descartada; Pix recusado pelo Chatwoot não conta', async () => {
   const eventos: string[] = [];
   const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true }, lidaDepois: { etiquetas: ['esperando-humano'] } });
+  const motivos: Array<string | null | undefined> = [];
   a.p.registrarEvento = async (e) => {
     eventos.push(e.tipo);
+    if (e.tipo === 'equipe') motivos.push(e.detalhe);
   };
   assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'mudou');
   // o painel só conta marcou/equipe/pix; «decisao» é linha da aba Registro (a resposta foi descartada)
   assert.deepEqual(eventos.filter((t) => t !== 'decisao'), ['equipe']);
+  assert.deepEqual(motivos, [null], 'sem categoria no resultado: o evento vai sem motivo (a tela mostra «sem motivo registrado»)');
   assert.deepEqual(eventos.filter((t) => t === 'decisao'), ['decisao']);
 
   const b = portas({ estado: 'ligado', sofia: { pix: 'PIX' } });

@@ -37,7 +37,7 @@ function codigoConfere(unit: Pick<Unit, 'pausaCodigo'>, codigo: unknown): boolea
   return a.length === b.length && timingSafeEqual(a, b);
 }
 
-function estado(unit: Unit) {
+export function estado(unit: Unit) {
   const tz = unit.spineTimezone ?? 'America/Sao_Paulo';
   return {
     unidade: unit.name,
@@ -61,7 +61,7 @@ const pedidoSchema = z.object({
   por: z.string().trim().max(80).nullable().optional(),
 });
 
-async function aplicarPausa(unit: Unit, body: unknown, quemPadrao: string | null): Promise<{ ok: true; unit: Unit } | { ok: false; erro: string }> {
+export async function aplicarPausa(unit: Unit, body: unknown, quemPadrao: string | null): Promise<{ ok: true; unit: Unit } | { ok: false; erro: string }> {
   const parsed = pedidoSchema.safeParse(body);
   if (!parsed.success) return { ok: false, erro: 'pedido inválido' };
   const ate = new Date(parsed.data.ate);
@@ -79,7 +79,7 @@ async function aplicarPausa(unit: Unit, body: unknown, quemPadrao: string | null
   return { ok: true, unit: atualizada };
 }
 
-async function retomar(unit: Unit, por: string | null): Promise<Unit> {
+export async function retomar(unit: Unit, por: string | null): Promise<Unit> {
   const atualizada = await prisma.unit.update({
     where: { id: unit.id },
     data: { pausaAte: null, pausaDesde: null, pausaMotivo: null, pausaPor: null },

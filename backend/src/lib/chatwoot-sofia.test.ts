@@ -313,6 +313,17 @@ test('pausar_ia no LIGADO: etiqueta esperando-humano + etapa «Esperando humano�
   assert.equal(m.estado.passouParaEquipe, true);
 });
 
+test('pausar_ia guarda o MOTIVO em categoria (só o código, o texto fica na nota); o 1º motivo da rodada vale; Chatwoot fora não grava', async () => {
+  const m = montar('ligado', { etapa: 'Sofia qualifica' });
+  await m.por('pausar_ia').invoke({ motivo: 'o paciente quer falar com uma pessoa' });
+  assert.equal(m.estado.motivoDaPassagem, 'pediu-pessoa');
+  await m.por('pausar_ia').invoke({ motivo: 'dúvida sobre o exame' });
+  assert.equal(m.estado.motivoDaPassagem, 'pediu-pessoa', 'o primeiro vale');
+  const f = montar('ligado', { chat: chatFalso({ falhaNota: true }) });
+  await f.por('pausar_ia').invoke({ motivo: 'quer falar com a Dra.' });
+  assert.equal(f.estado.motivoDaPassagem ?? null, null, 'a equipe não foi avisada: nada de motivo');
+});
+
 test('pausar_ia com consulta de pé: etiqueta e nota, mas a ETAPA não muda (a régua lê a etapa)', async () => {
   const m = montar('ligado', { etapa: 'Agendado' });
   await m.por('pausar_ia').invoke({ motivo: 'dúvida sobre o exame' });

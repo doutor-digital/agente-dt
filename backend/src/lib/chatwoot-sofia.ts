@@ -19,6 +19,7 @@
  * Etapa não é campo: quem já está em Agendado/Confirmado/Compareceu/Pós-consulta/Fechou NÃO muda de etapa por ação da Sofia
  * (a régua lê a etapa; mover quem está em alta dispara mensagem de meses depois). Campo sim, etapa não.
  */
+import { categoriaDoMotivo, type CodigoDoMotivo, type OrigemDaPassagem } from './motivo-da-passagem.js';
 import { notaComMencao } from './crm-tarefas/regras.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import { z } from 'zod';
@@ -210,6 +211,8 @@ export interface EstadoDaRodada {
   etapa: string;
   agendou: { data: string; hora: string } | null;
   passouParaEquipe: boolean;
+  /** por que passou (categoria do painel Agente, `motivo-da-passagem.ts`); o 1º motivo da rodada vale */
+  motivoDaPassagem?: CodigoDoMotivo | null;
 }
 
 export interface PedidoDasFerramentas {
@@ -236,14 +239,19 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
   const lead = leadDaConversaChatwoot(conversa);
 
   // ── passar à equipe (pausar_ia, os avisos da agenda e do Pix) ──
-  const passarParaEquipe = async (motivo: string): Promise<boolean> => {
-    if (seco) {
+  const passarParaEquipe = async (motivo: string, origem: OrigemDaPassagem = 'modelo'): Promise<boolean> => {
+    // a categoria só vale quando a equipe foi mesmo avisada (o 1º motivo da rodada fica)
+    const passou = () => {
       estado.passouParaEquipe = true;
+      estado.motivoDaPassagem ??= categoriaDoMotivo(motivo, origem);
+    };
+    if (seco) {
+      passou();
       return true;
     }
     try {
       estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo });
-      estado.passouParaEquipe = true;
+      passou();
       return true;
     } catch (err) {
       logger.warn({ err: String(err), conversa }, 'chatwoot-sofia: não consegui passar a conversa para a equipe');
@@ -260,9 +268,9 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       semSondagem: seco,
       semGravar: seco,
       // cadastro duplicado, agenda sem conferir, cadastro recusado, vaga presa: sem tarefa no Kommo, a equipe fica sabendo pela conversa
-      avisoSemKommo: (motivo, detalhe) => passarParaEquipe(`${motivo.replace(/_/g, ' ')} — ${detalhe}`),
+      avisoSemKommo: (motivo, detalhe) => passarParaEquipe(`${motivo.replace(/_/g, ' ')} — ${detalhe}`, 'agenda'),
     },
-    { avisarEquipe: (motivo, detalhe) => passarParaEquipe(motivo === 'sinal_pix_falhou' ? `o Pix do sinal não saiu. ${detalhe}` : `Pix do sinal gerado mas sem registro. ${detalhe}`) },
+    { avisarEquipe: (motivo, detalhe) => passarParaEquipe(motivo === 'sinal_pix_falhou' ? `o Pix do sinal não saiu. ${detalhe}` : `Pix do sinal gerado mas sem registro. ${detalhe}`, 'pix') },
   );
 
   if (seco) {
@@ -504,6 +512,8 @@ export interface ResultadoDaSofia {
   /** endereço e mapa, depois de marcar (só no ligado) */
   cartao: string | null;
   passouParaEquipe: boolean;
+  /** por que passou para a equipe, em categoria (só o código; o texto fica na nota do Chatwoot) */
+  motivoDaPassagem?: CodigoDoMotivo | null;
   /** a consulta que ela marcou nesta rodada (no ligado, depois de a franquia aceitar); null/ausente = não marcou */
   agendou?: { data: string; hora: string } | null;
   /** o modelo falhou ou não escreveu resposta, mas as ferramentas já tinham agido: nada a enviar, equipe avisada */
@@ -517,7 +527,7 @@ export interface DepsDaRodada {
 
 export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada): Promise<ResultadoDaSofia | null> {
   const recorder = new RastroEmMemoria(`cw-${p.conversa}-${Date.now()}`, p.unit.id);
-  const estado: EstadoDaRodada = { etapa: texto(p.lida.attrs.etapa), agendou: null, passouParaEquipe: false };
+  const estado: EstadoDaRodada = { etapa: texto(p.lida.attrs.etapa), agendou: null, passouParaEquipe: false, motivoDaPassagem: null };
   const feitas: SandboxAction[] = [];
   const r = await deps.rodarTeste(p.unit, p.falas, {
     ferramentas: ({ onCall }) =>
@@ -548,6 +558,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
       pix: null,
       cartao: null,
       passouParaEquipe: estado.passouParaEquipe,
+      motivoDaPassagem: estado.motivoDaPassagem ?? null,
       agendou: p.modo === 'ligado' ? estado.agendou : null,
       semResposta: true,
     };
@@ -580,6 +591,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
     pix: ligado ? (pixDoSinalDoTurno(recorder.traceId) ?? null) : null,
     cartao: ligado && consultaMarcadaNoTurno(recorder.traceId) ? legendaDoCartao(p.unit) : null,
     passouParaEquipe: estado.passouParaEquipe,
+    motivoDaPassagem: estado.motivoDaPassagem ?? null,
     agendou: ligado ? estado.agendou : null,
   };
 }

@@ -251,6 +251,29 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
 .janela-rodape{padding:10px 22px 16px;border-top:1px solid var(--b);color:var(--sec);font-size:13px}
 .tab .quem{white-space:nowrap}
 
+/* faixa da pausa da Sofia (estado visível em todas as abas) */
+.faixa{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:0 0 14px;padding:10px 14px;border:1px solid var(--b);border-radius:14px;background:var(--sf)}
+.faixa.pausada{border-color:var(--at);background:var(--at-bg)}
+.faixa .txt{flex:1 1 260px;min-width:0;font-size:13.5px}
+.faixa .txt b{font-weight:700}
+.faixa .txt small{display:block;color:var(--sec);font-size:12.5px}
+/* filtros e motivos clicáveis */
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 22px 0}
+.chip{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;border:1px solid var(--b2);border-radius:999px;background:var(--sf);color:var(--txt);font-size:13px;font-weight:600;cursor:pointer}
+.chip:hover{background:var(--sf2)}
+.chip[aria-pressed=true]{background:var(--pri);border-color:var(--pri);color:var(--pri-tx)}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.8}
+.mot{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:center;width:100%;padding:10px 0;border:0;border-top:1px solid var(--b);background:transparent;text-align:left;cursor:pointer;color:var(--txt)}
+.mot:first-child{border-top:0}
+.mot:hover .t{color:var(--lnk)}
+.mot .t{font-size:14px;font-weight:600}
+.mot .q{font:800 20px "Bricolage Grotesque",Figtree,sans-serif;font-variant-numeric:tabular-nums}
+.mot .barra{grid-column:1/3;height:6px;border-radius:3px;background:var(--sf2);overflow:hidden}
+.mot .barra i{display:block;height:100%;background:var(--so);border-radius:3px}
+.mot.nao .barra i{background:var(--b2)}
+.sits{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0}
+.sits .chip{min-height:44px}
+dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
 /* esqueleto e aviso flutuante */
 .sk{display:block;border-radius:10px;background:linear-gradient(90deg,var(--sf2) 0,var(--b) 40%,var(--sf2) 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
@@ -272,6 +295,7 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
  .antes-depois{grid-template-columns:1fr}
  .reg-it{grid-template-columns:1fr;gap:2px}.reg-filtros input.sel{width:100%}
  .bt{min-height:44px}
+ .chips{padding-left:14px;padding-right:14px}
  .lin .btns{justify-content:flex-start}
  .b-lista{padding:2px 14px 8px}
  .janela-cab,.janela-corpo,.janela-rodape{padding-left:14px;padding-right:14px}
@@ -292,6 +316,7 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
 <div id="erroTopo" class="aviso erro" hidden></div>
 
 <div id="corpo" hidden>
+<div class="faixa" id="faixaPausa" hidden></div>
 <div class="topo">
   <nav class="abas" role="tablist" aria-label="Seções">
     <button role="tab" id="aba-painel" data-aba="painel" aria-selected="true">Painel</button>
@@ -328,6 +353,16 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
       <div class="b-lista" id="listaRevisar"><span class="sk" style="height:60px"></span></div>
     </section>
     <div>
+      <section class="b-bloco" id="blocoEquipe">
+        <h3>Por que passou para a equipe <span class="c" id="cEquipe"></span></h3>
+        <div class="meta">Os motivos mais comuns no período. Clique para ver as conversas.</div>
+        <div class="b-lista" id="listaEquipe2"><span class="sk" style="height:60px"></span></div>
+      </section>
+      <section class="b-bloco" id="blocoPix">
+        <h3>Pix do sinal: pagou ou não <span class="c" id="cPix"></span></h3>
+        <div class="meta">Os Pix que a Sofia gerou no período, para a equipe cobrar quem não pagou.</div>
+        <div class="b-lista" id="listaPix"><span class="sk" style="height:60px"></span></div>
+      </section>
       <section class="b-bloco">
         <h3>Conversas pausadas <span class="c" id="cPausadasPainel"></span></h3>
         <div class="meta">A Sofia volta quando a conversa é resolvida. Dá para devolver antes.</div>
@@ -458,10 +493,26 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
       <div><h3 id="dlgTitulo">Consultas que a Sofia marcou</h3><div class="meta" id="dlgPeriodo"></div></div>
       <button class="bt" id="dlgFechar" type="button">Fechar</button>
     </div>
+    <div class="chips" id="dlgFiltros" hidden></div>
     <div class="janela-corpo">
-      <div class="rolar"><table class="tab empilha"><thead><tr><th>Paciente</th><th>Consulta</th><th>Marcada</th><th>Quem agendou</th><th></th></tr></thead><tbody id="dlgLista"></tbody></table></div>
+      <div class="rolar"><table class="tab empilha"><thead id="dlgCab"></thead><tbody id="dlgLista"></tbody></table></div>
     </div>
     <div class="janela-rodape" id="dlgRodape"></div>
+  </div>
+</dialog>
+<dialog class="janela estreita" id="dlgPausa" aria-labelledby="pausaTitulo">
+  <div class="janela-in">
+    <div class="janela-cab"><div><h3 id="pausaTitulo">Pausar a Sofia da clínica</h3><div class="meta" id="pausaUnidade"></div></div><button class="bt" id="pausaFechar" type="button">Cancelar</button></div>
+    <div class="janela-corpo">
+      <div class="aviso" id="pausaAviso" style="margin-top:14px"></div>
+      <label class="rot" for="pausaQuanto">Até quando?</label>
+      <select class="sel" id="pausaQuanto" style="width:100%"><option value="1">Por 1 hora</option><option value="2">Por 2 horas</option><option value="4">Por 4 horas</option><option value="8">Por 8 horas</option><option value="24">Por 24 horas</option><option value="outro">Escolher o dia e a hora</option></select>
+      <div id="pausaOutro" hidden><label class="rot" for="pausaAte">Dia e hora para a Sofia voltar <span>horário do seu computador</span></label><input class="sel" type="datetime-local" id="pausaAte" style="width:100%"></div>
+      <label class="rot" for="pausaMotivo">Motivo <span id="cntMotivo">0/200</span></label>
+      <input type="text" id="pausaMotivo" maxlength="200" placeholder="Ex.: o doutor atrasou, falta de energia, reunião da equipe">
+      <div class="aviso erro" id="pausaErro" hidden style="margin-top:10px"></div>
+      <div class="acoes" style="margin-bottom:16px"><span class="meta">Em nome de <b id="pausaQuem"></b></span><button class="bt pri" id="pausaConfirma" type="button">Pausar a Sofia</button></div>
+    </div>
   </div>
 </dialog>
 <div id="toast" class="toast" role="status" hidden></div>
@@ -553,11 +604,14 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
     if (v && v.texto) d.textContent = v.texto;
     return d;
   }
-  function cartao(tag, rotulo, definicao, valor, v, extra){
+  function cartao(tag, rotulo, definicao, valor, v, extra, medida){
+    if (medida) { tag = 'button'; extra = (extra ? extra + ' ' : '') + 'b-clicavel'; }
     var k = el(tag, 'b-card' + (extra ? ' ' + extra : '')); if (tag === 'button') k.type = 'button';
+    if (medida) { k.setAttribute('aria-haspopup', 'dialog'); k.onclick = function(){ abrirDetalhe(medida); }; }
     var r = el('span', 'r', rotulo); r.title = definicao; k.appendChild(r);
     k.appendChild(el('span', 'v' + (valor === '—' ? ' nulo' : ''), valor));
     k.appendChild(elDelta(v));
+    if (medida) k.appendChild(el('span', 'b-ver', 'Ver as conversas'));
     return k;
   }
   // o caso (👎) que a pessoa abriu em «Ensinar a Sofia» ou «Pedir ajuste»: só a regra/o pedido feito DALI o dá por revisado
@@ -578,25 +632,26 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
       ULTIMO = p;
       $('descPeriodo').textContent = ROT_PERIODO[PERIODO] + ', contra ' + (PERIODO === 'hoje' ? 'ontem até a mesma hora' : 'os ' + COMPARA[PERIODO]);
       var g = $('grandes'); g.textContent = ''; graficos = [];
-      var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande');
+      var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande', 'respondidas');
       var gm = cartao('button', 'Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes), 'b-grande b-clicavel');
       gm.setAttribute('aria-haspopup', 'dialog'); gm.onclick = abrirConsultas;
       [[gr, 'respondidas', 'g-r'], [gm, 'marcadas', 'g-m']].forEach(function(x){ var box = el('span', 'graf'); x[0].appendChild(box); g.appendChild(x[0]); graficos.push({ box: box, chave: x[1], cls: x[2] }); });
       gm.appendChild(el('span', 'b-ver', p.marcadas.agora ? 'Ver quem agendou' : 'Ver a lista'));
+      var vv = gr.querySelector('.b-ver'); if (vv) gr.appendChild(vv);
       var k = $('peq'); k.textContent = '';
-      k.appendChild(cartao('div', 'Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
-      k.appendChild(cartao('div', 'Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
+      k.appendChild(cartao('div', 'Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true), '', 'marcaram'));
+      k.appendChild(cartao('div', 'Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes), '', 'pix'));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
-      k.appendChild(cartao('div', 'Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
-      k.appendChild(cartao('div', 'À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { texto: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '' }));
-      k.appendChild(cartao('div', 'Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { texto: 'ninguém avaliou' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
+      k.appendChild(cartao('div', 'Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq, '', 'equipe'));
+      k.appendChild(cartao('div', 'À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { texto: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '' }, '', 'fora'));
+      k.appendChild(cartao('div', 'Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { texto: 'ninguém avaliou' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true), '', 'avaliacoes'));
       var nr = p.totalParaRevisar != null ? p.totalParaRevisar : (p.paraRevisar || []).length;
       $('nRevisar').textContent = String(nr);
       desenharGraficos(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       desenharRevisar(p.paraRevisar || [], nr);
     } catch (e) { erroEm($('grandes'), e.message); }
-    contarPausadas();
+    contarPausadas(); carregarBlocos(); carregarPausa();
   }
   var NS = 'http://www.w3.org/2000/svg';
   function svg(tag, attrs){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
@@ -641,31 +696,134 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
     });
     var mais = el('div', 'mais'), bm = el('button', 'bt link', 'Ver as ' + (total || l.length) + ' e quem agendou'); bm.type = 'button'; bm.onclick = abrirConsultas; mais.appendChild(bm); box.appendChild(mais);
   }
-  // a lista COMPLETA das consultas do período: paciente, dia e hora da consulta, quando foi marcada e quem agendou
+  // ── a lista por trás de um número (janela): clicar no card abre as conversas daquele número, no período escolhido ──
   function dataHoraCurta(iso){ var d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
   function celula(tr, rotulo, conteudo, cls){ var td = el('td', cls || null); td.setAttribute('data-r', rotulo); if (typeof conteudo === 'string') td.textContent = conteudo; else td.appendChild(conteudo); tr.appendChild(td); return td; }
-  function abrirConsultas(){
-    var p = ULTIMO; if (!p) return;
-    var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tb = $('dlgLista'); tb.textContent = '';
-    $('dlgPeriodo').textContent = ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1) + ' · ' + plural(p.marcadas.agora, 'consulta', 'consultas');
-    if (!lista.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', 'A Sofia não marcou nenhuma consulta neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
-    lista.forEach(function(m){
+  function reais(c){ return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+  function nomeDe(l){ return l.nome || ('Conversa ' + l.conversa); }
+  function quandoTxt(iso){ return dataHoraCurta(iso) + ' · ' + ha(iso); }
+  function pilula(cls, t){ return el('span', 'pill ' + cls, t); }
+  function subDaJanela(n, um, varios){ var p = ROT_PERIODO[PERIODO]; return p.charAt(0).toUpperCase() + p.slice(1) + ' · ' + plural(n, um, varios); }
+  function renderJanela(cfg){
+    $('dlgTitulo').textContent = cfg.titulo; $('dlgPeriodo').textContent = cfg.sub || '';
+    var cab = $('dlgCab'); cab.textContent = ''; var trc = el('tr'); (cfg.colunas || []).concat(['']).forEach(function(c){ trc.appendChild(el('th', null, c)); }); cab.appendChild(trc);
+    var f = $('dlgFiltros'); f.textContent = ''; f.hidden = !(cfg.filtros && cfg.filtros.length);
+    (cfg.filtros || []).forEach(function(x){
+      var b = el('button', 'chip'); b.type = 'button'; b.setAttribute('aria-pressed', cfg.filtroAtivo === x.id ? 'true' : 'false');
+      b.appendChild(document.createTextNode(x.rot + ' ')); b.appendChild(el('span', 'n', String(x.total)));
+      b.onclick = function(){ cfg.filtroAtivo = cfg.filtroAtivo === x.id ? null : x.id; renderJanela(cfg); };
+      f.appendChild(b);
+    });
+    var tb = $('dlgLista'); tb.textContent = '';
+    if (cfg.carregando) { var trk = el('tr'), tdk = el('td'); tdk.colSpan = 5; var sk = el('span', 'sk'); sk.style.height = '48px'; tdk.appendChild(sk); trk.appendChild(tdk); tb.appendChild(trk); }
+    var vis = (cfg.linhas || []).filter(function(l){ return cfg.filtroAtivo == null || l.filtro === cfg.filtroAtivo; });
+    if (!cfg.carregando && !vis.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', cfg.vazio || 'Nada neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
+    vis.forEach(function(l){
       var tr = el('tr');
-      celula(tr, 'Paciente', m.nome || ('Conversa ' + m.conversa)).style.fontWeight = '700';
-      celula(tr, 'Consulta', m.agendadoPara ? consultaEm(m.agendadoPara) : '—', 'n');
-      celula(tr, 'Marcada', dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), 'n');
-      var q = m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—');
-      celula(tr, 'Quem agendou', q, 'quem');
-      var ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ $('dlgConsultas').close(); abrirConversa(m.conversa); };
+      l.cells.forEach(function(c, i){ var td = celula(tr, cfg.colunas[i], c.v, c.cls); if (i === 0) td.style.fontWeight = '700'; });
+      var ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ $('dlgConsultas').close(); abrirConversa(l.conversa); };
       celula(tr, '', ab);
       tb.appendChild(tr);
     });
-    var tot = p.consultasTotal != null ? p.consultasTotal : lista.length;
-    $('dlgRodape').textContent = (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.';
-    var d = $('dlgConsultas'); if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+    $('dlgRodape').textContent = cfg.rodape || '';
+    var d = $('dlgConsultas'); if (!d.open) { if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
+  }
+  // as consultas que a Sofia marcou: paciente, dia e hora da consulta, quando foi marcada e quem agendou
+  function abrirConsultas(){
+    var p = ULTIMO; if (!p) return;
+    var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tot = p.consultasTotal != null ? p.consultasTotal : lista.length;
+    renderJanela({
+      titulo: 'Consultas que a Sofia marcou', sub: subDaJanela(p.marcadas.agora, 'consulta', 'consultas'),
+      colunas: ['Paciente', 'Consulta', 'Marcada', 'Quem agendou'],
+      linhas: lista.map(function(m){ return { conversa: m.conversa, cells: [{ v: m.nome || ('Conversa ' + m.conversa) }, { v: m.agendadoPara ? consultaEm(m.agendadoPara) : '—', cls: 'n' }, { v: dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), cls: 'n' }, { v: m.quem ? pilula('so', m.quem) : el('span', 'mut', '—'), cls: 'quem' }] }; }),
+      vazio: 'A Sofia não marcou nenhuma consulta neste período.',
+      rodape: (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.'
+    });
+  }
+  var TITULOS = { respondidas: 'Pessoas respondidas', marcaram: 'Marcaram consulta', equipe: 'Passou para a equipe', pix: 'Pix do sinal gerado', fora: 'Respostas à noite ou no fim de semana', avaliacoes: 'Avaliações das respostas' };
+  var NOTA_NOME = 'O nome do paciente só aparece quando a Sofia marcou consulta; nas outras linhas vale o número da conversa.';
+  var SIT_PIX = { pago: ['ok', 'Pago'], pendente: ['at', 'Pendente'], vencido: ['er', 'Vencido'] };
+  function cfgDoDetalhe(medida, r, filtroInicial){
+    var cfg = { titulo: TITULOS[medida], sub: subDaJanela(r.total, medida === 'avaliacoes' ? 'avaliação' : 'conversa', medida === 'avaliacoes' ? 'avaliações' : 'conversas'), linhas: [], filtroAtivo: filtroInicial || null, vazio: 'Nada neste período.' };
+    var cortado = r.total > r.linhas.length ? 'Mostrando as ' + r.linhas.length + ' mais recentes de ' + r.total + '. ' : '';
+    if (medida === 'respondidas' || medida === 'fora') {
+      cfg.colunas = ['Conversa', 'Última resposta', 'Respostas'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: l.detalhe || '', cls: 'n' }] }; });
+      cfg.rodape = cortado + NOTA_NOME;
+    } else if (medida === 'marcaram') {
+      cfg.colunas = ['Paciente', 'Consulta', 'Marcada'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: l.consultaEm ? consultaEm(l.consultaEm) : '—', cls: 'n' }, { v: quandoTxt(l.quando), cls: 'n' }] }; });
+      cfg.rodape = cortado + 'Conversas que a Sofia respondeu no período e em que ela marcou consulta: é o número do card «Marcaram».';
+    } else if (medida === 'equipe') {
+      cfg.colunas = ['Conversa', 'Passou', 'Motivo'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, filtro: l.motivo.codigo, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: pilula(l.motivo.codigo === 'sem-registro' ? 'ne' : 'so', l.motivo.rotulo) }] }; });
+      cfg.filtros = (r.grupos || []).map(function(g){ return { id: g.codigo, rot: g.rotulo, total: g.total }; });
+      cfg.rodape = cortado + 'O motivo vem de uma categoria gravada na hora em que a Sofia passa a conversa. Passagens de antes disso ficam como «Sem motivo registrado». ' + NOTA_NOME;
+    } else if (medida === 'pix') {
+      cfg.colunas = ['Conversa', 'Valor', 'Gerado', 'Situação'];
+      cfg.linhas = r.linhas.map(function(l){
+        var sx = l.pix && l.pix.situacao ? SIT_PIX[l.pix.situacao] : null, quando = l.pix && l.pix.geradoEm ? l.pix.geradoEm : l.quando;
+        var celSit = sx ? pilula(sx[0], sx[1]) : pilula('ne', 'Sem registro');
+        return { conversa: l.conversa, filtro: l.pix && l.pix.situacao ? l.pix.situacao : 'sem', cells: [{ v: nomeDe(l) }, { v: l.pix && l.pix.valorCentavos != null ? reais(l.pix.valorCentavos) : '—', cls: 'n' }, { v: quandoTxt(quando), cls: 'n' }, { v: celSit }] };
+      });
+      var st = r.situacoes || {};
+      cfg.filtros = [['pago', 'Pagos', st.pago], ['pendente', 'Pendentes', st.pendente], ['vencido', 'Vencidos', st.vencido], ['sem', 'Sem registro', st.semRegistro]].filter(function(x){ return x[2]; }).map(function(x){ return { id: x[0], rot: x[1], total: x[2] }; });
+      cfg.rodape = cortado + 'Pago = o Asaas já baixou. Pendente = dentro da validade do link. Vencido = passou da validade sem pagar. «Sem registro» = não achei o sinal desta conversa. O link e a chave Pix não aparecem aqui. ' + NOTA_NOME;
+    } else {
+      cfg.colunas = ['Conversa', 'Quando', 'Avaliação', 'Quem avaliou'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, filtro: l.nota, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: pilula(l.nota === 'boa' ? 'ok' : 'er', l.nota === 'boa' ? 'Boa' : 'Ruim') }, { v: (l.quem || '') + (l.detalhe ? ' · «' + l.detalhe + '»' : '') }] }; });
+      var boas = r.linhas.filter(function(l){ return l.nota === 'boa'; }).length;
+      cfg.filtros = [{ id: 'boa', rot: 'Boas', total: boas }, { id: 'ruim', rot: 'Ruins', total: r.linhas.length - boas }];
+      cfg.rodape = cortado + 'As avaliações que a equipe deu (👍 e 👎) nos balões da Sofia. ' + NOTA_NOME;
+    }
+    return cfg;
+  }
+  function urlDetalhe(medida){ return '/api/public/agente/detalhe?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO) + '&medida=' + enc(medida); }
+  async function abrirDetalhe(medida, filtroInicial){
+    renderJanela({ titulo: TITULOS[medida], sub: ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1), colunas: [], carregando: true, linhas: [] });
+    try { renderJanela(cfgDoDetalhe(medida, await api('GET', urlDetalhe(medida)), filtroInicial)); }
+    catch (e) { $('dlgConsultas').close(); toast(e.message, true); }
   }
   $('dlgFechar').addEventListener('click', function(){ $('dlgConsultas').close(); });
   $('dlgConsultas').addEventListener('click', function(ev){ if (ev.target === $('dlgConsultas')) $('dlgConsultas').close(); });
+
+  // dois blocos do painel que respondem «por que» e «pagou?» sem abrir nada
+  async function carregarBlocos(){
+    var per = PERIODO;
+    try { var r = await api('GET', urlDetalhe('equipe')); if (per === PERIODO) desenharMotivos(r); } catch (e) { erroEm($('listaEquipe2'), e.message); }
+    try { var x = await api('GET', urlDetalhe('pix')); if (per === PERIODO) desenharPix(x); } catch (e) { erroEm($('listaPix'), e.message); }
+  }
+  function desenharMotivos(r){
+    var box = $('listaEquipe2'); box.textContent = ''; $('cEquipe').textContent = r.total ? String(r.total) : '';
+    if (!r.total) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma passagem. ')); v.appendChild(document.createTextNode('Nenhuma conversa foi passada para a equipe neste período.')); box.appendChild(v); return; }
+    var max = 1; (r.grupos || []).forEach(function(g){ max = Math.max(max, g.total); });
+    (r.grupos || []).slice(0, 6).forEach(function(g){
+      var b = el('button', 'mot' + (g.codigo === 'sem-registro' ? ' nao' : '')); b.type = 'button';
+      b.appendChild(el('span', 't', g.rotulo)); b.appendChild(el('span', 'q', String(g.total)));
+      var bar = el('span', 'barra'), i = el('i'); i.style.width = Math.max(4, Math.round(100 * g.total / max)) + '%'; bar.appendChild(i); b.appendChild(bar);
+      b.onclick = function(){ abrirDetalhe('equipe', g.codigo); };
+      box.appendChild(b);
+    });
+  }
+  function desenharPix(x){
+    var box = $('listaPix'); box.textContent = ''; $('cPix').textContent = x.total ? String(x.total) : '';
+    if (!x.total) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhum Pix. ')); v.appendChild(document.createTextNode('A Sofia não gerou Pix do sinal neste período.')); box.appendChild(v); return; }
+    var st = x.situacoes || {}, sits = el('div', 'sits');
+    [['pago', 'Pagos', st.pago], ['pendente', 'Pendentes', st.pendente], ['vencido', 'Vencidos', st.vencido]].forEach(function(s){
+      var b = el('button', 'chip'); b.type = 'button'; b.appendChild(pilula(SIT_PIX[s[0]][0], s[1])); b.appendChild(el('span', 'n', String(s[2] || 0)));
+      b.onclick = function(){ abrirDetalhe('pix', s[0]); }; sits.appendChild(b);
+    });
+    box.appendChild(sits);
+    var cobrar = (x.linhas || []).filter(function(l){ return l.pix && (l.pix.situacao === 'pendente' || l.pix.situacao === 'vencido'); }).slice(0, 4);
+    cobrar.forEach(function(l){
+      var row = el('div', 'lin'), q = el('div'), sx = SIT_PIX[l.pix.situacao];
+      q.appendChild(el('div', 'nm', nomeDe(l)));
+      q.appendChild(el('span', 'det', (l.pix.valorCentavos != null ? reais(l.pix.valorCentavos) + ' · ' : '') + 'gerado ' + ha(l.pix.geradoEm || l.quando)));
+      var bs = el('div', 'btns'), ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(l.conversa); };
+      bs.appendChild(pilula(sx[0], sx[1])); bs.appendChild(ab); row.appendChild(q); row.appendChild(bs); box.appendChild(row);
+    });
+    if (!cobrar.length) box.appendChild(el('p', 'vazio', st.semRegistro ? 'Nenhum pendente ou vencido com registro do sinal.' : 'Ninguém para cobrar: todos pagaram.'));
+  }
   function desenharRevisar(l, total){
     var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = total ? (total > l.length ? (l.length + ' de ' + total) : String(total)) : '';
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. ')); v.appendChild(document.createTextNode('Para marcar uma resposta ruim, passe o mouse no balão da Sofia dentro da conversa.')); box.appendChild(v); return; }
@@ -818,6 +976,69 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
     $('f0').value = fala.slice(0, 500); ir('ensinar'); contar(); var r = $('regra'); r.focus(); r.setSelectionRange(r.value.length, r.value.length);
   });
 
+  // ── pausar e religar a Sofia da clínica (só administradora ou gerente da conta muda; as outras pessoas só veem o estado) ──
+  var PAUSA = null;
+  async function carregarPausa(){
+    if (!U) return;
+    try { PAUSA = await api('GET', '/api/public/agente/pausa?slug=' + enc(U.slug)); } catch (e) { PAUSA = null; }
+    desenharFaixa();
+  }
+  function horaDaPausa(iso){ if (!iso) return ''; try { return new Date(iso).toLocaleString('pt-BR', { timeZone: PAUSA.tz || undefined, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return dataHoraCurta(iso); } }
+  function desenharFaixa(){
+    var f = $('faixaPausa'); f.textContent = '';
+    if (!PAUSA) { f.hidden = true; return; }
+    f.hidden = false;
+    var parada = PAUSA.emPausa, marcada = PAUSA.agendada, txt = el('div', 'txt');
+    f.className = 'faixa' + (parada ? ' pausada' : '');
+    f.appendChild(parada ? pilula('at', 'Sofia pausada') : marcada ? pilula('ne', 'Pausa agendada') : pilula('ok', 'Sofia atendendo'));
+    if (parada) {
+      txt.appendChild(el('b', null, 'A Sofia não responde nenhuma conversa da clínica até ' + horaDaPausa(PAUSA.ate) + '.'));
+      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora.'));
+    } else if (marcada) {
+      txt.appendChild(el('b', null, 'Pausa marcada de ' + horaDaPausa(PAUSA.desde) + ' até ' + horaDaPausa(PAUSA.ate) + '.'));
+      txt.appendChild(el('small', null, 'Marcada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '')));
+    } else {
+      txt.appendChild(el('b', null, 'A Sofia está respondendo as conversas da clínica.'));
+    }
+    f.appendChild(txt);
+    if (PAUSA.podeMudar) {
+      var b = el('button', parada || marcada ? 'bt pri' : 'bt', parada || marcada ? 'Religar a Sofia' : 'Pausar a Sofia'); b.type = 'button';
+      b.onclick = parada || marcada ? religarASofia : abrirPausa;
+      f.appendChild(b);
+    } else if (parada || marcada) {
+      f.appendChild(el('span', 'meta', 'Só a administradora ou a gerente religa.'));
+    }
+  }
+  async function religarASofia(ev){
+    var b = ev.currentTarget; b.disabled = true;
+    try { PAUSA = await api('POST', '/api/public/agente/pausa/retomar', { slug: U.slug }); toast('A Sofia voltou a responder a clínica.'); desenharFaixa(); }
+    catch (e) { b.disabled = false; toast(e.message, true); }
+  }
+  function abrirPausa(){
+    $('pausaUnidade').textContent = U.nome; $('pausaQuem').textContent = EU || 'você';
+    $('pausaAviso').textContent = 'A Sofia vai parar de responder TODAS as conversas de ' + U.nome + ' até a hora escolhida e volta sozinha nela. Quem já está falando com a equipe não muda.';
+    $('pausaQuanto').value = '2'; $('pausaOutro').hidden = true; $('pausaAte').value = ''; $('pausaMotivo').value = ''; $('cntMotivo').textContent = '0/200'; some('pausaErro');
+    var d = $('dlgPausa'); if (d.showModal) d.showModal(); else d.setAttribute('open', '');
+    $('pausaMotivo').focus();
+  }
+  $('pausaQuanto').addEventListener('change', function(){ $('pausaOutro').hidden = $('pausaQuanto').value !== 'outro'; });
+  $('pausaMotivo').addEventListener('input', function(){ $('cntMotivo').textContent = $('pausaMotivo').value.length + '/200'; });
+  $('pausaFechar').addEventListener('click', function(){ $('dlgPausa').close(); });
+  $('pausaConfirma').addEventListener('click', async function(){
+    var b = this, motivo = $('pausaMotivo').value.trim(), q = $('pausaQuanto').value, ate;
+    some('pausaErro');
+    if (motivo.length < 3) { aviso('pausaErro', 'Escreva o motivo da pausa (uma frase curta).'); $('pausaMotivo').focus(); return; }
+    if (q === 'outro') { ate = $('pausaAte').value ? new Date($('pausaAte').value) : null; if (!ate || isNaN(ate.getTime())) { aviso('pausaErro', 'Escolha o dia e a hora em que a Sofia volta.'); $('pausaAte').focus(); return; } }
+    else ate = new Date(Date.now() + Number(q) * 3600000);
+    if (ate.getTime() <= Date.now()) { aviso('pausaErro', 'A hora de voltar precisa estar no futuro.'); return; }
+    b.disabled = true;
+    try {
+      PAUSA = await api('POST', '/api/public/agente/pausa', { slug: U.slug, ate: ate.toISOString(), motivo: motivo, confirmar: true });
+      $('dlgPausa').close(); toast('A Sofia está pausada até ' + horaDaPausa(PAUSA.ate) + '.'); desenharFaixa();
+    } catch (e) { aviso('pausaErro', e.message); }
+    b.disabled = false;
+  });
+
   // ── PAUSADAS ──
   function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; $('cPausadasPainel').textContent = n ? String(n) : ''; $('nPausadas').textContent = String(n || 0); }
   async function contarPausadas(){ try { var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); desenharPausadasPainel(r.conversas); } catch (e) {} }
@@ -945,8 +1166,9 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   function escolherUnidade(u){
-    U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; $('heroUnidade').textContent = 'Sofia · ' + u.nome; desvincular();
+    U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; $('heroUnidade').textContent = 'Sofia · ' + u.nome; desvincular(); PAUSA = null; desenharFaixa();
     EST = null; previaDe = null; ULTIMO = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
+    carregarPausa();
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }
   async function entrar(){

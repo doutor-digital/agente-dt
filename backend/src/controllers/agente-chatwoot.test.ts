@@ -36,10 +36,20 @@ test('tela Placar: faixa de atenção, card «Consultas marcadas» abre a lista 
   for (const id of ['nRevisar', 'nPausadas', 'nPedidos', 'grandes', 'peq', 'dlgConsultas', 'dlgLista', 'listaPausadasPainel']) assert.ok(html.includes(`id="${id}"`), id);
   const js = scriptDe(html);
   assert.ok(js.includes('abrirConsultas') && js.includes('consultasDoPeriodo'), 'o card de consultas abre a lista que vem do painel');
-  assert.ok(js.includes('m.quem') && html.includes('<th>Quem agendou</th>'), 'a lista mostra quem agendou');
+  assert.ok(js.includes('m.quem') && js.includes("'Quem agendou'"), 'a lista mostra quem agendou');
   assert.ok(js.includes("'funil-tema'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM (e quando ele muda) + o do aparelho');
   assert.ok(html.includes('<meta name="color-scheme" content="light dark">'));
   assert.ok(html.includes('.bt{min-height:44px}'), 'botões de 44 px no celular');
+});
+
+test('PR2: todo número do painel abre a lista, Pix/motivos/pausa estão na página e pausar pede confirmação', () => {
+  const html = paginaDoAgente(CW);
+  const js = scriptDe(html);
+  for (const medida of ['respondidas', 'marcaram', 'equipe', 'pix', 'fora', 'avaliacoes']) assert.ok(js.includes(`'${medida}'`), medida);
+  for (const id of ['blocoEquipe', 'blocoPix', 'faixaPausa', 'dlgPausa', 'pausaMotivo', 'pausaConfirma']) assert.ok(html.includes(`id="${id}"`), id);
+  assert.ok(js.includes('confirmar: true'), 'o POST de pausar leva a confirmação');
+  assert.ok(js.includes('PAUSA.podeMudar'), 'o botão só aparece para quem pode mudar');
+  assert.ok(!js.includes('url:') || !/linkId|paymentId/.test(js), 'a página não lida com link nem chave do Pix');
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
@@ -49,7 +59,7 @@ test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
 
 test('a página usa as rotas certas (regras, prévia, conversa, pausadas, avaliações, pedidos)', () => {
   const js = scriptDe(paginaDoAgente(CW));
-  for (const rota of ["'/api/public/aprendizados/'", "'/previa'", "'/conversa'", "'/regra/'", "'/api/public/testar-ia/pausadas'", "'/api/public/testar-ia/unidades'", "'/api/public/agente/painel?slug='", "'/api/public/agente/avaliacoes/'", "'/api/public/agente/pedidos'", "'/api/public/assistente/pausa'"])
+  for (const rota of ["'/api/public/aprendizados/'", "'/previa'", "'/conversa'", "'/regra/'", "'/api/public/testar-ia/pausadas'", "'/api/public/testar-ia/unidades'", "'/api/public/agente/painel?slug='", "'/api/public/agente/detalhe?slug='", "'/api/public/agente/pausa'", "'/api/public/agente/pausa/retomar'", "'/api/public/agente/avaliacoes/'", "'/api/public/agente/pedidos'", "'/api/public/assistente/pausa'"])
     assert.ok(js.includes(rota), rota);
 });
 
