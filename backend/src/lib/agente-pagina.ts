@@ -572,6 +572,7 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
   Array.prototype.forEach.call(document.querySelectorAll('[data-desvincular]'), function(b){ b.addEventListener('click', desvincular); });
   var ULTIMO = null, graficos = [];
   async function carregarPainel(){
+    ULTIMO = null;
     try {
       var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
       ULTIMO = p;
@@ -945,7 +946,7 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   function escolherUnidade(u){
     U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; $('heroUnidade').textContent = 'Sofia · ' + u.nome; desvincular();
-    EST = null; previaDe = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
+    EST = null; previaDe = null; ULTIMO = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }
   async function entrar(){
@@ -972,7 +973,8 @@ dialog.janela::backdrop{background:rgba(5,8,20,.6)}
   }
   window.addEventListener('message', function(ev){
     if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
-    var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
+    var d = ev.data; if (d && d.event === 'funil-tema' && (d.tema === 'escuro' || d.tema === 'claro')) { temaDoCrm = d.tema; aplicarTema(d.tema); return; }
+    if (!d || d.event !== 'funil-sessao') return;
     if (d.tema === 'escuro' || d.tema === 'claro') { temaDoCrm = d.tema; aplicarTema(d.tema); }
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();

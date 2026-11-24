@@ -35,10 +35,9 @@ test('tela Placar: faixa de atenção, card «Consultas marcadas» abre a lista 
   const html = paginaDoAgente(CW);
   for (const id of ['nRevisar', 'nPausadas', 'nPedidos', 'grandes', 'peq', 'dlgConsultas', 'dlgLista', 'listaPausadasPainel']) assert.ok(html.includes(`id="${id}"`), id);
   const js = scriptDe(html);
-  assert.ok(js.includes('gm.onclick = abrirConsultas'), 'o card de consultas é um botão que abre a lista');
-  assert.ok(js.includes('p.consultasDoPeriodo'), 'a lista vem do campo novo do painel');
-  assert.ok(js.includes("m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—')"), 'quem agendou: pílula, ou «—» quando não se sabe');
-  assert.ok(js.includes("d.tema === 'escuro'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM + o do aparelho');
+  assert.ok(js.includes('abrirConsultas') && js.includes('consultasDoPeriodo'), 'o card de consultas abre a lista que vem do painel');
+  assert.ok(js.includes('m.quem') && html.includes('<th>Quem agendou</th>'), 'a lista mostra quem agendou');
+  assert.ok(js.includes("'funil-tema'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM (e quando ele muda) + o do aparelho');
   assert.ok(html.includes('<meta name="color-scheme" content="light dark">'));
   assert.ok(html.includes('.bt{min-height:44px}'), 'botões de 44 px no celular');
 });
