@@ -214,9 +214,14 @@ test('--so-crm: nenhum aviso do plano aponta --sobrescrever para a Sofia (em Mar
   const sofia = passo(p, 'sofia');
   assert.equal(sofia.acao, 'nada');
   assert.ok(!sofia.avisos.some((a) => /--sobrescrever/.test(a)), `aviso da Sofia não pode sugerir --sobrescrever: ${sofia.avisos.join(' | ')}`);
+  // …mas a divergência continua avisada (modelos e mensagens prontas usam o preço do questionário; a Sofia, o dela)
+  assert.ok(sofia.avisos.some((a) => /DIFERE do questionário em .*personaAgentName.*sourceNegocio/.test(a)), `avisa o que difere: ${sofia.avisos.join(' | ')}`);
   // unidade ATIVA sem a flag (o caso de Marabá rodado sem --so-crm): a Sofia também não pode sugerir --sobrescrever
   const ativaSemFlag = montarPlano(q, estado, { molde: MOLDE });
   assert.ok(!passo(ativaSemFlag, 'sofia').avisos.some((a) => /--sobrescrever/.test(a)), `ativa sem flag: ${passo(ativaSemFlag, 'sofia').avisos.join(' | ')}`);
+  // e a config do CRM divergente, na ativa sem flag, também não sugere a flag
+  const cfgAtiva = { ...estado, banco: { ...estado.banco, configChatwoot: { ...(estado.banco?.configChatwoot ?? {}), subdominio: 'outrosubdominio' } } };
+  assert.ok(!passo(montarPlano(q, cfgAtiva, { molde: MOLDE }), 'config-chatwoot').avisos.some((a) => /--sobrescrever/.test(a)), 'config-chatwoot na ativa sem flag');
   // unidade INATIVA sem a flag: o aviso continua (lá o --sobrescrever é o caminho normal)
   const inativa = { ...estado, banco: { ...estado.banco, unidade: { ...estado.banco.unidade, campos: { ...estado.banco.unidade.campos, isActive: false } } } };
   assert.ok(passo(montarPlano(q, inativa, { molde: MOLDE }), 'sofia').avisos.some((a) => /já preenchidos e diferentes/.test(a)), 'inativa: o aviso segue');
