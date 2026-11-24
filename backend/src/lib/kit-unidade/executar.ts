@@ -227,7 +227,7 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       const ficaram = [...simples.preservados, ...dados.preservados.map((k) => `dadosModelos.${k}`)];
       return [
         Object.keys(parcial).length ? `configuração já existia: preenchi ${Object.keys(parcial).join(', ')}` : 'configuração já existia e não tinha campo vazio a preencher',
-        ...(ficaram.length ? [`ficaram como estão (já preenchidos, diferem do questionário; --sobrescrever troca): ${ficaram.join(', ')}`] : []),
+        ...(ficaram.length ? [`ficaram como estão (já preenchidos, diferem do questionário${o.soCrm ? '' : '; --sobrescrever troca'}): ${ficaram.join(', ')}`] : []),
       ];
     }
     case 'automacoes-seco': {
