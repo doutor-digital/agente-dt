@@ -338,7 +338,6 @@ const NARRA_DECISAO = new RegExp(
   'iu',
 );
 const NARRA_RELATO_TODOS = new RegExp(NARRA_RELATO.source, 'giu');
-const NARRA_DECISAO_TODAS = new RegExp(NARRA_DECISAO.source, 'giu');
 const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');
 // Só vira raciocínio quando a narração usa o vocabulário de quem PLANEJA o atendimento (paciente, lead, fluxo, regra, cumprimento,
 // transcrição, triagem, "não traz", "encerrou a conversa"…). "A equipe já confirmou, então vou aguardar o comprovante 😊" e "O áudio veio
@@ -355,14 +354,15 @@ export function paragrafoNarraDecisao(paragrafo: string): string | null {
   if (!NARRA_SUJEITO.test(p) && !NARRA_NOME.test(p)) return null;
   // olha só o começo: a narração acontece nas duas primeiras frases
   const inicio = p.slice(0, 260);
-  // Testa TODA dupla relato → decisão do começo, não só a primeira: "A equipe já tinha perguntado…, preciso retomar. Ele ainda
-  // não respondeu à pergunta da equipe, então vou perguntar de novo." — a 1ª dupla fecha a frase sem vocabulário de bastidor,
-  // a 2ª é que entrega o raciocínio (achado do sênior no #441).
+  // Testa CADA relato com a 1ª decisão depois dele (não só o 1º relato): "A equipe já tinha perguntado…, preciso retomar. Ele
+  // ainda não respondeu à pergunta da equipe, então vou perguntar de novo." — a 1ª dupla fecha a frase sem vocabulário de
+  // bastidor, a 2ª é que entrega o raciocínio (achado do sênior no #441). Só a 1ª decisão de cada relato, como sempre foi:
+  // decisão de uma frase SEGUINTE esticaria a janela do vocabulário até palavras que a regra nunca olhou ("…vou aguardar o
+  // comprovante. Mantenho a triagem marcada" virava bloqueio — 2ª rodada do sênior).
   for (const rel of inicio.matchAll(NARRA_RELATO_TODOS)) {
     const fimDoRelato = rel.index + rel[0].length;
-    for (const dec of inicio.slice(fimDoRelato).matchAll(NARRA_DECISAO_TODAS)) {
-      if (duplaNarraBastidor(inicio, rel[0], fimDoRelato + dec.index + dec[0].length)) return p.slice(0, 80);
-    }
+    const dec = NARRA_DECISAO.exec(inicio.slice(fimDoRelato));
+    if (dec && duplaNarraBastidor(inicio, rel[0], fimDoRelato + dec.index + dec[0].length)) return p.slice(0, 80);
   }
   return null;
 }

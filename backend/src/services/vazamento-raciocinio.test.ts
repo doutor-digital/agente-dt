@@ -264,7 +264,16 @@ test('Boa Vista (22/11): as mesmas palavras faladas COM o paciente passam', () =
     'A equipe havia explicado o fluxo de atendimento, preciso repetir rapidinho: primeiro a avaliação, depois o tratamento.',
     'A resposta do exame não chegou, não tenho resposta da triagem ainda, preciso perguntar pra doutora.',
     'A Ilma havia confirmado a consulta, preciso perguntar o horário para a qualificação do cadastro.',
+    // 2ª rodada do sênior: decisão de uma frase SEGUINTE não pode esticar a janela do vocabulário de bastidor
+    'A equipe confirmou o horário, então vou aguardar o comprovante. Mantenho a triagem marcada pra amanhã 😊',
+    'O áudio veio mudo, então vou pedir pra escrever. Respondo assim que chegar a transcrição 🙏',
   ]) {
     assert.equal(detectarVazamento(m), null, m);
   }
+});
+
+test('2ª rodada do sênior (#441): instrução ao paciente na 2ª frase não é cortada', () => {
+  const m = 'A equipe confirmou o horário, então vou aguardar o comprovante. Mantenho a triagem marcada, sem jejum e com roupa leve.\n\nQualquer dúvida, me chama que te ajudo 😊';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+  assert.equal(detectarVazamento(m), null);
 });
