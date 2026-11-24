@@ -276,7 +276,7 @@ a.bt{text-decoration:none}
 .tipo-ia{color:var(--lnk)}.tipo-equipe{color:var(--ok)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
 @media (max-width:560px){body.km .abas{width:100%;gap:0 2px}body.km .abas button{padding:0 9px;font-size:13.5px}body.km .lado{width:100%;padding:8px 0}body.km .lado .sel{flex:1;min-height:40px}body.km .bt{min-height:40px}}
 
-body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe{display:none}
+body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe,body.km #faixaPausa{display:none}
 @media (min-width:561px){body.km .b-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 /* filtros da janela e resumo do Pix */
@@ -296,6 +296,13 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 .mot .barra{grid-column:1/3;height:6px;border-radius:3px;background:var(--sf2);overflow:hidden}
 .mot .barra i{display:block;height:100%;background:var(--so);border-radius:3px}
 .mot.nao .barra i{background:var(--b2)}
+/* faixa da pausa da Sofia (estado visível em todas as abas) */
+.faixa{display:flex;flex-wrap:wrap;align-items:center;gap:8px 14px;margin:0 0 14px;padding:10px 14px;border:1px solid var(--b);border-radius:14px;background:var(--sf)}
+.faixa.pausada{border-color:var(--at);background:var(--at-bg)}
+.faixa .txt{flex:1 1 260px;min-width:0;font-size:13.5px}
+.faixa .txt b{font-weight:700}
+.faixa .txt small{display:block;color:var(--sec);font-size:12.5px}
+dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
 /* esqueleto e aviso flutuante */
 .sk{display:block;border-radius:10px;background:linear-gradient(90deg,var(--sf2) 0,var(--b) 40%,var(--sf2) 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
@@ -347,6 +354,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 </section>
 
 <div id="corpo" hidden>
+<div class="faixa" id="faixaPausa" hidden></div>
 <div class="topo">
   <nav class="abas" role="tablist" aria-label="Seções">
     <button role="tab" id="aba-painel" data-aba="painel" aria-selected="true">Painel</button>
@@ -548,6 +556,21 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     <div class="janela-rodape" id="dlgRodape"></div>
   </div>
 </dialog>
+<dialog class="janela estreita" id="dlgPausa" aria-labelledby="pausaTitulo">
+  <div class="janela-in">
+    <div class="janela-cab"><div><h3 id="pausaTitulo">Pausar a Sofia da clínica</h3><div class="meta" id="pausaUnidade"></div></div><button class="bt" id="pausaFechar" type="button">Cancelar</button></div>
+    <div class="janela-corpo">
+      <div class="aviso" id="pausaAviso" style="margin-top:14px"></div>
+      <label class="rot" for="pausaQuanto">Até quando?</label>
+      <select class="sel" id="pausaQuanto" style="width:100%"><option value="1">Por 1 hora</option><option value="2">Por 2 horas</option><option value="4">Por 4 horas</option><option value="8">Por 8 horas</option><option value="24">Por 24 horas</option><option value="outro">Escolher o dia e a hora</option></select>
+      <div id="pausaOutro" hidden><label class="rot" for="pausaAte">Dia e hora para a Sofia voltar <span>horário do seu computador</span></label><input class="sel" type="datetime-local" id="pausaAte" style="width:100%"></div>
+      <label class="rot" for="pausaMotivo">Motivo <span id="cntMotivo">0/200</span></label>
+      <input type="text" id="pausaMotivo" maxlength="200" placeholder="Ex.: o doutor atrasou, falta de energia, reunião da equipe">
+      <div class="aviso erro" id="pausaErro" hidden style="margin-top:10px"></div>
+      <div class="acoes" style="margin-bottom:16px"><span class="meta">Em nome de <b id="pausaQuem"></b></span><button class="bt pri" id="pausaConfirma" type="button">Pausar a Sofia</button></div>
+    </div>
+  </div>
+</dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
@@ -740,7 +763,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       desenharGraficos(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       if (!KM) desenharRevisar(p.paraRevisar || [], nr);
-      if (!KM) carregarBlocos();
+      if (!KM) { carregarBlocos(); carregarPausa(); }
     } catch (e) { if (eu !== seqPainel || !U || U.slug !== slug) return; painelVazio(); erroEm($('grandes'), e.message); }
     contarPausadas();
   }
@@ -1086,6 +1109,81 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     $('f0').value = fala.slice(0, 500); ir('ensinar'); contar(); var r = $('regra'); r.focus(); r.setSelectionRange(r.value.length, r.value.length);
   });
 
+  // ── pausar e religar a Sofia da clínica (só no CRM; só administradora ou gerente da conta muda, as outras pessoas só veem o estado) ──
+  // No Kommo a aba «Pausar» já faz isso com o código da unidade.
+  var PAUSA = null, seqPausa = 0;
+  async function carregarPausa(){
+    if (KM || !U) return;
+    var eu = ++seqPausa, slug = U.slug, nova = null;
+    try { nova = await api('GET', '/api/public/agente/pausa?slug=' + enc(slug)); } catch (e) { nova = null; }
+    if (eu !== seqPausa || !U || U.slug !== slug) return; // a resposta é de uma unidade que a pessoa já deixou
+    PAUSA = nova; desenharFaixa();
+  }
+  // o servidor respondeu sobre a unidade pedida? (senão a resposta é de outra e não pinta nada)
+  function daUnidadeAtual(r){ return !!r && !!U && r.slug === U.slug; }
+  function horaDaPausa(iso){ if (!iso) return ''; try { return new Date(iso).toLocaleString('pt-BR', { timeZone: (PAUSA && PAUSA.tz) || undefined, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return dataHoraCurta(iso); } }
+  function desenharFaixa(){
+    var f = $('faixaPausa'); f.textContent = '';
+    if (KM || !PAUSA) { f.hidden = true; return; }
+    f.hidden = false;
+    var parada = PAUSA.emPausa, marcada = PAUSA.agendada, txt = el('div', 'txt');
+    f.className = 'faixa' + (parada ? ' pausada' : '');
+    f.appendChild(parada ? pilula('at', 'Sofia pausada') : marcada ? pilula('ne', 'Pausa agendada') : pilula('ok', 'Sofia atendendo'));
+    if (parada) {
+      txt.appendChild(el('b', null, 'A Sofia não responde nenhuma conversa da clínica até ' + horaDaPausa(PAUSA.ate) + '.'));
+      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora.'));
+    } else if (marcada) {
+      txt.appendChild(el('b', null, 'Pausa marcada de ' + horaDaPausa(PAUSA.desde) + ' até ' + horaDaPausa(PAUSA.ate) + '.'));
+      txt.appendChild(el('small', null, 'Marcada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '')));
+    } else {
+      txt.appendChild(el('b', null, 'A Sofia está respondendo as conversas da clínica.'));
+    }
+    f.appendChild(txt);
+    if (PAUSA.podeMudar) {
+      var b = el('button', parada || marcada ? 'bt pri' : 'bt', parada || marcada ? 'Religar a Sofia' : 'Pausar a Sofia'); b.type = 'button';
+      b.onclick = parada || marcada ? religarASofia : abrirPausa;
+      f.appendChild(b);
+    } else if (parada || marcada) {
+      f.appendChild(el('span', 'meta', 'Só a administradora ou a gerente religa.'));
+    }
+  }
+  async function religarASofia(ev){
+    var b = ev.currentTarget, slug = U.slug; b.disabled = true;
+    try {
+      var novo = await api('POST', '/api/public/agente/pausa/retomar', { slug: slug });
+      if (daUnidadeAtual(novo)) { PAUSA = novo; desenharFaixa(); toast('A Sofia voltou a responder a clínica.'); }
+    } catch (e) { b.disabled = false; toast(e.message, true); }
+  }
+  function abrirPausa(){
+    $('pausaUnidade').textContent = U.nome; $('pausaQuem').textContent = EU || 'você';
+    $('pausaAviso').textContent = 'A Sofia vai parar de responder TODAS as conversas de ' + U.nome + ' até a hora escolhida e volta sozinha nela. Quem já está falando com a equipe não muda.';
+    $('pausaQuanto').value = '2'; $('pausaOutro').hidden = true; $('pausaAte').value = ''; $('pausaMotivo').value = ''; $('cntMotivo').textContent = '0/200'; some('pausaErro');
+    abrirDialogo($('dlgPausa'));
+    $('pausaMotivo').focus();
+  }
+  $('pausaQuanto').addEventListener('change', function(){ $('pausaOutro').hidden = $('pausaQuanto').value !== 'outro'; });
+  $('pausaMotivo').addEventListener('input', function(){ $('cntMotivo').textContent = $('pausaMotivo').value.length + '/200'; });
+  $('pausaFechar').addEventListener('click', function(){ fecharDialogo($('dlgPausa')); });
+  $('pausaConfirma').addEventListener('click', async function(){
+    var b = this, motivo = $('pausaMotivo').value.trim(), q = $('pausaQuanto').value, ate, slug = U.slug;
+    some('pausaErro');
+    if (motivo.length < 3) { aviso('pausaErro', 'Escreva o motivo da pausa (uma frase curta).'); $('pausaMotivo').focus(); return; }
+    if (q === 'outro') { ate = $('pausaAte').value ? new Date($('pausaAte').value) : null; if (!ate || isNaN(ate.getTime())) { aviso('pausaErro', 'Escolha o dia e a hora em que a Sofia volta.'); $('pausaAte').focus(); return; } }
+    else ate = new Date(Date.now() + Number(q) * 3600000);
+    if (ate.getTime() <= Date.now()) { aviso('pausaErro', 'A hora de voltar precisa estar no futuro.'); return; }
+    b.disabled = true;
+    try {
+      var novo = await api('POST', '/api/public/agente/pausa', { slug: slug, ate: ate.toISOString(), motivo: motivo, confirmar: true });
+      fecharDialogo($('dlgPausa'));
+      if (daUnidadeAtual(novo)) { PAUSA = novo; desenharFaixa(); toast('A Sofia está pausada até ' + horaDaPausa(PAUSA.ate) + '.'); }
+    } catch (e) {
+      // 409: alguém pausou antes. A faixa mostra a pausa de quem pausou, e a janela fecha com o motivo
+      if (e.dados && e.dados.slug && daUnidadeAtual(e.dados)) { PAUSA = e.dados; desenharFaixa(); fecharDialogo($('dlgPausa')); toast(e.message, true); }
+      else aviso('pausaErro', e.message);
+    }
+    b.disabled = false;
+  });
+
   // ── PAUSADAS ──
   function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; $('cPausadasPainel').textContent = n ? String(n) : ''; $('nPausadas').textContent = String(n || 0); }
   async function contarPausadas(){
@@ -1229,10 +1327,10 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   function escolherUnidade(u){
     U = u; if (!KM) guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; $('heroUnidade').textContent = 'Sofia · ' + u.nome; desvincular();
     // nada da unidade anterior fica na tela: números, contadores da faixa e pedidos abertos
-    painelVazio(); $('nPausadas').textContent = '—'; $('nPedidos').textContent = '—'; $('contaPedidos').textContent = '';
+    painelVazio(); $('nPausadas').textContent = '—'; $('nPedidos').textContent = '—'; $('contaPedidos').textContent = ''; PAUSA = null; desenharFaixa();
     EST = null; previaDe = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
     if (KM && !KM_LIB) return;
-    carregarPedidos();
+    carregarPedidos(); carregarPausa();
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }
   async function entrar(){

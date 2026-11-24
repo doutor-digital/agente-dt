@@ -56,7 +56,7 @@ test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; e
 test('Placar no modo Kommo: parseia, sem «para revisar», sem «quem agendou», consultas com «Abrir cartão»', () => {
   const html = paginaDoAgenteKommo('doutor-hernia-caxias');
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe{display:none}'));
+  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe,body.km #faixaPausa{display:none}'));
   const js = scriptDe(html);
   assert.ok(js.includes("if (!KM) desenharRevisar("), 'sem revisão no Kommo');
   assert.ok(js.includes("'Abrir cartão'") && js.includes('Ver as consultas'));
@@ -70,7 +70,7 @@ test('PR 2a: todo número do painel abre a lista (só no CRM), com o bloco do Pi
   for (const id of ['blocoPix', 'listaPix', 'dlgFiltros', 'dlgCab']) assert.ok(html.includes(`id="${id}"`), id);
   assert.ok(js.includes("'/api/public/agente/detalhe?slug='"), 'rota da lista');
   // no Kommo o card não vira botão e o bloco do Pix some (a rota é só do CRM)
-  assert.ok(js.includes('if (medida && !KM)') && js.includes('if (!KM) carregarBlocos();'), 'detalhe atrás de !KM');
+  assert.ok(js.includes('if (medida && !KM)') && /if \(!KM\) \{?\s*carregarBlocos\(\)/.test(js), 'detalhe atrás de !KM');
   assert.ok(html.includes('body.km #blocoPix'), 'bloco do Pix escondido no Kommo');
   // a página só lê valor, situação e datas do Pix: nunca o link nem a chave
   assert.ok(!/\b(linkId|paymentId|copiaECola|chavePix)\b/.test(js) && !/\bl\.pix\.(url|link)\b/.test(js), 'a página não toca link nem chave Pix');
@@ -103,6 +103,18 @@ test('PR 2b: bloco «Por que passou para a equipe» (motivo em categoria) no CRM
   for (const id of ['blocoEquipe', 'listaEquipe2', 'cEquipe']) assert.ok(html.includes(`id="${id}"`), id);
   assert.ok(js.includes('l.motivo.codigo') && js.includes('r.grupos') && js.includes("abrirDetalhe('equipe', g.codigo)"), 'motivos agrupados, clicáveis, com filtro na lista');
   assert.ok(html.includes('body.km #blocoEquipe'), 'sem o bloco no Kommo');
+});
+
+test('PR 2c: faixa e janela de pausar a Sofia — só no CRM, só quem pode vê o botão, pausar pede confirmação e motivo, resposta de outra unidade não vale', () => {
+  const html = paginaDoAgente(CW);
+  const js = scriptDe(html);
+  for (const id of ['faixaPausa', 'dlgPausa', 'pausaMotivo', 'pausaQuanto', 'pausaConfirma']) assert.ok(html.includes(`id="${id}"`), id);
+  for (const rota of ["'/api/public/agente/pausa?slug='", "'/api/public/agente/pausa'", "'/api/public/agente/pausa/retomar'"]) assert.ok(js.includes(rota), rota);
+  assert.ok(js.includes('confirmar: true') && js.includes('motivo.length < 3'), 'confirmação e motivo');
+  assert.ok(js.includes('PAUSA.podeMudar'), 'o botão só aparece para quem pode mudar');
+  assert.ok(js.includes('if (KM || !PAUSA)') && js.includes('if (KM || !U) return;') && html.includes('body.km #faixaPausa'), 'no Kommo a faixa não existe (a aba Pausar é dele)');
+  assert.ok(js.includes('function daUnidadeAtual(r)') && js.includes('if (daUnidadeAtual(novo))'), 'a resposta de outra unidade não pinta a faixa');
+  assert.ok(js.includes('e.dados && e.dados.slug && daUnidadeAtual(e.dados)'), '409: a faixa mostra a pausa de quem pausou antes');
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
