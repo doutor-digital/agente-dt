@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { buildAgendaTools, hojeLocal, type EstadoAgenda } from './agenda-tools.js';
+import { buildSophiaTools } from './sophia-tools.js';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { LeadFieldRule, Unit } from '@prisma/client';
@@ -1460,7 +1461,8 @@ export function buildTools({
   ];
   if (resumir_lead_para_sdr) nativeTools.push(resumir_lead_para_sdr);
 
-  const agendaTools = unit ? buildAgendaTools({ unit, recorder, kommo, estado: agenda }) : [];
+  // Sophia (escritório sem franquia): as ferramentas dela só existem com a automação sophia-agenda em seco ou ligada (lib/sophia/config.ts)
+  const agendaTools = unit ? [...buildAgendaTools({ unit, recorder, kommo, estado: agenda }), ...buildSophiaTools({ unit, recorder, kommo })] : [];
 
   // Fecha a ponte: agora `pausar_ia` consegue consultar a agenda por conta própria.
   const consultarHorarios = agendaTools.find((t) => t.name === 'consultar_horarios');

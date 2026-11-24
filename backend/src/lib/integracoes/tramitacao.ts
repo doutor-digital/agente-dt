@@ -36,6 +36,7 @@ const LEITURA_PERMITIDA = [
   /^\/v1\/publicacoes$/,
   /^\/v1\/clientes$/,
   /^\/v1\/atividades$/,
+  /^\/v2\/usuarios$/, // só para achar o id público do advogado (Sophia); a lista traz e-mail e telefone, que o conector de leitura não repassa
 ];
 /**
  * Parâmetro que pede a senha do Meu INSS. Compara só letras e números, em minúsculo: `mostrar_meu_inss_pass[]`,

@@ -365,7 +365,7 @@ export interface LeituraGuardada {
 }
 
 /** O que `agendar_consulta` e `remarcar_consulta` devolvem quando marcam. */
-export const RESPOSTA_QUE_MARCA = /^(Consulta marcada para|Remarcada (de|para)|A CONSULTA NOVA ESTÁ MARCADA)/;
+export const RESPOSTA_QUE_MARCA = /^(Consulta marcada para|Atendimento marcado para|Remarcada (de|para)|A CONSULTA NOVA ESTÁ MARCADA)/;
 /** …e o que `cancelar_consulta` devolve: cada uma abre uma negociação nova. */
 const MARCO_DA_NEGOCIACAO = new RegExp(`${RESPOSTA_QUE_MARCA.source}|^Consulta de .+ cancelada`);
 

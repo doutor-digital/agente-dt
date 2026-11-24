@@ -50,13 +50,15 @@ export async function avisarJoao(texto: string, chave: string, intervaloMs: numb
  * 15 s de prazo. true = enviou; false = falhou (já logado). Nunca lança. Também usado pelo aviso do exame de imagem.
  */
 export async function enviarPelaEvolution(
-  a: { url: string; header: string; valor: string; numero: string; texto: string },
+  a: { url: string; header: string; valor: string; numero: string; texto: string; mencionar?: string[] },
   deps: { post?: typeof axios.post } = {},
 ): Promise<boolean> {
   try {
+    // `mentioned` (Evolution v2): números (só dígitos, com DDI) a marcar no grupo; o texto precisa ter o `@número` para o WhatsApp destacar.
+    const mentioned = (a.mencionar ?? []).map((n) => n.replace(/\D/g, '')).filter(Boolean);
     await (deps.post ?? axios.post)(
       a.url,
-      { number: a.numero, text: a.texto.slice(0, 1500) },
+      { number: a.numero, text: a.texto.slice(0, 1500), ...(mentioned.length ? { mentioned } : {}) },
       { headers: { 'Content-Type': 'application/json', [a.header]: a.valor }, timeout: 15_000 },
     );
     return true;

@@ -824,6 +824,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/exame-de-imagem.ts',
   },
   {
+    id: 'sophia-agenda',
+    chave: 'SOPHIA_AGENDA_SLUGS',
+    nome: 'Sophia (advocacia): agenda dos advogados na Tramitação, cartão e aviso no grupo',
+    oQueFaz:
+      'Escritório sem franquia: a Sophia oferece 2 horários reais livres da Dra. Amanda e do Dr. Victor (lidos da agenda da Tramitação Inteligente, seg–sex 8h–12h e 14h–18h, 50 min) e, quando o cliente escolhe, cria o evento "Atendimento - <cliente> (<advogado>)" na Tramitação, move o cartão para "4 - Análise agendada" e avisa o grupo interno marcando o advogado. Presencial só em Araguaína/TO (manda o cartão de chegada); outras cidades, online pelo Google Meet. Cliente que pede o Dr. Thiago, ou caso tributário, não agenda: o grupo recebe um aviso marcando o Dr. Thiago.',
+    pegadinha:
+      'Só em seco o que se grava é o rastro (trace e tela de simulações): não cria evento, não move cartão, não manda ao grupo nem o cartão de chegada. Mas em seco a Sophia CONFIRMA o horário ao cliente no chat — use seco com cartão de teste ou com a equipe olhando. Precisa da chave da Tramitação no painel de integrações e destas variáveis em JSON por unidade: SOPHIA_GRUPO_INTERNO, SOPHIA_ADVOGADOS (números a marcar e nomes na Tramitação), SOPHIA_ETAPA_ANALISE_AGENDADA, SOPHIA_MEET_URL (vazio = a equipe envia o link) e a Evolution (SOPHIA_EVOLUTION_* ou EVOLUTION_ALERT_*). Prazo ou lembrete de dia inteiro na Tramitação NÃO ocupa o horário. Só existe para unidade sem franquia conectada.',
+    risco: 'move-cartao',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/sophia/atendimento.ts',
+  },
+  {
     id: 'sem-pergunta-de-alerta',
     chave: 'SEM_PERGUNTA_DE_ALERTA_SLUGS',
     nome: 'Sofia não pergunta sinal de alerta (força, xixi, fezes)',
