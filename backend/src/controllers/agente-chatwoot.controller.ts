@@ -4,6 +4,7 @@
  * Chatwoot da atendente (cabeçalhos X-CW-*) e que ela atenda uma caixa da unidade pedida (`atendenteDaUnidade`).
  *
  *   GET  /api/public/agente/painel?slug=&periodo=   painel da Sofia (hoje | 7 | 30 dias) + as 👎 para revisar
+ *   GET  /api/public/agente/detalhe?slug=&periodo=&medida=   as conversas por trás de um número do painel (respondidas | marcaram | equipe | pix | fora | avaliacoes)
  *   POST /api/public/agente/avaliacoes/:id/revisar  { slug, como: regra | pedido | ok }
  *   GET  /api/public/agente/pedidos?slug=           pedidos à Doutor Digital feitos pela unidade
  *   POST /api/public/agente/pedidos                 { slug, tipo, texto, conversa? } → demanda no suporte + aviso no bot de chamados
@@ -20,6 +21,7 @@ import { COMO_REVISOU, marcarRevisada, resumoDaUnidade, type ComoRevisou } from 
 import { MAX_PEDIDOS_POR_DIA, avisoDoPedido, criarPedido, lerPedido, marcarAvisado, pedidosDaUnidade, pedidosHoje, TIPOS_DE_PEDIDO } from '../lib/agente-pedidos.js';
 import { paginaDoAgente } from '../lib/agente-pagina.js';
 import { lerPeriodo, painelDaUnidade } from '../lib/agente-painel.js';
+import { detalheDaUnidade, lerMedida } from '../lib/agente-detalhe.js';
 import { lerTipoDoRegistro, registroDaUnidade } from '../lib/sofia-registro.js';
 
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
@@ -44,6 +46,24 @@ export async function agentePainelHandler(req: Request, res: Response): Promise<
   } catch (e) {
     logger.warn({ err: String(e), unit: r.unit.slug }, 'agente: painel falhou');
     res.status(502).json({ error: 'não consegui montar o painel agora' });
+  }
+}
+
+/** As conversas por trás de um número do painel (clicar no card): da MESMA unidade que o painel (a unidade tem que ser da conta e das caixas da pessoa: `atendenteDaUnidade`). Só no CRM (o Kommo tem rota própria). */
+export async function agenteDetalheHandler(req: Request, res: Response): Promise<void> {
+  // a sessão e a conta vêm ANTES de qualquer outra coisa (sem login válido da conta, a resposta é sempre a mesma recusa)
+  const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
+  if (!r) return;
+  const medida = lerMedida(req.query.medida);
+  if (!medida) {
+    res.status(400).json({ error: 'medida inválida' });
+    return;
+  }
+  try {
+    res.set('Cache-Control', 'no-store').json(await detalheDaUnidade(r.unit, lerPeriodo(req.query.periodo), medida));
+  } catch (e) {
+    logger.warn({ err: String(e), unit: r.unit.slug, medida }, 'agente: detalhe falhou');
+    res.status(502).json({ error: 'não consegui montar a lista agora' });
   }
 }
 

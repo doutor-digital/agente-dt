@@ -164,7 +164,7 @@ import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoH
 import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
 import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasRecentesHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
 import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
-import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
+import { agenteDetalheHandler, agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
 import { agenteKommoEstadoHandler, agenteKommoNovoPedidoHandler, agenteKommoPainelHandler, agenteKommoPausadasHandler, agenteKommoPedidosHandler } from '../controllers/agente-kommo.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
@@ -398,6 +398,7 @@ apiRouter.get('/public/testar-ia/unidades', testarIaUnidadesHandler);
 apiRouter.get('/public/testar-ia/pausadas', testarIaPausadasHandler);
 // tela Agente do Chatwoot (13/11): resumo dos 👍/👎, revisar 👎 e pedidos à Doutor Digital — login do Chatwoot da atendente
 apiRouter.get('/public/agente/painel', agentePainelHandler);
+apiRouter.get('/public/agente/detalhe', agenteDetalheHandler);
 apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
 apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
 apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
