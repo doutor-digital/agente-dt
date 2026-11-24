@@ -31,6 +31,18 @@ test('a página do Agente parseia, tem as 5 abas (Painel primeiro) e só aceita 
   assert.ok(!html.includes('__ORIGEM_CW__'));
 });
 
+test('tela Placar: faixa de atenção, card «Consultas marcadas» abre a lista completa, tema claro e escuro, 44 px no celular', () => {
+  const html = paginaDoAgente(CW);
+  for (const id of ['nRevisar', 'nPausadas', 'nPedidos', 'grandes', 'peq', 'dlgConsultas', 'dlgLista', 'listaPausadasPainel']) assert.ok(html.includes(`id="${id}"`), id);
+  const js = scriptDe(html);
+  assert.ok(js.includes('gm.onclick = abrirConsultas'), 'o card de consultas é um botão que abre a lista');
+  assert.ok(js.includes('p.consultasDoPeriodo'), 'a lista vem do campo novo do painel');
+  assert.ok(js.includes("m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—')"), 'quem agendou: pílula, ou «—» quando não se sabe');
+  assert.ok(js.includes("d.tema === 'escuro'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM + o do aparelho');
+  assert.ok(html.includes('<meta name="color-scheme" content="light dark">'));
+  assert.ok(html.includes('.bt{min-height:44px}'), 'botões de 44 px no celular');
+});
+
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
   const js = scriptDe(paginaDoAgente(CW));
   assert.equal((js.match(/innerHTML/g) ?? []).length, 0);

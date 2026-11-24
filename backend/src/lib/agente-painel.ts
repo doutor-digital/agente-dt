@@ -19,6 +19,8 @@ import { fusoDaUnidade } from './fuso.js';
 export type Periodo = 'hoje' | '7' | '30';
 const DIA_MS = 86_400_000;
 const DIAS_NO_GRAFICO = 14;
+/** teto da lista de consultas do período (card «Consultas marcadas» → lista completa); o total real vai junto para a tela avisar do corte */
+export const MAX_CONSULTAS_NA_LISTA = 300;
 
 export function lerPeriodo(v: unknown): Periodo {
   return v === 'hoje' || v === '30' ? v : '7';
@@ -74,6 +76,8 @@ export interface MarcadaDoPainel {
   /** "AAAA-MM-DDTHH:mm" no fuso da clínica */
   agendadoPara: string | null;
   criadoEm: Date;
+  /** quem agendou; null = não se sabe (a tela mostra «—»). Hoje todo evento `marcou` vem da ferramenta de agenda da Sofia, então é «Sofia». */
+  quem?: string | null;
 }
 export interface AvaliacaoDoPainel {
   nota: string;
@@ -103,7 +107,12 @@ export interface Painel {
   foraDoHorario: { respostas: number; pct: number | null };
   avaliacoes: { boas: number; ruins: number; pct: number | null; pctAntes: number | null };
   porDia: Array<{ dia: string; respondidas: number; marcadas: number }>;
+  /** as 10 mais recentes do período (prévia no painel) */
   ultimasMarcadas: MarcadaDoPainel[];
+  /** TODAS as do período, mais recentes primeiro, até `MAX_CONSULTAS_NA_LISTA` (a lista que o card «Consultas marcadas» abre) */
+  consultasDoPeriodo: MarcadaDoPainel[];
+  /** quantas consultas o período tem de verdade (≥ o tamanho da lista quando houve corte) */
+  consultasTotal: number;
 }
 
 const pct = (a: number, b: number): number | null => (b > 0 ? Math.round((100 * a) / b) : null);
@@ -158,6 +167,8 @@ export function montarPainel(e: {
     porDiaM.set(d, (porDiaM.get(d) ?? 0) + 1);
   }
 
+  const maisRecentes = [...mAgora].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime()).map((m) => ({ ...m, quem: m.quem ?? null }));
+
   return {
     periodo: e.periodo,
     desde: j.inicio.toISOString(),
@@ -170,7 +181,9 @@ export function montarPainel(e: {
     foraDoHorario: { respostas: fora, pct: pct(fora, rAgora.length) },
     avaliacoes: { boas, ruins, pct: pct(boas, boas + ruins), pctAntes: pct(aAntes.filter((a) => a.nota === 'boa').length, aAntes.length) },
     porDia: [...new Set(dias)].map((dia) => ({ dia, respondidas: porDiaR.get(dia)?.size ?? 0, marcadas: porDiaM.get(dia) ?? 0 })),
-    ultimasMarcadas: [...mAgora].sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime()).slice(0, 10),
+    ultimasMarcadas: maisRecentes.slice(0, 10),
+    consultasDoPeriodo: maisRecentes.slice(0, MAX_CONSULTAS_NA_LISTA),
+    consultasTotal: mAgora.length,
   };
 }
 
@@ -190,7 +203,8 @@ export async function painelDaUnidade(
   ]);
   return montarPainel({
     respostas,
-    marcadas: eventos.filter((e) => e.tipo === 'marcou').map((e) => ({ conversa: e.conversa, nome: e.nome, agendadoPara: e.detalhe, criadoEm: e.criadoEm })),
+    // `marcou` só é gravado quando a ferramenta de agenda da Sofia marca na franquia (chatwoot-ia.ts): quem agendou = Sofia
+    marcadas: eventos.filter((e) => e.tipo === 'marcou').map((e) => ({ conversa: e.conversa, nome: e.nome, agendadoPara: e.detalhe, criadoEm: e.criadoEm, quem: 'Sofia' })),
     avaliacoes,
     eventos,
     agora,
