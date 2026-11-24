@@ -89,7 +89,7 @@ import { portaPerdidoReabre } from '../lib/perdido-reabre.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
 import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
-import { origemDoPaciente, portaDoCanal } from '../lib/sofia-so-whatsapp.js';
+import { portaDoCanal } from '../lib/sofia-so-whatsapp.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -1227,7 +1227,7 @@ export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
     contactName: null,
     authorId: null,
     accountId: null,
-    origem: null, // cartão que ganhou a unidade depois: o canal não foi guardado, segue como hoje
+    origem: null, // cartão que ganhou a unidade depois: sem origem, segue como WhatsApp (fora da chave sofia-so-whatsapp)
     isChatMessage: true,
   };
   const status = scheduleAgentRun({
@@ -1266,7 +1266,7 @@ export interface ArgsDoTurno {
   contactId: string | null;
   authorId?: string | null;
   accountId?: number | null;
-  /** O canal da mensagem (origem do Kommo). Alimenta a chave `sofia-so-whatsapp`; ausente = segue como WhatsApp. */
+  /** O canal DESTA mensagem (origem do Kommo). Alimenta a chave `sofia-so-whatsapp`; ausente (widget, adiado, webhook sem `origin`) = segue como WhatsApp, nunca herda a origem de mensagem anterior. */
   origem?: string | null;
   isChatMessage: boolean;
   requestStart: number;
@@ -1464,7 +1464,6 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         leadId,
         origem: args.origem,
         latenciaMs: () => Math.round(performance.now() - requestStart),
-        ultimaOrigemConhecida: () => origemDoPaciente(unit.id, leadId),
       },
       {
         step: (st) => recorder.step(st),

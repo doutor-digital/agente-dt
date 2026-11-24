@@ -4,6 +4,7 @@ import type { Conversation, Unit } from '@prisma/client';
 
 import { retomarTurnoPerdido, type DepsRetomada } from './webhook.controller.js';
 import type { TurnoPerdido } from '../lib/recuperar-turnos.js';
+import { portaDoCanal } from '../lib/sofia-so-whatsapp.js';
 
 /**
  * A origem do canal (`message.add[].origin`) tem de CHEGAR ao turno: `extractContext` → `execucaoDoTurno` → `processAgent({ origem })`.
@@ -46,6 +47,9 @@ test('a origem do webhook chega ao processAgent (instagram_business, facebook, w
   assert.equal(await origemQueChegouAoTurno('waba'), 'waba');
 });
 
-test('webhook sem origem: o turno segue com origem nula (a chave não cala o que não sabe)', async () => {
-  assert.equal(await origemQueChegouAoTurno(undefined), null);
+test('webhook sem origem: o turno chega com origem nula e a porta SEGUE (responde), mesmo com a chave ligada', async () => {
+  const origem = await origemQueChegouAoTurno(undefined);
+  assert.equal(origem, null);
+  const g = { step: async () => undefined, finalizar: async () => undefined };
+  assert.equal(await portaDoCanal({ slug: UNIT.slug, leadId: 5142896, origem, estado: 'ligado' }, g), 'segue');
 });
