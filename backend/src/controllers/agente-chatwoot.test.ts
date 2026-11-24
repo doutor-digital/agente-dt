@@ -9,7 +9,7 @@ process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 
-const { paginaDoAgente } = await import('../lib/agente-pagina.js');
+const { paginaDoAgente, paginaDoAgenteKommo } = await import('../lib/agente-pagina.js');
 const { corsDoAssistente } = await import('./assistente.controller.js');
 const { assistenteJs } = await import('../lib/chatwoot-assistente-ui.js');
 
@@ -29,6 +29,38 @@ test('a página do Agente parseia, tem as 5 abas (Painel primeiro) e só aceita 
   assert.ok(html.includes(`var CW = origemDoPai("${CW}")`));
   assert.ok(html.includes('!origemDoCrm(ev.origin) || ev.source !== window.parent'));
   assert.ok(!html.includes('__ORIGEM_CW__'));
+});
+
+test('tela Placar: faixa de atenção, card «Consultas marcadas» abre a lista completa, tema claro e escuro, 44 px no celular', () => {
+  const html = paginaDoAgente(CW);
+  for (const id of ['nRevisar', 'nPausadas', 'nPedidos', 'grandes', 'peq', 'dlgConsultas', 'dlgLista', 'listaPausadasPainel']) assert.ok(html.includes(`id="${id}"`), id);
+  const js = scriptDe(html);
+  assert.ok(js.includes('abrirConsultas') && js.includes('consultasDoPeriodo'), 'o card de consultas abre a lista que vem do painel');
+  assert.ok(js.includes('m.quem') && html.includes('>Quem agendou</th>'), 'a lista mostra quem agendou');
+  assert.ok(js.includes("'funil-tema'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM (e quando ele muda) + o do aparelho');
+  assert.ok(html.includes('<meta name="color-scheme" content="light dark">'));
+  assert.ok(html.includes('.bt{min-height:44px}'), 'botões de 44 px no celular');
+});
+
+test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; erro limpa TUDO (não só os gráficos)', () => {
+  const js = scriptDe(paginaDoAgente(CW));
+  const troca = /function escolherUnidade\(u\)\{[\s\S]*?\n  \}/.exec(js)?.[0] ?? '';
+  assert.ok(troca.includes('carregarPedidos()') && troca.includes('painelVazio()'), 'a troca de unidade recarrega pedidos e limpa o painel');
+  const vazio = /function painelVazio\(\)\{[\s\S]*?\n  \}/.exec(js)?.[0] ?? '';
+  for (const id of ["'grandes'", "'peq'", "'nRevisar'", "'listaRevisar'", "'listaMarcadas'", "'listaPausadasPainel'", "'tabDia'", "'lidoEm'", "'nPausadas'"]) assert.ok(vazio.includes(id), id);
+  for (const fn of ['carregarPainel', 'contarPausadas', 'carregarPedidos']) assert.ok(new RegExp(`async function ${fn}\\(\\)\\{[\\s\\S]*?U\\.slug !== slug`).test(js), `${fn} descarta resposta de outra unidade`);
+  assert.ok(js.includes('painelVazio(); erroEm($(\'grandes\'), e.message); }'), 'o erro do painel limpa tudo antes de mostrar a mensagem');
+  assert.ok(js.includes('function fecharDialogo(d)') && !/\.close\(\)/.test(js.replace('if (d.close) d.close();', '')), 'o dialog tem fallback sem showModal/close');
+});
+
+test('Placar no modo Kommo: parseia, sem «para revisar», sem «quem agendou», consultas com «Abrir cartão»', () => {
+  const html = paginaDoAgenteKommo('doutor-hernia-caxias');
+  assert.doesNotThrow(() => new Function(scriptDe(html)));
+  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar{display:none}'));
+  const js = scriptDe(html);
+  assert.ok(js.includes("if (!KM) desenharRevisar("), 'sem revisão no Kommo');
+  assert.ok(js.includes("'Abrir cartão'") && js.includes('Ver as consultas'));
+  assert.ok(!html.includes('__KOMMO__') && !html.includes('__ORIGEM_CW__'));
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {

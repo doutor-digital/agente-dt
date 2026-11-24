@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { foraDoHorario, janelas, lerPeriodo, montarPainel, partesLocais } from './agente-painel.js';
+import { MAX_CONSULTAS_NA_LISTA, foraDoHorario, janelas, lerPeriodo, montarPainel, partesLocais } from './agente-painel.js';
 
 const FUSO = 'America/Belem'; // UTC-3, sem horário de verão
 const agora = new Date('2026-11-13T18:00:00Z'); // sexta, 15h em Belém
@@ -88,4 +88,28 @@ test('% que marcou conta PESSOAS: duas consultas na mesma conversa não passam d
   });
   assert.equal(p.marcadas.agora, 2, 'consultas marcadas: as duas');
   assert.equal(p.conversao.agora, 100, 'pessoas que marcaram: uma de uma');
+});
+
+test('consultas do período: a lista completa (não só 10), mais recentes primeiro, com quem agendou; o que não se sabe fica nulo', () => {
+  const marcadas = [
+    ...Array.from({ length: 14 }, (_, i) => ({ conversa: 100 + i, nome: `Paciente Teste ${i}`, agendadoPara: '2026-11-20T09:00', criadoEm: h(1 + i), quem: 'Sofia' })),
+    { conversa: 200, nome: 'Sem origem', agendadoPara: null, criadoEm: h(20) }, // sem `quem`: não inventa
+    { conversa: 300, nome: 'Fora do período', agendadoPara: null, criadoEm: h(24 * 9), quem: 'Sofia' },
+  ];
+  const p = montarPainel({ agora, periodo: '7', fuso: FUSO, respostas: [], marcadas, avaliacoes: [], eventos: [] });
+  assert.equal(p.ultimasMarcadas.length, 10, 'a prévia do painel continua com 10');
+  assert.equal(p.consultasDoPeriodo.length, 15, 'a lista tem as 15 do período (a de 9 dias atrás fica fora)');
+  assert.equal(p.consultasTotal, 15);
+  assert.equal(p.marcadas.agora, 15, 'o número do card e a lista contam a mesma coisa');
+  assert.equal(p.consultasDoPeriodo[0]!.conversa, 100, 'mais recente primeiro');
+  assert.equal(p.consultasDoPeriodo[0]!.quem, 'Sofia');
+  assert.equal(p.consultasDoPeriodo.at(-1)!.quem, null, 'sem registro de quem agendou: nulo, a tela mostra «—»');
+});
+
+test('consultas do período: teto da lista, com o total real à parte', () => {
+  const marcadas = Array.from({ length: MAX_CONSULTAS_NA_LISTA + 25 }, (_, i) => ({ conversa: i + 1, nome: null, agendadoPara: null, criadoEm: new Date(agora.getTime() - (i + 1) * 60_000), quem: 'Sofia' }));
+  const p = montarPainel({ agora, periodo: '7', fuso: FUSO, respostas: [], marcadas, avaliacoes: [], eventos: [] });
+  assert.equal(p.consultasDoPeriodo.length, MAX_CONSULTAS_NA_LISTA);
+  assert.equal(p.consultasTotal, MAX_CONSULTAS_NA_LISTA + 25);
+  assert.equal(p.consultasDoPeriodo[0]!.conversa, 1);
 });

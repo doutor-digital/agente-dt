@@ -159,6 +159,7 @@ export interface PainelDoKommo extends Painel {
   /** a leitura nova está em andamento por trás: a página pergunta de novo sozinha */
   atualizando: boolean;
   ultimasMarcadas: Array<Painel['ultimasMarcadas'][number] & { link: string | null }>;
+  consultasDoPeriodo: Array<Painel['ultimasMarcadas'][number] & { link: string | null }>;
 }
 
 export async function painelDoKommo(
@@ -173,6 +174,7 @@ export async function painelDoKommo(
   const ids = [...new Set(leitura.valor.linhas.filter((l) => l.tipo === 'marcou' && l.criadoEm >= j.inicio).sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime()).map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10))];
   const nomes = await nomesDosCartoes(unit.id, ids);
   const painel = painelDasLinhas(leitura.valor, nomes, { agora, periodo, fuso });
+  const ultimas = painel.ultimasMarcadas.map((m) => ({ ...m, link: linkDoCartao(unit, m.conversa) }));
   return {
     ...painel,
     semAnterior: semAnterior(painel),
@@ -180,7 +182,9 @@ export async function painelDoKommo(
     lidoEm: new Date(leitura.lidoEm).toISOString(),
     desatualizado: leitura.desatualizado,
     atualizando: leitura.atualizando === true,
-    ultimasMarcadas: painel.ultimasMarcadas.map((m) => ({ ...m, link: linkDoCartao(unit, m.conversa) })),
+    ultimasMarcadas: ultimas,
+    // a lista completa do card «Consultas marcadas»: no Kommo só as 10 últimas têm nome e link (os nomes vêm do banco só delas); o total real vai em `consultasTotal`
+    consultasDoPeriodo: ultimas,
   };
 }
 
