@@ -46,9 +46,33 @@ test('campo que não existe na conta fica de fora e é listado (nada é criado n
   assert.deepEqual(p.deFora, [{ nome: '⌂ Cidade', motivo: 'não existe na conta' }]);
 });
 
-test('casa por nome normalizado (sem símbolo, acento e caixa) quando o exato não existe', () => {
-  const p = planejarRegras([modelo('★ Qualificação (Quente/Morno/Frio)', 'select', 't')], [{ id: 5, name: 'Qualificacao (quente/morno/frio)', type: 'select', enums: [{ id: 1, value: 'Quente' }] }], []);
-  assert.equal(p.criar[0]?.kommoFieldId, 5);
+test('nome que só casa SEM o símbolo NUNCA cria regra: fica de fora e é listado (Tipo de lead antigo ≠ ⬢ Tipo de lead)', () => {
+  const tipo = modelo('⬢ Tipo de lead', 'select', 'registra_tipo_lead');
+  const antigo: CampoDaConta[] = [{ id: 31, name: 'Tipo de lead', type: 'select', enums: [{ id: 1, value: 'Cadastro' }] }];
+  const p = planejarRegras([tipo], antigo, []);
+  assert.equal(p.criar.length, 0);
+  assert.equal(p.deFora[0]?.motivo, 'só casa pelo nome sem o símbolo');
+  assert.match(p.deFora[0]?.detalhe ?? '', /31:Tipo de lead/);
+  // acento e pontuação também: "Qualificacao (quente/morno/frio)" não é o campo "★ Qualificação (...)"
+  const q = planejarRegras([modelo('★ Qualificação (Quente/Morno/Frio)', 'select', 't')], [{ id: 5, name: 'Qualificacao (quente/morno/frio)', type: 'select', enums: [{ id: 1, value: 'Quente' }] }], []);
+  assert.equal(q.criar.length, 0);
+  assert.equal(q.deFora[0]?.motivo, 'só casa pelo nome sem o símbolo');
+  // com os dois na conta, vale SÓ o exato
+  const dois: CampoDaConta[] = [...antigo, { id: 32, name: '⬢ Tipo de lead', type: 'select', enums: [{ id: 1, value: 'Cadastro' }] }];
+  const ok = planejarRegras([tipo], dois, []);
+  assert.equal(ok.criar[0]?.kommoFieldId, 32);
+  assert.equal(ok.deFora.length, 0);
+});
+
+test('o nome exato vale com caixa e espaço nas pontas diferentes', () => {
+  const p = planejarRegras([modelo('✎ queixa ', 'textarea', 't')], conta, []);
+  assert.equal(p.criar[0]?.kommoFieldId, 901);
+});
+
+test('regra já existente mas DESLIGADA aparece como desligada (não é religada)', () => {
+  const p = planejarRegras([QUEIXA], conta, [{ toolName: 'registra_queixa', kommoFieldId: 901, enabled: false }]);
+  assert.equal(p.criar.length, 0);
+  assert.deepEqual(p.jaExistem, [{ nome: '✎ Queixa', porque: 'mesma ferramenta', desligada: true }]);
 });
 
 test('dois campos com o mesmo nome na conta: fica de fora (escolher um é palpite)', () => {
@@ -60,9 +84,10 @@ test('dois campos com o mesmo nome na conta: fica de fora (escolher um é palpit
   assert.equal(p.criar.length, 0);
   assert.equal(p.deFora[0]?.motivo, 'mais de um campo com esse nome');
   assert.match(p.deFora[0]?.detalhe ?? '', /1:.*2:/);
-  // e o normalizado ambíguo também
+  // vários parecidos só pelo nome normalizado: também de fora (e nunca cria)
   const sim = planejarRegras([CIDADE], [{ id: 1, name: 'Cidade', type: 'text', enums: [] }, { id: 2, name: '#Cidade', type: 'text', enums: [] }], []);
-  assert.equal(sim.deFora[0]?.motivo, 'mais de um campo com esse nome');
+  assert.equal(sim.criar.length, 0);
+  assert.equal(sim.deFora[0]?.motivo, 'só casa pelo nome sem o símbolo');
 });
 
 test('tipo incompatível, tipo sem suporte e lista sem opções ficam de fora', () => {

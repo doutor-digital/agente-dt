@@ -8,6 +8,7 @@
  *
  * Regras que esta decisão segue:
  *  - nome que não existe na conta: fica de fora e é listado (nunca cria campo, nunca chuta outro);
+ *  - nome que só casa SEM o símbolo ("Tipo de lead" no lugar de "⬢ Tipo de lead"): fica de fora e é listado, nunca cria regra;
  *  - nome que casa com MAIS DE UM campo da conta: fica de fora (escolher o primeiro é palpite de identidade);
  *  - tipo incompatível (modelo "select", conta "texto"): fica de fora;
  *  - lista sem opções na conta: fica de fora (a regra pediria um valor que não existe);
@@ -39,13 +40,14 @@ export interface CampoDaConta {
 export interface RegraExistente {
   toolName: string;
   kommoFieldId: number;
+  enabled?: boolean;
 }
 
-export type MotivoDeFora = 'não existe na conta' | 'mais de um campo com esse nome' | 'tipo incompatível' | 'tipo sem suporte' | 'lista sem opções na conta';
+export type MotivoDeFora = 'não existe na conta' | 'mais de um campo com esse nome' | 'só casa pelo nome sem o símbolo' | 'tipo incompatível' | 'tipo sem suporte' | 'lista sem opções na conta';
 
 export interface PlanoDeRegras {
   criar: LeadFieldRuleInput[];
-  jaExistem: Array<{ nome: string; porque: 'mesma ferramenta' | 'mesmo campo' }>;
+  jaExistem: Array<{ nome: string; porque: 'mesma ferramenta' | 'mesmo campo'; desligada: boolean }>;
   deFora: Array<{ nome: string; motivo: MotivoDeFora; detalhe?: string }>;
   /**
    * Lista cujas opções NO MODELO não existem na conta: a instrução (copiada do modelo) pode pedir um valor que a conta recusa.
@@ -65,20 +67,23 @@ export function tiposCompativeis(modelo: string, conta: string): boolean {
   return [LISTAS, TEXTOS, NUMEROS, DATAS].some((g) => g.has(modelo) && g.has(conta));
 }
 
-/** O campo da conta pelo nome do modelo: nome exato primeiro; depois o normalizado (tira símbolo, acento, caixa). */
+/**
+ * O campo da conta pelo nome do modelo, SÓ pelo nome exato (símbolo incluso; caixa e espaço nas pontas não contam).
+ * Casar sem o símbolo é o perigo de `tipo-lead-chegada.acharCampo`: o "Tipo de lead" antigo (Salto/Tatuí, estrutura velha) casaria no
+ * lugar do "⬢ Tipo de lead" e a regra passaria a gravar no campo errado. Quem só casa pelo nome normalizado vem em `parecidos`:
+ * é para LISTAR para a pessoa decidir, nunca para criar regra.
+ */
 export function acharCampoPorNome(
   campos: ReadonlyArray<CampoDaConta>,
   nome: string,
-): { campo: CampoDaConta } | { ausente: true } | { ambiguo: CampoDaConta[] } {
+): { campo: CampoDaConta } | { ausente: true } | { ambiguo: CampoDaConta[] } | { parecidos: CampoDaConta[] } {
   const exatos = campos.filter((c) => c.name.trim().toLowerCase() === nome.trim().toLowerCase());
   if (exatos.length === 1) return { campo: exatos[0]! };
   if (exatos.length > 1) return { ambiguo: exatos };
   const alvo = normalizar(nome);
   if (!alvo) return { ausente: true };
   const parecidos = campos.filter((c) => normalizar(c.name) === alvo);
-  if (parecidos.length === 1) return { campo: parecidos[0]! };
-  if (parecidos.length > 1) return { ambiguo: parecidos };
-  return { ausente: true };
+  return parecidos.length > 0 ? { parecidos } : { ausente: true };
 }
 
 export function planejarRegras(
@@ -89,11 +94,16 @@ export function planejarRegras(
   const plano: PlanoDeRegras = { criar: [], jaExistem: [], deFora: [], avisos: [] };
   const toolsUsadas = new Set(existentes.map((e) => e.toolName));
   const camposUsados = new Set(existentes.map((e) => e.kommoFieldId));
+  const desligada = (tool: string, campoId: number) => existentes.some((e) => (e.toolName === tool || e.kommoFieldId === campoId) && e.enabled === false);
 
   for (const m of modelo) {
     const achado = acharCampoPorNome(campos, m.kommoFieldName);
     if ('ausente' in achado) {
       plano.deFora.push({ nome: m.kommoFieldName, motivo: 'não existe na conta' });
+      continue;
+    }
+    if ('parecidos' in achado) {
+      plano.deFora.push({ nome: m.kommoFieldName, motivo: 'só casa pelo nome sem o símbolo', detalhe: achado.parecidos.map((c) => `${c.id}:${c.name}`).join(', ') });
       continue;
     }
     if ('ambiguo' in achado) {
@@ -115,11 +125,11 @@ export function planejarRegras(
       continue;
     }
     if (toolsUsadas.has(m.toolName)) {
-      plano.jaExistem.push({ nome: m.kommoFieldName, porque: 'mesma ferramenta' });
+      plano.jaExistem.push({ nome: m.kommoFieldName, porque: 'mesma ferramenta', desligada: desligada(m.toolName, campo.id) });
       continue;
     }
     if (camposUsados.has(campo.id)) {
-      plano.jaExistem.push({ nome: m.kommoFieldName, porque: 'mesmo campo' });
+      plano.jaExistem.push({ nome: m.kommoFieldName, porque: 'mesmo campo', desligada: desligada(m.toolName, campo.id) });
       continue;
     }
     if (LISTAS.has(campo.type)) {

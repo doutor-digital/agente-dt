@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   contagemVazia,
@@ -6,10 +6,14 @@ import {
   etapaPermiteMotivo,
   extrairComRetentativa,
   lerExtracoes,
+  regrasDoBackfill,
   valorNaoInformado,
   type Extracao,
   type RegraDeLeitura,
 } from './backfill-campos-regras.js';
+import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
+
+afterEach(() => _esquecerOBancoParaTeste());
 
 const regra = (id: number, nome: string, tipo: string, opcoes: string[] = []): RegraDeLeitura => ({
   kommoFieldId: id,
@@ -42,7 +46,7 @@ test('"Motivo do não agendamento" só em Em espera ou Perdido (24/11: 76 de 101
 });
 
 test('"Não informada" e equivalentes nunca são gravados, mesmo sendo opção da lista da conta', () => {
-  for (const v of ['Não informada', 'não informado', 'NÃO INFORMOU', 'Sem informação', 'sem informacao', 'Não informada.']) {
+  for (const v of ['Não informada', 'N/I', 'n/i', 'não informado', 'NÃO INFORMOU', 'Sem informação', 'sem informacao', 'Não informada.']) {
     assert.ok(valorNaoInformado(v), v);
   }
   for (const v of ['Lombar', 'dor informada pelo marido', 'Informada', '', null, 'informação sobre exame']) assert.ok(!valorNaoInformado(v), String(v));
@@ -164,4 +168,53 @@ test('leadId que o modelo devolve e NÃO é do lote enviado é descartado (nunca
 test('etapa de perda com outro feitio de nome ("Venda perdida") também vale', () => {
   assert.ok(etapaPermiteMotivo('Venda perdida'));
   assert.ok(etapaPermiteMotivo('Fechado - Perdido'));
+});
+
+test('com o robô tipo-lead-chegada LIGADO, o backfill NÃO grava "⬢ Tipo de lead" (escritor único; palpite ficaria para sempre)', () => {
+  const rules = [
+    { ...regra(5, '⬢ Tipo de lead', 'select', ['Cadastro', 'Resgate']) },
+    ...REGRAS,
+  ];
+  _semearParaTeste([{ slug: 'doutor-hernia-salto', automacao: 'tipo-lead-chegada', estado: 'ligado' }]);
+  const usadas = regrasDoBackfill('doutor-hernia-salto', rules);
+  assert.ok(!usadas.some((r) => r.kommoFieldName === '⬢ Tipo de lead'));
+  assert.equal(usadas.length, REGRAS.length, 'as outras regras de conversa seguem');
+  // ponta a ponta: mesmo que o modelo devolva o Tipo de lead, não há regra para gravar
+  const d = decidirCampos({
+    campos: { '✎ Queixa': 'dor lombar', '⬢ Tipo de lead': 'Cadastro' },
+    porNome: new Map(usadas.map((r) => [r.kommoFieldName.toLowerCase(), r])),
+    preenchidos: new Set(),
+    nomeDaEtapa: 'EM QUALIFICAÇÃO',
+  });
+  assert.deepEqual(d.aGravar.map((g) => g.regra.kommoFieldName), ['✎ Queixa']);
+});
+
+test('robô tipo-lead-chegada desligado ou em outra unidade: o Tipo de lead segue entre as regras; campo antigo sem símbolo não é o mesmo', () => {
+  const rules = [regra(5, '⬢ Tipo de lead', 'select', ['Cadastro', 'Resgate']), regra(6, 'Tipo de lead', 'select', ['Cadastro'])];
+  _semearParaTeste([{ slug: 'doutor-hernia-salto', automacao: 'tipo-lead-chegada', estado: 'ligado' }, { slug: 'doutor-hernia-caxias', automacao: 'tipo-lead-chegada', estado: 'desligado' }]);
+  assert.deepEqual(regrasDoBackfill('doutor-hernia-salto', rules).map((r) => r.kommoFieldId), [6], 'só o nome exato com símbolo sai');
+  assert.deepEqual(regrasDoBackfill('doutor-hernia-caxias', rules).map((r) => r.kommoFieldId), [5, 6]);
+});
+
+test('o modelo omite um cartão numa resposta legível: ele entra em perdidas (não some)', async () => {
+  const cont = contagemVazia();
+  const r = await extrairComRetentativa(conversas(3), async () => [ext({ leadId: 100 }), ext({ leadId: 102 })], cont);
+  assert.deepEqual(r.map((e) => e.leadId), [100, 102]);
+  assert.deepEqual(cont.perdidas, [101]);
+  assert.equal(cont.omitidas, 1);
+});
+
+test('resposta "[]" para um lote de 3: as 3 conversas entram em perdidas', async () => {
+  const cont = contagemVazia();
+  const r = await extrairComRetentativa(conversas(3), async () => [], cont);
+  assert.equal(r.length, 0);
+  assert.deepEqual(cont.perdidas, [100, 101, 102]);
+  assert.equal(cont.omitidas, 3);
+  assert.equal(cont.respostasInvalidas, 0, 'a resposta era legível, só incompleta');
+});
+
+test('leadId fora do lote devolvido pelo modelo não conta como cobertura do cartão que faltou', async () => {
+  const cont = contagemVazia();
+  await extrairComRetentativa(conversas(2), async () => [ext({ leadId: 100 }), ext({ leadId: 999 })], cont);
+  assert.deepEqual(cont.perdidas, [101]);
 });

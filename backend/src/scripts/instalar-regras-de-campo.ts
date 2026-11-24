@@ -55,51 +55,56 @@ async function main(): Promise<void> {
   const resumo: Array<{ slug: string; criar: number; jaExistem: number; deFora: number; gravadas: number }> = [];
 
   for (const slug of SLUGS) {
-    const unit = await prisma.unit.findUnique({ where: { slug } });
-    if (!unit) {
-      console.log(`!! unidade ${slug} não existe`);
-      continue;
-    }
-    if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
-      console.log(`!! ${slug}: sem credencial do Kommo — não dá para ler os campos da conta`);
-      continue;
-    }
-    const campos = await createKommoClient(unit).listarCamposDoCartao();
-    const existentes = await prisma.leadFieldRule.findMany({ where: { unitId: unit.id }, select: { toolName: true, kommoFieldId: true } });
-    const plano = planejarRegras(modelo, campos, existentes);
+    try {
+      const unit = await prisma.unit.findUnique({ where: { slug } });
+      if (!unit) {
+        console.log(`!! unidade ${slug} não existe`);
+        continue;
+      }
+      if (!unit.kommoSubdomain || !unit.kommoAccessToken) {
+        console.log(`!! ${slug}: sem credencial do Kommo — não dá para ler os campos da conta`);
+        continue;
+      }
+      const campos = await createKommoClient(unit).listarCamposDoCartao();
+      const existentes = await prisma.leadFieldRule.findMany({ where: { unitId: unit.id }, select: { toolName: true, kommoFieldId: true, enabled: true } });
+      const plano = planejarRegras(modelo, campos, existentes);
 
-    console.log(`=== ${slug} — ${campos.length} campos na conta, ${existentes.length} regras já instaladas`);
-    for (const r of plano.criar) {
-      const op = r.kommoFieldEnums?.length ? ` · ${r.kommoFieldEnums.length} opções` : '';
-      console.log(`  + ${r.kommoFieldName}  [${r.kommoFieldType}${op}]  campo ${r.kommoFieldId}  ferramenta ${r.toolName}`);
-    }
-    for (const a of plano.avisos) {
-      console.log(`  ? ${a.nome}: opções do modelo que a conta NÃO tem: ${a.soNoModelo.join(' | ')}  (a conta tem: ${a.naConta.join(' | ')})`);
-    }
-    for (const j of plano.jaExistem) console.log(`  = ${j.nome}: já existe (${j.porque})`);
-    for (const f of plano.deFora) console.log(`  - ${f.nome}: FICA DE FORA — ${f.motivo}${f.detalhe ? ` (${f.detalhe})` : ''}`);
-
-    let gravadas = 0;
-    if (APLICAR) {
+      console.log(`=== ${slug} — ${campos.length} campos na conta, ${existentes.length} regras já instaladas`);
       for (const r of plano.criar) {
-        try {
-          await createLeadFieldRule(unit.id, r);
-          gravadas++;
-        } catch (err) {
-          // corrida (alguém criou a mesma ferramenta no meio): a restrição única do banco segura, e a próxima rodada vê "já existe"
-          console.log(`  ! ${r.kommoFieldName}: ${String(err).slice(0, 120)}`);
+        const op = r.kommoFieldEnums?.length ? ` · ${r.kommoFieldEnums.length} opções` : '';
+        console.log(`  + ${r.kommoFieldName}  [${r.kommoFieldType}${op}]  campo ${r.kommoFieldId}  ferramenta ${r.toolName}`);
+      }
+      for (const a of plano.avisos) {
+        console.log(`  ? ${a.nome}: opções do modelo que a conta NÃO tem: ${a.soNoModelo.join(' | ')}  (a conta tem: ${a.naConta.join(' | ')})`);
+      }
+      for (const j of plano.jaExistem) console.log(`  = ${j.nome}: já existe (${j.porque})${j.desligada ? ' — DESLIGADA na tela, não religo' : ''}`);
+      for (const f of plano.deFora) console.log(`  - ${f.nome}: FICA DE FORA — ${f.motivo}${f.detalhe ? ` (${f.detalhe})` : ''}`);
+
+      let gravadas = 0;
+      if (APLICAR) {
+        for (const r of plano.criar) {
+          try {
+            await createLeadFieldRule(unit.id, r);
+            gravadas++;
+          } catch (err) {
+            // corrida (alguém criou a mesma ferramenta no meio): a restrição única do banco segura, e a próxima rodada vê "já existe"
+            console.log(`  ! ${r.kommoFieldName}: ${String(err).slice(0, 120)}`);
+          }
+        }
+        if (gravadas > 0) {
+          await addChangeLog(unit.id, {
+            category: 'kommo',
+            summary: `Regras de captura instaladas a partir de ${SLUG_MODELO}: ${gravadas}`,
+            details: plano.criar.map((r) => `${r.kommoFieldName} (${r.toolName})`).join('\n'),
+          });
         }
       }
-      if (gravadas > 0) {
-        await addChangeLog(unit.id, {
-          category: 'kommo',
-          summary: `Regras de captura instaladas a partir de ${SLUG_MODELO}: ${gravadas}`,
-          details: plano.criar.map((r) => `${r.kommoFieldName} (${r.toolName})`).join('\n'),
-        });
-      }
+      resumo.push({ slug, criar: plano.criar.length, jaExistem: plano.jaExistem.length, deFora: plano.deFora.length, gravadas });
+      console.log('');
+    } catch (err) {
+      console.log(`!! ${slug}: falhou, passo para a próxima unidade: ${String(err).slice(0, 200)}`);
+      process.exitCode = 1;
     }
-    resumo.push({ slug, criar: plano.criar.length, jaExistem: plano.jaExistem.length, deFora: plano.deFora.length, gravadas });
-    console.log('');
   }
 
   console.log('RESUMO');

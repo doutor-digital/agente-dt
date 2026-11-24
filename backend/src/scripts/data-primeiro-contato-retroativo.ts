@@ -53,61 +53,66 @@ async function main(): Promise<void> {
   console.log(`${APLICAR ? 'GRAVANDO' : 'SIMULAÇÃO (nada será gravado; use --aplicar)'} · ${FECHADOS ? 'todos os cartões' : 'só cartões ativos'}\n`);
 
   for (const slug of SLUGS) {
-    const unit = await prisma.unit.findUnique({ where: { slug } });
-    if (!unit?.kommoSubdomain || !unit.kommoAccessToken) {
-      console.log(`!! ${slug}: unidade ou credencial do Kommo ausente`);
-      continue;
-    }
-    const kommo = createKommoClient(unit);
-    const campos = await kommo.listarCamposDoCartao();
-    let cartoes: CartaoParaData[];
     try {
-      cartoes = await lerTodosOsCartoes(kommo, FECHADOS);
-    } catch (err) {
-      console.log(`=== ${slug}\n  !! leitura do Kommo falhou, NADA foi planejado nem gravado: ${String(err).slice(0, 160)}\n`);
-      continue;
-    }
-    const plano = planejarDataDoPrimeiroContato(cartoes, campos, FECHADOS);
-    console.log(`=== ${slug} — ${cartoes.length} cartões lidos`);
-    if (!plano.campo || plano.semCampo) {
-      console.log(`  nada a fazer: ${plano.semCampo}\n`);
-      continue;
-    }
-    console.log(
-      `  campo ${plano.campo.id} (${plano.campo.type}) · ${plano.gravar.length} ${APLICAR ? 'a gravar' : 'seriam gravados'} · ${plano.jaTinham} já tinham · ${plano.semCriacao} sem data de criação · ${plano.fechadosIgnorados} fechados ignorados`,
-    );
-    for (const g of plano.gravar.slice(0, 10)) console.log(`    ${g.leadId}  → ${new Date(g.epoch * 1000).toISOString()}`);
-    if (plano.gravar.length > 10) console.log(`    … e mais ${plano.gravar.length - 10}`);
-
-    if (!APLICAR) {
-      console.log('');
-      continue;
-    }
-    let gravados = 0;
-    let mudaramNoMeio = 0;
-    let erros = 0;
-    for (const g of plano.gravar) {
-      try {
-        const agora = await kommo.getLead(g.leadId);
-        const jaTem = (agora.custom_fields_values ?? []).find((f) => f.field_id === plano.campo!.id)?.values?.[0]?.value;
-        if (jaTem !== null && jaTem !== undefined && jaTem !== '' && jaTem !== 0) {
-          mudaramNoMeio++;
-          continue;
-        }
-        await kommo.gravarCamposDoLead(g.leadId, [{ field_id: plano.campo.id, values: [{ value: g.epoch }] }]);
-        gravados++;
-      } catch (err) {
-        erros++;
-        console.log(`  ! ${g.leadId}: ${String(err).slice(0, 100)}`);
+      const unit = await prisma.unit.findUnique({ where: { slug } });
+      if (!unit?.kommoSubdomain || !unit.kommoAccessToken) {
+        console.log(`!! ${slug}: unidade ou credencial do Kommo ausente`);
+        continue;
       }
-      await dormir(PAUSA_MS);
-    }
-    console.log(`  → ${gravados} gravados · ${mudaramNoMeio} preenchidos por outro no meio · ${erros} erros\n`);
-    if (gravados > 0) {
-      await addChangeLog(unit.id, {
-        category: 'kommo',
-        summary: `"Data do primeiro contato" preenchida com a criação do cartão em ${gravados} cartões (retroativo)`,
-      });
+      const kommo = createKommoClient(unit);
+      const campos = await kommo.listarCamposDoCartao();
+      let cartoes: CartaoParaData[];
+      try {
+        cartoes = await lerTodosOsCartoes(kommo, FECHADOS);
+      } catch (err) {
+        console.log(`=== ${slug}\n  !! leitura do Kommo falhou, NADA foi planejado nem gravado: ${String(err).slice(0, 160)}\n`);
+        continue;
+      }
+      const plano = planejarDataDoPrimeiroContato(cartoes, campos, FECHADOS);
+      console.log(`=== ${slug} — ${cartoes.length} cartões lidos`);
+      if (!plano.campo || plano.semCampo) {
+        console.log(`  nada a fazer: ${plano.semCampo}\n`);
+        continue;
+      }
+      console.log(
+        `  campo ${plano.campo.id} (${plano.campo.type}) · ${plano.gravar.length} ${APLICAR ? 'a gravar' : 'seriam gravados'} · ${plano.jaTinham} já tinham · ${plano.semCriacao} sem data de criação · ${plano.fechadosIgnorados} fechados ignorados`,
+      );
+      for (const g of plano.gravar.slice(0, 10)) console.log(`    ${g.leadId}  → ${new Date(g.epoch * 1000).toISOString()}`);
+      if (plano.gravar.length > 10) console.log(`    … e mais ${plano.gravar.length - 10}`);
+
+      if (!APLICAR) {
+        console.log('');
+        continue;
+      }
+      let gravados = 0;
+      let mudaramNoMeio = 0;
+      let erros = 0;
+      for (const g of plano.gravar) {
+        try {
+          const agora = await kommo.getLead(g.leadId);
+          const jaTem = (agora.custom_fields_values ?? []).find((f) => f.field_id === plano.campo!.id)?.values?.[0]?.value;
+          if (jaTem !== null && jaTem !== undefined && jaTem !== '') {
+            mudaramNoMeio++;
+            continue;
+          }
+          await kommo.gravarCamposDoLead(g.leadId, [{ field_id: plano.campo.id, values: [{ value: g.epoch }] }]);
+          gravados++;
+        } catch (err) {
+          erros++;
+          console.log(`  ! ${g.leadId}: ${String(err).slice(0, 100)}`);
+        }
+        await dormir(PAUSA_MS);
+      }
+      console.log(`  → ${gravados} gravados · ${mudaramNoMeio} preenchidos por outro no meio · ${erros} erros\n`);
+      if (gravados > 0) {
+        await addChangeLog(unit.id, {
+          category: 'kommo',
+          summary: `"Data do primeiro contato" preenchida com a criação do cartão em ${gravados} cartões (retroativo)`,
+        });
+      }
+    } catch (err) {
+      console.log(`!! ${slug}: falhou, passo para a próxima unidade: ${String(err).slice(0, 200)}`);
+      process.exitCode = 1;
     }
   }
 }

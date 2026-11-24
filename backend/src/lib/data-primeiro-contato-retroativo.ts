@@ -41,7 +41,7 @@ export const ETAPAS_FECHADAS: ReadonlySet<number> = new Set([142, 143]);
 
 function temValor(c: CartaoParaData, campoId: number): boolean {
   const v = (c.custom_fields_values ?? []).find((f) => f.field_id === campoId)?.values?.[0]?.value;
-  return v !== null && v !== undefined && v !== '' && v !== 0;
+  return v !== null && v !== undefined && v !== '';
 }
 
 export function planejarDataDoPrimeiroContato(

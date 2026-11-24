@@ -16,6 +16,12 @@ test('vazio → data de criação do cartão; preenchido nunca é sobrescrito', 
   assert.equal(p.jaTinham, 1);
 });
 
+test('valor 0 no campo conta como preenchido (nunca sobrescreve)', () => {
+  const p = planejarDataDoPrimeiroContato([cartao(1, 10, 1_700_000_000, 0)], [CAMPO]);
+  assert.equal(p.gravar.length, 0);
+  assert.equal(p.jaTinham, 1);
+});
+
 test('Ganho/Perdido ficam de fora, salvo pedido explícito', () => {
   const cartoes = [cartao(1, 142, 1_700_000_000), cartao(2, 143, 1_700_000_000), cartao(3, 10, 1_700_000_000)];
   assert.deepEqual(planejarDataDoPrimeiroContato(cartoes, [CAMPO]).gravar.map((g) => g.leadId), [3]);

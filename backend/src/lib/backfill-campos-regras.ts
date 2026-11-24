@@ -9,6 +9,7 @@
  *    Agora o lote é partido ao meio e tentado de novo, e o que não se recupera é CONTADO e mostrado no fim.
  */
 import { normalizar } from './franquia-sync.js';
+import { sofiaNaoGravaTipoDeLead } from './tipo-lead-chegada.js';
 
 /**
  * Campos que uma CONVERSA pode responder. Os outros da régua (data de pagamento, situação da consulta, motivo da espera) são
@@ -23,6 +24,16 @@ export interface RegraDeLeitura {
   kommoFieldEnums?: unknown;
 }
 
+/**
+ * As regras que o backfill pode usar: as "de conversa" E as mesmas que a Sofia ao vivo usa. Com o robô `tipo-lead-chegada` LIGADO
+ * na unidade, "⬢ Tipo de lead" sai (ver `sofiaNaoGravaTipoDeLead`): ele é o único escritor do campo, só preenche vazio e o
+ * `campos-sdr-tipos` copia o valor adiante, então um palpite do modelo ficaria para sempre. Quem chama deve ter chamado
+ * `recarregarAutomacoes()` antes (num processo avulso o estado da tela não está carregado e cairia só no `.env`).
+ */
+export function regrasDoBackfill<R extends { kommoFieldName: string }>(slug: string, regras: ReadonlyArray<R>): R[] {
+  return regras.filter((r) => DA_CONVERSA.test(r.kommoFieldName) && !sofiaNaoGravaTipoDeLead(slug, r.kommoFieldName));
+}
+
 export interface Extracao {
   leadId: number;
   campos: Record<string, string | null>;
@@ -32,7 +43,7 @@ export interface Extracao {
 export function valorNaoInformado(bruto: unknown): boolean {
   const v = normalizar(String(bruto ?? ''));
   if (!v) return false;
-  return /^(nao (informad[oa]s?|informou|consta|especificad[oa]s?|se sabe)|sem informacao|sem informacoes|nao ha informacao|nao ha informacoes|ni)$/.test(v);
+  return /^(nao (informad[oa]s?|informou|consta|especificad[oa]s?|se sabe)|sem informacao|sem informacoes|nao ha informacao|nao ha informacoes|ni|n i)$/.test(v);
 }
 
 export function ehCampoDeMotivo(nomeDoCampo: string): boolean {
@@ -145,6 +156,8 @@ export function lerExtracoes(texto: string): Extracao[] | null {
 export interface ContagemDeFalhas {
   /** quantas respostas vieram ilegíveis (cada tentativa conta) */
   respostasInvalidas: number;
+  /** quantas conversas o modelo deixou de responder numa resposta legível (todas entram também em `perdidas`) */
+  omitidas: number;
   /** lotes que deram erro de rede/API (não são repetidos: erro de chave ou limite só se repetiria) */
   lotesComErro: number;
   /** cartões cuja conversa NÃO foi lida, mesmo depois de partir o lote */
@@ -153,7 +166,7 @@ export interface ContagemDeFalhas {
 }
 
 export function contagemVazia(): ContagemDeFalhas {
-  return { respostasInvalidas: 0, lotesComErro: 0, perdidas: [], erros: [] };
+  return { respostasInvalidas: 0, omitidas: 0, lotesComErro: 0, perdidas: [], erros: [] };
 }
 
 /**
@@ -178,9 +191,18 @@ export async function extrairComRetentativa<C extends { leadId: number }>(
   if (resposta !== null) {
     // só vale o que veio de uma conversa DESTE lote: id de outro cartão (modelo repetiu ou inventou) nunca vira gravação
     const doLote = new Set(lote.map((c) => c.leadId));
-    return resposta
+    const validas = resposta
       .filter((e) => ehExtracao(e) && doLote.has(Number(e.leadId)))
       .map((e) => ({ ...e, leadId: Number(e.leadId) }));
+    // o modelo devolve UM objeto por conversa (campos null quando não é paciente); conversa que ficou de fora não foi lida:
+    // um `[]` solto ou um cartão omitido não podem sumir sem rastro
+    const vistos = new Set(validas.map((e) => e.leadId));
+    for (const id of doLote) {
+      if (vistos.has(id)) continue;
+      cont.omitidas++;
+      cont.perdidas.push(id);
+    }
+    return validas;
   }
   cont.respostasInvalidas++;
   if (lote.length === 1) {

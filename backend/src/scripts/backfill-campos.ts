@@ -35,12 +35,15 @@
 import type { LeadFieldRule, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { createKommoClient, type KommoFieldType } from '../services/kommo.service.js';
+import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
+import { ID_AUTOMACAO as ID_TIPO_LEAD_CHEGADA } from '../lib/tipo-lead-chegada.js';
+import { estadoDaAutomacao, recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import {
-  DA_CONVERSA,
   contagemVazia,
   decidirCampos,
   extrairComRetentativa,
   lerExtracoes,
+  regrasDoBackfill,
   type Extracao,
 } from '../lib/backfill-campos-regras.js';
 
@@ -153,113 +156,121 @@ async function main(): Promise<void> {
     ? await prisma.unit.findMany({ where: { slug: SLUG } })
     : await prisma.unit.findMany({ where: { isActive: true, kommoAccessToken: { not: null } }, orderBy: { slug: 'asc' } });
 
+  // processo avulso: sem isto o estado das automações (tela) não está carregado e cairia só no .env
+  await recarregarAutomacoes();
+
   console.log(`modo ${APLICAR ? 'APLICAR' : 'SIMULAÇÃO'} · modelo ${MODELO} · lotes de ${LOTE}\n`);
 
   for (const unit of unidades) {
-    const regras = (await prisma.leadFieldRule.findMany({ where: { unitId: unit.id, enabled: true } })).filter((r) =>
-      DA_CONVERSA.test(r.kommoFieldName),
-    );
-    if (regras.length === 0) {
-      console.log(`${unit.slug}: sem regras de conversa — pulando`);
-      continue;
-    }
-
-    const conversas = await conversasSemCampo(unit, LIMITE);
-    if (conversas.length === 0) {
-      console.log(`${unit.slug}: nada a preencher`);
-      continue;
-    }
-    console.log(`\n=== ${unit.slug} — ${conversas.length} conversas, ${regras.length} campos ===`);
-
-    const kommo = createKommoClient(unit);
-    const porNome = new Map(regras.map((r) => [r.kommoFieldName.toLowerCase(), r]));
-    // nome da etapa de cada cartão: "Motivo do não agendamento" só vale em Em espera / Perdido (ver lib/backfill-campos-regras)
-    const nomesDeEtapa = new Map<string, string>();
-    for (const p of await kommo.listPipelines()) for (const st of p.statuses) nomesDeEtapa.set(`${p.id}:${st.id}`, st.name);
-    const falhas = contagemVazia();
-    let gravados = 0;
-    let falhasDeGravacao = 0;
-    const naoLidos: number[] = [];
-    let errosSeguidos = 0;
-    let parouNoLote = 0;
-    const descartes = { jaPreenchidos: 0, naoInformados: 0, motivoForaDaEtapa: 0 };
-
-    for (let i = 0; i < conversas.length; i += LOTE) {
-      const lote = conversas.slice(i, i + LOTE);
-      const comErroAntes = falhas.lotesComErro;
-      const extracoes = await extrairComRetentativa(lote, (parte) => extrair(unit, regras, parte), falhas);
-      // erro de chave/limite se repetiria em todos os lotes: depois de 3 seguidos, para esta unidade (o resto fica para a próxima rodada)
-      errosSeguidos = falhas.lotesComErro > comErroAntes ? errosSeguidos + 1 : 0;
-      if (errosSeguidos >= 3) {
-        parouNoLote = i / LOTE + 1;
-        console.log(`  ! 3 lotes seguidos com erro — parei esta unidade no lote ${parouNoLote} (rode de novo depois)`);
-        break;
+    try {
+      // As MESMAS regras que a Sofia ao vivo usa (sem "⬢ Tipo de lead" onde o robô tipo-lead-chegada está ligado: ele é o escritor único)
+      const regras = regrasDoBackfill(unit.slug, await listEnabledLeadFieldRules(unit.id, unit.slug));
+      console.log(`${unit.slug}: tipo-lead-chegada ${estadoDaAutomacao(unit.slug, ID_TIPO_LEAD_CHEGADA, process.env.TIPO_LEAD_CHEGADA_SLUGS)}`);
+      if (regras.length === 0) {
+        console.log(`${unit.slug}: sem regras de conversa — pulando`);
+        continue;
       }
 
-      for (const ex of extracoes) {
-        const lead = await kommo.getLead(ex.leadId).catch(() => null);
-        if (!lead) {
-          naoLidos.push(ex.leadId);
-          continue;
-        }
-        const preenchidos = new Set(
-          ((lead as { custom_fields_values?: Array<{ field_id: number; values?: Array<{ value?: unknown }> }> })
-            .custom_fields_values ?? [])
-            .filter((f) => {
-              const v = (f.values ?? [{}])[0]?.value;
-              return v !== null && v !== undefined && v !== '';
-            })
-            .map((f) => f.field_id),
-        );
+      const conversas = await conversasSemCampo(unit, LIMITE);
+      if (conversas.length === 0) {
+        console.log(`${unit.slug}: nada a preencher`);
+        continue;
+      }
+      console.log(`\n=== ${unit.slug} — ${conversas.length} conversas, ${regras.length} campos ===`);
 
-        const decisao = decidirCampos({
-          campos: ex.campos,
-          porNome,
-          preenchidos,
-          nomeDaEtapa: nomesDeEtapa.get(`${lead.pipeline_id}:${lead.status_id}`),
-        });
-        descartes.jaPreenchidos += decisao.jaPreenchidos;
-        descartes.naoInformados += decisao.naoInformados;
-        descartes.motivoForaDaEtapa += decisao.motivoForaDaEtapa;
-        const aGravar = decisao.aGravar;
-        if (aGravar.length === 0) continue;
+      const kommo = createKommoClient(unit);
+      const porNome = new Map(regras.map((r) => [r.kommoFieldName.toLowerCase(), r]));
+      // nome da etapa de cada cartão: "Motivo do não agendamento" só vale em Em espera / Perdido (ver lib/backfill-campos-regras)
+      const nomesDeEtapa = new Map<string, string>();
+      for (const p of await kommo.listPipelines()) for (const st of p.statuses) nomesDeEtapa.set(`${p.id}:${st.id}`, st.name);
+      const falhas = contagemVazia();
+      let gravados = 0;
+      let falhasDeGravacao = 0;
+      const naoLidos: number[] = [];
+      let errosSeguidos = 0;
+      let parouNoLote = 0;
+      const descartes = { jaPreenchidos: 0, naoInformados: 0, motivoForaDaEtapa: 0 };
 
-        console.log(
-          `  ${String(ex.leadId).padEnd(9)} ${aGravar.map((g) => `${g.regra.kommoFieldName}="${g.valor.slice(0, 28)}"`).join(' · ')}`,
-        );
-        if (!APLICAR) {
-          gravados += aGravar.length;
-          continue;
+      for (let i = 0; i < conversas.length; i += LOTE) {
+        const lote = conversas.slice(i, i + LOTE);
+        const comErroAntes = falhas.lotesComErro;
+        const extracoes = await extrairComRetentativa(lote, (parte) => extrair(unit, regras, parte), falhas);
+        // erro de chave/limite se repetiria em todos os lotes: depois de 3 seguidos, para esta unidade (o resto fica para a próxima rodada)
+        errosSeguidos = falhas.lotesComErro > comErroAntes ? errosSeguidos + 1 : 0;
+        if (errosSeguidos >= 3) {
+          parouNoLote = i / LOTE + 1;
+          console.log(`  ! 3 lotes seguidos com erro — parei esta unidade no lote ${parouNoLote} (rode de novo depois)`);
+          break;
         }
-        for (const g of aGravar) {
-          try {
-            await kommo.setLeadCustomFieldValue(
-              ex.leadId,
-              g.regra.kommoFieldId,
-              g.regra.kommoFieldType as KommoFieldType,
-              g.valor,
-              (g.regra.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [],
-            );
-            gravados++;
-          } catch (err) {
-            falhasDeGravacao++;
-            console.log(`     ! ${g.regra.kommoFieldName}: ${String(err).slice(0, 90)}`);
+
+        for (const ex of extracoes) {
+          const lead = await kommo.getLead(ex.leadId).catch(() => null);
+          if (!lead) {
+            naoLidos.push(ex.leadId);
+            continue;
           }
-          await new Promise((r) => setTimeout(r, 160));
+          const preenchidos = new Set(
+            ((lead as { custom_fields_values?: Array<{ field_id: number; values?: Array<{ value?: unknown }> }> })
+              .custom_fields_values ?? [])
+              .filter((f) => {
+                const v = (f.values ?? [{}])[0]?.value;
+                return v !== null && v !== undefined && v !== '';
+              })
+              .map((f) => f.field_id),
+          );
+
+          const decisao = decidirCampos({
+            campos: ex.campos,
+            porNome,
+            preenchidos,
+            nomeDaEtapa: nomesDeEtapa.get(`${lead.pipeline_id}:${lead.status_id}`),
+          });
+          descartes.jaPreenchidos += decisao.jaPreenchidos;
+          descartes.naoInformados += decisao.naoInformados;
+          descartes.motivoForaDaEtapa += decisao.motivoForaDaEtapa;
+          const aGravar = decisao.aGravar;
+          if (aGravar.length === 0) continue;
+
+          console.log(
+            `  ${String(ex.leadId).padEnd(9)} ${aGravar.map((g) => `${g.regra.kommoFieldName}="${g.valor.slice(0, 28)}"`).join(' · ')}`,
+          );
+          if (!APLICAR) {
+            gravados += aGravar.length;
+            continue;
+          }
+          for (const g of aGravar) {
+            try {
+              await kommo.setLeadCustomFieldValue(
+                ex.leadId,
+                g.regra.kommoFieldId,
+                g.regra.kommoFieldType as KommoFieldType,
+                g.valor,
+                (g.regra.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [],
+              );
+              gravados++;
+            } catch (err) {
+              falhasDeGravacao++;
+              console.log(`     ! ${g.regra.kommoFieldName}: ${String(err).slice(0, 90)}`);
+            }
+            await new Promise((r) => setTimeout(r, 160));
+          }
         }
       }
+      console.log(`  → ${gravados} campos ${APLICAR ? 'gravados' : 'seriam gravados'}`);
+      console.log(
+        `  descartados: ${descartes.jaPreenchidos} já tinham valor · ${descartes.naoInformados} "não informado" · ${descartes.motivoForaDaEtapa} motivo fora de Em espera/Perdido · ${naoLidos.length} cartões NÃO lidos no Kommo (apagados ou erro)`,
+      );
+      // o que NÃO foi lido tem de aparecer: antes, lote ilegível sumia sem rastro
+      console.log(
+        `  falhas: ${falhas.respostasInvalidas} respostas ilegíveis (lote partido e repetido) · ${falhas.lotesComErro} lotes com erro · ${falhas.perdidas.length} conversas NÃO lidas${APLICAR ? ` · ${falhasDeGravacao} gravações recusadas` : ''}`,
+      );
+      if (falhas.perdidas.length > 0) console.log(`  conversas não lidas (leadId): ${falhas.perdidas.join(', ')}`);
+      if (naoLidos.length > 0) console.log(`  cartões não lidos no Kommo (leadId): ${naoLidos.join(', ')}`);
+      if (falhas.erros.length > 0) console.log(`  erros: ${[...new Set(falhas.erros)].join(' | ')}`);
+    } catch (err) {
+      console.log(`!! ${unit.slug}: falhou, passo para a próxima unidade: ${String(err).slice(0, 200)}`);
+      process.exitCode = 1;
     }
-    console.log(`  → ${gravados} campos ${APLICAR ? 'gravados' : 'seriam gravados'}`);
-    console.log(
-      `  descartados: ${descartes.jaPreenchidos} já tinham valor · ${descartes.naoInformados} "não informado" · ${descartes.motivoForaDaEtapa} motivo fora de Em espera/Perdido · ${naoLidos.length} cartões NÃO lidos no Kommo (apagados ou erro)`,
-    );
-    // o que NÃO foi lido tem de aparecer: antes, lote ilegível sumia sem rastro
-    console.log(
-      `  falhas: ${falhas.respostasInvalidas} respostas ilegíveis (lote partido e repetido) · ${falhas.lotesComErro} lotes com erro · ${falhas.perdidas.length} conversas NÃO lidas${APLICAR ? ` · ${falhasDeGravacao} gravações recusadas` : ''}`,
-    );
-    if (falhas.perdidas.length > 0) console.log(`  conversas não lidas (leadId): ${falhas.perdidas.join(', ')}`);
-    if (naoLidos.length > 0) console.log(`  cartões não lidos no Kommo (leadId): ${naoLidos.join(', ')}`);
-    if (falhas.erros.length > 0) console.log(`  erros: ${[...new Set(falhas.erros)].join(' | ')}`);
   }
   await prisma.$disconnect();
 }
