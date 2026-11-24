@@ -7,6 +7,7 @@ import { createKommoClient } from '../services/kommo.service.js';
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { falaDaEquipeDesde } from './pausa-equipe.js';
+import { pacienteDeRedeSocialCalado } from './sofia-so-whatsapp.js';
 
 const SWEEP_MS = 5 * 60_000;
 const ESPERA_MIN = 30;
@@ -98,6 +99,11 @@ async function reativarUnidade(unit: Unit): Promise<void> {
       await encerrar(conv.id);
       continue;
     }
+
+    // Chave `sofia-so-whatsapp` (Salto e Tatuí): paciente de Instagram/Facebook é da equipe — a Sofia não reabre o contato. ANTES de despausar o
+    // cartão e de gerar texto. Só pula (não limpa o handoff): se a chave for desligada a conversa volta a ser candidata; a janela de 24 h acima
+    // é quem a encerra quando vence.
+    if (await pacienteDeRedeSocialCalado(unit, leadId)) continue;
 
     try {
       const temConsulta = await prisma.spineLeadLink.findFirst({
