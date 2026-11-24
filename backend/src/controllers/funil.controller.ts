@@ -1904,6 +1904,14 @@ const MENU_JS = String.raw`(function(){
     if (link && !link.closest(DE_MENU)) fechar();
   }, true);
   document.addEventListener('keydown', function(e){ if (e.key === 'Escape') fechar(); });
+  // o tema do Chatwoot (classe «dark» no <html> ou no <body>, conforme a versão) vai para a tela junto com a sessão e de novo quando a pessoa troca
+  function temaDoCrm(){ var h = document.documentElement, b = document.body; return (h.classList.contains('dark') || (b && b.classList.contains('dark'))) ? 'escuro' : 'claro'; }
+  try {
+    var avisarTema = function(){ if (fr && fr.contentWindow) fr.contentWindow.postMessage({ event: 'funil-tema', tema: temaDoCrm() }, AGENTE); };
+    var vigiaTema = new MutationObserver(avisarTema);
+    vigiaTema.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
+    if (document.body) vigiaTema.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  } catch (e) {}
   window.addEventListener('message', function(ev){
     // a sessão vai para o quadro do menu E para a aba "Funil" da conversa (iframe que o Chatwoot cria), só se forem deste servidor
     if (ev.origin !== AGENTE || !ev.source) return;
@@ -1913,7 +1921,7 @@ const MENU_JS = String.raw`(function(){
     });
     if (!doFunil) return;
     var d = ev.data;
-    if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao(), tema: document.documentElement.classList.contains('dark') ? 'escuro' : 'claro' }, AGENTE);
+    if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao(), tema: temaDoCrm() }, AGENTE);
     else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
     else if (d && d.event === 'funil:abrir-conversa' && fr && ev.source === fr.contentWindow) {
       // abre a conversa do lead na tela normal do Chatwoot (mesma conta da página); id só número

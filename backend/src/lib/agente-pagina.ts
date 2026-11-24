@@ -655,6 +655,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   function abrirDialogo(d){ if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
   function fecharDialogo(d){ if (d.close) d.close(); else d.removeAttribute('open'); }
   async function carregarPainel(){
+    ULTIMO = null;
     try {
       var p = await api('GET', KM ? kmRota('painel', 'periodo=' + enc(PERIODO)) : '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
       clearTimeout(tPainel);
@@ -1253,7 +1254,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   window.addEventListener('message', function(ev){
     if (KM) return;
     if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
-    var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
+    var d = ev.data; if (d && d.event === 'funil-tema' && (d.tema === 'escuro' || d.tema === 'claro')) { temaDoCrm = d.tema; aplicarTema(d.tema); return; }
+    if (!d || d.event !== 'funil-sessao') return;
     if (d.tema === 'escuro' || d.tema === 'claro') { temaDoCrm = d.tema; aplicarTema(d.tema); }
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();
