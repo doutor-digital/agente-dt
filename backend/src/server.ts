@@ -14,6 +14,7 @@ import { paginaAprendizadosHandler } from './controllers/aprendizados.controller
 import { ligarNovaClinica, somenteCadastroNoHostDeCadastro } from './controllers/nova-clinica.controller.js';
 import { mascararUrlDoLog } from './lib/mascara-url-log.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
+import { paginaAgenteKommoHandler } from './controllers/agente-kommo.controller.js';
 import { paginaRobosHandler } from './controllers/robos.controller.js';
 import { paginaDisparosHandler } from './controllers/disparos.controller.js';
 import { menuFunilHandler, paginaFunilHandler } from './controllers/funil.controller.js';
@@ -187,6 +188,8 @@ async function main(): Promise<void> {
 
   // Página da unidade para ensinar a Sofia (aprendizados), com código da unidade e chave por unidade.
   app.get('/aprendizados/:slug', paginaAprendizadosHandler);
+  // A tela «Agente» do CRM para as unidades do Kommo (24/11): números da Sofia, pausar, ensinar, testar, conferir e pedir ajuste. Mesmo código da unidade.
+  app.get('/agente/:slug', paginaAgenteKommoHandler);
   // Funil de etapas encaixado no Chatwoot (Dashboard App). A chave vem em ?k= e é mascarada no log abaixo.
   app.get('/funil', paginaFunilHandler);
   app.get('/funil/menu.js', menuFunilHandler);

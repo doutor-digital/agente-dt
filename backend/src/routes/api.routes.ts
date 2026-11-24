@@ -165,6 +165,7 @@ import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandle
 import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasRecentesHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
 import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
 import { agenteNovoPedidoHandler, agentePainelHandler, agentePedidosHandler, agenteRegistroHandler, agenteRevisarHandler } from '../controllers/agente-chatwoot.controller.js';
+import { agenteKommoEstadoHandler, agenteKommoNovoPedidoHandler, agenteKommoPainelHandler, agenteKommoPausadasHandler, agenteKommoPedidosHandler } from '../controllers/agente-kommo.controller.js';
 import { centralChamadoFeitoHandler, centralChamadosHandler, centralEstadoHandler, centralGeralHandler, centralPessoaHandler } from '../controllers/central.controller.js';
 import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
@@ -401,6 +402,12 @@ apiRouter.post('/public/agente/avaliacoes/:id/revisar', agenteRevisarHandler);
 apiRouter.get('/public/agente/pedidos', agentePedidosHandler);
 apiRouter.post('/public/agente/pedidos', agenteNovoPedidoHandler);
 apiRouter.get('/public/agente/registro', agenteRegistroHandler);
+// tela Agente das unidades do Kommo (24/11): página /agente/:slug com o código da unidade (sem sessão). Ensinar/Testar/Pausar/Conferir usam as rotas acima de /pausa, /aprendizados e /ia.
+apiRouter.get('/public/agente-kommo/:slug/estado', agenteKommoEstadoHandler);
+apiRouter.get('/public/agente-kommo/:slug/painel', agenteKommoPainelHandler);
+apiRouter.get('/public/agente-kommo/:slug/pausadas', agenteKommoPausadasHandler);
+apiRouter.get('/public/agente-kommo/:slug/pedidos', agenteKommoPedidosHandler);
+apiRouter.post('/public/agente-kommo/:slug/pedidos', agenteKommoNovoPedidoHandler);
 // tela Robôs do Chatwoot (14/11): lista, enviados e configuração por robô — login do Chatwoot; só administrador altera
 apiRouter.get('/public/robos', robosHandler);
 apiRouter.get('/public/robos/enviados', robosEnviadosHandler);

@@ -11,6 +11,13 @@
 import { prisma } from './prisma.js';
 
 export const VERIFICACAO_CHATWOOT = 'chatwoot';
+/**
+ * De onde veio o pedido. `chatwoot` = tela Agente do CRM (logada); `pagina` = página `/agente/:slug` das unidades do Kommo (código da
+ * unidade, 24/11/2026). As duas usam a MESMA verificação («chatwoot» = nunca entra sozinha na fila do agente de código) e a mesma
+ * lista «Pedidos da unidade»; o que muda é o rótulo e o `jid` (`pagina:<slug>` não é número, como `chatwoot:<id>`).
+ */
+export type OrigemDoPedido = 'chatwoot' | 'pagina';
+const ROTULO_DA_ORIGEM: Record<OrigemDoPedido, string> = { chatwoot: 'Agente (Chatwoot)', pagina: 'Agente (página da unidade)' };
 export const MIN_PEDIDO = 10;
 export const MAX_PEDIDO = 1_500;
 /** por unidade e por dia: a porta é aberta a toda a equipe, o teto evita enxurrada no bot de chamados */
@@ -39,14 +46,15 @@ export function lerPedido(corpo: unknown): { ok: true; tipo: TipoDePedido; texto
   return { ok: true, tipo: c.tipo, texto, conversa: Number.isInteger(n) && n > 0 ? n : null };
 }
 
-export function relatoDoPedido(p: { unidade: string; nome: string; tipo: TipoDePedido; texto: string; conversa: number | null }): string {
+export function relatoDoPedido(p: { unidade: string; nome: string; tipo: TipoDePedido; texto: string; conversa: number | null; origem?: OrigemDoPedido }): string {
+  const pagina = p.origem === 'pagina';
   const onde = p.conversa ? ` (conversa ${p.conversa} do Chatwoot)` : '';
-  return `[Agente no Chatwoot] ${p.nome}, de ${p.unidade}, pediu${onde}:\n${TIPOS_DE_PEDIDO[p.tipo].rotulo}\n\n${p.texto}`;
+  return `[${pagina ? 'Agente na página da unidade' : 'Agente no Chatwoot'}] ${p.nome}, de ${p.unidade}, pediu${onde}:\n${TIPOS_DE_PEDIDO[p.tipo].rotulo}\n\n${p.texto}`;
 }
 
-export function avisoDoPedido(p: { protocolo: number; unidade: string; nome: string; tipo: TipoDePedido; texto: string }): string {
+export function avisoDoPedido(p: { protocolo: number; unidade: string; nome: string; tipo: TipoDePedido; texto: string; origem?: OrigemDoPedido }): string {
   const corte = p.texto.length > 400 ? `${p.texto.slice(0, 399)}…` : p.texto;
-  return `🆕 Pedido #${p.protocolo} pelo Agente (Chatwoot) — ${p.unidade}\n${p.nome} · ${TIPOS_DE_PEDIDO[p.tipo].rotulo}\n"${corte}"`;
+  return `🆕 Pedido #${p.protocolo} pelo ${ROTULO_DA_ORIGEM[p.origem ?? 'chatwoot']} — ${p.unidade}\n${p.nome} · ${TIPOS_DE_PEDIDO[p.tipo].rotulo}\n"${corte}"`;
 }
 
 export type SituacaoDoPedido = 'na-fila' | 'resolvido' | 'reaberto';
@@ -68,16 +76,18 @@ export async function criarPedido(p: {
   tipo: TipoDePedido;
   texto: string;
   conversa: number | null;
+  origem?: OrigemDoPedido;
 }): Promise<{ protocolo: number }> {
   const t = TIPOS_DE_PEDIDO[p.tipo];
+  const origem = p.origem ?? 'chatwoot';
   return prisma.suporteDemanda.create({
     data: {
-      jid: `chatwoot:${p.quemId ?? 0}`,
+      jid: origem === 'pagina' ? `pagina:${p.slug}` : `chatwoot:${p.quemId ?? 0}`,
       nome: p.nome.slice(0, 80),
       unidadeSlug: p.slug,
       verificacao: VERIFICACAO_CHATWOOT,
       categoria: t.categoria,
-      categoriaNome: `Agente (Chatwoot) · ${t.rotulo}`,
+      categoriaNome: `${ROTULO_DA_ORIGEM[origem]} · ${t.rotulo}`,
       relato: relatoDoPedido(p).slice(0, 8_000),
     },
     select: { protocolo: true },
@@ -111,8 +121,8 @@ export async function pedidosDaUnidade(slug: string, agora = new Date()): Promis
   return l.map((d) => ({
     protocolo: d.protocolo,
     nome: d.nome,
-    tipo: d.categoriaNome.replace(/^Agente \(Chatwoot\) · /, ''),
-    // o relato guarda o cabeçalho "[Agente no Chatwoot] …" + o tipo; a lista mostra só o que a pessoa escreveu
+    tipo: d.categoriaNome.replace(/^Agente \([^)]*\) · /, ''),
+    // o relato guarda o cabeçalho "[Agente no Chatwoot] …" (ou "…na página da unidade") + o tipo; a lista mostra só o que a pessoa escreveu
     texto: d.relato.split('\n\n').slice(1).join('\n\n') || d.relato,
     situacao: situacaoDoPedido(d.status),
     criadoEm: d.criadoEm,

@@ -19,12 +19,19 @@
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
  * `__ORIGEM_CW__` (a origem do Chatwoot) e `__GUIA_LIGADO__` (true/false: o «?» do cabeçalho só aparece com o guia da etapa ligado) são trocados
  * por `paginaDoAgente`; página servida sem trocar os dois quebra o script.
+ *
+ * MODO KOMMO (24/11/2026, `paginaDoAgenteKommo`, rota `/agente/:slug`): a MESMA página, para as unidades que usam o Kommo e não têm login do
+ * Chatwoot. Troca só a porta de entrada (código de 6 dígitos da unidade em vez da sessão do menu) e o transporte (`apiKm`: manda o código;
+ * as rotas do painel, das pausadas e dos pedidos são as de `/api/public/agente-kommo/:slug`). As abas Ensinar/Testar falam com as mesmas rotas
+ * de `/aprendizados`; Pausar com as de `/pausa`; Conferir com as de `/ia`. Fica de fora o que só existe no CRM: Registro, 👍/👎 e «para revisar».
+ * `KM` é nulo no CRM: todo desvio do modo Kommo está atrás dele, e o CRM segue como estava.
  */
 import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
 import { comContaNaPagina } from './conta-no-navegador.js';
 
 const PAGINA = String.raw`<!doctype html>
 <html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <title>Agente · Sofia</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -200,6 +207,24 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 .pedido .det{margin-top:2px;font-size:12.5px;color:var(--sec)}
 .pedido .resp{margin-top:6px;padding-left:10px;border-left:2px solid #a9d9bd;color:#185c3c;font-size:13px;white-space:pre-wrap}
 
+/* modo Kommo: entrada por código, pausa da unidade, conferir, celular */
+a.bt{text-decoration:none}
+.entrada{max-width:420px;margin-top:20px}
+.entrada input{margin-bottom:4px}
+.pausa-ops{display:flex;flex-direction:column;gap:2px;margin:10px 0 8px}
+.pausa-ops label{display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:14px}
+.pausa-ops input{width:16px;height:16px;margin:0;accent-color:var(--azul)}
+.pausa-estado{display:inline-flex;align-items:center;gap:6px;font-weight:600}
+.pausa-estado::before{content:"";width:8px;height:8px;border-radius:50%;background:#30a46c}
+.pausa-estado.off::before{background:#e5a100}
+.conf-grupo h4{margin:14px 0 2px;font-size:13.5px;font-weight:600;color:var(--amarelo)}
+.conf-col{display:flex;justify-content:space-between;gap:12px;padding:8px 0;border-top:1px solid var(--b);font-variant-numeric:tabular-nums}
+.conf-item{padding:8px 0;border-top:1px solid var(--b)}
+.conf-item a{color:var(--txt);font-weight:600;text-decoration:none;border-bottom:1px dotted var(--mut)}
+.conf-item .f{font-size:13px;color:var(--sec)}
+.tipo-ia{color:var(--azul-txt)}.tipo-equipe{color:var(--bom)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
+@media (max-width:560px){body.km .abas{width:100%;gap:0 2px}body.km .abas button{padding:0 9px;font-size:13.5px}body.km .lado{width:100%;padding:8px 0}body.km .lado .sel{flex:1;min-height:40px}body.km .bt{min-height:40px}}
+
 /* esqueleto e aviso flutuante */
 .sk{display:block;border-radius:6px;background:linear-gradient(90deg,#f0f0f3 0,#f9f9fb 40%,#f0f0f3 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
@@ -213,9 +238,18 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <body><main>
 <div class="cab">
   <div><h1>Agente</h1><div class="meta" id="unidadeNome">Carregando…</div></div>
-  <div class="eu"><button class="aj" id="ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span></div>
+  <div class="eu"><button class="aj" id="ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><select class="sel" id="unidadeSel" aria-label="Unidade" hidden></select><span id="euNome"></span><button class="bt leve" id="kmSair" type="button" hidden>Sair</button></div>
 </div>
 <div id="erroTopo" class="aviso erro" hidden></div>
+<section class="entrada" id="entradaKm" hidden>
+  <h3>Entrar</h3>
+  <div class="meta">Use o código de 6 dígitos da unidade (o mesmo da página de pausar a Sofia).</div>
+  <label class="rot" for="kmCodigo">Código da unidade</label>
+  <input type="text" id="kmCodigo" inputmode="numeric" maxlength="6" autocomplete="one-time-code" placeholder="6 dígitos">
+  <label class="rot" for="kmNome">Seu nome</label>
+  <input type="text" id="kmNome" maxlength="80" placeholder="Quem está usando">
+  <div class="acoes"><span></span><button class="bt pri" id="kmEntrar" type="button">Entrar</button></div>
+</section>
 
 <div id="corpo" hidden>
 <div class="topo">
@@ -225,6 +259,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <button role="tab" id="aba-testar" data-aba="testar" aria-selected="false">Testar</button>
     <button role="tab" id="aba-pausadas" data-aba="pausadas" aria-selected="false">Pausadas<span class="c" id="contaPausadas"></span></button>
     <button role="tab" id="aba-registro" data-aba="registro" aria-selected="false">Registro</button>
+    <button role="tab" id="aba-conferir" data-aba="conferir" aria-selected="false" hidden>Conferir</button>
     <button role="tab" id="aba-pedir" data-aba="pedir" aria-selected="false">Pedir à Doutor Digital<span class="c" id="contaPedidos"></span></button>
   </nav>
   <div class="lado" id="ladoPainel"><select class="sel" id="periodo" aria-label="Período"><option value="hoje">Hoje</option><option value="7">Últimos 7 dias</option><option value="30">Últimos 30 dias</option></select></div>
@@ -233,6 +268,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 <!-- PAINEL -->
 <section class="pane" id="pane-painel" role="tabpanel" aria-labelledby="aba-painel">
   <div class="kpis" id="kpis"><span class="sk" style="height:84px"></span></div>
+  <div class="meta" id="lidoEm" hidden></div>
   <section class="graf">
     <h3>Por dia <span class="c">últimos 14 dias</span></h3>
     <div id="grafico"><span class="sk" style="height:150px;margin-top:8px"></span></div>
@@ -240,7 +276,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <details class="def" style="margin-top:4px"><summary>Ver como tabela</summary><div class="rolar"><table class="tabdia" id="tabDia"></table></div></details>
   </section>
   <div class="duas larga">
-    <section>
+    <section id="secRevisar">
       <h3>Respostas marcadas como ruins <span class="c" id="cRevisar"></span></h3>
       <div class="meta">Ficam aqui até alguém ensinar a Sofia, pedir ajuste ou dar ok.</div>
       <div id="listaRevisar" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
@@ -257,9 +293,10 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     <li><b>Marcaram</b>: consultas marcadas ÷ pessoas respondidas.</li>
     <li><b>Passou para a equipe</b>: conversas em que ela chamou alguém da equipe (paciente pediu uma pessoa, assunto que ela não resolve).</li>
     <li><b>Pix do sinal gerado</b>: conversas em que ela gerou o Pix do sinal.</li>
-    <li><b>Para revisar</b>: respostas marcadas como ruins que ninguém revisou ainda.</li>
+    <li class="so-crm"><b>Para revisar</b>: respostas marcadas como ruins que ninguém revisou ainda.</li>
     <li><b>À noite ou no fim de semana</b>: respostas antes das 8h, a partir das 18h, sábado e domingo.</li>
-    <li><b>Avaliadas como boas</b>: das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas.</li>
+    <li class="so-crm"><b>Avaliadas como boas</b>: das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas.</li>
+    <li class="so-km" hidden><b>De onde vêm os números</b>: do registro de tudo o que a Sofia fez em cada conversa. A cobrança de quem sumiu, a reativação e o cartão de chegada não contam como resposta.</li>
     <li>Cada número compara com o período anterior do mesmo tamanho (hoje com ontem até a mesma hora).</li>
   </ul></details>
 </section>
@@ -313,18 +350,33 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       <div class="acoes"><span class="meta" id="restam"></span></div>
       <div class="acoes" style="justify-content:flex-start"><button class="bt" id="btRegraDaqui" type="button">Ela errou? Ensinar</button><button class="bt leve" id="btRecomecar" type="button">Recomeçar</button></div>
       <div id="avisoChat" class="aviso erro" hidden style="margin-top:10px"></div>
-      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o CRM ou o WhatsApp. A conversa fica só neste computador.</p>
+      <p class="meta" style="margin-top:16px">Agenda e Pix aqui são de mentira: nada vai para a franquia, o CRM ou o WhatsApp. A conversa fica só neste aparelho.</p>
     </section>
   </div>
 </section>
 
 <!-- PAUSADAS -->
 <section class="pane" id="pane-pausadas" role="tabpanel" aria-labelledby="aba-pausadas" hidden>
+  <section id="pausaUnidade" hidden>
+    <h3>Pausar a Sofia na unidade</h3>
+    <div class="meta" id="pausaDescricao">Carregando…</div>
+    <div class="pausa-ops" id="pausaOps" role="radiogroup" aria-label="Até quando"></div>
+    <input type="text" id="pausaMotivo" maxlength="200" placeholder="Motivo (opcional): reunião, feriado local…" aria-label="Motivo">
+    <div class="acoes"><span class="meta">Pausada, a Sofia não responde, não cobra quem sumiu e não manda lembrete. Ela volta sozinha na hora marcada.</span><span><button class="bt pri" id="btPausar" type="button">Pausar a Sofia</button> <button class="bt" id="btRetomar" type="button" hidden>Retomar agora</button></span></div>
+    <div id="avisoPausa" class="aviso erro" hidden style="margin-top:10px"></div>
+  </section>
   <section>
     <h3>Conversas com a Sofia pausada <span class="c" id="cPausadas"></span></h3>
-    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
-    <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th>Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
+    <div class="meta" id="pausadasMeta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
+    <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th id="thCom">Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
   </section>
+</section>
+
+<!-- CONFERIR (só no modo Kommo) -->
+<section class="pane" id="pane-conferir" role="tabpanel" aria-labelledby="aba-conferir" hidden>
+  <div id="conferirAvisos"></div>
+  <div id="conferirCorpo"><span class="sk" style="height:84px"></span></div>
+  <p class="meta" id="conferirQuando"></p>
 </section>
 
 <!-- REGISTRO -->
@@ -346,7 +398,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   <div class="duas">
     <section>
       <h3>Pedir à Doutor Digital</h3>
-      <div class="meta">Valor, horários, médicos, informação da clínica ou um erro da Sofia: isso a nossa equipe ajusta. A resposta aparece na lista ao lado.</div>
+      <div class="meta">Valor, horários, médicos, informação da clínica ou um erro da Sofia: isso a nossa equipe ajusta. A resposta aparece na lista de pedidos.</div>
       <div class="vinculo" id="vinculo-pedir" hidden><span>Este pedido resolve a resposta marcada por <b class="vinculoQuem"></b>.</span><button class="bt link" type="button" data-desvincular>Desvincular</button></div>
       <div class="tipos" id="tipos" role="radiogroup" aria-label="Tipo do pedido"></div>
       <label class="rot" for="pedidoTexto">O que precisa? <span id="cntPedido">0/1500</span></label>
@@ -368,6 +420,9 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 (function(){
   var GUIA_LIGADO = __GUIA_LIGADO__;
   var CW = __ORIGEM_CW__, S = null, U = null, EU = '', UNIDADES = [];
+  var KM = __KOMMO__, KM_COD = '', KM_NOME = '', KM_LIB = false;
+  if (KM) document.body.classList.add('km');
+  function kmRota(parte, query){ return '/api/public/agente-kommo/' + encodeURIComponent(KM.slug) + '/' + parte + (query ? '?' + query : ''); }
   var $ = function(id){ return document.getElementById(id); };
   function el(tag, cls, txt){ var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
   function guardar(k, v){ try { if (v == null) localStorage.removeItem(k); else localStorage.setItem(k, v); } catch (e) {} }
@@ -381,7 +436,20 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   // ── servidor (com o login do Chatwoot de quem está usando) ──
   /*__CONTA_JS__*/
   function cab(){ var h = { 'Content-Type': 'application/json' }; if (S) { h['X-CW-Token'] = S.token; h['X-CW-Client'] = S.client; h['X-CW-Uid'] = S.uid; } return h; }
+  // modo Kommo: o código da unidade vai em toda chamada (GET no cabeçalho x-codigo, para não ir parar no log de acesso; o resto no corpo) e o nome de quem está usando vira «por»
+  async function apiKm(method, path, body){
+    // sem código (saiu, ou o código foi recusado) nada vai ao servidor: cada chamada com código vazio gastaria uma das 12 tentativas da unidade
+    if (!KM_COD) throw new Error('Entre com o código da unidade.');
+    var url = path, init = { method: method, headers: { 'Content-Type': 'application/json' } };
+    if (method === 'GET') init.headers['x-codigo'] = KM_COD;
+    else init.body = JSON.stringify(Object.assign({ por: KM_NOME }, body || {}, { codigo: KM_COD }));
+    var r = await fetch(url, init);
+    var j = await r.json().catch(function(){ return {}; });
+    if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; er.status = r.status; if (r.status === 403 && j.error === 'código inválido') sairKm('Código inválido. Confira os 6 dígitos.'); throw er; }
+    return j;
+  }
   async function api(method, path, body){
+    if (KM) return apiKm(method, path, body);
     var r = await fetch(comConta(path), { method: method, headers: cab(), body: method === 'GET' ? undefined : JSON.stringify(body || {}) });
     var j = await r.json().catch(function(){ return {}; });
     if (!r.ok) { var er = new Error(j.error || ('erro ' + r.status)); er.dados = j; if (r.status === 401) { S = null; pedirSessao(); } throw er; }
@@ -402,7 +470,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   function plural(n, um, varios){ return n + ' ' + (n === 1 ? um : varios); }
 
   // ── abas ──
-  var ABAS = ['painel', 'ensinar', 'testar', 'pausadas', 'registro', 'pedir'], abaAtual = 'painel';
+  var ABAS = ['painel', 'ensinar', 'testar', 'pausadas', 'conferir', 'registro', 'pedir'], abaAtual = 'painel';
   function ir(qual){
     if (ABAS.indexOf(qual) < 0 || $('aba-' + qual).hidden) qual = 'painel';
     abaAtual = qual;
@@ -415,6 +483,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (qual === 'ensinar') carregarRegras();
     if (qual === 'testar') { desenharChat(false); setTimeout(function(){ $('fala').focus(); }, 50); }
     if (qual === 'pausadas') carregarPausadas();
+    if (qual === 'conferir') carregarConferir();
     if (qual === 'registro') carregarRegistro();
     if (qual === 'pedir') carregarPedidos();
   }
@@ -423,6 +492,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   // ── estado da unidade (regras, testes de regra, conversa de teste) ──
   var EST = null, MAX = 400, falasPadrao = [];
   async function lerEstado(){
+    if (KM && !KM_LIB) return null;
     EST = await api('GET', apiUnidade());
     MAX = EST.maxCaracteres || 400; falasPadrao = EST.falasDeExemplo || [];
     ['f0', 'f1', 'f2'].forEach(function(id, i){ if (!$(id).value) $(id).value = falasPadrao[i] || ''; });
@@ -436,9 +506,11 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   var PERIODO = lerGuardado('agente:periodo') || '7';
   $('periodo').value = PERIODO;
   $('periodo').addEventListener('change', function(){ PERIODO = $('periodo').value; guardar('agente:periodo', PERIODO); carregarPainel(); });
+  var tPainel = null, tentativasPainel = 0;
   var COMPARA = { hoje: 'ontem', '7': '7 dias antes', '30': '30 dias antes' };
+  var SEM_ANTES = false;
   function variacao(agora, antes, pontos){
-    if (agora == null || antes == null) return { t: '', c: '' };
+    if (agora == null || antes == null || SEM_ANTES) return { t: '', c: '' };
     var d = agora - antes;
     if (d === 0) return { t: PERIODO === 'hoje' ? 'igual a ontem' : 'igual ao período anterior', c: '' };
     return { t: (d > 0 ? '+' : '−') + Math.abs(d) + (pontos ? ' pts' : '') + ' vs. ' + COMPARA[PERIODO], c: d > 0 ? 'bom' : 'ruim' };
@@ -461,21 +533,41 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   Array.prototype.forEach.call(document.querySelectorAll('[data-desvincular]'), function(b){ b.addEventListener('click', desvincular); });
   async function carregarPainel(){
     try {
-      var p = await api('GET', '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
+      var p = await api('GET', KM ? kmRota('painel', 'periodo=' + enc(PERIODO)) : '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
+      clearTimeout(tPainel);
+      if (p.carregando) {
+        // a primeira leitura de uma conta grande demora: pergunta de novo sozinha, sem martelar
+        $('kpis').textContent = ''; $('kpis').appendChild(el('div', 'aviso', p.motivo || 'Lendo os números…'));
+        if (++tentativasPainel < 30) tPainel = setTimeout(function(){ if (abaAtual === 'painel') carregarPainel(); }, 6000);
+        else erroEm($('kpis'), 'Os números estão demorando mais que o normal. Toque em Painel de novo daqui a alguns minutos.');
+        return;
+      }
+      // cache velho servido enquanto a leitura nova roda por trás: pergunta de novo, como no «lendo…»
+      if (KM && p.atualizando && ++tentativasPainel < 30) tPainel = setTimeout(function(){ if (abaAtual === 'painel') carregarPainel(); }, 6000);
+      else tentativasPainel = 0;
+      SEM_ANTES = !!(KM && p.semAnterior);
       var k = $('kpis'); k.textContent = '';
       k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
       k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
       k.appendChild(kpi('Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
-      k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
+      if (!KM || p.pixUsado) k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
       k.appendChild(kpi('Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
       k.appendChild(kpi('À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { t: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '', c: '' }));
-      k.appendChild(kpi('Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { t: 'ninguém avaliou', c: '' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
       var nr = p.totalParaRevisar != null ? p.totalParaRevisar : (p.paraRevisar || []).length;
-      k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
+      if (!KM) {
+        k.appendChild(kpi('Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { t: 'ninguém avaliou', c: '' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
+        k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
+      } else {
+        var le = $('lidoEm'); le.hidden = false;
+        // «Lido às 10:42» só vale se foi hoje: leitura de outro dia leva o dia
+        var lido = new Date(p.lidoEm), hojeLido = lido.toDateString() === new Date().toDateString();
+        var quandoLido = (hojeLido ? '' : lido.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' às ') + lido.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        le.textContent = p.desatualizado ? ('Mostrando a última leitura (' + quandoLido + ')' + (p.atualizando ? ': estou atualizando.' : ': não consegui atualizar agora.')) : ('Lido ' + (hojeLido ? 'às ' : 'em ') + quandoLido + ' · os números se renovam a cada 5 minutos.');
+      }
       desenharGrafico(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || []);
-      desenharRevisar(p.paraRevisar || [], nr);
+      if (!KM) desenharRevisar(p.paraRevisar || [], nr);
     } catch (e) { erroEm($('kpis'), e.message); }
     contarPausadas();
   }
@@ -511,9 +603,12 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma no período. ')); v.appendChild(document.createTextNode('Quando a Sofia marcar uma consulta, ela aparece aqui com o dia e a hora.')); box.appendChild(v); return; }
     l.forEach(function(m){
       var row = el('div', 'lin'), q = el('div');
-      q.appendChild(el('div', 'nm', m.nome || ('Conversa ' + m.conversa)));
+      q.appendChild(el('div', 'nm', m.nome || ((KM ? 'Cartão ' : 'Conversa ') + m.conversa)));
       q.appendChild(el('span', 'det', (m.agendadoPara ? 'Consulta ' + consultaEm(m.agendadoPara) : 'Consulta marcada') + ' · marcada ' + ha(m.criadoEm)));
-      var bs = el('div', 'btns'), ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(m.conversa); }; bs.appendChild(ab);
+      var bs = el('div', 'btns'), ab;
+      if (KM) { ab = el('a', 'bt', 'Abrir cartão'); if (m.link) { ab.href = m.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; } else ab.hidden = true; }
+      else { ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(m.conversa); }; }
+      bs.appendChild(ab);
       row.appendChild(q); row.appendChild(bs); box.appendChild(row);
     });
   }
@@ -562,6 +657,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   $('regra').addEventListener('input', contar);
   function primeiraFrase(t){ var m = String(t).match(/^[\s\S]*?[.!?](\s|$)/); return (m ? m[0] : String(t)).trim(); }
   async function carregarRegras(){
+    if (KM && !KM_LIB) return;
     var l = $('listaRegras');
     try { await lerEstado(); } catch (e) { erroEm(l, e.message); return; }
     l.textContent = '';
@@ -668,14 +764,16 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
 
   // ── PAUSADAS ──
   function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; }
-  async function contarPausadas(){ try { var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); } catch (e) {} }
+  async function contarPausadas(){ try { var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); } catch (e) {} }
   function linhaUnica(tb, conteudo){ var tr = el('tr'), td = el('td'); td.colSpan = 5; td.style.textAlign = 'left'; td.appendChild(conteudo); tr.appendChild(td); tb.appendChild(tr); }
   async function carregarPausadas(){
+    if (KM) { carregarPausaUnidade(); }
     var tb = $('listaPausadas'); tb.textContent = '';
     var sk = el('span', 'sk'); sk.style.height = '40px'; linhaUnica(tb, sk);
     try {
-      var r = await api('GET', '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); tb.textContent = '';
+      var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); tb.textContent = '';
       if (!r.conversas.length) { linhaUnica(tb, el('span', 'mut', 'Nenhuma conversa com a Sofia pausada agora.')); return; }
+      if (KM) { r.conversas.forEach(linhaPausadaKm.bind(null, tb)); return; }
       r.conversas.forEach(function(c){
         var tr = el('tr');
         tr.appendChild(el('td', null, c.nome));
@@ -747,7 +845,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     });
   }
   async function carregarPedidos(){
-    try { var r = await api('GET', '/api/public/agente/pedidos?slug=' + enc(U.slug)); TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
+    try { var r = await api('GET', KM ? kmRota('pedidos') : '/api/public/agente/pedidos?slug=' + enc(U.slug)); TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
     catch (e) { erroEm($('listaPedidos'), e.message); }
   }
   $('btPedir').addEventListener('click', async function(){
@@ -756,7 +854,7 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     if (texto.length < 10) { aviso('avisoPedido', 'Explique o que precisa (pelo menos uma frase).'); $('pedidoTexto').focus(); return; }
     b.disabled = true;
     try {
-      var r = await api('POST', '/api/public/agente/pedidos', { slug: U.slug, tipo: tipoPedido, texto: texto, conversa: pedidoConversa });
+      var r = await api('POST', KM ? kmRota('pedidos') : '/api/public/agente/pedidos', { slug: U.slug, tipo: tipoPedido, texto: texto, conversa: pedidoConversa });
       if (revisando && revisando.aba === 'pedir') await revisar(revisando.id, 'pedido').catch(function(){});
       desvincular();
       $('pedidoTexto').value = ''; contarPedido(); desenharPedidos(r.pedidos || []);
@@ -768,8 +866,9 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   function escolherUnidade(u){
-    U = u; guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; desvincular();
+    U = u; if (!KM) guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; desvincular();
     EST = null; previaDe = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
+    if (KM && !KM_LIB) return;
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }
   async function entrar(){
@@ -794,14 +893,173 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
       if (abaAtual !== 'pedir') carregarPedidos();
     } catch (e) { aviso('erroTopo', e.message); }
   }
+  // ── modo Kommo: entrada pelo código da unidade ──
+  function sairKm(msg){
+    clearTimeout(tPainel); clearTimeout(tConferir); tentativasPainel = 0; tentativasConferir = 0;
+    KM_COD = ''; guardar('pausa-codigo-' + KM.slug, null);
+    $('corpo').hidden = true; $('kmSair').hidden = true; $('euNome').textContent = ''; $('unidadeNome').textContent = '';
+    $('entradaKm').hidden = false; $('kmCodigo').value = '';
+    if (msg) aviso('erroTopo', msg); else some('erroTopo');
+  }
+  async function tentarKm(){
+    var c = $('kmCodigo').value.trim(), n = $('kmNome').value.trim();
+    if (!/^[0-9]{6}$/.test(c)) { aviso('erroTopo', 'Digite os 6 dígitos do código da unidade.'); return; }
+    if (n.length < 2) { aviso('erroTopo', 'Escreva o seu nome.'); return; }
+    KM_COD = c; KM_NOME = n; $('kmEntrar').disabled = true;
+    try {
+      var e = await api('GET', kmRota('estado'));
+      guardar('pausa-codigo-' + KM.slug, c); guardar('pausa-nome-' + KM.slug, n);
+      KM_LIB = !!e.aprendizados; U = { slug: KM.slug, nome: e.unidade }; document.title = 'Agente · ' + e.unidade;
+      $('entradaKm').hidden = true; some('erroTopo'); $('kmSair').hidden = false; $('euNome').textContent = n; $('pedidoQuem').textContent = n;
+      $('aba-registro').hidden = true; $('aba-conferir').hidden = false; $('aba-pausadas').childNodes[0].nodeValue = 'Pausar'; $('thCom').textContent = 'Volta'; $('pausaUnidade').hidden = false;
+      Array.prototype.forEach.call(document.querySelectorAll('.so-crm'), function(x){ x.hidden = true; });
+      Array.prototype.forEach.call(document.querySelectorAll('.so-km'), function(x){ x.hidden = false; });
+      $('secRevisar').hidden = true;
+      $('pausadasMeta').textContent = 'A Sofia sai da frente quando alguém da equipe responde ao paciente e volta cerca de 1 hora depois da última fala da equipe. Aqui dá para devolver antes só as pausas com data.';
+      // entrar de novo (a chave pode ter ligado desde a última vez): limpa o aviso e mostra as abas antes de decidir
+      ['ensinar', 'testar'].forEach(function(a){ var p = $('pane-' + a); Array.prototype.forEach.call(p.querySelectorAll('.nao-liberado'), function(x){ x.remove(); }); Array.prototype.forEach.call(p.children, function(x){ x.hidden = false; }); });
+      if (!KM_LIB) ['ensinar', 'testar'].forEach(function(a){
+        var p = $('pane-' + a); Array.prototype.forEach.call(p.children, function(x){ x.hidden = true; });
+        var v = el('p', 'vazio nao-liberado'); v.appendChild(el('b', null, 'Ainda não liberado para a sua unidade. ')); v.appendChild(document.createTextNode('Para a Sofia aprender com vocês, peça à Doutor Digital pela aba '));
+        var b = el('button', 'bt link', 'Pedir à Doutor Digital'); b.type = 'button'; b.onclick = function(){ ir('pedir'); }; v.appendChild(b); p.appendChild(v);
+      });
+      escolherUnidade(U); $('corpo').hidden = false; ir(lerGuardado('agente:aba') || 'painel');
+      if (abaAtual !== 'pausadas' && abaAtual !== 'painel') contarPausadas();
+      if (abaAtual !== 'pedir') carregarPedidos();
+    } catch (er) { if (er.status !== 403) aviso('erroTopo', er.message); }
+    $('kmEntrar').disabled = false;
+  }
+  var OPCOES_PAUSA = [['hoje18', 'Até as 18h de hoje'], ['1h', 'Por 1 hora'], ['2h', 'Por 2 horas'], ['amanha8', 'Até amanhã às 8h']], pausaEscolha = 'hoje18';
+  function fimDaPausa(){
+    var d = new Date();
+    if (pausaEscolha === '1h') return new Date(Date.now() + 3600e3);
+    if (pausaEscolha === '2h') return new Date(Date.now() + 7200e3);
+    if (pausaEscolha === 'amanha8') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d; }
+    d.setHours(18, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d;
+  }
+  OPCOES_PAUSA.forEach(function(o){ var l = el('label'), i = el('input'); l.setAttribute('data-k', o[0]); i.type = 'radio'; i.name = 'pausa'; i.value = o[0]; i.checked = o[0] === pausaEscolha; i.onchange = function(){ pausaEscolha = o[0]; }; l.appendChild(i); l.appendChild(document.createTextNode(o[1])); $('pausaOps').appendChild(l); });
+  // «Até as 18h de hoje» depois das 18h viraria «amanhã às 18h»: some. A hora é a do fuso da unidade (vem da /pausa) ou, sem ela, a do aparelho (como a /pausa)
+  var PAUSA_TZ = '';
+  function horaAgora(){ try { var h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: PAUSA_TZ || undefined, hour: '2-digit', hourCycle: 'h23' }).format(new Date())); if (!isNaN(h)) return h; } catch (e) {} return new Date().getHours(); }
+  function ajustarOpcoesPausa(){
+    var tarde = horaAgora() >= 18, l = document.querySelector('#pausaOps label[data-k="hoje18"]');
+    if (l) l.hidden = tarde;
+    if (tarde && pausaEscolha === 'hoje18') { pausaEscolha = '1h'; var i = document.querySelector('#pausaOps input[value="1h"]'); if (i) i.checked = true; }
+  }
+  ajustarOpcoesPausa();
+  function mostrarPausa(e){
+    if (e.tz) PAUSA_TZ = e.tz; ajustarOpcoesPausa();
+    var d = $('pausaDescricao'); d.textContent = '';
+    var on = !!e.emPausa; d.appendChild(el('span', 'pausa-estado' + (on ? ' off' : ''), on ? 'Pausada' : (e.agendada ? 'Pausa marcada' : 'Ativa e respondendo')));
+    if (e.descricao && (on || e.agendada)) d.appendChild(document.createTextNode(' · ' + e.descricao + (e.por ? ' (por ' + e.por + ')' : '')));
+    $('btRetomar').hidden = !(on || e.agendada);
+  }
+  async function carregarPausaUnidade(){
+    try { mostrarPausa(await api('GET', '/api/public/pausa/' + enc(U.slug))); } catch (e) { $('pausaDescricao').textContent = e.message; }
+  }
+  $('btPausar').addEventListener('click', async function(){
+    var b = this; some('avisoPausa');
+    // tela aberta desde antes das 18h: «Até as 18h de hoje» clicado depois das 18h pausaria até amanhã às 18h — não pausa, pede outra escolha
+    if (pausaEscolha === 'hoje18' && horaAgora() >= 18) { ajustarOpcoesPausa(); aviso('avisoPausa', 'Já passou das 18h. Escolha outra opção e toque em Pausar de novo.'); return; }
+    b.disabled = true;
+    try { var e = await api('POST', '/api/public/pausa/' + enc(U.slug), { ate: fimDaPausa().toISOString(), motivo: $('pausaMotivo').value }); mostrarPausa(e); toast('Pronto: ' + e.descricao + '.'); }
+    catch (er) { aviso('avisoPausa', er.message); }
+    b.disabled = false;
+  });
+  $('btRetomar').addEventListener('click', async function(){
+    var b = this; some('avisoPausa'); b.disabled = true;
+    try { mostrarPausa(await api('DELETE', '/api/public/pausa/' + enc(U.slug), {})); toast('A Sofia voltou a responder.'); }
+    catch (er) { aviso('avisoPausa', er.message); }
+    b.disabled = false;
+  });
+  function linhaPausadaKm(tb, c){
+    var tr = el('tr');
+    tr.appendChild(el('td', null, c.nome)); tr.appendChild(el('td', null, c.por || '—')); tr.appendChild(el('td', null, ha(c.desde)));
+    tr.appendChild(el('td', null, c.tipo === 'janela' && c.ate ? 'até ' + dataHora(c.ate) : 'depois da equipe'));
+    var td = el('td');
+    if (c.link) { var ab = el('a', 'bt link', 'Abrir cartão'); ab.href = c.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; td.appendChild(ab); }
+    // a pausa da equipe (a Sofia se calou porque alguém falou com o paciente) termina depois que a equipe para de falar; só a pausa com data tem «devolver»
+    if (c.tipo === 'janela') {
+      var re = el('button', 'bt', 'Devolver para a Sofia'); re.type = 'button';
+      re.onclick = async function(){ re.disabled = true; try { await api('DELETE', '/api/public/pausa/' + enc(U.slug) + '/lead/' + c.leadId, {}); toast(c.equipeTambem ? 'Tirei a pausa com data. A equipe ainda está atendendo este cartão: a Sofia só volta depois que ela terminar.' : 'A Sofia voltou a responder neste cartão.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, true); } };
+      td.appendChild(re);
+    }
+    tr.appendChild(td); tb.appendChild(tr);
+  }
+
+  // ── CONFERIR (modo Kommo): colunas, mudanças do dia e cartões para conferir — a leitura da página /ia ──
+  var tConferir = null, tentativasConferir = 0;
+  function semKommo(t){ return String(t == null ? '' : t).replace(/Kommo/g, 'CRM'); }
+  function horaDe(iso, tz){ try { return new Intl.DateTimeFormat('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(new Date(iso)); } catch (e) { return ''; } }
+  async function carregarConferir(){
+    var corpo = $('conferirCorpo'), av = $('conferirAvisos'); clearTimeout(tConferir);
+    try {
+      var d = await api('GET', '/api/public/ia/' + enc(U.slug)), k = d.kommo || {};
+      av.textContent = ''; corpo.textContent = '';
+      if (!k.ok) { av.appendChild(el('div', k.carregando ? 'aviso' : 'aviso erro', semKommo(k.motivo || 'Dados do CRM indisponíveis agora.'))); }
+      else {
+        if (k.atualizando) av.appendChild(el('div', 'aviso', 'Atualizando… mostrando a leitura das ' + horaDe(k.lidoEm, d.tz) + '.'));
+        else if (k.desatualizado) av.appendChild(el('div', 'aviso', 'Mostrando a última leitura (' + horaDe(k.lidoEm, d.tz) + '): não consegui atualizar agora.'));
+        (k.avisos || []).forEach(function(a){ av.appendChild(el('div', 'aviso', semKommo(a))); });
+        desenharConferir(corpo, k, d.tz);
+      }
+      $('conferirQuando').textContent = 'Atualizado às ' + horaDe(d.geradoEm, d.tz) + (k.ok ? ' · a leitura do CRM se renova a cada ' + d.renovaACadaMin + ' min' : '');
+      if ((k.carregando || k.atualizando) && abaAtual === 'conferir') {
+        if (++tentativasConferir < 20) tConferir = setTimeout(carregarConferir, 6000);
+      } else tentativasConferir = 0;
+    } catch (e) { corpo.textContent = ''; erroEm(corpo, e.message); }
+  }
+  function desenharConferir(box, k, tz){
+    if (k.colunas) {
+      var s1 = el('section'); s1.appendChild(el('h3', null, 'Cartões em cada coluna')); s1.appendChild(el('div', 'meta', 'Só cartões abertos (ganhos e perdidos não entram).'));
+      k.colunas.forEach(function(fu){
+        var t = el('div', 'meta', fu.funil + ' · ' + fu.total); t.style.marginTop = '12px'; s1.appendChild(t);
+        fu.etapas.forEach(function(e){ var l = el('div', 'conf-col'); l.appendChild(el('span', null, e.nome)); l.appendChild(el('b', null, String(e.total))); s1.appendChild(l); });
+      });
+      box.appendChild(s1);
+    }
+    if (k.mudancas) {
+      var m = k.mudancas, s2 = el('section'); s2.appendChild(el('h3', null, 'Mudanças de coluna hoje')); s2.appendChild(el('div', 'meta', 'Quem moveu o cartão de uma coluna para outra.'));
+      if (!m.total) s2.appendChild(el('p', 'vazio', 'Nenhuma mudança de coluna hoje.'));
+      else {
+        s2.appendChild(el('div', 'meta', m.porTipo.map(function(t){ return t.rotulo + ': ' + t.total; }).join(' · ')));
+        if (m.pessoas.length) s2.appendChild(el('div', 'meta', 'Equipe: ' + m.pessoas.map(function(p){ return p.nome + ' (' + p.total + ')'; }).join(', ')));
+        m.lista.forEach(function(x){
+          var l = el('div', 'conf-item'), a = el('a', null, x.paciente); a.href = x.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; l.appendChild(a);
+          l.appendChild(el('div', 'f', x.de + ' → ' + x.para)); l.appendChild(el('div', 'f tipo-' + x.tipo, x.quem + ' · ' + x.hora)); s2.appendChild(l);
+        });
+        if (m.total > m.lista.length) s2.appendChild(el('p', 'meta', 'Mostrando as ' + m.lista.length + ' mais recentes de ' + m.total + '.'));
+      }
+      box.appendChild(s2);
+    }
+    if (k.conferir) {
+      var cf = k.conferir, s3 = el('section'); s3.appendChild(el('h3', null, 'Para conferir')); s3.appendChild(el('div', 'meta', 'Cartões que parecem estar na coluna errada ou sem um dado importante.'));
+      if (!cf.total) s3.appendChild(el('p', 'vazio', 'Tudo certo: nada para conferir agora.'));
+      cf.grupos.forEach(function(g){
+        var gr = el('div', 'conf-grupo'); gr.appendChild(el('h4', null, g.titulo + ' (' + g.total + ')'));
+        g.itens.forEach(function(i){ var it = el('div', 'conf-item'), a = el('a', null, i.nome); a.href = i.link; a.target = '_blank'; a.rel = 'noopener noreferrer'; it.appendChild(a); it.appendChild(el('div', 'f', i.oQueFazer)); gr.appendChild(it); });
+        if (g.total > g.itens.length && g.regra !== 'cartao_vazio') gr.appendChild(el('p', 'meta', 'e mais ' + (g.total - g.itens.length) + ' nesta lista.'));
+        s3.appendChild(gr);
+      });
+      box.appendChild(s3);
+    }
+    box.style.display = 'grid'; box.style.gap = '28px';
+  }
+  $('kmEntrar').addEventListener('click', tentarKm);
+  $('kmCodigo').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') tentarKm(); });
+  $('kmNome').addEventListener('keydown', function(ev){ if (ev.key === 'Enter') tentarKm(); });
+  // «Sair» apaga o código guardado NESTE aparelho (vale também para /pausa e /ia, que usam a mesma chave) e recarrega: nada da pessoa anterior fica na tela
+  $('kmSair').addEventListener('click', function(){ clearTimeout(tPainel); clearTimeout(tConferir); KM_COD = ''; guardar('pausa-codigo-' + KM.slug, null); location.reload(); });
+
   window.addEventListener('message', function(ev){
+    if (KM) return;
     if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();
   });
   window.addEventListener('storage', function(ev){
-    if (ev.key !== 'testar-ia-rascunho' || !ev.newValue || !U) return;
+    if (KM || ev.key !== 'testar-ia-rascunho' || !ev.newValue || !U) return;
     guardar('testar-ia-rascunho', null); $('regra').value = ev.newValue.slice(0, 800); ir('ensinar'); contar(); $('regra').focus();
   });
   // «?» do cabeçalho: abre a aula desta tela em vídeo por cima da conversa (o menu do CRM mostra o modal; aqui só se pede). Só dentro do CRM.
@@ -809,12 +1067,28 @@ table.tab{width:100%;border-collapse:collapse;font-size:14px}
     $('ajuda').hidden = false;
     $('ajuda').addEventListener('click', function(){ try { window.parent.postMessage({ event: 'guia:tela', tela: 'agente' }, CW); } catch (e) {} });
   }
-  pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
-  setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do CRM (Agente), já logada.'); }, 6000);
+  if (KM) {
+    $('entradaKm').hidden = false; $('unidadeNome').textContent = '';
+    $('kmCodigo').value = lerGuardado('pausa-codigo-' + KM.slug) || ''; $('kmNome').value = lerGuardado('pausa-nome-' + KM.slug) || '';
+    // o aparelho já guardou o código (página de pausar a Sofia ou o último acesso): entra direto
+    if (/^[0-9]{6}$/.test($('kmCodigo').value) && $('kmNome').value.trim().length >= 2) tentarKm();
+  } else {
+    pedirSessao(); setTimeout(function(){ if (!S) pedirSessao(); }, 1500);
+    setTimeout(function(){ if (!S) aviso('erroTopo', 'Abra esta tela pelo menu do CRM (Agente), já logada.'); }, 6000);
+  }
 })();
 </script></body></html>`;
 
+/**
+ * A página das unidades do Kommo (`/agente/:slug`). `slug` vem de uma unidade que existe e está ativa; entra no JavaScript como JSON com o
+ * `<` escapado (nunca fecha o `<script>`). Sem origem do Chatwoot: ninguém fala com esta página por postMessage.
+ */
+export function paginaDoAgenteKommo(slug: string): string {
+  const km = JSON.stringify({ slug }).replace(/</g, '\\u003c');
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join("''").split('__KOMMO__').join(km).split('__GUIA_LIGADO__').join('false'));
+}
+
 /** A página. `origemChatwoot` = a origem do Chatwoot (só ela fala com a página por postMessage). */
 export function paginaDoAgente(origemChatwoot: string, env: NodeJS.ProcessEnv = process.env): string {
-  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
+  return comContaNaPagina(PAGINA.split('__ORIGEM_CW__').join(`origemDoPai(${JSON.stringify(origemChatwoot)})`).split('__KOMMO__').join('null').split('__GUIA_LIGADO__').join(String(guiaDaEtapaLigado(env))));
 }

@@ -110,7 +110,7 @@ function rotasPublicas(): Rota[] {
 }
 const COM_LOGIN = /^\/public\/(funil|robos|disparos|tarefas|agente|assistente|aprendizados|testar-ia)(\/|$)/;
 /** O resto das rotas públicas: autorizadas por código/segredo da unidade, token do widget ou HMAC — nenhuma usa o login do Chatwoot nem aceita `conta`. */
-const SEM_LOGIN = /^\/public\/(pausa|central|evolution|chatwoot\/evento|widget|alta|ia|whatsapp)(\/|$)/;
+const SEM_LOGIN = /^\/public\/(pausa|agente-kommo|central|evolution|chatwoot\/evento|widget|alta|ia|whatsapp)(\/|$)/;
 
 test('GUARDA: toda rota /api/public é varrida pelo ataque (login do Chatwoot) ou está declarada como autorizada por código/segredo', () => {
   const rotas = rotasPublicas();

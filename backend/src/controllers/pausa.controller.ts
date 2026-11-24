@@ -92,7 +92,9 @@ async function retomar(unit: Unit, por: string | null): Promise<Unit> {
 /** Confere slug + código da unidade, com a trava de tentativas por ip+unidade. Também usada pela página de aprendizados. */
 export async function unidadePublica(req: Request, res: Response): Promise<Unit | null> {
   const slug = String(req.params.slug ?? '');
-  const codigo = (req.method === 'GET' ? req.query.codigo : (req.body as { codigo?: unknown })?.codigo) as unknown;
+  // GET: o código pode vir no cabeçalho `x-codigo` (a página /agente/:slug usa; a URL fica no log de acesso, o cabeçalho não) ou na consulta (/pausa e /aprendizados)
+  const doCabecalho = typeof req.get === 'function' ? req.get('x-codigo') : undefined;
+  const codigo = (req.method === 'GET' ? (doCabecalho ?? req.query.codigo) : (req.body as { codigo?: unknown })?.codigo) as unknown;
   const chave = `${req.ip}:${slug}`;
   if (excedeu(chave)) {
     res.status(429).json({ error: 'muitas tentativas — aguarde 10 minutos' });

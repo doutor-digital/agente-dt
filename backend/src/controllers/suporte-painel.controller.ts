@@ -49,6 +49,8 @@ function depsReais(): DepsPainel {
     // a pausa por pessoa (que é por número) não a alcança aqui.
     menuLigado: async (jid) => menu.modo === 'ligado' && !(await menuPausado()) && !(await pessoaPausada(jid, null, false)),
     async enviarWhatsApp(jid, texto) {
+      // pedido da tela Agente (`chatwoot:<id>` no CRM, `pagina:<slug>` na página das unidades do Kommo): não tem WhatsApp, a resposta é a lista da tela
+      if (ehJidDaTelaAgente(jid)) return false;
       const ok = await enviar(jid, texto);
       if (ok) await prisma.suporteEnvio.create({ data: { jid, nova: false } });
       return ok;
@@ -60,6 +62,7 @@ function depsReais(): DepsPainel {
   };
 }
 
+export const ehJidDaTelaAgente = (jid: string): boolean => /^(chatwoot|pagina):/.test(jid);
 const quem = (req: Request) => req.user?.email ?? req.user?.id ?? 'painel';
 const protocoloDe = (req: Request): number | null => {
   const n = Number(req.params.protocolo);
@@ -77,7 +80,7 @@ export async function listarDemandasHandler(req: Request, res: Response): Promis
     demandas: demandas.map((d) => ({
       protocolo: d.protocolo,
       criadoEm: d.criadoEm,
-      numero: d.jid.endsWith('@lid') ? null : `+${d.jid.split('@')[0]}`,
+      numero: d.jid.endsWith('@lid') || ehJidDaTelaAgente(d.jid) ? null : `+${d.jid.split('@')[0]}`,
       nome: d.nome,
       unidadeSlug: d.unidadeSlug,
       verificacao: d.verificacao,
