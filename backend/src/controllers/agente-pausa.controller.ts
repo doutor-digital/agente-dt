@@ -18,6 +18,7 @@ import { logger } from '../lib/logger.js';
 import { ctxEhDoAmbiente } from '../lib/conta-da-requisicao.js';
 import { podeVerGestao } from '../lib/chatwoot-gestor.js';
 import { atendenteDaUnidade } from './aprendizados.controller.js';
+import { lembretesDaKommoParam } from '../lib/pausa-unidade.js';
 import { aplicarPausa, estado as estadoDaPausa, retomar } from './pausa.controller.js';
 
 type Atendente = { nome: string; papel?: string | null; email?: string | null; c: Parameters<typeof ctxEhDoAmbiente>[0] };
@@ -41,9 +42,9 @@ const portasReais = (): PortasDaPausaDoAgente => ({
 const slugDe = (v: unknown): string => (typeof v === 'string' ? v.trim().slice(0, 80) : '');
 const MSG_SO_GERENTE = 'Só a administradora ou a gerente da conta pode pausar ou religar a Sofia da clínica.';
 
-/** O que a tela precisa do estado: sem código da unidade, sem e-mail de ninguém. */
+/** O que a tela precisa do estado: sem código da unidade, sem e-mail de ninguém. `lembretesDaKommoParam`: a unidade tem lembrete pela Kommo, que a pausa também para (a tela diz a verdade). */
 function paraATela(u: Unit, e: ReturnType<typeof estadoDaPausa>, podeMudar: boolean) {
-  return { slug: u.slug, unidade: u.name, tz: e.tz, emPausa: e.emPausa, agendada: e.agendada, desde: e.pausaDesde, ate: e.pausaAte, motivo: e.motivo, por: e.por, descricao: e.descricao, agora: e.agora, podeMudar };
+  return { slug: u.slug, unidade: u.name, tz: e.tz, emPausa: e.emPausa, agendada: e.agendada, desde: e.pausaDesde, ate: e.pausaAte, motivo: e.motivo, por: e.por, descricao: e.descricao, agora: e.agora, podeMudar, lembretesDaKommoParam: lembretesDaKommoParam(u) };
 }
 
 export function fazerPausaDoAgente(portas: PortasDaPausaDoAgente = portasReais()) {

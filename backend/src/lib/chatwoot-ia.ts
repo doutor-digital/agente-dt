@@ -515,7 +515,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   // PAUSA DA UNIDADE (colunas `pausa_*`: a página /pausa da recepção e o botão do painel Agente): a Sofia do CRM também respeita, como o Kommo. A mensagem do
   // paciente fica sem resposta da Sofia (a equipe vê no Registro) e ela NÃO responde sozinha quando a pausa acaba. Sem pausa, nada muda.
   if (emPausa(unit)) {
-    // texto fixo: o motivo digitado e quem pausou aparecem só na faixa do painel (quem pode ver), nunca no Registro que todas as atendentes leem
+    // texto fixo: o motivo digitado e quem pausou aparecem na faixa do painel (qualquer atendente da unidade vê), mas NÃO se repetem em cada linha do Registro
     info.motivo = 'pausa da clínica';
     logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: unidade pausada — a Sofia não responde`);
     return 'pausada-pela-unidade';

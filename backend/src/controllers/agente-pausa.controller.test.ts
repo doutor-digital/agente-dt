@@ -117,6 +117,15 @@ test('conta errada ou unidade que a pessoa não atende: recusa ANTES de ler ou e
   assert.deepEqual([...errada.chamadas, ...outra.chamadas], []);
 });
 
+test('o estado diz se a unidade tem lembrete pela Kommo (a tela mostra a verdade da unidade)', async () => {
+  for (const [spine, esperado] of [[{ spineEnabled: true, spineToken: 'tok' }, true], [{ spineEnabled: false, spineToken: null }, false]] as const) {
+    const { h } = montar({ papel: 'agent', unit: unidade(spine) });
+    const r = resposta();
+    await h.ver(pedido({}, { slug: 'timbo' }), r as unknown as Response);
+    assert.equal((r.corpo as { lembretesDaKommoParam: boolean }).lembretesDaKommoParam, esperado, JSON.stringify(spine));
+  }
+});
+
 test('pausar sem motivo é recusado, e não passa por cima de uma pausa que já existe (409)', async () => {
   const a = montar({ papel: 'administrator' });
   const r1 = resposta();

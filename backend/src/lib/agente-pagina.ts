@@ -1112,6 +1112,8 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
   // ── pausar e religar a Sofia da clínica (só no CRM; só administradora ou gerente da conta muda, as outras pessoas só veem o estado) ──
   // No Kommo a aba «Pausar» já faz isso com o código da unidade.
   var PAUSA = null, seqPausa = 0, tVence = null;
+  // o que a pausa NÃO para, dito com a verdade DA UNIDADE: com lembrete pela Kommo o worker de confirmações também pausa; os do CRM continuam
+  function fraseLembretes(p){ return p && p.lembretesDaKommoParam ? 'Os lembretes de confirmação de consulta da Kommo TAMBÉM param durante a pausa; os do CRM continuam.' : 'Os lembretes automáticos do CRM continuam.'; }
   async function carregarPausa(){
     if (KM || !U) return;
     var eu = ++seqPausa, slug = U.slug, nova = null;
@@ -1134,7 +1136,7 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     f.appendChild(parada ? pilula('at', 'Sofia pausada') : marcada ? pilula('ne', 'Pausa agendada') : pilula('ok', 'Sofia atendendo'));
     if (parada) {
       txt.appendChild(el('b', null, 'A Sofia não responde as mensagens dos pacientes até ' + horaDaPausa(PAUSA.ate) + '.'));
-      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora. Os lembretes automáticos de consulta continuam.'));
+      txt.appendChild(el('small', null, 'Pausada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '') + ' · volta sozinha nessa hora. ' + fraseLembretes(PAUSA)));
     } else if (marcada) {
       txt.appendChild(el('b', null, 'Pausa marcada de ' + horaDaPausa(PAUSA.desde) + ' até ' + horaDaPausa(PAUSA.ate) + '.'));
       txt.appendChild(el('small', null, 'Marcada por ' + (PAUSA.por || 'a equipe') + (PAUSA.motivo ? ' · Motivo: ' + PAUSA.motivo : '')));
@@ -1159,7 +1161,7 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
   }
   function abrirPausa(){
     $('jpUnidade').textContent = U.nome; $('jpQuem').textContent = EU || 'você';
-    $('jpAviso').textContent = 'A Sofia vai parar de responder as mensagens dos pacientes de ' + U.nome + ' até a hora escolhida e volta sozinha nela. Os lembretes automáticos de consulta continuam. Quem já está falando com a equipe não muda.';
+    $('jpAviso').textContent = 'A Sofia vai parar de responder as mensagens dos pacientes de ' + U.nome + ' até a hora escolhida e volta sozinha nela. ' + fraseLembretes(PAUSA) + ' Quem já está falando com a equipe não muda.';
     $('jpQuanto').value = '2'; $('jpOutro').hidden = true; $('jpAte').value = ''; $('jpMotivo').value = ''; $('jpCnt').textContent = '0/200'; some('jpErro');
     abrirDialogo($('dlgPausa'));
     $('jpMotivo').focus();

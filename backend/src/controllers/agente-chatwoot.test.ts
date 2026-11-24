@@ -109,8 +109,15 @@ test('PR 2c: faixa e janela de pausar a Sofia — só no CRM, só quem pode vê 
   const html = paginaDoAgente(CW);
   const js = scriptDe(html);
   for (const id of ['faixaPausa', 'dlgPausa', 'jpMotivo', 'jpQuanto', 'jpConfirma']) assert.ok(html.includes(`id="${id}"`), id);
-  // a verdade sobre o que a pausa faz: a Sofia para de responder, os lembretes automáticos de consulta continuam
-  assert.ok(js.includes('Os lembretes automáticos de consulta continuam') && !js.includes('TODAS as conversas'), 'texto honesto sobre a régua');
+  // a verdade sobre o que a pausa faz, POR UNIDADE: a Sofia para; com lembrete pela Kommo os lembretes da Kommo também param, os do CRM continuam
+  assert.ok(!js.includes('TODAS as conversas') && !js.includes('Os lembretes automáticos de consulta continuam'), 'nada de promessa falsa sobre a régua');
+  const fonteFrase = /function fraseLembretes\(p\)\{[^\n]*\}/.exec(js)?.[0];
+  assert.ok(fonteFrase, 'achou fraseLembretes');
+  const frase = new Function(`${fonteFrase}; return fraseLembretes;`)() as (p: unknown) => string;
+  assert.equal(frase({ lembretesDaKommoParam: true }), 'Os lembretes de confirmação de consulta da Kommo TAMBÉM param durante a pausa; os do CRM continuam.', 'unidade com Kommo');
+  assert.equal(frase({ lembretesDaKommoParam: false }), 'Os lembretes automáticos do CRM continuam.', 'só CRM');
+  assert.equal(frase(null), 'Os lembretes automáticos do CRM continuam.');
+  assert.ok(js.includes('fraseLembretes(PAUSA)') && (js.match(/fraseLembretes\(PAUSA\)/g) ?? []).length === 2, 'faixa E janela usam a frase');
   assert.ok(js.includes('tVence = setTimeout(carregarPausa') && js.includes("addEventListener('focus'"), 'a faixa se atualiza quando a pausa vence');
   assert.equal((js.match(/carregarPausa\(\)/g) ?? []).length, 3, 'carregarPausa: definição, troca de unidade e o foco — sem chamada em dobro no painel');
   for (const rota of ["'/api/public/agente/pausa?slug='", "'/api/public/agente/pausa'", "'/api/public/agente/pausa/retomar'"]) assert.ok(js.includes(rota), rota);
