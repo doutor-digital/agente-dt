@@ -276,9 +276,17 @@ a.bt{text-decoration:none}
 .tipo-ia{color:var(--lnk)}.tipo-equipe{color:var(--ok)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
 @media (max-width:560px){body.km .abas{width:100%;gap:0 2px}body.km .abas button{padding:0 9px;font-size:13.5px}body.km .lado{width:100%;padding:8px 0}body.km .lado .sel{flex:1;min-height:40px}body.km .bt{min-height:40px}}
 
-body.km .col-quem,body.km #tRevisar{display:none}
+body.km .col-quem,body.km #tRevisar,body.km #blocoPix{display:none}
 @media (min-width:561px){body.km .b-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.km .b-duas{grid-template-columns:minmax(0,1fr)}
+/* filtros da janela e resumo do Pix */
+.chips{display:flex;flex-wrap:wrap;gap:8px;padding:12px 22px 0}
+.chip{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 12px;border:1px solid var(--b2);border-radius:999px;background:var(--sf);color:var(--txt);font-size:13px;font-weight:600;cursor:pointer}
+.chip:hover{background:var(--sf2)}
+.chip[aria-pressed=true]{background:var(--pri);border-color:var(--pri);color:var(--pri-tx)}
+.chip .n{font-variant-numeric:tabular-nums;opacity:.8}
+.sits{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0}
+.sits .chip{min-height:44px}
 /* esqueleto e aviso flutuante */
 .sk{display:block;border-radius:10px;background:linear-gradient(90deg,var(--sf2) 0,var(--b) 40%,var(--sf2) 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
@@ -300,6 +308,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
  .antes-depois{grid-template-columns:1fr}
  .reg-it{grid-template-columns:1fr;gap:2px}.reg-filtros input.sel{width:100%}
  .bt{min-height:44px}
+ .chips{padding-left:14px;padding-right:14px}
  .lin .btns{justify-content:flex-start}
  .b-lista{padding:2px 14px 8px}
  .janela-cab,.janela-corpo,.janela-rodape{padding-left:14px;padding-right:14px}
@@ -367,6 +376,11 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       <div class="b-lista" id="listaRevisar"><span class="sk" style="height:60px"></span></div>
     </section>
     <div>
+      <section class="b-bloco" id="blocoPix">
+        <h3>Pix do sinal: pagou ou não <span class="c" id="cPix"></span></h3>
+        <div class="meta">Os Pix que a Sofia gerou no período, para a equipe cobrar quem não pagou.</div>
+        <div class="b-lista" id="listaPix"><span class="sk" style="height:60px"></span></div>
+      </section>
       <section class="b-bloco">
         <h3>Conversas pausadas <span class="c" id="cPausadasPainel"></span></h3>
         <div class="meta">A Sofia volta quando a conversa é resolvida. Dá para devolver antes.</div>
@@ -513,8 +527,9 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       <div><h3 id="dlgTitulo">Consultas que a Sofia marcou</h3><div class="meta" id="dlgPeriodo"></div></div>
       <button class="bt" id="dlgFechar" type="button">Fechar</button>
     </div>
+    <div class="chips" id="dlgFiltros" hidden></div>
     <div class="janela-corpo">
-      <div class="rolar"><table class="tab empilha"><thead><tr><th>Paciente</th><th>Consulta</th><th>Marcada</th><th class="col-quem">Quem agendou</th><th></th></tr></thead><tbody id="dlgLista"></tbody></table></div>
+      <div class="rolar"><table class="tab empilha"><thead id="dlgCab"></thead><tbody id="dlgLista"></tbody></table></div>
     </div>
     <div class="janela-rodape" id="dlgRodape"></div>
   </div>
@@ -628,11 +643,15 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     if (v && v.texto) d.textContent = v.texto;
     return d;
   }
-  function cartao(tag, rotulo, definicao, valor, v, extra){
+  function cartao(tag, rotulo, definicao, valor, v, extra, medida){
+    // clicar no número abre a lista de conversas por trás dele (só no CRM: o Kommo não tem esta rota)
+    if (medida && !KM) { tag = 'button'; extra = (extra ? extra + ' ' : '') + 'b-clicavel'; } else medida = null;
     var k = el(tag, 'b-card' + (extra ? ' ' + extra : '')); if (tag === 'button') k.type = 'button';
+    if (medida) { k.setAttribute('aria-haspopup', 'dialog'); k.onclick = function(){ abrirDetalhe(medida); }; }
     var r = el('span', 'r', rotulo); r.title = definicao; k.appendChild(r);
     k.appendChild(el('span', 'v' + (valor === '—' ? ' nulo' : ''), valor));
     k.appendChild(elDelta(v));
+    if (medida) k.appendChild(el('span', 'b-ver', 'Ver as conversas'));
     return k;
   }
   // o caso (👎) que a pessoa abriu em «Ensinar a Sofia» ou «Pedir ajuste»: só a regra/o pedido feito DALI o dá por revisado
@@ -653,8 +672,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     ULTIMO = null; graficos = []; diasDoGrafico = null;
     $('grandes').textContent = ''; $('peq').textContent = ''; $('nRevisar').textContent = '—'; $('cRevisar').textContent = ''; $('cMarcadas').textContent = ''; $('descPeriodo').textContent = '';
     $('tabDia').textContent = ''; $('lidoEm').hidden = true; $('lidoEm').textContent = '';
-    ['listaRevisar', 'listaMarcadas', 'listaPausadasPainel'].forEach(function(id){ $(id).textContent = ''; });
-    $('cPausadasPainel').textContent = ''; $('cPausadas').textContent = ''; $('contaPausadas').textContent = ''; $('nPausadas').textContent = '—';
+    ['listaRevisar', 'listaMarcadas', 'listaPausadasPainel', 'listaPix'].forEach(function(id){ $(id).textContent = ''; });
+    $('cPix').textContent = ''; $('cPausadasPainel').textContent = ''; $('cPausadas').textContent = ''; $('contaPausadas').textContent = ''; $('nPausadas').textContent = '—';
   }
   // cada leitura do painel/pausadas/pedidos só vale se a unidade e a vez ainda são as dela (uma resposta lenta da unidade anterior não pinta a nova)
   var seqPainel = 0, seqPausadas = 0, seqPedidos = 0;
@@ -680,20 +699,21 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       ULTIMO = p;
       $('descPeriodo').textContent = ROT_PERIODO[PERIODO] + (SEM_ANTES ? '' : ', contra ' + (PERIODO === 'hoje' ? 'ontem até a mesma hora' : 'os ' + COMPARA[PERIODO]));
       var g = $('grandes'); g.textContent = ''; graficos = [];
-      var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande');
+      var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande', 'respondidas');
       var gm = cartao('button', 'Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes), 'b-grande b-clicavel');
       gm.setAttribute('aria-haspopup', 'dialog'); gm.onclick = abrirConsultas;
       [[gr, 'respondidas', 'g-r'], [gm, 'marcadas', 'g-m']].forEach(function(x){ var box = el('span', 'graf'); x[0].appendChild(box); g.appendChild(x[0]); graficos.push({ box: box, chave: x[1], cls: x[2] }); });
       gm.appendChild(el('span', 'b-ver', p.marcadas.agora ? (KM ? 'Ver as consultas' : 'Ver quem agendou') : 'Ver a lista'));
+      var vv = gr.querySelector('.b-ver'); if (vv) gr.appendChild(vv);
       var k = $('peq'); k.textContent = '';
-      k.appendChild(cartao('div', 'Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
-      if (!KM || p.pixUsado) k.appendChild(cartao('div', 'Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
+      k.appendChild(cartao('div', 'Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true), '', 'marcaram'));
+      if (!KM || p.pixUsado) k.appendChild(cartao('div', 'Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes), '', 'pix'));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
-      k.appendChild(cartao('div', 'Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
-      k.appendChild(cartao('div', 'À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { texto: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '' }));
+      k.appendChild(cartao('div', 'Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq, '', 'equipe'));
+      k.appendChild(cartao('div', 'À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { texto: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '' }, '', 'fora'));
       var nr = p.totalParaRevisar != null ? p.totalParaRevisar : (p.paraRevisar || []).length;
       if (!KM) {
-        k.appendChild(cartao('div', 'Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { texto: 'ninguém avaliou' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
+        k.appendChild(cartao('div', 'Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { texto: 'ninguém avaliou' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true), '', 'avaliacoes'));
         $('nRevisar').textContent = String(nr);
       } else {
         var le = $('lidoEm'); le.hidden = false;
@@ -705,6 +725,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       desenharGraficos(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       if (!KM) desenharRevisar(p.paraRevisar || [], nr);
+      if (!KM) carregarBlocos();
     } catch (e) { if (eu !== seqPainel || !U || U.slug !== slug) return; painelVazio(); erroEm($('grandes'), e.message); }
     contarPausadas();
   }
@@ -754,33 +775,132 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     });
     var mais = el('div', 'mais'), bm = el('button', 'bt link', KM ? 'Ver as ' + (total || l.length) + ' consultas' : 'Ver as ' + (total || l.length) + ' e quem agendou'); bm.type = 'button'; bm.onclick = abrirConsultas; mais.appendChild(bm); box.appendChild(mais);
   }
-  // a lista COMPLETA das consultas do período: paciente, dia e hora da consulta, quando foi marcada e quem agendou
+  // ── a lista por trás de um número (janela): clicar no card abre as conversas daquele número, no período escolhido ──
   function dataHoraCurta(iso){ var d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
   function celula(tr, rotulo, conteudo, cls){ var td = el('td', cls || null); td.setAttribute('data-r', rotulo); if (typeof conteudo === 'string') td.textContent = conteudo; else td.appendChild(conteudo); tr.appendChild(td); return td; }
-  function abrirConsultas(){
-    var p = ULTIMO; if (!p) return;
-    var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tb = $('dlgLista'); tb.textContent = '';
-    $('dlgPeriodo').textContent = ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1) + ' · ' + plural(p.marcadas.agora, 'consulta', 'consultas');
-    if (!lista.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', 'Nenhuma consulta marcada pela Sofia neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
-    lista.forEach(function(m){
+  function reais(c){ return (c / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }); }
+  function nomeDe(l){ return l.nome || ((KM ? 'Cartão ' : 'Conversa ') + l.conversa); }
+  function quandoTxt(iso){ return dataHoraCurta(iso) + ' · ' + ha(iso); }
+  function pilula(cls, t){ return el('span', 'pill ' + cls, t); }
+  function subDaJanela(n, um, varios){ var p = ROT_PERIODO[PERIODO]; return p.charAt(0).toUpperCase() + p.slice(1) + ' · ' + plural(n, um, varios); }
+  // cfg = { titulo, sub, colunas, linhas: [{ conversa, link?, filtro?, cells: [{ v, cls }] }], filtros?, filtroAtivo?, vazio?, rodape?, carregando? }
+  function renderJanela(cfg){
+    $('dlgTitulo').textContent = cfg.titulo; $('dlgPeriodo').textContent = cfg.sub || '';
+    var cab = $('dlgCab'); cab.textContent = ''; var trc = el('tr');
+    (cfg.colunas || []).concat(['']).forEach(function(c){ var th = el('th', c === 'Quem agendou' ? 'col-quem' : null, c); trc.appendChild(th); }); cab.appendChild(trc);
+    var f = $('dlgFiltros'); f.textContent = ''; f.hidden = !(cfg.filtros && cfg.filtros.length);
+    (cfg.filtros || []).forEach(function(x){
+      var b = el('button', 'chip'); b.type = 'button'; b.setAttribute('aria-pressed', cfg.filtroAtivo === x.id ? 'true' : 'false');
+      b.appendChild(document.createTextNode(x.rot + ' ')); b.appendChild(el('span', 'n', String(x.total)));
+      b.onclick = function(){ cfg.filtroAtivo = cfg.filtroAtivo === x.id ? null : x.id; renderJanela(cfg); };
+      f.appendChild(b);
+    });
+    var tb = $('dlgLista'); tb.textContent = '';
+    if (cfg.carregando) { var trk = el('tr'), tdk = el('td'); tdk.colSpan = 5; var sk = el('span', 'sk'); sk.style.height = '48px'; tdk.appendChild(sk); trk.appendChild(tdk); tb.appendChild(trk); }
+    var vis = (cfg.linhas || []).filter(function(l){ return cfg.filtroAtivo == null || l.filtro === cfg.filtroAtivo; });
+    if (!cfg.carregando && !vis.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', cfg.vazio || 'Nada neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
+    vis.forEach(function(l){
       var tr = el('tr');
-      celula(tr, 'Paciente', m.nome || ((KM ? 'Cartão ' : 'Conversa ') + m.conversa)).style.fontWeight = '700';
-      celula(tr, 'Consulta', m.agendadoPara ? consultaEm(m.agendadoPara) : '—', 'n');
-      celula(tr, 'Marcada', dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), 'n');
-      var q = m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—');
-      celula(tr, 'Quem agendou', q, 'quem col-quem');
+      l.cells.forEach(function(c, i){ var td = celula(tr, cfg.colunas[i], c.v, c.cls); if (i === 0) td.style.fontWeight = '700'; });
       var ab;
-      if (KM) { ab = el('a', 'bt', 'Abrir cartão'); if (m.link) { ab.href = m.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; } else ab.hidden = true; }
-      else { ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ fecharDialogo($('dlgConsultas')); abrirConversa(m.conversa); }; }
+      if (KM) { ab = el('a', 'bt', 'Abrir cartão'); if (l.link) { ab.href = l.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; } else ab.hidden = true; }
+      else { ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ fecharDialogo($('dlgConsultas')); abrirConversa(l.conversa); }; }
       celula(tr, '', ab);
       tb.appendChild(tr);
     });
-    var tot = p.consultasTotal != null ? p.consultasTotal : p.marcadas.agora;
-    $('dlgRodape').textContent = (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + (KM ? 'No Kommo só as consultas mais recentes trazem o nome e o link do cartão.' : 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.');
+    $('dlgRodape').textContent = cfg.rodape || '';
     abrirDialogo($('dlgConsultas'));
+  }
+  // as consultas que a Sofia marcou: paciente, dia e hora da consulta, quando foi marcada e quem agendou (no Kommo: as mais recentes, com o link do cartão)
+  function abrirConsultas(){
+    var p = ULTIMO; if (!p) return;
+    var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tot = p.consultasTotal != null ? p.consultasTotal : p.marcadas.agora;
+    renderJanela({
+      titulo: 'Consultas que a Sofia marcou', sub: subDaJanela(p.marcadas.agora, 'consulta', 'consultas'),
+      colunas: ['Paciente', 'Consulta', 'Marcada', 'Quem agendou'],
+      linhas: lista.map(function(m){ return { conversa: m.conversa, link: m.link, cells: [{ v: nomeDe(m) }, { v: m.agendadoPara ? consultaEm(m.agendadoPara) : '—', cls: 'n' }, { v: dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), cls: 'n' }, { v: m.quem ? pilula('so', m.quem) : el('span', 'mut', '—'), cls: 'quem col-quem' }] }; }),
+      vazio: 'Nenhuma consulta marcada pela Sofia neste período.',
+      rodape: (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + (KM ? 'No Kommo só as consultas mais recentes trazem o nome e o link do cartão.' : 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.')
+    });
+  }
+  var TITULOS = { respondidas: 'Pessoas respondidas', marcaram: 'Marcaram consulta', equipe: 'Passou para a equipe', pix: 'Pix do sinal gerado', fora: 'Respostas à noite ou no fim de semana', avaliacoes: 'Avaliações das respostas' };
+  var NOTA_NOME = 'O nome do paciente só aparece quando a Sofia marcou consulta; nas outras linhas vale o número da conversa.';
+  var SIT_PIX = { pago: ['ok', 'Pago'], pendente: ['at', 'Pendente'], vencido: ['er', 'Vencido'] };
+  function cfgDoDetalhe(medida, r, filtroInicial){
+    var cfg = { titulo: TITULOS[medida], sub: subDaJanela(r.total, medida === 'avaliacoes' ? 'avaliação' : 'conversa', medida === 'avaliacoes' ? 'avaliações' : 'conversas'), linhas: [], filtroAtivo: filtroInicial || null, vazio: 'Nada neste período.' };
+    var cortado = r.total > r.linhas.length ? 'Mostrando as ' + r.linhas.length + ' mais recentes de ' + r.total + '. ' : '';
+    if (medida === 'respondidas') {
+      cfg.colunas = ['Conversa', 'Última resposta', 'Respostas'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: l.detalhe || '', cls: 'n' }] }; });
+      cfg.rodape = cortado + NOTA_NOME;
+    } else if (medida === 'fora') {
+      // o card conta RESPOSTAS («169 de 412 respostas»); a lista tem uma linha por conversa e o total de respostas bate com o card
+      cfg.sub = subDaJanela(r.totalRespostas != null ? r.totalRespostas : r.total, 'resposta', 'respostas') + ' em ' + plural(r.total, 'conversa', 'conversas');
+      cfg.colunas = ['Conversa', 'Última resposta', 'Respostas fora do horário'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: l.detalhe || '', cls: 'n' }] }; });
+      cfg.rodape = cortado + 'Fora do horário = antes das 8h, a partir das 18h, sábado e domingo. ' + NOTA_NOME;
+    } else if (medida === 'marcaram') {
+      cfg.colunas = ['Paciente', 'Consulta', 'Marcada'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: l.consultaEm ? consultaEm(l.consultaEm) : '—', cls: 'n' }, { v: quandoTxt(l.quando), cls: 'n' }] }; });
+      cfg.rodape = cortado + 'Conversas que a Sofia respondeu no período e em que ela marcou consulta: é o número do card «Marcaram».';
+    } else if (medida === 'equipe') {
+      cfg.colunas = ['Conversa', 'Passou'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }] }; });
+      cfg.rodape = cortado + NOTA_NOME;
+    } else if (medida === 'pix') {
+      cfg.colunas = ['Conversa', 'Valor', 'Gerado', 'Situação'];
+      cfg.linhas = r.linhas.map(function(l){
+        var sx = l.pix && l.pix.situacao ? SIT_PIX[l.pix.situacao] : null, quando = l.pix && l.pix.geradoEm ? l.pix.geradoEm : l.quando;
+        return { conversa: l.conversa, filtro: l.pix && l.pix.situacao ? l.pix.situacao : 'sem', cells: [{ v: nomeDe(l) }, { v: l.pix && l.pix.valorCentavos != null ? reais(l.pix.valorCentavos) : '—', cls: 'n' }, { v: quandoTxt(quando), cls: 'n' }, { v: sx ? pilula(sx[0], sx[1]) : pilula('ne', 'Sem registro') }] };
+      });
+      var st = r.situacoes || {};
+      cfg.filtros = [['pago', 'Pagos', st.pago], ['pendente', 'Pendentes', st.pendente], ['vencido', 'Vencidos', st.vencido], ['sem', 'Sem registro', st.semRegistro]].filter(function(x){ return x[2]; }).map(function(x){ return { id: x[0], rot: x[1], total: x[2] }; });
+      cfg.rodape = cortado + 'Pago = o Asaas já baixou. Pendente = dentro da validade do link. Vencido = passou da validade sem pagar. «Sem registro» = não achei o sinal desta conversa. O link e a chave Pix não aparecem aqui. ' + NOTA_NOME;
+    } else {
+      cfg.colunas = ['Conversa', 'Quando', 'Avaliação', 'Quem avaliou'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, filtro: l.nota, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: pilula(l.nota === 'boa' ? 'ok' : 'er', l.nota === 'boa' ? 'Boa' : 'Ruim') }, { v: (l.quem || '') + (l.detalhe ? ' · «' + l.detalhe + '»' : '') }] }; });
+      var boas = r.linhas.filter(function(l){ return l.nota === 'boa'; }).length;
+      cfg.filtros = [{ id: 'boa', rot: 'Boas', total: boas }, { id: 'ruim', rot: 'Ruins', total: r.linhas.length - boas }];
+      cfg.rodape = cortado + 'As avaliações que a equipe deu (👍 e 👎) nos balões da Sofia. ' + NOTA_NOME;
+    }
+    return cfg;
+  }
+  function urlDetalhe(medida){ return '/api/public/agente/detalhe?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO) + '&medida=' + enc(medida); }
+  var seqDetalhe = 0;
+  async function abrirDetalhe(medida, filtroInicial){
+    var eu = ++seqDetalhe, slug = U.slug, per = PERIODO;
+    renderJanela({ titulo: TITULOS[medida], sub: ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1), colunas: [], carregando: true, linhas: [] });
+    try { var r = await api('GET', urlDetalhe(medida)); if (eu === seqDetalhe && U && U.slug === slug && per === PERIODO) renderJanela(cfgDoDetalhe(medida, r, filtroInicial)); }
+    catch (e) { if (eu === seqDetalhe) { fecharDialogo($('dlgConsultas')); toast(e.message, true); } }
   }
   $('dlgFechar').addEventListener('click', function(){ fecharDialogo($('dlgConsultas')); });
   $('dlgConsultas').addEventListener('click', function(ev){ if (ev.target === $('dlgConsultas')) fecharDialogo($('dlgConsultas')); });
+
+  // o bloco do painel que responde «pagou?» sem abrir nada (só no CRM: o Kommo não tem esta rota)
+  var seqBlocos = 0;
+  async function carregarBlocos(){
+    var eu = ++seqBlocos, slug = U.slug, per = PERIODO, vale = function(){ return eu === seqBlocos && per === PERIODO && U && U.slug === slug; };
+    try { var x = await api('GET', urlDetalhe('pix')); if (vale()) desenharPix(x); } catch (e) { if (vale()) { $('listaPix').textContent = ''; erroEm($('listaPix'), e.message); } }
+  }
+  function desenharPix(x){
+    var box = $('listaPix'); box.textContent = ''; $('cPix').textContent = x.total ? String(x.total) : '';
+    if (!x.total) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhum Pix. ')); v.appendChild(document.createTextNode('A Sofia não gerou Pix do sinal neste período.')); box.appendChild(v); return; }
+    var st = x.situacoes || {}, sits = el('div', 'sits');
+    [['pago', 'Pagos', st.pago], ['pendente', 'Pendentes', st.pendente], ['vencido', 'Vencidos', st.vencido]].forEach(function(s){
+      var b = el('button', 'chip'); b.type = 'button'; b.appendChild(pilula(SIT_PIX[s[0]][0], s[1])); b.appendChild(el('span', 'n', String(s[2] || 0)));
+      b.onclick = function(){ abrirDetalhe('pix', s[0]); }; sits.appendChild(b);
+    });
+    box.appendChild(sits);
+    var cobrar = (x.linhas || []).filter(function(l){ return l.pix && (l.pix.situacao === 'pendente' || l.pix.situacao === 'vencido'); }).slice(0, 4);
+    cobrar.forEach(function(l){
+      var row = el('div', 'lin'), q = el('div'), sx = SIT_PIX[l.pix.situacao];
+      q.appendChild(el('div', 'nm', nomeDe(l)));
+      q.appendChild(el('span', 'det', (l.pix.valorCentavos != null ? reais(l.pix.valorCentavos) + ' · ' : '') + 'gerado ' + ha(l.pix.geradoEm || l.quando)));
+      var bs = el('div', 'btns'), ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ abrirConversa(l.conversa); };
+      bs.appendChild(pilula(sx[0], sx[1])); bs.appendChild(ab); row.appendChild(q); row.appendChild(bs); box.appendChild(row);
+    });
+    if (!cobrar.length) box.appendChild(el('p', 'vazio', st.semRegistro ? 'Nenhum pendente ou vencido com registro do sinal.' : 'Ninguém para cobrar: todos pagaram.'));
+  }
   function desenharRevisar(l, total){
     var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = total ? (total > l.length ? (l.length + ' de ' + total) : String(total)) : '';
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. ')); v.appendChild(document.createTextNode('Para marcar uma resposta ruim, passe o mouse no balão da Sofia dentro da conversa.')); box.appendChild(v); return; }

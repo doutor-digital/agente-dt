@@ -36,7 +36,7 @@ test('tela Placar: faixa de atenção, card «Consultas marcadas» abre a lista 
   for (const id of ['nRevisar', 'nPausadas', 'nPedidos', 'grandes', 'peq', 'dlgConsultas', 'dlgLista', 'listaPausadasPainel']) assert.ok(html.includes(`id="${id}"`), id);
   const js = scriptDe(html);
   assert.ok(js.includes('abrirConsultas') && js.includes('consultasDoPeriodo'), 'o card de consultas abre a lista que vem do painel');
-  assert.ok(js.includes('m.quem') && html.includes('>Quem agendou</th>'), 'a lista mostra quem agendou');
+  assert.ok(js.includes('m.quem') && js.includes("'Quem agendou'"), 'a lista mostra quem agendou');
   assert.ok(js.includes("'funil-tema'") && html.includes('[data-tema=escuro]') && html.includes('prefers-color-scheme'), 'tema do CRM (e quando ele muda) + o do aparelho');
   assert.ok(html.includes('<meta name="color-scheme" content="light dark">'));
   assert.ok(html.includes('.bt{min-height:44px}'), 'botões de 44 px no celular');
@@ -56,11 +56,29 @@ test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; e
 test('Placar no modo Kommo: parseia, sem «para revisar», sem «quem agendou», consultas com «Abrir cartão»', () => {
   const html = paginaDoAgenteKommo('doutor-hernia-caxias');
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar{display:none}'));
+  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix{display:none}'));
   const js = scriptDe(html);
   assert.ok(js.includes("if (!KM) desenharRevisar("), 'sem revisão no Kommo');
   assert.ok(js.includes("'Abrir cartão'") && js.includes('Ver as consultas'));
   assert.ok(!html.includes('__KOMMO__') && !html.includes('__ORIGEM_CW__'));
+});
+
+test('PR 2a: todo número do painel abre a lista (só no CRM), com o bloco do Pix; nada de link nem chave Pix na página', () => {
+  const html = paginaDoAgente(CW);
+  const js = scriptDe(html);
+  for (const medida of ['respondidas', 'marcaram', 'equipe', 'pix', 'fora', 'avaliacoes']) assert.ok(js.includes(`'${medida}'`), medida);
+  for (const id of ['blocoPix', 'listaPix', 'dlgFiltros', 'dlgCab']) assert.ok(html.includes(`id="${id}"`), id);
+  assert.ok(js.includes("'/api/public/agente/detalhe?slug='"), 'rota da lista');
+  // no Kommo o card não vira botão e o bloco do Pix some (a rota é só do CRM)
+  assert.ok(js.includes('if (medida && !KM)') && js.includes('if (!KM) carregarBlocos();'), 'detalhe atrás de !KM');
+  assert.ok(html.includes('body.km #blocoPix'), 'bloco do Pix escondido no Kommo');
+  // a página só lê valor, situação e datas do Pix: nunca o link nem a chave
+  assert.ok(!/\b(linkId|paymentId|copiaECola|chavePix)\b/.test(js) && !/\bl\.pix\.(url|link)\b/.test(js), 'a página não toca link nem chave Pix');
+  for (const campo of ['l.pix.valorCentavos', 'l.pix.situacao', 'l.pix.geradoEm']) assert.ok(js.includes(campo), campo);
+  // o card «À noite ou fim de semana» conta respostas: a lista diz «respostas em conversas» e usa o total de respostas
+  assert.ok(js.includes('r.totalRespostas'), 'o total da lista de «fora do horário» bate com o card');
+  const kmHtml = paginaDoAgenteKommo('doutor-hernia-caxias');
+  assert.ok(scriptDe(kmHtml).includes('if (medida && !KM)'));
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {
