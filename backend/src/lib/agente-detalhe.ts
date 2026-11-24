@@ -17,6 +17,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { fusoDaUnidade } from './fuso.js';
 import { BASE_LEAD_CHATWOOT } from './chatwoot-lead.js';
+import { instanteLocal } from './sinal-pix.js';
 import { foraDoHorario, janelas, partesLocais, type Periodo } from './agente-painel.js';
 
 export const MEDIDAS = ['respondidas', 'marcaram', 'equipe', 'pix', 'fora', 'avaliacoes'] as const;
@@ -62,16 +63,17 @@ export interface EntradaDoDetalhe {
   eventos: ReadonlyArray<{ conversa: number; tipo: string; nome: string | null; detalhe: string | null; criadoEm: Date }>;
   avaliacoes: ReadonlyArray<{ conversa: number; nota: string; quemNome: string; texto: string | null; criadoEm: Date }>;
   /** `sinais_pix` das conversas dos Pix do período */
-  sinais: ReadonlyArray<{ leadId: string; status: string; venceEm: string; valorCentavos: number; criadoEm: Date; pagoEm: Date | null }>;
+  sinais: ReadonlyArray<{ leadId: string; status: string; venceEm: string; consultaEm: string; valorCentavos: number; criadoEm: Date; pagoEm: Date | null }>;
   agora: Date;
   periodo: Periodo;
   fuso: string;
 }
 
-/** PAGO / PENDENTE / VENCIDO: pago = o Asaas baixou; expirado ou passou do último dia do link = vencido; o resto está pendente. */
-export function situacaoDoPix(s: { status: string; venceEm: string }, hoje: string): SituacaoDoPix {
+/** PAGO / PENDENTE / VENCIDO: pago = o Asaas baixou; expirado ou passou do último dia do link = vencido; pendente dentro da validade = pendente. Status que não conheço = null (sem registro): nunca vira «para cobrar». */
+export function situacaoDoPix(s: { status: string; venceEm: string }, hoje: string): SituacaoDoPix | null {
   if (s.status === 'pago') return 'pago';
   if (s.status === 'expirado') return 'vencido';
+  if (s.status !== 'pendente') return null;
   return hoje > s.venceEm ? 'vencido' : 'pendente';
 }
 
@@ -116,13 +118,15 @@ export function montarDetalhe(medida: Medida, e: EntradaDoDetalhe): Detalhe {
     const sit = { pago: 0, pendente: 0, vencido: 0, semRegistro: 0 };
     linhas = porConversa(eventos('pix')).map((v) => {
       const lead = String(BASE_LEAD_CHATWOOT + v.conversa);
-      // o sinal que VALIA na hora do evento (a mesma regra de `gerarSinalPix`): criado antes do Pix sair, ainda dentro da validade (`vence_em` >= o dia
-      // do evento) e o mais recente. Pix reenviado reaproveita o link pendente de dias antes, e é ESSE que casa. «criando» é reserva que o Asaas ainda
-      // não respondeu (ou que falhou): não é Pix que o paciente recebeu.
+      // o sinal que VALIA na hora do evento (a mesma regra de `gerarSinalPix`): criado antes do Pix sair, de uma consulta que ainda não tinha passado
+      // (`consulta_em` >= o instante do Pix, no fuso da unidade), ainda dentro da validade (`vence_em` >= o dia do Pix) e o mais recente. Pix reenviado
+      // reaproveita o link pendente de dias antes, e é ESSE que casa. «criando» é reserva que o Asaas ainda não respondeu (ou que falhou): não é Pix
+      // que o paciente recebeu.
       const t0 = v.criadoEm.getTime();
       const diaDoEvento = partesLocais(v.criadoEm, e.fuso).dia;
-      const s = maisRecente(e.sinais.filter((x) => x.leadId === lead && x.status !== 'criando' && x.criadoEm.getTime() <= t0 + FOLGA_DEPOIS_MS && x.venceEm >= diaDoEvento))[0] ?? null;
-      const situacao = s ? situacaoDoPix(s, hoje) : null;
+      const instante = instanteLocal(v.criadoEm, e.fuso);
+      const s = maisRecente(e.sinais.filter((x) => x.leadId === lead && x.status !== 'criando' && x.criadoEm.getTime() <= t0 + FOLGA_DEPOIS_MS && x.venceEm >= diaDoEvento && x.consultaEm >= instante))[0] ?? null;
+      const situacao = s ? situacaoDoPix(s, hoje) : null; // sem sinal, ou com status que não conheço: sem registro
       if (situacao) sit[situacao] += 1;
       else sit.semRegistro += 1;
       return { ...base(v.conversa, v.criadoEm), pix: { valorCentavos: s?.valorCentavos ?? null, situacao, geradoEm: s?.criadoEm.toISOString() ?? null, pagoEm: s?.pagoEm?.toISOString() ?? null } };
@@ -145,15 +149,15 @@ export async function detalheDaUnidade(unit: Pick<Unit, 'id' | 'slug' | 'spineTi
   const where = { unitSlug: unit.slug, criadoEm: { gte: desde } };
   const [respostas, eventos, avaliacoes] = await Promise.all([
     medida === 'respondidas' || medida === 'fora' || medida === 'marcaram' ? prisma.sofiaMensagem.findMany({ where, select: { conversa: true, criadoEm: true } }) : Promise.resolve([]),
-    // as avaliações não precisam de eventos; marcaram/respondidas só do nome
-    medida === 'avaliacoes' || medida === 'fora' ? Promise.resolve([]) : prisma.sofiaEvento.findMany({ where, select: { conversa: true, tipo: true, nome: true, detalhe: true, criadoEm: true } }),
+    // só os eventos da medida (+ «marcou», que é o único que traz o nome); as avaliações não precisam deles
+    medida === 'avaliacoes' ? Promise.resolve([]) : prisma.sofiaEvento.findMany({ where: { ...where, tipo: { in: medida === 'equipe' || medida === 'pix' ? [medida, 'marcou'] : ['marcou'] } }, select: { conversa: true, tipo: true, nome: true, detalhe: true, criadoEm: true } }),
     medida === 'avaliacoes' ? prisma.sofiaAvaliacao.findMany({ where, select: { conversa: true, nota: true, quemNome: true, texto: true, criadoEm: true } }) : Promise.resolve([]),
   ]);
   let sinais: EntradaDoDetalhe['sinais'] = [];
   if (medida === 'pix') {
     const leads = [...new Set(eventos.filter((v) => v.tipo === 'pix').map((v) => String(BASE_LEAD_CHATWOOT + v.conversa)))].slice(0, 1000);
     // só as linhas DESTA unidade (unit_id) e só das conversas dos Pix do período; nunca o link (`url`) nem o id do link
-    if (leads.length) sinais = await prisma.sinalPix.findMany({ where: { unitId: unit.id, leadId: { in: leads } }, select: { leadId: true, status: true, venceEm: true, valorCentavos: true, criadoEm: true, pagoEm: true }, orderBy: { criadoEm: 'desc' }, take: 3000 });
+    if (leads.length) sinais = await prisma.sinalPix.findMany({ where: { unitId: unit.id, leadId: { in: leads } }, select: { leadId: true, status: true, venceEm: true, consultaEm: true, valorCentavos: true, criadoEm: true, pagoEm: true }, orderBy: { criadoEm: 'desc' }, take: 3000 });
   }
   return montarDetalhe(medida, { respostas, eventos, avaliacoes, sinais, agora, periodo, fuso });
 }

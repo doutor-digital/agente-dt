@@ -874,6 +874,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     catch (e) { if (eu === seqDetalhe) { fecharDialogo($('dlgConsultas')); toast(e.message, true); } }
   }
   $('dlgFechar').addEventListener('click', function(){ fecharDialogo($('dlgConsultas')); });
+  // fechar (botão, Esc ou clique fora) cancela a leitura em andamento: a lista que chegar depois não reabre a janela
+  $('dlgConsultas').addEventListener('close', function(){ seqDetalhe++; });
   $('dlgConsultas').addEventListener('click', function(ev){ if (ev.target === $('dlgConsultas')) fecharDialogo($('dlgConsultas')); });
 
   // o bloco do painel que responde «pagou?» sem abrir nada (só no CRM: o Kommo não tem esta rota)

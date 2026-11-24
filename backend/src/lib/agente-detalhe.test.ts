@@ -77,33 +77,37 @@ test('Pix: situação PAGO / PENDENTE / VENCIDO a partir do sinal; sem sinal = s
   assert.equal(situacaoDoPix({ status: 'expirado', venceEm: '2026-12-01' }, '2026-11-13'), 'vencido');
   assert.equal(situacaoDoPix({ status: 'pendente', venceEm: '2026-11-13' }, '2026-11-13'), 'pendente', 'o último dia ainda vale');
   assert.equal(situacaoDoPix({ status: 'pendente', venceEm: '2026-11-12' }, '2026-11-13'), 'vencido');
-  assert.equal(situacaoDoPix({ status: 'criando', venceEm: '2026-11-20' }, '2026-11-13'), 'pendente');
+  assert.equal(situacaoDoPix({ status: 'criando', venceEm: '2026-11-20' }, '2026-11-13'), null, 'reserva: não é Pix enviado');
+  assert.equal(situacaoDoPix({ status: 'estornado', venceEm: '2026-11-20' }, '2026-11-13'), null, 'status que não conheço nunca vira «para cobrar»');
   const lead = (c: number) => String(BASE_LEAD_CHATWOOT + c);
   const eventos = [1, 2, 3, 4].map((c, i) => ({ conversa: c, tipo: 'pix', nome: null, detalhe: null, criadoEm: c === 3 ? h(24 * 5) : h(2 + i) })); // a 3 saiu há 5 dias
   const sinais = [
-    { leadId: lead(1), status: 'pago', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(2.1), pagoEm: h(1) },
-    { leadId: lead(2), status: 'pendente', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(3.1), pagoEm: null },
-    { leadId: lead(3), status: 'pendente', venceEm: '2026-11-10', valorCentavos: 5000, criadoEm: h(24 * 5 + 0.1), pagoEm: null }, // valia no dia do Pix, e hoje já passou do último dia
-    { leadId: lead(99), status: 'pago', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(5.1), pagoEm: h(1) }, // de outra conversa: nunca casa
+    { leadId: lead(1), status: 'pago', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(2.1), pagoEm: h(1) },
+    { leadId: lead(2), status: 'pendente', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(3.1), pagoEm: null },
+    { leadId: lead(3), status: 'pendente', venceEm: '2026-11-10', consultaEm: '2026-11-10T09:00', valorCentavos: 5000, criadoEm: h(24 * 5 + 0.1), pagoEm: null }, // valia no dia do Pix, e hoje já passou do último dia
+    { leadId: lead(99), status: 'pago', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(5.1), pagoEm: h(1) }, // de outra conversa: nunca casa
   ];
   const r = montarDetalhe('pix', { ...base, eventos, sinais });
   assert.deepEqual(r.situacoes, { pago: 1, pendente: 1, vencido: 1, semRegistro: 1 });
   assert.deepEqual(r.linhas.map((l) => [l.conversa, l.pix!.situacao, l.pix!.valorCentavos]), [[1, 'pago', 5000], [2, 'pendente', 5000], [4, null, null], [3, 'vencido', 5000]]);
   // Pix REENVIADO: a Sofia reaproveita o link pendente de dias antes (mesmo sinal, evento novo) e é esse sinal que casa
-  const reenvio = montarDetalhe('pix', { ...base, eventos: [{ conversa: 42, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(42), status: 'pendente', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(24 * 3), pagoEm: null }] });
+  const reenvio = montarDetalhe('pix', { ...base, eventos: [{ conversa: 42, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(42), status: 'pendente', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(24 * 3), pagoEm: null }] });
   assert.equal(reenvio.linhas[0]!.pix!.situacao, 'pendente', 'o sinal de 3 dias atrás ainda valia quando o Pix foi reenviado');
   assert.equal(reenvio.linhas[0]!.pix!.valorCentavos, 5000);
   // sinal já VENCIDO na hora do evento não é o do Pix de agora (o Pix de agora tem sinal novo); sem ele, «sem registro»
-  const vencido = montarDetalhe('pix', { ...base, eventos: [{ conversa: 44, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(44), status: 'pendente', venceEm: '2026-11-05', valorCentavos: 5000, criadoEm: h(24 * 9), pagoEm: null }] });
+  const vencido = montarDetalhe('pix', { ...base, eventos: [{ conversa: 44, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(44), status: 'pendente', venceEm: '2026-11-05', consultaEm: '2026-11-05T09:00', valorCentavos: 5000, criadoEm: h(24 * 9), pagoEm: null }] });
   assert.equal(vencido.linhas[0]!.pix!.situacao, null, 'link que já tinha vencido não vale para o Pix de hoje');
   // com dois sinais da mesma conversa vale o mais recente que valia na hora
   const dois = montarDetalhe('pix', { ...base, eventos: [{ conversa: 45, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [
-    { leadId: lead(45), status: 'expirado', venceEm: '2026-11-05', valorCentavos: 5000, criadoEm: h(24 * 9), pagoEm: null },
-    { leadId: lead(45), status: 'pago', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(2.1), pagoEm: h(1) },
+    { leadId: lead(45), status: 'expirado', venceEm: '2026-11-05', consultaEm: '2026-11-05T09:00', valorCentavos: 5000, criadoEm: h(24 * 9), pagoEm: null },
+    { leadId: lead(45), status: 'pago', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(2.1), pagoEm: h(1) },
   ] });
   assert.equal(dois.linhas[0]!.pix!.situacao, 'pago');
+  // sinal de uma consulta que JÁ PASSOU (mesmo ainda dentro de vence_em) não vale para o Pix de agora
+  const passada = montarDetalhe('pix', { ...base, eventos: [{ conversa: 46, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(46), status: 'pago', venceEm: '2026-11-20', consultaEm: '2026-11-10T09:00', valorCentavos: 5000, criadoEm: h(24 * 4), pagoEm: h(24 * 4) }] });
+  assert.equal(passada.linhas[0]!.pix!.situacao, null, 'a consulta de 10/11 já tinha passado quando o Pix de 13/11 saiu');
   // reserva «criando» (órfã) não é Pix enviado
-  const reserva = montarDetalhe('pix', { ...base, eventos: [{ conversa: 43, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(43), status: 'criando', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(2.05), pagoEm: null }] });
+  const reserva = montarDetalhe('pix', { ...base, eventos: [{ conversa: 43, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(43), status: 'criando', venceEm: '2026-11-20', consultaEm: '2026-11-25T09:00', valorCentavos: 5000, criadoEm: h(2.05), pagoEm: null }] });
   assert.equal(reserva.linhas[0]!.pix!.situacao, null, '«criando» (reserva órfã) não entra como pendente');
   const texto = JSON.stringify(r);
   assert.ok(!/url|linkId|paymentId|chave/i.test(texto), 'nada de link nem chave Pix na resposta');
@@ -154,6 +158,7 @@ test('a leitura é SÓ da unidade pedida (slug e unit_id nos filtros), e o sinal
       assert.equal(v.where.unitId, 'u-timbo');
       assert.ok(!('url' in (v.select ?? {})) && !('linkId' in (v.select ?? {})) && !('paymentId' in (v.select ?? {})), 'o link e a chave não são lidos');
     } else assert.equal(v.where.unitSlug, 'timbo', v.onde);
+    if (v.onde === 'evento') assert.ok(Array.isArray((v.where.tipo as { in: string[] }).in), 'só os tipos de evento que a medida usa');
   }
   assert.ok(vistos.some((v) => v.onde === 'sinal'));
 });

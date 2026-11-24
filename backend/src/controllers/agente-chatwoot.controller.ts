@@ -49,7 +49,7 @@ export async function agentePainelHandler(req: Request, res: Response): Promise<
   }
 }
 
-/** As conversas por trás de um número do painel (clicar no card): mesma unidade, mesma conta e caixas da pessoa. Só no CRM (o Kommo tem rota própria). */
+/** As conversas por trás de um número do painel (clicar no card): da MESMA unidade que o painel (a unidade tem que ser da conta e das caixas da pessoa: `atendenteDaUnidade`). Só no CRM (o Kommo tem rota própria). */
 export async function agenteDetalheHandler(req: Request, res: Response): Promise<void> {
   // a sessão e a conta vêm ANTES de qualquer outra coisa (sem login válido da conta, a resposta é sempre a mesma recusa)
   const r = await atendenteDaUnidade(req, res, slugDe(req.query.slug));
