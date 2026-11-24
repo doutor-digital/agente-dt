@@ -1913,7 +1913,7 @@ const MENU_JS = String.raw`(function(){
     });
     if (!doFunil) return;
     var d = ev.data;
-    if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao() }, AGENTE);
+    if (d && d.event === 'funil:pede-sessao') ev.source.postMessage({ event: 'funil-sessao', sessao: sessao(), tema: document.documentElement.classList.contains('dark') ? 'escuro' : 'claro' }, AGENTE);
     else if (d && d.event === 'funil:fechar' && fr && ev.source === fr.contentWindow) fechar();
     else if (d && d.event === 'funil:abrir-conversa' && fr && ev.source === fr.contentWindow) {
       // abre a conversa do lead na tela normal do Chatwoot (mesma conta da página); id só número

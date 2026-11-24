@@ -9,11 +9,12 @@
  *   Pausadas  → conversas em que a equipe assumiu; devolver para a Sofia
  *   Pedir     → pedido à Doutor Digital (valor, horário, erro…): vira demanda no painel do suporte e avisa o bot de chamados
  *
- * Desenho: o MESMO das telas Oportunidades/Marketing/Gestor (`chatwoot-telas-ui.ts`), que o João aprovou depois de reclamar de «cara
- * de IA»: cores, bordas e fonte do próprio Chatwoot (escala slate, azul #2781f6 como única cor de destaque; verde/vermelho só para
- * bom/ruim), números numa faixa com divisórias finas e a variação contra o período anterior, abas sublinhadas, listas densas, um
- * gráfico só, sem sombra, sem gradiente, sem emoji nos controles. A definição de cada número fica no `title` do rótulo e em «Como
- * cada número é contado», nunca embaixo do número.
+ * Desenho («Placar», escolhido pelo João em 24/11/2026): no alto a faixa «o que precisa de você agora» (respostas ruins para revisar,
+ * conversas pausadas, pedidos abertos); depois o desempenho (dois gráficos, cada um na sua escala, e os cinco números menores) e as
+ * listas. O card «Consultas marcadas» é um botão: abre a lista completa do período (paciente, dia e hora, quando foi marcada e quem
+ * agendou). Tema claro e escuro (o menu do Chatwoot avisa qual está ativo; sem aviso vale o do aparelho), pílulas com cor + forma,
+ * números com `tabular-nums`, alvos de toque de 44 px. A definição de cada número fica no `title` do rótulo e em «Como cada número é
+ * contado».
  *
  * A sessão chega do menu do Chatwoot por postMessage (`funil:pede-sessao` → `funil-sessao`, com checagem de origem). Todo texto que
  * vem do servidor entra por textContent (nunca innerHTML). O JavaScript não usa crase nem `${`: o texto é um String.raw e só
@@ -30,67 +31,98 @@ import { guiaDaEtapaLigado } from './chatwoot-guia-etapas.js';
 import { comContaNaPagina } from './conta-no-navegador.js';
 
 const PAGINA = String.raw`<!doctype html>
-<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark">
 <meta name="robots" content="noindex,nofollow"><meta name="referrer" content="no-referrer">
 <title>Agente · Sofia</title>
 <link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
-:root{--txt:#1c2024;--sec:#60646c;--mut:#8b8d98;--b:#e8e8ec;--b2:#d9d9e0;--suave:#f9f9fb;--azul:#2781f6;--azul-txt:#086de0;--azul-claro:#cfe3fd;--bom:#218358;--ruim:#ca244d;--amarelo:#c77700}
+:root,[data-tema=claro]{color-scheme:light;--bg:#f9f9fb;--sf:#fff;--sf2:#f3f4f8;--txt:#0b122b;--sec:#464e70;--mut:#646d93;--b:#e3e6f0;--b2:#cdd2e3;--pri:#0b122b;--pri-tx:#fff;--lnk:#2437a0;--foco:#b45f00;--hero:#0b122b;--ok:#16694a;--ok-bg:#e3f5ec;--er:#b0203f;--er-bg:#fcebef;--at:#8a5200;--at-bg:#fff1d6;--so:#5b21b6;--so-bg:#efe8fd;--ne:#454c6b;--ne-bg:#eceef5;--s1:#5468b8;--s2:#d9780a;--ruim:#b0203f;--amarelo:#8a5200;--sombra:0 12px 40px rgba(11,18,43,.28)}
+[data-tema=escuro]{color-scheme:dark;--bg:#111113;--sf:#18191b;--sf2:#212225;--txt:#edeef0;--sec:#b0b4ba;--mut:#8b8d98;--b:#2e3135;--b2:#43484e;--pri:#F0A030;--pri-tx:#0b122b;--lnk:#9eb1ff;--foco:#F0A030;--hero:#16204d;--ok:#72d9a8;--ok-bg:#12372a;--er:#ff93aa;--er-bg:#3d1626;--at:#f6bb55;--at-bg:#3b2a0a;--so:#c7adff;--so-bg:#2c1c5c;--ne:#b9bfdc;--ne-bg:#2a2d3a;--s1:#7684d6;--s2:#d37c0e;--ruim:#ff93aa;--amarelo:#f6bb55;--sombra:0 12px 40px rgba(0,0,0,.6)}
 *{box-sizing:border-box}html,body{margin:0}
-body{background:#fff;color:var(--txt);font:14px/1.45 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+body{background:var(--bg);color:var(--txt);font:14px/1.5 Figtree,Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;-webkit-font-smoothing:antialiased}
 [hidden]{display:none!important}
 button,select,input,textarea{font:inherit;color:inherit}
-:focus-visible{outline:2px solid var(--azul);outline-offset:2px}
-main{max-width:1120px;margin:0 auto;padding:20px 24px 56px}
-h1{margin:0;font-size:16px;font-weight:600}
-h3{margin:0 0 4px;font-size:14px;font-weight:600;display:flex;align-items:baseline;gap:8px}
-h3 .c{color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
+:focus-visible{outline:2px solid var(--foco);outline-offset:2px}
+main{max-width:1240px;margin:0 auto;padding:20px 28px 56px}
+h1{margin:0;font:800 26px/1.1 "Bricolage Grotesque",Figtree,sans-serif;letter-spacing:-.02em}
+h3{margin:0 0 4px;font:700 17px/1.25 "Bricolage Grotesque",Figtree,sans-serif;letter-spacing:-.01em;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+h3 .c{color:var(--mut);font:500 13px Figtree,sans-serif;font-variant-numeric:tabular-nums}
 .meta{color:var(--sec);font-size:13px}
 .mut{color:var(--mut)}
-.cab{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-bottom:12px}
+.cab{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px 16px;margin-bottom:14px}
 .cab .eu{display:flex;align-items:center;gap:10px;color:var(--sec);font-size:13px}
-.cab .aj{width:30px;height:30px;border-radius:50%;border:1px solid var(--b);background:transparent;color:var(--sec);font-weight:700;font-size:14px;cursor:pointer}.cab .aj:hover{color:var(--azul-txt);border-color:var(--azul)}
-.topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--b)}
+.cab .aj{width:44px;height:44px;border-radius:50%;border:1px solid var(--b2);background:transparent;color:var(--sec);font-weight:700;font-size:15px;cursor:pointer}.cab .aj:hover{color:var(--lnk);border-color:var(--lnk)}
+.topo{display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:8px 16px;border-bottom:1px solid var(--b2)}
 .abas{display:flex;gap:4px;flex-wrap:wrap}
-.abas button{position:relative;min-height:40px;padding:0 12px;border:0;background:transparent;color:var(--sec);font-weight:500;font-size:14px;cursor:pointer;border-radius:6px 6px 0 0}
+.abas button{position:relative;min-height:44px;padding:0 14px;border:0;border-bottom:3px solid transparent;background:transparent;color:var(--sec);font-weight:600;font-size:14px;cursor:pointer;display:inline-flex;align-items:center;gap:8px;margin-bottom:-1px}
 .abas button:hover{color:var(--txt)}
-.abas button[aria-selected=true]{color:var(--azul-txt);font-weight:600}
-.abas button[aria-selected=true]::after{content:"";position:absolute;left:8px;right:8px;bottom:-1px;height:2px;background:var(--azul);border-radius:2px}
-.abas .c{margin-left:6px;color:var(--mut);font-weight:500;font-variant-numeric:tabular-nums}
-.abas button[aria-selected=true] .c{color:var(--azul-txt)}
+.abas button[aria-selected=true]{color:var(--txt);font-weight:700;border-bottom-color:#F0A030}
+.abas .c{min-width:20px;height:20px;padding:0 7px;border-radius:999px;background:var(--ne-bg);color:var(--ne);font-size:11.5px;font-weight:700;line-height:20px;text-align:center;font-variant-numeric:tabular-nums}
+.abas .c:empty{display:none}
+#aba-pausadas .c{background:var(--so-bg);color:var(--so)}
 .lado{display:flex;align-items:center;gap:10px;padding-bottom:6px}
-.sel{min-height:32px;padding:0 8px;border:1px solid var(--b2);border-radius:6px;background:#fff;font-size:13px;cursor:pointer}
-.bt{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:32px;padding:0 12px;border-radius:6px;border:1px solid var(--b2);background:#fff;color:var(--txt);font-weight:500;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .12s,border-color .12s}
-.bt:hover{background:var(--suave);border-color:#cdced6}
-.bt.pri{background:var(--azul);border-color:var(--azul);color:#fff}
-.bt.pri:hover{background:#1073e9}
-.bt.link{border-color:transparent;background:transparent;color:var(--azul-txt);padding:0 6px}
-.bt.link:hover{background:#f5f9ff}
+.sel{min-height:44px;padding:0 10px;border:1px solid var(--b2);border-radius:10px;background:var(--sf);font-size:13px;cursor:pointer}
+.bt{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:36px;padding:0 14px;border-radius:10px;border:1px solid var(--b2);background:var(--sf);color:var(--txt);font-weight:600;font-size:13px;cursor:pointer;white-space:nowrap;transition:background .12s}
+.bt:hover{background:var(--sf2)}
+.bt.pri{background:var(--pri);border-color:var(--pri);color:var(--pri-tx)}
+.bt.pri:hover{filter:brightness(1.12);background:var(--pri)}
+.bt.link{border-color:transparent;background:transparent;color:var(--lnk);padding:0 10px}
+.bt.link:hover{background:var(--sf2)}
 .bt.leve{border-color:transparent;background:transparent;color:var(--sec)}
-.bt.leve:hover{background:var(--suave);color:var(--txt)}
+.bt.leve:hover{background:var(--sf2);color:var(--txt)}
 .bt:disabled{opacity:.5;cursor:default}
-.pane{padding-top:20px}
+.pane{padding-top:22px}
 .pane>*+*{margin-top:28px}
-.aviso{padding:9px 12px;border:1px solid #f0e2b6;border-radius:8px;background:#fffbeb;color:#6b4e00;font-size:13px;white-space:pre-wrap}
-.aviso.erro{border-color:#f4d0d8;background:#fff5f7;color:#8f1d3a}
-.vinculo{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding:7px 10px;border:1px solid #d5e2fb;border-radius:6px;background:#f5f9ff;color:#1d3f87;font-size:13px}
+.aviso{padding:10px 14px;border:1px solid var(--at);border-radius:10px;background:var(--at-bg);color:var(--at);font-size:13px;white-space:pre-wrap}
+.aviso.erro{border-color:var(--er);background:var(--er-bg);color:var(--er)}
+.vinculo{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:12px;padding:7px 12px;border:1px solid var(--b2);border-radius:10px;background:var(--sf2);color:var(--txt);font-size:13px}
 
-/* números: uma faixa com divisórias finas */
-.kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));border:1px solid var(--b);border-radius:8px;overflow:hidden}
-.kpi{padding:14px 16px 12px;min-width:0;box-shadow:1px 0 0 var(--b),0 1px 0 var(--b)}
-.kpi .r{display:block;font-size:13px;color:var(--sec);cursor:help}
-.kpi .v{display:block;margin:4px 0 2px;font-size:24px;line-height:1.2;font-weight:600;letter-spacing:-.01em;font-variant-numeric:tabular-nums}
-.kpi .v.nulo{color:var(--mut)}
-.kpi .d{display:block;min-height:18px;font-size:12.5px;color:var(--mut);font-variant-numeric:tabular-nums}
-.kpi .d.bom{color:var(--bom)}.kpi .d.ruim{color:var(--ruim)}
+/* pílulas: cor + forma */
+.pill{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--ne-bg);color:var(--ne)}
+.pill::before{content:"";width:8px;height:8px;background:currentColor;flex:none}
+.pill.ok{background:var(--ok-bg);color:var(--ok)}.pill.ok::before{border-radius:50%}
+.pill.er{background:var(--er-bg);color:var(--er)}.pill.er::before{transform:rotate(45deg)}
+.pill.at{background:var(--at-bg);color:var(--at)}.pill.at::before{clip-path:polygon(50% 0,100% 100%,0 100%);width:9px}
+.pill.so{background:var(--so-bg);color:var(--so)}.pill.so::before{background:transparent;border:2px solid currentColor;border-radius:50%}
+.pill.ne::before{height:2px;width:9px}
 
-/* gráfico */
-.graf svg{display:block;width:100%;height:auto;overflow:visible;margin-top:8px}
-.graf text{font-family:inherit;font-size:11px;fill:var(--sec)}
-.leg{display:flex;flex-wrap:wrap;gap:4px 18px;margin:6px 0 0;padding:0;list-style:none;font-size:13px;color:var(--sec)}
-.leg li{display:flex;align-items:center;gap:6px}
-.leg i{width:10px;height:10px;border-radius:2px;flex:none}
+/* faixa «o que precisa de você» */
+.b-hero{--at:#f6bb55;--at-bg:#3b2a0a;--so:#c7adff;--so-bg:#2c1c5c;--ne:#c3c9e4;--ne-bg:#2a3260;--er:#ff93aa;--er-bg:#4a1a2d;background:var(--hero);color:#fff;border-radius:20px;padding:22px 24px 24px}
+.b-hero h2{margin:0;font:700 20px/1.2 "Bricolage Grotesque",Figtree,sans-serif;letter-spacing:-.01em}
+.b-hero .meta{color:#aeb6d8}
+.b-hero-top{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:baseline;gap:6px 16px}
+.b-tiles{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-top:16px}
+.b-tile{display:flex;flex-direction:column;align-items:flex-start;gap:6px;text-align:left;padding:16px 18px 18px;border-radius:16px;border:1px solid rgba(255,255,255,.18);background:rgba(255,255,255,.05);color:#fff;cursor:pointer;min-height:44px}
+.b-tile:hover{background:rgba(255,255,255,.11)}
+.b-tile:focus-visible{outline-color:#F0A030}
+.b-tile.alerta{border:2px solid #F0A030;padding:15px 17px 17px}
+.b-tile .num{font:800 58px/1 "Bricolage Grotesque",Figtree,sans-serif;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+.b-tile.alerta .num{color:#F0A030}
+.b-tile .rot{font-size:14px;color:#dfe3f5;font-weight:500}
+
+/* desempenho */
+.b-sec>h3{margin-bottom:12px}
+.b-grandes{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.b-peq{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px;margin-top:14px}
+.b-card{display:block;width:100%;text-align:left;background:var(--sf);border:1px solid var(--b);border-radius:18px;padding:18px 20px;color:inherit}
+.b-card .r{display:block;font-size:13.5px;color:var(--sec);font-weight:500;cursor:help}
+.b-card .v{display:block;font:800 44px/1.05 "Bricolage Grotesque",Figtree,sans-serif;letter-spacing:-.03em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+.b-card .v.nulo{color:var(--mut)}
+.b-peq .b-card{padding:14px 16px}.b-peq .v{font-size:32px}
+.b-card .graf{display:block;margin-top:12px}
+button.b-clicavel{cursor:pointer;border-color:var(--b2)}
+button.b-clicavel:hover{border-color:var(--lnk);background:var(--sf2)}
+.b-ver{display:inline-flex;align-items:center;gap:6px;margin-top:12px;min-height:24px;color:var(--lnk);font-weight:700;font-size:13px}
+.b-ver::after{content:"";width:7px;height:7px;border-top:2px solid currentColor;border-right:2px solid currentColor;transform:rotate(45deg)}
+.dt{display:block;min-height:19px;font-size:12.5px;color:var(--sec);font-variant-numeric:tabular-nums}
+.dt.up::before,.dt.dn::before{content:"";display:inline-block;width:8px;height:7px;margin-right:5px;background:currentColor}
+.dt.up::before{clip-path:polygon(50% 0,100% 100%,0 100%)}.dt.dn::before{clip-path:polygon(0 0,100% 0,50% 100%)}
+.dt.bom{color:var(--ok)}.dt.ruim{color:var(--er)}.dt .vs{color:var(--mut)}
+.graf svg{display:block;width:100%;height:auto;overflow:visible}
+.g-grade{stroke:var(--b)}.g-base{stroke:var(--b2)}.g-eixo{fill:var(--sec);font:11px Figtree,sans-serif}
+.g-r{fill:var(--s1)}.g-m{fill:var(--s2)}
+.b-nota{margin:8px 0 0}
 details.def{font-size:13px;color:var(--sec)}
 details.def summary{cursor:pointer;min-height:28px;display:inline-flex;align-items:center;gap:6px;list-style:none}
 details.def summary::-webkit-details-marker{display:none}
@@ -107,105 +139,124 @@ details.def li{margin:3px 0}
 /* duas colunas */
 .duas{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:32px;align-items:start}
 .duas.larga{grid-template-columns:minmax(0,1.35fr) minmax(0,1fr)}
+.b-duas{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:26px;align-items:start}
+.b-lista{background:var(--sf);border:1px solid var(--b);border-radius:18px;padding:4px 22px 10px;margin-top:10px}
+.b-lista>:first-child{border-top:0}
+.b-lista+.b-lista,.b-bloco+.b-bloco{margin-top:26px}
 
 /* listas densas */
-.lin{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 16px;align-items:center;padding:10px 0;border-top:1px solid var(--b)}
-.lin .nm{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lin .det{display:block;margin-top:1px;font-size:13px;color:var(--sec);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-variant-numeric:tabular-nums}
+.lin{display:flex;align-items:center;justify-content:space-between;gap:8px 14px;flex-wrap:wrap;padding:11px 0;border-top:1px solid var(--b)}
+.lin .nm{font-weight:600}
+.lin .det{display:block;margin-top:1px;font-size:13px;color:var(--sec);font-variant-numeric:tabular-nums}
 .lin .btns{display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap}
+.mais{display:flex;justify-content:flex-end;padding-top:6px}
 .vazio{margin:0;padding:12px 0;border-top:1px solid var(--b);color:var(--sec)}
 .vazio b{color:var(--txt);font-weight:600}
 .reg-filtros{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
-.reg-filtros input.sel{width:150px}
-.reg{border-top:1px solid var(--b);padding:10px 0}
+.reg-filtros input.sel{width:170px}
+.reg{border-top:1px solid var(--b);padding:12px 0}
 .reg-cab{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:6px}
 .reg-cab .bt{margin-left:auto}
-.reg-it{display:grid;grid-template-columns:92px 1fr;gap:10px;padding:4px 0 4px 10px;border-left:2px solid var(--b)}
-.reg-it.reg-nao-respondeu{border-left-color:#e5484d}
-.reg-it.reg-marcou,.reg-it.reg-pix{border-left-color:#12855a}
-.reg-it.reg-resposta,.reg-it.reg-equipe{border-left-color:var(--azul,#2781f6)}
+.reg-it{display:grid;grid-template-columns:92px 1fr;gap:10px;padding:4px 0 4px 12px;border-left:3px solid var(--b2)}
+.reg-it.reg-nao-respondeu{border-left-color:var(--er)}
+.reg-it.reg-marcou,.reg-it.reg-pix{border-left-color:var(--ok)}
+.reg-it.reg-equipe{border-left-color:var(--so)}
+.reg-it.reg-resposta{border-left-color:var(--lnk)}
+.reg-it.reg-avaliacao{border-left-color:var(--at)}
 .reg-q{color:var(--sec);font-variant-numeric:tabular-nums;font-size:12.5px}
 .reg-tx{min-width:0;overflow-wrap:anywhere}
-@media (max-width:520px){.reg-it{grid-template-columns:1fr}.reg-filtros input.sel{width:100%}}
 
 /* resposta para revisar */
-.caso{padding:12px 0;border-top:1px solid var(--b)}
-.caso .q{display:flex;justify-content:space-between;gap:8px;font-size:12.5px;color:var(--sec)}
+.caso{padding:14px 0;border-top:1px solid var(--b)}
+.caso .q{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap;font-size:12.5px;color:var(--sec)}
 .caso .q b{color:var(--txt);font-weight:600}
-.caso dl{display:grid;grid-template-columns:62px minmax(0,1fr);gap:4px 10px;margin:8px 0 0;font-size:13.5px}
-.caso dt{color:var(--mut);font-size:12.5px;padding-top:1px}
+.caso dl{display:grid;grid-template-columns:64px minmax(0,1fr);gap:5px 10px;margin:8px 0 0;font-size:14px}
+.caso dt{color:var(--mut);font-size:12.5px;padding-top:2px}
 .caso dd{margin:0;white-space:pre-wrap;word-break:break-word}
-.caso dd.errado{color:var(--ruim)}
-.caso .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px}
+.caso dd.errado{color:var(--er);font-weight:500}
+.caso .btns{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px}
 
 /* ensinar */
-label.rot{display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:500;color:var(--txt);margin:14px 0 6px}
+label.rot{display:flex;justify-content:space-between;gap:10px;font-size:13px;font-weight:600;margin:14px 0 6px}
 label.rot span{font-weight:400;color:var(--mut);font-variant-numeric:tabular-nums}
-textarea,input[type=text]{width:100%;border:1px solid var(--b2);border-radius:6px;background:#fff;padding:9px 11px;line-height:1.45;transition:border-color .12s,box-shadow .12s}
+textarea,input[type=text]{width:100%;border:1px solid var(--b2);border-radius:10px;background:var(--sf);padding:10px 12px;line-height:1.45}
 textarea{min-height:96px;resize:vertical}
-textarea:focus,input[type=text]:focus{outline:none;border-color:var(--azul);box-shadow:0 0 0 3px rgba(39,129,246,.15)}
+textarea:focus,input[type=text]:focus{outline:2px solid var(--foco);outline-offset:1px}
 textarea::placeholder,input::placeholder{color:var(--mut)}
 .exemplos{list-style:none;padding:0!important}
-.exemplos button{border:0;background:transparent;padding:2px 0;color:var(--azul-txt);cursor:pointer;text-align:left}
+.exemplos button{border:0;background:transparent;padding:4px 0;color:var(--lnk);cursor:pointer;text-align:left}
 .exemplos button:hover{text-decoration:underline}
 .falas input{margin-top:6px}
 .acoes{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-top:12px}
 .antes-depois{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:6px}
-.antes-depois>div{border:1px solid var(--b);border-radius:8px;padding:9px 11px;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
-.antes-depois>div.nova{border-color:#a9cdfb;background:#f5f9ff}
-.antes-depois small{display:block;margin-bottom:3px;color:var(--sec);font-size:12px;font-weight:500}
+.antes-depois>div{border:1px solid var(--b);border-radius:12px;padding:10px 12px;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.antes-depois>div.nova{border-color:var(--lnk);background:var(--sf2)}
+.antes-depois small{display:block;margin-bottom:3px;color:var(--sec);font-size:12px;font-weight:600}
 .previa-item{padding:12px 0;border-top:1px solid var(--b)}
 .previa-item .fala{font-size:13px;color:var(--sec)}
-.previa-item .fala b{color:var(--txt);font-weight:500}
-.regra{display:flex;gap:12px;align-items:flex-start;padding:10px 0;border-top:1px solid var(--b)}
-.regra p{margin:0;flex:1;min-width:0;font-size:13.5px;white-space:pre-wrap;word-break:break-word}
+.previa-item .fala b{color:var(--txt);font-weight:600}
+.regra{display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--b)}
+.regra p{margin:0;flex:1;min-width:0;font-size:14px;white-space:pre-wrap;word-break:break-word}
 .regra small{display:block;margin-top:2px;color:var(--mut);font-size:12px}
 .regra.off p{color:var(--mut)}
-.sw{position:relative;width:32px;height:18px;margin-top:2px;border-radius:999px;border:0;background:#d9d9e0;cursor:pointer;flex:none;transition:background .15s}
-.sw::after{content:"";position:absolute;top:2px;left:2px;width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.2);transition:transform .15s}
-.sw[aria-checked=true]{background:var(--azul)}
-.sw[aria-checked=true]::after{transform:translateX(14px)}
+.sw{position:relative;width:46px;height:28px;margin-top:0;border-radius:999px;border:0;background:var(--b2);cursor:pointer;flex:none;transition:background .15s}
+.sw::after{content:"";position:absolute;top:3px;left:3px;width:22px;height:22px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform .15s}
+.sw[aria-checked=true]{background:var(--ok)}
+.sw[aria-checked=true]::after{transform:translateX(18px)}
 details.equipe{margin-top:12px}
 
-/* testar: a conversa com o desenho do Chatwoot (paciente à esquerda, Sofia à direita) */
-.chatbox{border:1px solid var(--b);border-radius:8px;overflow:hidden}
-.chatbox .cabc{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:10px 14px;border-bottom:1px solid var(--b);font-size:13px;color:var(--sec)}
-.chatbox .cabc b{color:var(--txt);font-weight:600;font-size:14px}
-.chat{display:flex;flex-direction:column;gap:6px;height:min(56vh,520px);overflow-y:auto;padding:14px;background:#fcfcfd}
-.msg{max-width:76%;padding:8px 12px;border-radius:12px;font-size:14px;white-space:pre-wrap;word-break:break-word}
-.msg.pac{align-self:flex-start;background:#f0f0f3}
-.msg.sofia{align-self:flex-end;background:#dbe8fe}
+/* testar */
+.chatbox{border:1px solid var(--b);border-radius:16px;overflow:hidden;background:var(--sf)}
+.chatbox .cabc{display:flex;justify-content:space-between;gap:10px;align-items:center;padding:11px 14px;border-bottom:1px solid var(--b);font-size:13px;color:var(--sec)}
+.chatbox .cabc b{color:var(--txt);font-weight:700;font-size:14px}
+.chat{display:flex;flex-direction:column;gap:6px;height:min(56vh,520px);overflow-y:auto;padding:14px;background:var(--sf2)}
+.msg{max-width:78%;padding:8px 12px;border-radius:14px;font-size:14px;white-space:pre-wrap;word-break:break-word}
+.msg.pac{align-self:flex-start;background:var(--ne-bg);color:var(--txt);border-bottom-left-radius:4px}
+.msg.sofia{align-self:flex-end;background:var(--so-bg);color:var(--txt);border-bottom-right-radius:4px}
 .msg.acao{align-self:flex-end;background:transparent;color:var(--amarelo);font-size:12px;padding:0 4px}
 .msg.dica{align-self:center;background:transparent;color:var(--sec);font-size:13px;text-align:center}
 .msg.dig{color:var(--sec)}
 .escrever{display:flex;gap:8px;padding:10px;border-top:1px solid var(--b)}
-.escrever textarea{min-height:40px;height:40px;resize:none}
+.escrever textarea{min-height:44px;height:44px;resize:none}
 .lista-falas{margin:6px 0 0;padding:0;list-style:none}
 .lista-falas li{border-top:1px solid var(--b)}
-.lista-falas button{width:100%;border:0;background:transparent;text-align:left;padding:8px 0;cursor:pointer;color:var(--txt)}
-.lista-falas button:hover{color:var(--azul-txt)}
+.lista-falas button{width:100%;border:0;background:transparent;text-align:left;padding:10px 0;cursor:pointer;color:var(--txt)}
+.lista-falas button:hover{color:var(--lnk)}
 
-/* tabela */
+/* tabelas */
 .rolar{overflow-x:auto}
 table.tab{width:100%;border-collapse:collapse;font-size:14px}
-.tab th{padding:8px 12px;text-align:left;font-size:12px;font-weight:500;color:var(--sec);white-space:nowrap;border-bottom:1px solid var(--b2)}
+.tab th{padding:8px 12px;text-align:left;font-size:12px;font-weight:600;color:var(--sec);white-space:nowrap;border-bottom:1px solid var(--b2)}
 .tab td{padding:10px 12px;border-bottom:1px solid var(--b);vertical-align:middle}
 .tab th:first-child,.tab td:first-child{padding-left:0}
 .tab th:last-child,.tab td:last-child{padding-right:0;text-align:right;white-space:nowrap}
-.sem{display:inline-flex;align-items:center;gap:6px;font-size:13px;color:var(--sec);white-space:nowrap}
-.sem::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--ponto,#b9bbc6)}
-.sem.a{--ponto:#e5a100}.sem.g{--ponto:#30a46c}.sem.v{--ponto:#d9304f}
+.tab .n{font-variant-numeric:tabular-nums}
+.sem{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 10px 0 8px;border-radius:999px;font-size:12px;font-weight:600;white-space:nowrap;background:var(--ne-bg);color:var(--ne)}
+.sem::before{content:"";width:8px;height:8px;background:currentColor;flex:none}
+.sem.g{background:var(--ok-bg);color:var(--ok)}.sem.g::before{border-radius:50%}
+.sem.v{background:var(--er-bg);color:var(--er)}.sem.v::before{transform:rotate(45deg)}
+.sem.a{background:var(--at-bg);color:var(--at)}.sem.a::before{clip-path:polygon(50% 0,100% 100%,0 100%);width:9px}
 
 /* pedir */
 .tipos{display:flex;flex-direction:column;gap:2px;margin-top:10px}
-.tipos label{display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:14px}
-.tipos input{width:16px;height:16px;margin:0;accent-color:var(--azul)}
-.pedido{padding:10px 0;border-top:1px solid var(--b)}
+.tipos label{display:flex;align-items:center;gap:10px;padding:6px 0;min-height:36px;cursor:pointer;font-size:14px}
+.tipos input{width:18px;height:18px;margin:0;accent-color:var(--pri)}
+.pedido{padding:12px 0;border-top:1px solid var(--b)}
 .pedido .l1{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.pedido .l1 b{font-weight:600}
-.pedido p{margin:4px 0 0;font-size:13.5px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.pedido .l1 b{font-weight:700;font-variant-numeric:tabular-nums}
+.pedido p{margin:4px 0 0;font-size:14px;white-space:pre-wrap;word-break:break-word;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .pedido .det{margin-top:2px;font-size:12.5px;color:var(--sec)}
-.pedido .resp{margin-top:6px;padding-left:10px;border-left:2px solid #a9d9bd;color:#185c3c;font-size:13px;white-space:pre-wrap}
+.pedido .resp{margin-top:8px;padding-left:10px;border-left:3px solid var(--ok);color:var(--txt);font-size:13px;white-space:pre-wrap}
+
+/* lista de consultas (janela) */
+dialog.janela{width:min(940px,calc(100vw - 24px));max-height:calc(100vh - 32px);padding:0;border:1px solid var(--b2);border-radius:20px;background:var(--sf);color:var(--txt);box-shadow:var(--sombra)}
+dialog.janela::backdrop{background:rgba(5,8,20,.6)}
+.janela-in{display:flex;flex-direction:column;max-height:calc(100vh - 34px)}
+.janela-cab{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:18px 22px 12px;border-bottom:1px solid var(--b)}
+.janela-cab h3{margin:0;font-size:20px}
+.janela-corpo{overflow:auto;padding:4px 22px 6px}
+.janela-rodape{padding:10px 22px 16px;border-top:1px solid var(--b);color:var(--sec);font-size:13px}
+.tab .quem{white-space:nowrap}
 
 /* modo Kommo: entrada por código, pausa da unidade, conferir, celular */
 a.bt{text-decoration:none}
@@ -213,7 +264,7 @@ a.bt{text-decoration:none}
 .entrada input{margin-bottom:4px}
 .pausa-ops{display:flex;flex-direction:column;gap:2px;margin:10px 0 8px}
 .pausa-ops label{display:flex;align-items:center;gap:8px;padding:5px 0;cursor:pointer;font-size:14px}
-.pausa-ops input{width:16px;height:16px;margin:0;accent-color:var(--azul)}
+.pausa-ops input{width:16px;height:16px;margin:0;accent-color:var(--pri)}
 .pausa-estado{display:inline-flex;align-items:center;gap:6px;font-weight:600}
 .pausa-estado::before{content:"";width:8px;height:8px;border-radius:50%;background:#30a46c}
 .pausa-estado.off::before{background:#e5a100}
@@ -222,17 +273,43 @@ a.bt{text-decoration:none}
 .conf-item{padding:8px 0;border-top:1px solid var(--b)}
 .conf-item a{color:var(--txt);font-weight:600;text-decoration:none;border-bottom:1px dotted var(--mut)}
 .conf-item .f{font-size:13px;color:var(--sec)}
-.tipo-ia{color:var(--azul-txt)}.tipo-equipe{color:var(--bom)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
+.tipo-ia{color:var(--lnk)}.tipo-equipe{color:var(--ok)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
 @media (max-width:560px){body.km .abas{width:100%;gap:0 2px}body.km .abas button{padding:0 9px;font-size:13.5px}body.km .lado{width:100%;padding:8px 0}body.km .lado .sel{flex:1;min-height:40px}body.km .bt{min-height:40px}}
 
+body.km .col-quem,body.km #tRevisar{display:none}
+@media (min-width:561px){body.km .b-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
+body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 /* esqueleto e aviso flutuante */
-.sk{display:block;border-radius:6px;background:linear-gradient(90deg,#f0f0f3 0,#f9f9fb 40%,#f0f0f3 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
+.sk{display:block;border-radius:10px;background:linear-gradient(90deg,var(--sf2) 0,var(--b) 40%,var(--sf2) 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
-.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));padding:10px 14px;border-radius:8px;background:#1c2024;color:#fff;font-size:13.5px;z-index:20}
-.toast.erro{background:#8f1d3a}
+.toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);max-width:min(560px,calc(100vw - 32px));padding:11px 16px;border-radius:12px;background:var(--pri);color:var(--pri-tx);font-size:13.5px;font-weight:600;z-index:20}
+.toast.erro{background:var(--er-bg);color:var(--er);border:1px solid var(--er)}
 .rodape{margin-top:32px;color:var(--mut);font-size:12.5px}
-@media (max-width:900px){.duas,.duas.larga{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media (max-width:560px){main{padding:16px 16px 40px}.antes-depois{grid-template-columns:1fr}.lin{grid-template-columns:1fr}.lin .btns{justify-content:flex-start}}
+@media (max-width:1000px){.b-peq{grid-template-columns:repeat(3,minmax(0,1fr))}.b-duas,.duas,.duas.larga{grid-template-columns:1fr}}
+@media (max-width:700px){.b-peq{grid-template-columns:repeat(2,minmax(0,1fr))}.b-grandes{grid-template-columns:1fr}}
+@media (max-width:560px){
+ main{padding:14px 14px 40px}
+ .b-hero{padding:18px 16px;border-radius:16px}
+ .b-tiles{grid-template-columns:1fr}
+ .b-tile{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:2px 16px}
+ .b-tile .num{font-size:44px;grid-row:1/3}
+ .b-tile .pill{justify-self:start}
+ .b-card .v{font-size:36px}
+ .abas{overflow-x:auto;flex-wrap:nowrap;width:100%}.abas button{flex:none}
+ .lado{width:100%}.lado .sel{width:100%}
+ .antes-depois{grid-template-columns:1fr}
+ .reg-it{grid-template-columns:1fr;gap:2px}.reg-filtros input.sel{width:100%}
+ .bt{min-height:44px}
+ .lin .btns{justify-content:flex-start}
+ .b-lista{padding:2px 14px 8px}
+ .janela-cab,.janela-corpo,.janela-rodape{padding-left:14px;padding-right:14px}
+ table.tab.empilha thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+ table.tab.empilha tr{display:block;padding:10px 0;border-bottom:1px solid var(--b)}
+ table.tab.empilha td{display:flex;justify-content:space-between;gap:12px;border:0;padding:3px 0;text-align:right!important}
+ table.tab.empilha td::before{content:attr(data-r);color:var(--mut);font-size:12px;font-weight:400;text-align:left}
+ table.tab.empilha td:last-child{justify-content:flex-end;padding-top:8px}
+ table.tab.empilha td:last-child::before{content:none}
+}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
 </style></head>
 <body><main>
@@ -267,29 +344,44 @@ a.bt{text-decoration:none}
 
 <!-- PAINEL -->
 <section class="pane" id="pane-painel" role="tabpanel" aria-labelledby="aba-painel">
-  <div class="kpis" id="kpis"><span class="sk" style="height:84px"></span></div>
+  <div class="b-hero">
+    <div class="b-hero-top"><h2>O que precisa de você agora</h2><span class="meta" id="heroUnidade"></span></div>
+    <div class="b-tiles">
+      <button class="b-tile alerta" id="tRevisar" type="button"><span class="num" id="nRevisar">—</span><span class="rot">respostas marcadas como ruins, sem revisão</span><span class="pill er">Para revisar</span></button>
+      <button class="b-tile" id="tPausadas" type="button"><span class="num" id="nPausadas">—</span><span class="rot">conversas com a Sofia pausada</span><span class="pill so">Equipe no comando</span></button>
+      <button class="b-tile" id="tPedidos" type="button"><span class="num" id="nPedidos">—</span><span class="rot">pedidos abertos à Doutor Digital</span><span class="pill at">Na fila</span></button>
+    </div>
+  </div>
   <div class="meta" id="lidoEm" hidden></div>
-  <section class="graf">
-    <h3>Por dia <span class="c">últimos 14 dias</span></h3>
-    <div id="grafico"><span class="sk" style="height:150px;margin-top:8px"></span></div>
-    <ul class="leg"><li><i style="background:var(--azul-claro)"></i>Pessoas respondidas</li><li><i style="background:var(--azul)"></i>Consultas marcadas</li></ul>
-    <details class="def" style="margin-top:4px"><summary>Ver como tabela</summary><div class="rolar"><table class="tabdia" id="tabDia"></table></div></details>
+  <section class="b-sec">
+    <h3>Desempenho da Sofia <span class="c" id="descPeriodo"></span></h3>
+    <div class="b-grandes" id="grandes"><span class="sk" style="height:220px"></span><span class="sk" style="height:220px"></span></div>
+    <p class="meta b-nota">Cada gráfico tem a sua escala: os últimos 14 dias.</p>
+    <div class="b-peq" id="peq"><span class="sk" style="height:96px"></span></div>
+    <details class="def" style="margin-top:12px"><summary>Ver o gráfico por dia como tabela</summary><div class="rolar"><table class="tabdia" id="tabDia"></table></div></details>
   </section>
-  <div class="duas larga">
+  <div class="b-duas">
     <section id="secRevisar">
       <h3>Respostas marcadas como ruins <span class="c" id="cRevisar"></span></h3>
       <div class="meta">Ficam aqui até alguém ensinar a Sofia, pedir ajuste ou dar ok.</div>
-      <div id="listaRevisar" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
+      <div class="b-lista" id="listaRevisar"><span class="sk" style="height:60px"></span></div>
     </section>
-    <section>
-      <h3>Consultas que a Sofia marcou <span class="c" id="cMarcadas"></span></h3>
-      <div class="meta">No período escolhido.</div>
-      <div id="listaMarcadas" style="margin-top:8px"><span class="sk" style="height:60px"></span></div>
-    </section>
+    <div>
+      <section class="b-bloco">
+        <h3>Conversas pausadas <span class="c" id="cPausadasPainel"></span></h3>
+        <div class="meta">A Sofia volta quando a conversa é resolvida. Dá para devolver antes.</div>
+        <div class="b-lista" id="listaPausadasPainel"><span class="sk" style="height:60px"></span></div>
+      </section>
+      <section class="b-bloco">
+        <h3>Consultas que a Sofia marcou <span class="c" id="cMarcadas"></span></h3>
+        <div class="meta">No período escolhido. Mais recentes primeiro.</div>
+        <div class="b-lista" id="listaMarcadas"><span class="sk" style="height:60px"></span></div>
+      </section>
+    </div>
   </div>
   <details class="def"><summary>Como cada número é contado</summary><ul>
     <li><b>Pessoas respondidas</b>: conversas em que a Sofia mandou pelo menos uma resposta no período.</li>
-    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM.</li>
+    <li><b>Consultas marcadas</b>: consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM. Consultas que a equipe marca direto na agenda não passam por aqui.</li>
     <li><b>Marcaram</b>: consultas marcadas ÷ pessoas respondidas.</li>
     <li><b>Passou para a equipe</b>: conversas em que ela chamou alguém da equipe (paciente pediu uma pessoa, assunto que ela não resolve).</li>
     <li><b>Pix do sinal gerado</b>: conversas em que ela gerou o Pix do sinal.</li>
@@ -415,6 +507,18 @@ a.bt{text-decoration:none}
 <p class="rodape">Vale só para a unidade escolhida. A Doutor Digital é avisada de cada regra nova e de cada pedido.</p>
 </div>
 </main>
+<dialog class="janela" id="dlgConsultas" aria-labelledby="dlgTitulo">
+  <div class="janela-in">
+    <div class="janela-cab">
+      <div><h3 id="dlgTitulo">Consultas que a Sofia marcou</h3><div class="meta" id="dlgPeriodo"></div></div>
+      <button class="bt" id="dlgFechar" type="button">Fechar</button>
+    </div>
+    <div class="janela-corpo">
+      <div class="rolar"><table class="tab empilha"><thead><tr><th>Paciente</th><th>Consulta</th><th>Marcada</th><th class="col-quem">Quem agendou</th><th></th></tr></thead><tbody id="dlgLista"></tbody></table></div>
+    </div>
+    <div class="janela-rodape" id="dlgRodape"></div>
+  </div>
+</dialog>
 <div id="toast" class="toast" role="status" hidden></div>
 <script>
 (function(){
@@ -509,16 +613,26 @@ a.bt{text-decoration:none}
   var tPainel = null, tentativasPainel = 0;
   var COMPARA = { hoje: 'ontem', '7': '7 dias antes', '30': '30 dias antes' };
   var SEM_ANTES = false;
+  var ROT_PERIODO = { hoje: 'hoje', '7': 'últimos 7 dias', '30': 'últimos 30 dias' };
+  // a variação contra o período anterior: v = «+17», vs = «vs. 7 dias antes»; s = sentido da seta; c = bom | ruim (vazio = neutro)
   function variacao(agora, antes, pontos){
-    if (agora == null || antes == null || SEM_ANTES) return { t: '', c: '' };
+    if (agora == null || antes == null || SEM_ANTES) return { v: '', vs: '', c: '', s: '' };
     var d = agora - antes;
-    if (d === 0) return { t: PERIODO === 'hoje' ? 'igual a ontem' : 'igual ao período anterior', c: '' };
-    return { t: (d > 0 ? '+' : '−') + Math.abs(d) + (pontos ? ' pts' : '') + ' vs. ' + COMPARA[PERIODO], c: d > 0 ? 'bom' : 'ruim' };
+    if (d === 0) return { v: PERIODO === 'hoje' ? 'igual a ontem' : 'igual ao período anterior', vs: '', c: '', s: '' };
+    return { v: (d > 0 ? '+' : '−') + Math.abs(d) + (pontos ? ' pts' : ''), vs: ' vs. ' + COMPARA[PERIODO], c: d > 0 ? 'bom' : 'ruim', s: d > 0 ? 'up' : 'dn' };
   }
-  function kpi(rotulo, definicao, valor, v){
-    var k = el('div', 'kpi'), r = el('span', 'r', rotulo); r.title = definicao; k.appendChild(r);
+  function elDelta(v){
+    var d = el('span', 'dt' + (v && v.c ? ' ' + v.c : '') + (v && v.s ? ' ' + v.s : ''));
+    if (v && v.v) d.appendChild(document.createTextNode(v.v));
+    if (v && v.vs) d.appendChild(el('span', 'vs', v.vs));
+    if (v && v.texto) d.textContent = v.texto;
+    return d;
+  }
+  function cartao(tag, rotulo, definicao, valor, v, extra){
+    var k = el(tag, 'b-card' + (extra ? ' ' + extra : '')); if (tag === 'button') k.type = 'button';
+    var r = el('span', 'r', rotulo); r.title = definicao; k.appendChild(r);
     k.appendChild(el('span', 'v' + (valor === '—' ? ' nulo' : ''), valor));
-    k.appendChild(el('span', 'd' + (v && v.c ? ' ' + v.c : ''), v ? v.t : ''));
+    k.appendChild(elDelta(v));
     return k;
   }
   // o caso (👎) que a pessoa abriu em «Ensinar a Sofia» ou «Pedir ajuste»: só a regra/o pedido feito DALI o dá por revisado
@@ -531,33 +645,48 @@ a.bt{text-decoration:none}
   }
   function desvincular(){ revisando = null; pedidoConversa = null; mostrarVinculo(); }
   Array.prototype.forEach.call(document.querySelectorAll('[data-desvincular]'), function(b){ b.addEventListener('click', desvincular); });
+  var ULTIMO = null, graficos = [];
+  // erro ou «lendo…»: nada do período anterior (nem de OUTRA unidade) fica na tela
+  function painelVazio(){
+    ULTIMO = null; graficos = [];
+    $('grandes').textContent = ''; $('peq').textContent = ''; $('nRevisar').textContent = '—'; $('cRevisar').textContent = ''; $('cMarcadas').textContent = ''; $('descPeriodo').textContent = '';
+    ['listaRevisar', 'listaMarcadas'].forEach(function(id){ $(id).textContent = ''; });
+  }
+  function abrirDialogo(d){ if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
+  function fecharDialogo(d){ if (d.close) d.close(); else d.removeAttribute('open'); }
   async function carregarPainel(){
     try {
       var p = await api('GET', KM ? kmRota('painel', 'periodo=' + enc(PERIODO)) : '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
       clearTimeout(tPainel);
       if (p.carregando) {
         // a primeira leitura de uma conta grande demora: pergunta de novo sozinha, sem martelar
-        $('kpis').textContent = ''; $('kpis').appendChild(el('div', 'aviso', p.motivo || 'Lendo os números…'));
+        painelVazio(); $('grandes').appendChild(el('div', 'aviso', p.motivo || 'Lendo os números…'));
         if (++tentativasPainel < 30) tPainel = setTimeout(function(){ if (abaAtual === 'painel') carregarPainel(); }, 6000);
-        else erroEm($('kpis'), 'Os números estão demorando mais que o normal. Toque em Painel de novo daqui a alguns minutos.');
+        else { painelVazio(); erroEm($('grandes'), 'Os números estão demorando mais que o normal. Toque em Painel de novo daqui a alguns minutos.'); }
         return;
       }
       // cache velho servido enquanto a leitura nova roda por trás: pergunta de novo, como no «lendo…»
       if (KM && p.atualizando && ++tentativasPainel < 30) tPainel = setTimeout(function(){ if (abaAtual === 'painel') carregarPainel(); }, 6000);
       else tentativasPainel = 0;
       SEM_ANTES = !!(KM && p.semAnterior);
-      var k = $('kpis'); k.textContent = '';
-      k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
-      k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
-      k.appendChild(kpi('Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
-      if (!KM || p.pixUsado) k.appendChild(kpi('Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
+      ULTIMO = p;
+      $('descPeriodo').textContent = ROT_PERIODO[PERIODO] + (SEM_ANTES ? '' : ', contra ' + (PERIODO === 'hoje' ? 'ontem até a mesma hora' : 'os ' + COMPARA[PERIODO]));
+      var g = $('grandes'); g.textContent = ''; graficos = [];
+      var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande');
+      var gm = cartao('button', 'Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes), 'b-grande b-clicavel');
+      gm.setAttribute('aria-haspopup', 'dialog'); gm.onclick = abrirConsultas;
+      [[gr, 'respondidas', 'g-r'], [gm, 'marcadas', 'g-m']].forEach(function(x){ var box = el('span', 'graf'); x[0].appendChild(box); g.appendChild(x[0]); graficos.push({ box: box, chave: x[1], cls: x[2] }); });
+      gm.appendChild(el('span', 'b-ver', p.marcadas.agora ? (KM ? 'Ver as consultas' : 'Ver quem agendou') : 'Ver a lista'));
+      var k = $('peq'); k.textContent = '';
+      k.appendChild(cartao('div', 'Marcaram', 'Consultas marcadas ÷ pessoas respondidas', p.conversao.agora == null ? '—' : p.conversao.agora + '%', variacao(p.conversao.agora, p.conversao.antes, true)));
+      if (!KM || p.pixUsado) k.appendChild(cartao('div', 'Pix do sinal gerado', 'Conversas em que ela gerou o Pix do sinal', String(p.pix.agora), variacao(p.pix.agora, p.pix.antes)));
       var eq = variacao(p.equipe.agora, p.equipe.antes); eq.c = '';
-      k.appendChild(kpi('Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
-      k.appendChild(kpi('À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { t: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '', c: '' }));
+      k.appendChild(cartao('div', 'Passou para a equipe', 'Conversas em que ela chamou alguém da equipe', String(p.equipe.agora), eq));
+      k.appendChild(cartao('div', 'À noite ou fim de semana', 'Respostas antes das 8h, a partir das 18h, sábado e domingo', p.foraDoHorario.pct == null ? '—' : p.foraDoHorario.pct + '%', { texto: p.respostas ? (p.foraDoHorario.respostas + ' de ' + plural(p.respostas, 'resposta', 'respostas')) : '' }));
       var nr = p.totalParaRevisar != null ? p.totalParaRevisar : (p.paraRevisar || []).length;
       if (!KM) {
-        k.appendChild(kpi('Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { t: 'ninguém avaliou', c: '' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
-        k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
+        k.appendChild(cartao('div', 'Avaliadas como boas', 'Das avaliações que a equipe deu nos balões da Sofia, quantas foram positivas', p.avaliacoes.pct == null ? '—' : p.avaliacoes.pct + '%', p.avaliacoes.pct == null ? { texto: 'ninguém avaliou' } : variacao(p.avaliacoes.pct, p.avaliacoes.pctAntes, true)));
+        $('nRevisar').textContent = String(nr);
       } else {
         var le = $('lidoEm'); le.hidden = false;
         // «Lido às 10:42» só vale se foi hoje: leitura de outro dia leva o dia
@@ -565,43 +694,47 @@ a.bt{text-decoration:none}
         var quandoLido = (hojeLido ? '' : lido.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' às ') + lido.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
         le.textContent = p.desatualizado ? ('Mostrando a última leitura (' + quandoLido + ')' + (p.atualizando ? ': estou atualizando.' : ': não consegui atualizar agora.')) : ('Lido ' + (hojeLido ? 'às ' : 'em ') + quandoLido + ' · os números se renovam a cada 5 minutos.');
       }
-      desenharGrafico(p.porDia || []);
-      desenharMarcadas(p.ultimasMarcadas || []);
+      desenharGraficos(p.porDia || []);
+      desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       if (!KM) desenharRevisar(p.paraRevisar || [], nr);
-    } catch (e) { erroEm($('kpis'), e.message); }
+    } catch (e) { painelVazio(); erroEm($('grandes'), e.message); }
     contarPausadas();
   }
   var NS = 'http://www.w3.org/2000/svg';
   function svg(tag, attrs){ var e = document.createElementNS(NS, tag); for (var k in attrs) e.setAttribute(k, attrs[k]); return e; }
   var diasDoGrafico = null, tRedesenho = null;
-  window.addEventListener('resize', function(){ clearTimeout(tRedesenho); tRedesenho = setTimeout(function(){ if (diasDoGrafico && abaAtual === 'painel') desenharGrafico(diasDoGrafico); }, 150); });
-  function desenharGrafico(dias){
-    diasDoGrafico = dias;
-    var box = $('grafico'); box.textContent = '';
-    var W = Math.max(320, Math.round(box.clientWidth || 720)), H = 166, base = 140, topo = 14, n = dias.length || 1, passo = W / n, larg = Math.min(28, passo * 0.56);
-    var max = 1; dias.forEach(function(d){ max = Math.max(max, d.respondidas, d.marcadas); });
-    var g = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': 'Pessoas respondidas e consultas marcadas por dia' });
-    g.appendChild(svg('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, stroke: '#d9d9e0' }));
-    g.appendChild(svg('line', { x1: 0, x2: W, y1: topo + 0.5, y2: topo + 0.5, stroke: '#f0f0f3' }));
-    var tm = svg('text', { x: 0, y: topo - 3 }); tm.textContent = String(max); g.appendChild(tm);
+  window.addEventListener('resize', function(){ clearTimeout(tRedesenho); tRedesenho = setTimeout(function(){ if (diasDoGrafico && abaAtual === 'painel') desenharGraficos(diasDoGrafico); }, 150); });
+  // um gráfico de barras por medida, cada um na sua escala (marcadas é bem menor que respondidas); barras finas, base reta, valor do topo escrito
+  function desenharBarras(box, dias, chave, cls){
+    box.textContent = '';
+    var W = Math.max(240, Math.round(box.clientWidth || 520)), H = 112, base = 90, topo = 14, n = dias.length || 1, passo = W / n, larg = Math.min(22, passo * 0.5);
+    var max = 1; dias.forEach(function(d){ max = Math.max(max, d[chave]); });
+    var g = svg('svg', { viewBox: '0 0 ' + W + ' ' + H, role: 'img', 'aria-label': (chave === 'respondidas' ? 'Pessoas respondidas' : 'Consultas marcadas') + ' por dia' });
+    g.appendChild(svg('line', { x1: 0, x2: W, y1: base + 0.5, y2: base + 0.5, class: 'g-base' }));
+    g.appendChild(svg('line', { x1: 0, x2: W, y1: topo + 0.5, y2: topo + 0.5, class: 'g-grade' }));
+    var tm = svg('text', { x: 0, y: topo - 4, class: 'g-eixo' }); tm.textContent = String(max); g.appendChild(tm);
     dias.forEach(function(d, i){
-      var x = i * passo + (passo - larg) / 2, alt = function(v){ return v > 0 ? Math.max(2, (base - topo) * v / max) : 0; };
-      var gr = svg('g', {}), t = svg('title', {}); t.textContent = diaMes(d.dia) + ': ' + plural(d.respondidas, 'pessoa respondida', 'pessoas respondidas') + ', ' + plural(d.marcadas, 'consulta marcada', 'consultas marcadas'); gr.appendChild(t);
+      var x = i * passo + (passo - larg) / 2, a = d[chave] > 0 ? Math.max(3, (base - topo) * d[chave] / max) : 0;
+      var gr = svg('g', {}), t = svg('title', {}); t.textContent = diaMes(d.dia) + ': ' + (chave === 'respondidas' ? plural(d.respondidas, 'pessoa respondida', 'pessoas respondidas') : plural(d.marcadas, 'consulta marcada', 'consultas marcadas')); gr.appendChild(t);
       gr.appendChild(svg('rect', { x: i * passo, y: 0, width: passo, height: H, fill: 'transparent' }));
-      gr.appendChild(svg('rect', { x: x, y: base - alt(d.respondidas), width: larg, height: alt(d.respondidas), rx: 2, fill: '#cfe3fd' }));
-      if (d.marcadas) gr.appendChild(svg('rect', { x: x + larg * 0.22, y: base - alt(d.marcadas), width: larg * 0.56, height: alt(d.marcadas), rx: 2, fill: '#2781f6' }));
-      if (i % 2 === (n - 1) % 2) { var tx = svg('text', { x: x + larg / 2, y: base + 16, 'text-anchor': 'middle' }); tx.textContent = diaMes(d.dia); gr.appendChild(tx); }
+      if (a) gr.appendChild(svg('rect', { x: x, y: base - a, width: larg, height: a, rx: 3, class: cls }));
+      if (i % 3 === (n - 1) % 3) { var tx = svg('text', { x: x + larg / 2, y: base + 17, 'text-anchor': 'middle', class: 'g-eixo' }); tx.textContent = diaMes(d.dia); gr.appendChild(tx); }
       g.appendChild(gr);
     });
     box.appendChild(g);
+  }
+  function desenharGraficos(dias){
+    diasDoGrafico = dias;
+    graficos.forEach(function(x){ desenharBarras(x.box, dias, x.chave, x.cls); });
     var tab = $('tabDia'); tab.textContent = '';
     var cabT = el('tr'); ['Dia', 'Pessoas respondidas', 'Consultas marcadas'].forEach(function(t){ cabT.appendChild(el('th', null, t)); }); tab.appendChild(cabT);
     dias.slice().reverse().forEach(function(d){ var tr = el('tr'); tr.appendChild(el('td', null, diaMes(d.dia))); tr.appendChild(el('td', null, String(d.respondidas))); tr.appendChild(el('td', null, String(d.marcadas))); tab.appendChild(tr); });
   }
-  function desenharMarcadas(l){
-    var box = $('listaMarcadas'); box.textContent = ''; $('cMarcadas').textContent = l.length ? String(l.length) : '';
+  var PREVIA_MARCADAS = 4;
+  function desenharMarcadas(l, total){
+    var box = $('listaMarcadas'); box.textContent = ''; $('cMarcadas').textContent = total ? String(total) : '';
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma no período. ')); v.appendChild(document.createTextNode('Quando a Sofia marcar uma consulta, ela aparece aqui com o dia e a hora.')); box.appendChild(v); return; }
-    l.forEach(function(m){
+    l.slice(0, PREVIA_MARCADAS).forEach(function(m){
       var row = el('div', 'lin'), q = el('div');
       q.appendChild(el('div', 'nm', m.nome || ((KM ? 'Cartão ' : 'Conversa ') + m.conversa)));
       q.appendChild(el('span', 'det', (m.agendadoPara ? 'Consulta ' + consultaEm(m.agendadoPara) : 'Consulta marcada') + ' · marcada ' + ha(m.criadoEm)));
@@ -611,13 +744,41 @@ a.bt{text-decoration:none}
       bs.appendChild(ab);
       row.appendChild(q); row.appendChild(bs); box.appendChild(row);
     });
+    var mais = el('div', 'mais'), bm = el('button', 'bt link', 'Ver as ' + (total || l.length) + ' e quem agendou'); bm.type = 'button'; bm.onclick = abrirConsultas; mais.appendChild(bm); box.appendChild(mais);
   }
+  // a lista COMPLETA das consultas do período: paciente, dia e hora da consulta, quando foi marcada e quem agendou
+  function dataHoraCurta(iso){ var d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
+  function celula(tr, rotulo, conteudo, cls){ var td = el('td', cls || null); td.setAttribute('data-r', rotulo); if (typeof conteudo === 'string') td.textContent = conteudo; else td.appendChild(conteudo); tr.appendChild(td); return td; }
+  function abrirConsultas(){
+    var p = ULTIMO; if (!p) return;
+    var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tb = $('dlgLista'); tb.textContent = '';
+    $('dlgPeriodo').textContent = ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1) + ' · ' + plural(p.marcadas.agora, 'consulta', 'consultas');
+    if (!lista.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', 'A Sofia não marcou nenhuma consulta neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
+    lista.forEach(function(m){
+      var tr = el('tr');
+      celula(tr, 'Paciente', m.nome || ('Conversa ' + m.conversa)).style.fontWeight = '700';
+      celula(tr, 'Consulta', m.agendadoPara ? consultaEm(m.agendadoPara) : '—', 'n');
+      celula(tr, 'Marcada', dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), 'n');
+      var q = m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—');
+      celula(tr, 'Quem agendou', q, 'quem col-quem');
+      var ab;
+      if (KM) { ab = el('a', 'bt', 'Abrir cartão'); if (m.link) { ab.href = m.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; } else ab.hidden = true; }
+      else { ab = el('button', 'bt', 'Abrir conversa'); ab.type = 'button'; ab.onclick = function(){ fecharDialogo($('dlgConsultas')); abrirConversa(m.conversa); }; }
+      celula(tr, '', ab);
+      tb.appendChild(tr);
+    });
+    var tot = p.consultasTotal != null ? p.consultasTotal : p.marcadas.agora;
+    $('dlgRodape').textContent = (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + (KM ? 'A lista traz as consultas mais recentes que o Kommo registrou.' : 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.');
+    abrirDialogo($('dlgConsultas'));
+  }
+  $('dlgFechar').addEventListener('click', function(){ fecharDialogo($('dlgConsultas')); });
+  $('dlgConsultas').addEventListener('click', function(ev){ if (ev.target === $('dlgConsultas')) fecharDialogo($('dlgConsultas')); });
   function desenharRevisar(l, total){
     var box = $('listaRevisar'); box.textContent = ''; $('cRevisar').textContent = total ? (total > l.length ? (l.length + ' de ' + total) : String(total)) : '';
     if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nada para revisar. ')); v.appendChild(document.createTextNode('Para marcar uma resposta ruim, passe o mouse no balão da Sofia dentro da conversa.')); box.appendChild(v); return; }
     l.forEach(function(a){
       var c = el('div', 'caso'), q = el('div', 'q'), quem = el('span'); quem.appendChild(el('b', null, a.quemNome)); quem.appendChild(document.createTextNode(' marcou como ruim'));
-      q.appendChild(quem); q.appendChild(el('span', null, ha(a.criadoEm))); c.appendChild(q);
+      q.appendChild(quem); q.appendChild(el('span', null, 'Conversa ' + a.conversa + ' · ' + ha(a.criadoEm))); c.appendChild(q);
       var dl = el('dl');
       if (a.fala) { dl.appendChild(el('dt', null, 'Paciente')); dl.appendChild(el('dd', null, a.fala)); }
       if (a.resposta) { dl.appendChild(el('dt', null, 'Sofia')); dl.appendChild(el('dd', null, a.resposta)); }
@@ -641,6 +802,9 @@ a.bt{text-decoration:none}
   }
   function revisar(id, como){ return api('POST', '/api/public/agente/avaliacoes/' + enc(id) + '/revisar', { slug: U.slug, como: como }); }
   function abrirConversa(id){ try { window.parent.postMessage({ event: 'funil:abrir-conversa', id: id }, CW); } catch (e) {} }
+  $('tRevisar').addEventListener('click', function(){ var a = $('secRevisar'); if (a) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+  $('tPausadas').addEventListener('click', function(){ ir('pausadas'); });
+  $('tPedidos').addEventListener('click', function(){ ir('pedir'); });
 
   // ── ENSINAR ──
   var EXEMPLOS = [
@@ -763,8 +927,34 @@ a.bt{text-decoration:none}
   });
 
   // ── PAUSADAS ──
-  function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; }
-  async function contarPausadas(){ try { var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); } catch (e) {} }
+  function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; $('cPausadasPainel').textContent = n ? String(n) : ''; $('nPausadas').textContent = String(n || 0); }
+  async function contarPausadas(){ try { var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); desenharPausadasPainel(r.conversas); } catch (e) {} }
+  async function devolverParaASofia(c, bt, depois){
+    bt.disabled = true;
+    try { await api('POST', '/api/public/assistente/pausa', { conversa: c.id, acao: 'reativar' }); toast('A Sofia voltou a responder nesta conversa.'); depois(); } catch (e) { bt.disabled = false; toast(e.message, true); }
+  }
+  // as 3 pausadas mais recentes no painel (a lista inteira fica na aba Pausadas)
+  function desenharPausadasPainel(l){
+    var box = $('listaPausadasPainel'); box.textContent = '';
+    if (!l.length) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma pausada. ')); v.appendChild(document.createTextNode('A Sofia está atendendo todas as conversas.')); box.appendChild(v); return; }
+    l.slice(0, 3).forEach(function(c){
+      var row = el('div', 'lin'), q = el('div'), bs = el('div', 'btns');
+      q.appendChild(el('div', 'nm', c.nome));
+      if (KM) {
+        // modo Kommo: cartão (não conversa); a devolução com data fica na aba Pausadas
+        q.appendChild(el('span', 'det', 'Pausada ' + ha(c.desde) + ' · ' + (c.por || '—') + (c.tipo === 'janela' && c.ate ? ' · até ' + dataHora(c.ate) : '')));
+        if (c.link) { var ak = el('a', 'bt link', 'Abrir cartão'); ak.href = c.link; ak.target = '_blank'; ak.rel = 'noopener noreferrer'; bs.appendChild(ak); }
+      } else {
+        q.appendChild(el('span', 'det', 'Pausada ' + (c.em ? ha(c.em) : '') + ' · ' + (c.por || '—') + (c.atendente ? ' · com ' + c.atendente : '')));
+        var ab = el('button', 'bt link', 'Abrir'), re = el('button', 'bt', 'Devolver para a Sofia');
+        ab.type = re.type = 'button'; ab.onclick = function(){ abrirConversa(c.id); };
+        re.onclick = function(){ devolverParaASofia(c, re, contarPausadas); };
+        bs.appendChild(ab); bs.appendChild(re);
+      }
+      row.appendChild(q); row.appendChild(bs); box.appendChild(row);
+    });
+    if (l.length > 3) { var mais = el('div', 'mais'), bm = el('button', 'bt link', 'Ver as ' + l.length + ' pausadas'); bm.type = 'button'; bm.onclick = function(){ ir('pausadas'); }; mais.appendChild(bm); box.appendChild(mais); }
+  }
   function linhaUnica(tb, conteudo){ var tr = el('tr'), td = el('td'); td.colSpan = 5; td.style.textAlign = 'left'; td.appendChild(conteudo); tr.appendChild(td); tb.appendChild(tr); }
   async function carregarPausadas(){
     if (KM) { carregarPausaUnidade(); }
@@ -782,7 +972,7 @@ a.bt{text-decoration:none}
         tr.appendChild(el('td', null, c.atendente || '—'));
         var td = el('td'), ab = el('button', 'bt link', 'Abrir'), re = el('button', 'bt', 'Devolver para a Sofia');
         ab.type = re.type = 'button'; ab.onclick = function(){ abrirConversa(c.id); };
-        re.onclick = async function(){ re.disabled = true; try { await api('POST', '/api/public/assistente/pausa', { conversa: c.id, acao: 'reativar' }); toast('A Sofia voltou a responder nesta conversa.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, true); } };
+        re.onclick = function(){ devolverParaASofia(c, re, carregarPausadas); };
         td.appendChild(ab); td.appendChild(re); tr.appendChild(td); tb.appendChild(tr);
       });
     } catch (e) { tb.textContent = ''; linhaUnica(tb, el('div', 'aviso erro', e.message)); }
@@ -834,7 +1024,7 @@ a.bt{text-decoration:none}
   var SITUACAO = { 'na-fila': ['a', 'Na fila'], resolvido: ['g', 'Resolvido'], reaberto: ['v', 'Reaberto'] };
   function desenharPedidos(lista){
     var l = $('listaPedidos'); l.textContent = '';
-    var abertos = lista.filter(function(p){ return p.situacao !== 'resolvido'; }).length; $('contaPedidos').textContent = abertos ? String(abertos) : '';
+    var abertos = lista.filter(function(p){ return p.situacao !== 'resolvido'; }).length; $('contaPedidos').textContent = abertos ? String(abertos) : ''; $('nPedidos').textContent = String(abertos);
     if (!lista.length) { l.appendChild(el('p', 'vazio', 'Nenhum pedido ainda. O que vocês pedirem aparece aqui, com a resposta da Doutor Digital.')); return; }
     lista.forEach(function(p){
       var d = el('div', 'pedido'), l1 = el('div', 'l1'), s = SITUACAO[p.situacao] || SITUACAO['na-fila'];
@@ -863,12 +1053,21 @@ a.bt{text-decoration:none}
     b.disabled = false;
   });
 
+  // ── tema: o menu do CRM diz se o Chatwoot está no escuro; sem aviso, vale o do aparelho ──
+  var temaDoCrm = null, mqEscuro = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+  function aplicarTema(t){ document.documentElement.setAttribute('data-tema', t === 'escuro' ? 'escuro' : 'claro'); if (diasDoGrafico && abaAtual === 'painel') desenharGraficos(diasDoGrafico); }
+  aplicarTema(mqEscuro && mqEscuro.matches ? 'escuro' : 'claro');
+  if (mqEscuro && mqEscuro.addEventListener) mqEscuro.addEventListener('change', function(){ if (!temaDoCrm) aplicarTema(mqEscuro.matches ? 'escuro' : 'claro'); });
+
   // ── entrada: sessão do Chatwoot pelo menu, unidade pelas caixas da pessoa ──
   function pedirSessao(){ try { window.parent.postMessage({ event: 'funil:pede-sessao' }, CW); } catch (e) {} }
   function escolherUnidade(u){
-    U = u; if (!KM) guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; desvincular();
+    U = u; if (!KM) guardar('agente:unidade', u.slug); $('unidadeNome').textContent = u.nome; $('heroUnidade').textContent = 'Sofia · ' + u.nome; desvincular();
+    // nada da unidade anterior fica na tela: números, contadores da faixa e pedidos abertos
+    painelVazio(); $('nPausadas').textContent = '—'; $('nPedidos').textContent = '—'; $('contaPedidos').textContent = '';
     EST = null; previaDe = null; $('cardPrevia').hidden = true; lerChat(); restam = null;
     if (KM && !KM_LIB) return;
+    carregarPedidos();
     lerEstado().then(function(){ restam = EST && EST.conversa ? EST.conversa.restantes : null; if (abaAtual === 'testar') desenharChat(false); }).catch(function(e){ aviso('erroTopo', e.message); });
   }
   async function entrar(){
@@ -1055,6 +1254,7 @@ a.bt{text-decoration:none}
     if (KM) return;
     if (!origemDoCrm(ev.origin) || ev.source !== window.parent) return;
     var d = ev.data; if (!d || d.event !== 'funil-sessao') return;
+    if (d.tema === 'escuro' || d.tema === 'claro') { temaDoCrm = d.tema; aplicarTema(d.tema); }
     var novo = d.sessao && d.sessao.token ? d.sessao : null, primeira = !S && novo && !U; S = novo;
     if (primeira) entrar();
   });
