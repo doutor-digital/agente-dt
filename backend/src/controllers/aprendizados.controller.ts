@@ -52,7 +52,7 @@ import { RECUSA_DA_ENTRADA, RESPOSTA_NEUTRA, ecoDoPrompt, pedeOPrompt } from '..
 import { esc, unidadePublica } from './pausa.controller.js';
 import { rodarTesteDaSofia } from './playground.controller.js';
 
-function ligadaPara(slug: string): boolean {
+export function ligadaPara(slug: string): boolean {
   return automacaoLigada(slug, CHAVE_APRENDIZADOS, process.env.APRENDIZADOS_PELA_UNIDADE_SLUGS);
 }
 
