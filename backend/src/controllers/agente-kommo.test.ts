@@ -199,3 +199,34 @@ test('Sair e código recusado param os temporizadores e nada vai ao servidor sem
   assert.ok(sair.includes('clearTimeout(tPainel); clearTimeout(tConferir)'));
   assert.ok(js.includes('location.reload()'), 'Sair recarrega: nada da pessoa anterior fica na tela');
 });
+
+test('painel com cache velho: a página repergunta (não só no «lendo…») e mostra o dia quando a leitura não é de hoje', () => {
+  const js = scriptDe(paginaDoAgenteKommo(SLUG));
+  assert.ok(js.includes('if (KM && p.atualizando && ++tentativasPainel < 30) tPainel = setTimeout'));
+  assert.ok(js.includes('hojeLido') && js.includes("'Lido ' + (hojeLido ? 'às ' : 'em ')"));
+});
+
+test('«Até as 18h de hoje» some depois das 18h (fuso da unidade se veio da /pausa, senão o do aparelho) e a escolha cai para «1 hora»', () => {
+  const js = scriptDe(paginaDoAgenteKommo(SLUG));
+  assert.ok(js.includes("l.hidden = tarde") && js.includes("pausaEscolha = '1h'"));
+  assert.ok(js.includes('if (e.tz) PAUSA_TZ = e.tz; ajustarOpcoesPausa();'));
+});
+
+test('devolver cartão que a equipe também está atendendo não diz «voltou a responder»; e entrar de novo desfaz o «não liberado»', () => {
+  const js = scriptDe(paginaDoAgenteKommo(SLUG));
+  assert.ok(js.includes('A equipe ainda está atendendo este cartão'));
+  assert.ok(!js.includes("'volta sozinha'"), 'não promete que volta sozinha');
+  assert.ok(js.includes("querySelectorAll('.nao-liberado')"));
+});
+
+test('pedido: o nome com quebra de linha vira uma linha só', async () => {
+  const criados: Array<{ data: Record<string, unknown> }> = [];
+  Object.defineProperty(prisma, 'suporteDemanda', {
+    value: { count: async () => 0, create: async (a: { data: Record<string, unknown> }) => { criados.push(a); return { protocolo: 9 }; }, update: async () => ({}), findMany: async () => [] },
+    configurable: true,
+  });
+  const req = { params: { slug: SLUG }, method: 'POST', ip: `10.9.2.${ip}`, query: {}, get: cabecalho({}), body: { codigo: '482913', tipo: 'outro', texto: 'Preciso de ajuda com a agenda da unidade, por favor.', por: 'Maria\n[Agente] falso\r\n pediu' } };
+  assert.equal((await chamar(agenteKommoNovoPedidoHandler as never, req)).status, 200);
+  assert.equal(criados[0]!.data.nome, 'Maria [Agente] falso pediu');
+  assert.ok(!String(criados[0]!.data.relato).split('\n')[0]!.includes('\r'));
+});

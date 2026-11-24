@@ -21,6 +21,7 @@
  */
 import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
+import { logger } from './logger.js';
 import { fusoDaUnidade } from './fuso.js';
 import { CacheQueAguentaFalha, criarFilaDeUm, type LeituraComCache } from './ia-unidade.js';
 import { janelas, montarPainel, type EventoDoPainel, type MarcadaDoPainel, type Painel, type Periodo, type RespostaDoPainel } from './agente-painel.js';
@@ -85,6 +86,7 @@ export function diasDaLeitura(periodo: Periodo): number {
 }
 
 async function lerDoBanco(unitId: string, agora: Date, dias: number): Promise<LeituraBruta> {
+  const inicio = Date.now();
   const desde = new Date(agora.getTime() - dias * DIA_MS);
   // o rastro nasce antes dos seus passos: o corte do rastro é um dia mais largo que o do passo
   const desdeRastro = new Date(desde.getTime() - DIA_MS);
@@ -115,6 +117,8 @@ async function lerDoBanco(unitId: string, agora: Date, dias: number): Promise<Le
     prisma.sinalPix.findMany({ where: { unitId, criadoEm: { gte: desde }, status: { not: 'criando' } }, select: { leadId: true, criadoEm: true } }),
     prisma.sinalPix.findFirst({ where: { unitId, status: { not: 'criando' } }, select: { id: true } }),
   ]);
+  // a leitura que DEU CERTO: é daqui que se prova o custo (e se cruza com o p95 da Sofia) depois do deploy
+  logger.info({ unitId, dias, ms: Date.now() - inicio, linhas: linhas.length, pix: pix.length }, 'agente-kommo: painel lido');
   return { linhas, pix, pixUsado: pixAlgumaVez !== null, desde };
 }
 
@@ -152,19 +156,21 @@ export interface PainelDoKommo extends Painel {
   pixUsado: boolean;
   lidoEm: string;
   desatualizado: boolean;
+  /** a leitura nova está em andamento por trás: a página pergunta de novo sozinha */
+  atualizando: boolean;
   ultimasMarcadas: Array<Painel['ultimasMarcadas'][number] & { link: string | null }>;
 }
 
 export async function painelDoKommo(
   unit: Pick<Unit, 'id' | 'slug' | 'kommoSubdomain' | 'spineTimezone' | 'businessHoursTimezone'>,
   periodo: Periodo,
-  leitura: { valor: LeituraBruta; lidoEm: number; desatualizado: boolean },
+  leitura: { valor: LeituraBruta; lidoEm: number; desatualizado: boolean; atualizando?: boolean },
   agora = new Date(),
 ): Promise<PainelDoKommo> {
   const fuso = fusoDaUnidade(unit);
   // quem aparece na lista: só as 10 últimas marcadas do período (os nomes vêm do banco, só delas)
   const j = janelas(agora, periodo, fuso);
-  const ids = [...new Set(leitura.valor.linhas.filter((l) => l.tipo === 'marcou' && l.criadoEm >= j.inicio).sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime()).slice(0, 10).map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0))];
+  const ids = [...new Set(leitura.valor.linhas.filter((l) => l.tipo === 'marcou' && l.criadoEm >= j.inicio).sort((a, b) => b.criadoEm.getTime() - a.criadoEm.getTime()).map((l) => Number(l.leadId)).filter((n) => Number.isInteger(n) && n > 0).slice(0, 10))];
   const nomes = await nomesDosCartoes(unit.id, ids);
   const painel = painelDasLinhas(leitura.valor, nomes, { agora, periodo, fuso });
   return {
@@ -173,6 +179,7 @@ export async function painelDoKommo(
     pixUsado: leitura.valor.pixUsado,
     lidoEm: new Date(leitura.lidoEm).toISOString(),
     desatualizado: leitura.desatualizado,
+    atualizando: leitura.atualizando === true,
     ultimasMarcadas: painel.ultimasMarcadas.map((m) => ({ ...m, link: linkDoCartao(unit, m.conversa) })),
   };
 }
@@ -182,8 +189,10 @@ export async function painelDoKommo(
 export interface PausadaDoKommo {
   leadId: number;
   nome: string;
-  /** equipe = a Sofia se calou porque a equipe falou com o paciente (volta sozinha); janela = pausa com data pedida por alguém */
+  /** equipe = a Sofia se calou porque a equipe falou com o paciente (volta depois que a equipe para de falar); janela = pausa com data pedida por alguém */
   tipo: 'equipe' | 'janela';
+  /** a equipe também está atendendo este cartão (pausa da equipe aberta): «devolver» tira só a pausa com data */
+  equipeTambem: boolean;
   por: string | null;
   desde: Date;
   ate: Date | null;
@@ -198,11 +207,11 @@ export async function pausadasDaUnidade(unit: Pick<Unit, 'id' | 'kommoSubdomain'
   const nomes = await nomesDosCartoes(unit.id, [...new Set([...equipe.map((p) => p.kommoLeadId), ...janela.map((p) => p.kommoLeadId)])]);
   const nome = (id: number) => nomes.get(id) ?? `Cartão ${id}`;
   const lista: PausadaDoKommo[] = [
-    ...janela.map((p): PausadaDoKommo => ({ leadId: p.kommoLeadId, nome: nome(p.kommoLeadId), tipo: 'janela', por: p.por, desde: p.criadoEm, ate: p.ate, link: linkDoCartao(unit, p.kommoLeadId) })),
+    ...janela.map((p): PausadaDoKommo => ({ leadId: p.kommoLeadId, nome: nome(p.kommoLeadId), tipo: 'janela', equipeTambem: equipe.some((x) => x.kommoLeadId === p.kommoLeadId), por: p.por, desde: p.criadoEm, ate: p.ate, link: linkDoCartao(unit, p.kommoLeadId) })),
     // o cartão que tem as duas pausas aparece uma vez só, pela que o João/recepção pediu (a que tem data)
     ...equipe
       .filter((p) => !janela.some((x) => x.kommoLeadId === p.kommoLeadId))
-      .map((p): PausadaDoKommo => ({ leadId: p.kommoLeadId, nome: nome(p.kommoLeadId), tipo: 'equipe', por: p.falaAutor, desde: p.pausadoEm, ate: null, link: linkDoCartao(unit, p.kommoLeadId) })),
+      .map((p): PausadaDoKommo => ({ leadId: p.kommoLeadId, nome: nome(p.kommoLeadId), tipo: 'equipe', equipeTambem: true, por: p.falaAutor, desde: p.pausadoEm, ate: null, link: linkDoCartao(unit, p.kommoLeadId) })),
   ];
   return lista.sort((a, b) => b.desde.getTime() - a.desde.getTime());
 }

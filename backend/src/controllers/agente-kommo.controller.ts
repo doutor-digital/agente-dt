@@ -70,7 +70,7 @@ export async function agenteKommoPainelHandler(req: Request, res: Response): Pro
         res.status(202).json({ carregando: true, motivo: 'Lendo os números… na primeira vez pode levar até 1 minuto.' });
         return;
       }
-      res.json(await painelDoKommo(unit, periodo, { ...antiga, desatualizado: true }));
+      res.json(await painelDoKommo(unit, periodo, { ...antiga, desatualizado: true, atualizando: true }));
       return;
     }
     if (!leitura.ok) {
@@ -120,7 +120,8 @@ export async function agenteKommoNovoPedidoHandler(req: Request, res: Response):
     return;
   }
   const por = (req.body as { por?: unknown })?.por;
-  const nome = (typeof por === 'string' ? por.trim().slice(0, 80) : '') || 'recepção';
+  // uma linha só: quebra de linha no nome estragaria o cabeçalho do relato e o aviso do Telegram
+  const nome = (typeof por === 'string' ? por.replace(/\s+/g, ' ').trim().slice(0, 80) : '') || 'recepção';
   try {
     if ((await pedidosHoje(unit.slug)) >= MAX_PEDIDOS_POR_DIA) {
       res.status(429).json({ error: `A unidade já mandou ${MAX_PEDIDOS_POR_DIA} pedidos nas últimas 24 horas. Junte o resto num pedido só ou fale com a Suzanne.` });

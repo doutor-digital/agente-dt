@@ -367,7 +367,7 @@ a.bt{text-decoration:none}
   </section>
   <section>
     <h3>Conversas com a Sofia pausada <span class="c" id="cPausadas"></span></h3>
-    <div class="meta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
+    <div class="meta" id="pausadasMeta">A Sofia sai da frente quando alguém da equipe responde (pelo CRM ou pelo celular) e volta quando a conversa é resolvida. Aqui dá para devolver antes.</div>
     <div class="rolar" style="margin-top:8px"><table class="tab"><thead><tr><th>Paciente</th><th>Pausada por</th><th>Desde</th><th id="thCom">Com</th><th></th></tr></thead><tbody id="listaPausadas"></tbody></table></div>
   </section>
 </section>
@@ -542,7 +542,10 @@ a.bt{text-decoration:none}
         else erroEm($('kpis'), 'Os números estão demorando mais que o normal. Toque em Painel de novo daqui a alguns minutos.');
         return;
       }
-      tentativasPainel = 0; SEM_ANTES = !!(KM && p.semAnterior);
+      // cache velho servido enquanto a leitura nova roda por trás: pergunta de novo, como no «lendo…»
+      if (KM && p.atualizando && ++tentativasPainel < 30) tPainel = setTimeout(function(){ if (abaAtual === 'painel') carregarPainel(); }, 6000);
+      else tentativasPainel = 0;
+      SEM_ANTES = !!(KM && p.semAnterior);
       var k = $('kpis'); k.textContent = '';
       k.appendChild(kpi('Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes)));
       k.appendChild(kpi('Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes)));
@@ -557,7 +560,10 @@ a.bt{text-decoration:none}
         k.appendChild(kpi('Para revisar', 'Respostas marcadas como ruins que ninguém revisou ainda', String(nr), { t: nr ? 'veja abaixo' : 'nada pendente', c: '' }));
       } else {
         var le = $('lidoEm'); le.hidden = false;
-        le.textContent = (p.desatualizado ? 'Mostrando a última leitura (' : 'Lido às ') + new Date(p.lidoEm).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) + (p.desatualizado ? '): estou atualizando.' : ' · os números se renovam a cada 5 minutos.');
+        // «Lido às 10:42» só vale se foi hoje: leitura de outro dia leva o dia
+        var lido = new Date(p.lidoEm), hojeLido = lido.toDateString() === new Date().toDateString();
+        var quandoLido = (hojeLido ? '' : lido.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' às ') + lido.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+        le.textContent = p.desatualizado ? ('Mostrando a última leitura (' + quandoLido + ')' + (p.atualizando ? ': estou atualizando.' : ': não consegui atualizar agora.')) : ('Lido ' + (hojeLido ? 'às ' : 'em ') + quandoLido + ' · os números se renovam a cada 5 minutos.');
       }
       desenharGrafico(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || []);
@@ -909,9 +915,12 @@ a.bt{text-decoration:none}
       Array.prototype.forEach.call(document.querySelectorAll('.so-crm'), function(x){ x.hidden = true; });
       Array.prototype.forEach.call(document.querySelectorAll('.so-km'), function(x){ x.hidden = false; });
       $('secRevisar').hidden = true;
+      $('pausadasMeta').textContent = 'A Sofia sai da frente quando alguém da equipe responde ao paciente e volta cerca de 1 hora depois da última fala da equipe. Aqui dá para devolver antes só as pausas com data.';
+      // entrar de novo (a chave pode ter ligado desde a última vez): limpa o aviso e mostra as abas antes de decidir
+      ['ensinar', 'testar'].forEach(function(a){ var p = $('pane-' + a); Array.prototype.forEach.call(p.querySelectorAll('.nao-liberado'), function(x){ x.remove(); }); Array.prototype.forEach.call(p.children, function(x){ x.hidden = false; }); });
       if (!KM_LIB) ['ensinar', 'testar'].forEach(function(a){
         var p = $('pane-' + a); Array.prototype.forEach.call(p.children, function(x){ x.hidden = true; });
-        var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Ainda não liberado para a sua unidade. ')); v.appendChild(document.createTextNode('Para a Sofia aprender com vocês, peça à Doutor Digital pela aba '));
+        var v = el('p', 'vazio nao-liberado'); v.appendChild(el('b', null, 'Ainda não liberado para a sua unidade. ')); v.appendChild(document.createTextNode('Para a Sofia aprender com vocês, peça à Doutor Digital pela aba '));
         var b = el('button', 'bt link', 'Pedir à Doutor Digital'); b.type = 'button'; b.onclick = function(){ ir('pedir'); }; v.appendChild(b); p.appendChild(v);
       });
       escolherUnidade(U); $('corpo').hidden = false; ir(lerGuardado('agente:aba') || 'painel');
@@ -928,8 +937,18 @@ a.bt{text-decoration:none}
     if (pausaEscolha === 'amanha8') { d.setDate(d.getDate() + 1); d.setHours(8, 0, 0, 0); return d; }
     d.setHours(18, 0, 0, 0); if (d <= new Date()) d.setDate(d.getDate() + 1); return d;
   }
-  OPCOES_PAUSA.forEach(function(o){ var l = el('label'), i = el('input'); i.type = 'radio'; i.name = 'pausa'; i.value = o[0]; i.checked = o[0] === pausaEscolha; i.onchange = function(){ pausaEscolha = o[0]; }; l.appendChild(i); l.appendChild(document.createTextNode(o[1])); $('pausaOps').appendChild(l); });
+  OPCOES_PAUSA.forEach(function(o){ var l = el('label'), i = el('input'); l.setAttribute('data-k', o[0]); i.type = 'radio'; i.name = 'pausa'; i.value = o[0]; i.checked = o[0] === pausaEscolha; i.onchange = function(){ pausaEscolha = o[0]; }; l.appendChild(i); l.appendChild(document.createTextNode(o[1])); $('pausaOps').appendChild(l); });
+  // «Até as 18h de hoje» depois das 18h viraria «amanhã às 18h»: some. A hora é a do fuso da unidade (vem da /pausa) ou, sem ela, a do aparelho (como a /pausa)
+  var PAUSA_TZ = '';
+  function horaAgora(){ try { var h = Number(new Intl.DateTimeFormat('en-GB', { timeZone: PAUSA_TZ || undefined, hour: '2-digit', hourCycle: 'h23' }).format(new Date())); if (!isNaN(h)) return h; } catch (e) {} return new Date().getHours(); }
+  function ajustarOpcoesPausa(){
+    var tarde = horaAgora() >= 18, l = document.querySelector('#pausaOps label[data-k="hoje18"]');
+    if (l) l.hidden = tarde;
+    if (tarde && pausaEscolha === 'hoje18') { pausaEscolha = '1h'; var i = document.querySelector('#pausaOps input[value="1h"]'); if (i) i.checked = true; }
+  }
+  ajustarOpcoesPausa();
   function mostrarPausa(e){
+    if (e.tz) PAUSA_TZ = e.tz; ajustarOpcoesPausa();
     var d = $('pausaDescricao'); d.textContent = '';
     var on = !!e.emPausa; d.appendChild(el('span', 'pausa-estado' + (on ? ' off' : ''), on ? 'Pausada' : (e.agendada ? 'Pausa marcada' : 'Ativa e respondendo')));
     if (e.descricao && (on || e.agendada)) d.appendChild(document.createTextNode(' · ' + e.descricao + (e.por ? ' (por ' + e.por + ')' : '')));
@@ -953,13 +972,13 @@ a.bt{text-decoration:none}
   function linhaPausadaKm(tb, c){
     var tr = el('tr');
     tr.appendChild(el('td', null, c.nome)); tr.appendChild(el('td', null, c.por || '—')); tr.appendChild(el('td', null, ha(c.desde)));
-    tr.appendChild(el('td', null, c.tipo === 'janela' && c.ate ? 'até ' + dataHora(c.ate) : 'volta sozinha'));
+    tr.appendChild(el('td', null, c.tipo === 'janela' && c.ate ? 'até ' + dataHora(c.ate) : 'depois da equipe'));
     var td = el('td');
     if (c.link) { var ab = el('a', 'bt link', 'Abrir cartão'); ab.href = c.link; ab.target = '_blank'; ab.rel = 'noopener noreferrer'; td.appendChild(ab); }
-    // a pausa da equipe (a Sofia se calou porque alguém falou com o paciente) volta sozinha; só a pausa com data tem «devolver»
+    // a pausa da equipe (a Sofia se calou porque alguém falou com o paciente) termina depois que a equipe para de falar; só a pausa com data tem «devolver»
     if (c.tipo === 'janela') {
       var re = el('button', 'bt', 'Devolver para a Sofia'); re.type = 'button';
-      re.onclick = async function(){ re.disabled = true; try { await api('DELETE', '/api/public/pausa/' + enc(U.slug) + '/lead/' + c.leadId, {}); toast('A Sofia voltou a responder neste cartão.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, true); } };
+      re.onclick = async function(){ re.disabled = true; try { await api('DELETE', '/api/public/pausa/' + enc(U.slug) + '/lead/' + c.leadId, {}); toast(c.equipeTambem ? 'Tirei a pausa com data. A equipe ainda está atendendo este cartão: a Sofia só volta depois que ela terminar.' : 'A Sofia voltou a responder neste cartão.'); carregarPausadas(); } catch (e) { re.disabled = false; toast(e.message, true); } };
       td.appendChild(re);
     }
     tr.appendChild(td); tb.appendChild(tr);

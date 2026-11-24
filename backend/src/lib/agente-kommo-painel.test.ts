@@ -107,3 +107,9 @@ test('sem nada no período anterior (histórico curto) a tela não compara com z
   const soPix = painelDasLinhas({ linhas: [], pix: [{ leadId: '5', criadoEm: h(24 * 9) }] }, new Map(), { agora, periodo: '7', fuso: FUSO });
   assert.equal(semAnterior(soPix), false, 'o Pix do período anterior também é «algo»');
 });
+
+test('lerDoBanco loga a leitura que deu certo (unidade, dias, ms, linhas) com prefixo fixo', async () => {
+  const { readFileSync } = await import('node:fs');
+  const fonte = readFileSync(new URL('./agente-kommo-painel.ts', import.meta.url), 'utf8');
+  assert.ok(fonte.includes("'agente-kommo: painel lido'") && /logger\.info\(\{ unitId, dias, ms: /.test(fonte));
+});
