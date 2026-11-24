@@ -958,7 +958,10 @@ a.bt{text-decoration:none}
     try { mostrarPausa(await api('GET', '/api/public/pausa/' + enc(U.slug))); } catch (e) { $('pausaDescricao').textContent = e.message; }
   }
   $('btPausar').addEventListener('click', async function(){
-    var b = this; some('avisoPausa'); b.disabled = true;
+    var b = this; some('avisoPausa');
+    // tela aberta desde antes das 18h: «Até as 18h de hoje» clicado depois das 18h pausaria até amanhã às 18h — não pausa, pede outra escolha
+    if (pausaEscolha === 'hoje18' && horaAgora() >= 18) { ajustarOpcoesPausa(); aviso('avisoPausa', 'Já passou das 18h. Escolha outra opção e toque em Pausar de novo.'); return; }
+    b.disabled = true;
     try { var e = await api('POST', '/api/public/pausa/' + enc(U.slug), { ate: fimDaPausa().toISOString(), motivo: $('pausaMotivo').value }); mostrarPausa(e); toast('Pronto: ' + e.descricao + '.'); }
     catch (er) { aviso('avisoPausa', er.message); }
     b.disabled = false;
