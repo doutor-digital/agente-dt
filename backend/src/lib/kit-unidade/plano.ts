@@ -344,7 +344,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     sistema: 'chatwoot',
     titulo: 'Webhook da conta para o agente, com a chave DESTA conta (derivada do token dela; a de outra conta não vale)',
     acao: semCaixa ? 'manual' : cw?.webhookDaConta ? 'nada' : 'criar',
-    itens: semCaixa ? [ADIADO] : ['POST webhooks na conta, com os eventos de mensagem e conversa', 'o servidor só aceita o evento se a chave for a da conta que o evento diz ser'],
+    itens: semCaixa ? [ADIADO, 'sem caixa não há conversa para avisar: o webhook nasce junto com a caixa (o servidor só reconhece a conta depois que a caixa é registrada)'] : ['POST webhooks na conta, com os eventos de mensagem e conversa', 'o servidor só aceita o evento se a chave for a da conta que o evento diz ser'],
     execucao: semCaixa ? 'manual' : 'sim',
     avisos: [cw ? 'se o webhook já existe com a mesma chave, nada é criado' : NAO_CONSULTADO],
     depende: ['conta'],
@@ -386,7 +386,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'numero',
     sistema: 'meta',
-    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `Número ${mascararCampo(q.whatsapp.numero_oficial)} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
+    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `${q.whatsapp.numero_oficial ? `Número ${mascararCampo(q.whatsapp.numero_oficial)}` : 'Número (ainda não definido)'} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
     acao: q.whatsapp.modo === 'demonstracao' ? 'nada' : 'manual',
     itens: q.whatsapp.modo === 'demonstracao' ? ['a demonstração não usa WhatsApp de verdade'] : [q.whatsapp.conexao === 'coexistencia' ? 'quem tem o celular da unidade lê o QR/aceita a coexistência no app do WhatsApp Business' : 'verificar o número na Meta (código por SMS/ligação)'],
     execucao: 'manual',
@@ -420,7 +420,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     sistema: 'meta',
     titulo: 'Dataset da CAPI (conversões do WhatsApp para a Meta)',
     acao: q.whatsapp.modo === 'demonstracao' || estado.meta?.datasetCapi || estado.segredos?.[q.meta.dataset_id_env] ? 'nada' : 'manual',
-    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${mascararCampo(q.whatsapp.waba_id)}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
+    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${q.whatsapp.waba_id ? mascararCampo(q.whatsapp.waba_id) : '<WABA: ainda não definida>'}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
     execucao: 'manual',
     avisos: estado.meta ? [] : [NAO_CONSULTADO, 'a criação do dataset usa o token da Meta da clínica: o script não faz (conferir a tela do Business Manager)'],
   });
@@ -510,9 +510,9 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
 /** O que falta para a unidade estar de pé, na ordem de quem faz. */
 function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number; ausentes: string[]; inferidos: number; soCrm?: boolean; semCaixa?: boolean }): string[] {
   const r: string[] = [];
-  if (x.semCaixa) r.push('SEM CAIXA (--sem-caixa): a conta, o time, os atendentes, as etiquetas, os atributos, as automações, as abas e as mensagens prontas foram montados; a CAIXA do WhatsApp, o webhook e os modelos da Meta ficaram para depois. Ordem combinada: número no Kapso → rodar de novo SEM --sem-caixa (com numero_oficial e kapso_phone_number_id no questionário; só o que falta é criado) → só então desvincular a Kommo');
+  if (x.semCaixa) r.push('SEM CAIXA (--sem-caixa): a conta, o time, os atendentes, as etiquetas, os atributos, as automações, as abas e as mensagens prontas foram montados; a CAIXA do WhatsApp, o webhook e os modelos da Meta ficaram para depois. Ordem combinada: número no Kapso → rodar de novo SEM --sem-caixa (com numero_oficial, kapso_phone_number_id e waba_id no questionário — os três obrigatórios; só o que falta é criado) → só então desvincular a Kommo');
   const tem = (id: string) => passos.find((p) => p.id === id)?.acao !== 'nada';
-  if (tem('numero')) r.push(x.soCrm ? `NÚMERO (decisão SEPARADA, não faz parte do --so-crm): conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje` : `NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
+  if (tem('numero')) r.push(x.soCrm ? `NÚMERO (decisão SEPARADA, não faz parte do --so-crm): conectar ${q.whatsapp.numero_oficial ? mascararCampo(q.whatsapp.numero_oficial) : 'o número (ainda não definido)'} ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje` : `NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
   if (q.whatsapp.modo === 'demonstracao') r.push('DEMONSTRAÇÃO: os modelos ficaram em SECO e a caixa é API. Para virar clínica de verdade: modo: real, número e WABA no questionário, e rodar de novo');
   r.push(q.assistente?.quer === false || x.soCrm ? `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) fica na pasta KIT_SEGREDOS_DIR (${x.soCrm ? '--so-crm: sem robô' : 'clínica SEM assistente: não há robô'}, então não há CHATWOOT_SOFIA_BOT_TOKEN; use cofre-para-servico-joao.sh ${sufixoDoQuestionario(q)} --sem-ia):` : `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) e o do robô (CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}) ficam na pasta KIT_SEGREDOS_DIR: o João os coloca no arquivo de segredos da VPS e no env do serviço ddagent_agent e REINICIA o serviço (é quando o servidor passa a conhecer a conta)`);
   r.push('PASTAS: cada atendente cria as 10 pastas dela depois do primeiro login (a pasta é da pessoa; o script não consegue)');

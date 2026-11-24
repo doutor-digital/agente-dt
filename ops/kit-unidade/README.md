@@ -51,7 +51,7 @@ Quando a unidade já existe, o CRM pode ser montado ANTES de o número entrar no
 
     bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm --sem-caixa --so-conferir
     bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm --sem-caixa      # conta, time, atendentes (convite), etiquetas, atributos, automações em seco, abas, mensagens prontas, subdomínio
-    ... depois, com o número no Kapso e `numero_oficial` + `kapso_phone_number_id` (+ `waba_id`) no questionário:
+    ... depois, com o número no Kapso e `numero_oficial`, `kapso_phone_number_id` e `waba_id` (os três) no questionário:
     bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm                  # completa SÓ o que faltou: caixa, os agentes na caixa, webhook, modelos da Meta e o registro da caixa
 
 Com `--sem-caixa` o questionário real não exige número, id do Kapso nem WABA (ausentes ou escritos `PENDENTE`; se vierem, o formato vale). A caixa do WhatsApp, o registro dela, o webhook e os modelos ficam ADIADOS (manuais, nada é perguntado nem lido).

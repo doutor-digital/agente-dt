@@ -346,7 +346,7 @@ export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao, semC
   const faltamNoTime = ids.filter((i) => !noTime.has(i));
   if (faltamNaCaixa.length) await postar(e, conta, 'inbox_members', { inbox_id: caixa, user_ids: faltamNaCaixa });
   if (faltamNoTime.length) await postar(e, conta, `teams/${time}/team_members`, { user_ids: faltamNoTime });
-  return [convidados.length ? `${convidados.length} convite(s) enviado(s): ${convidados.join(', ')}` : 'todas já eram agentes', faltamNaCaixa.length || faltamNoTime.length ? `${faltamNaCaixa.length} entraram na caixa ${caixa} e ${faltamNoTime.length} no time ${time}` : `já estavam na caixa ${caixa} e no time ${time}`];
+  return [convidados.length ? `${convidados.length} convite(s) enviado(s): ${convidados.join(', ')}` : 'todas já eram agentes', caixa === null ? (faltamNoTime.length ? `${faltamNoTime.length} entraram no time ${time} (a caixa só existe na rodada com o número)` : `já estavam no time ${time} (a caixa só existe na rodada com o número)`) : faltamNaCaixa.length || faltamNoTime.length ? `${faltamNaCaixa.length} entraram na caixa ${caixa} e ${faltamNoTime.length} no time ${time}` : `já estavam na caixa ${caixa} e no time ${time}`];
 }
 
 export async function passoUsuarioCelular(q: Questionario, e: EstadoDaExecucao, semCaixa = false): Promise<string[]> {

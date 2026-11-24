@@ -309,7 +309,7 @@ falta() { echo "  $n. $1"; n=$((n+1)); }
 if [ "$MODO" = "demonstracao" ]; then
   falta "NÚMERO/MODELOS: não se aplicam (demonstração: caixa API, modelos em seco). Para virar clínica de verdade: modo real, número e WABA no questionário, e rodar este comando de novo."
 elif [ "$SEM_CAIXA" = "1" ]; then
-  falta "CAIXA DO WHATSAPP, WEBHOOK E MODELOS (adiados por --sem-caixa): ordem combinada = número no Kapso → rodar de novo SEM --sem-caixa, com numero_oficial e kapso_phone_number_id no questionário (só o que falta é criado) → só então desvincular a Kommo.  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG --so-crm"
+  falta "CAIXA DO WHATSAPP, WEBHOOK E MODELOS (adiados por --sem-caixa): ordem combinada = número no Kapso → rodar de novo SEM --sem-caixa, com numero_oficial, kapso_phone_number_id e waba_id no questionário (os três; só o que falta é criado) → só então desvincular a Kommo.  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG --so-crm"
   falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
 elif [ "$SO_CRM" = "1" ]; then
   falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
