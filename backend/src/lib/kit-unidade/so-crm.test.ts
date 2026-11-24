@@ -203,3 +203,18 @@ test('--so-crm não combina com --sobrescrever, --sobrescrever-prompt, --reimpor
   }
   assert.equal(u.escritas.length, 0);
 });
+
+test('--so-crm: nenhum aviso do plano aponta --sobrescrever para a Sofia (em Marabá a flag destruiria a Sofia no ar)', () => {
+  const q = questionario();
+  const u = unidadeAtiva(q);
+  // a Sofia viva difere do questionário (como em Marabá: persona e fontes escritas à mão na unidade)
+  const estado = u.estadoAtual() as any;
+  estado.banco = { ...estado.banco, sofia: { ...(estado.banco?.sofia ?? {}), personaAgentName: 'Sofia de Marabá', sourceNegocio: 'texto vivo da unidade', systemPrompt: 'prompt vivo' } };
+  const p = montarPlano(q, estado, { molde: MOLDE, soCrm: true });
+  const sofia = passo(p, 'sofia');
+  assert.equal(sofia.acao, 'nada');
+  assert.ok(!sofia.avisos.some((a) => /--sobrescrever/.test(a)), `aviso da Sofia não pode sugerir --sobrescrever: ${sofia.avisos.join(' | ')}`);
+  // sem a flag (plano de unidade nova/inativa) o aviso continua existindo — o conserto é só do --so-crm
+  const semFlag = montarPlano(q, { ...estado, banco: { ...estado.banco, unidade: { ...estado.banco.unidade, isActive: false } } }, { molde: MOLDE });
+  assert.ok(passo(semFlag, 'sofia').avisos.some((a) => /já preenchidos e diferentes/.test(a)), 'fora do --so-crm o aviso segue');
+});
