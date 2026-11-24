@@ -89,6 +89,7 @@ import { portaPerdidoReabre } from '../lib/perdido-reabre.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
 import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
+import { origemDoPaciente, portaDoCanal } from '../lib/sofia-so-whatsapp.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -337,6 +338,8 @@ interface ExtractedContext {
   authorId: string | null;
   /** Id numérico da conta Kommo que mandou o webhook. */
   accountId: number | null;
+  /** De que canal veio a mensagem (`waba`, `com.amocrm.amocrmwa`, `instagram_business`, `facebook`…), como o Kommo informa; null = não veio. */
+  origem: string | null;
   isChatMessage: boolean;
 }
 
@@ -354,6 +357,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
       contactName: msg.author?.name ?? null,
       authorId: msg.author?.id ?? null,
       accountId,
+      origem: msg.origin?.trim() || null,
       isChatMessage: true,
     };
   }
@@ -367,6 +371,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
     contactName: null,
     authorId: null,
     accountId,
+    origem: null,
     isChatMessage: false,
   };
 }
@@ -1005,6 +1010,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       contactId: ctx.contactId,
       authorId: ctx.authorId,
       accountId: ctx.accountId,
+      origem: ctx.origem,
       isChatMessage: ctx.isChatMessage,
       requestStart,
     })).catch((err) => {
@@ -1038,6 +1044,7 @@ function execucaoDoTurno(
         contactId: ctx.contactId,
         authorId: ctx.authorId,
         accountId: ctx.accountId,
+        origem: ctx.origem,
         isChatMessage: ctx.isChatMessage,
         requestStart,
         burstSize: traceIds.length,
@@ -1220,6 +1227,7 @@ export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
     contactName: null,
     authorId: null,
     accountId: null,
+    origem: null, // cartão que ganhou a unidade depois: o canal não foi guardado, segue como hoje
     isChatMessage: true,
   };
   const status = scheduleAgentRun({
@@ -1258,6 +1266,8 @@ export interface ArgsDoTurno {
   contactId: string | null;
   authorId?: string | null;
   accountId?: number | null;
+  /** O canal da mensagem (origem do Kommo). Alimenta a chave `sofia-so-whatsapp`; ausente = segue como WhatsApp. */
+  origem?: string | null;
   isChatMessage: boolean;
   requestStart: number;
   burstSize?: number;
@@ -1441,6 +1451,33 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       title: `Burst coalescido: ${burstSize} mensagens do paciente combinadas em 1 turno`,
       payload: { burstSize, combined: humanMessage.slice(0, 400) },
     });
+  }
+
+  // A SOFIA SÓ FALA NO WHATSAPP (chave `sofia-so-whatsapp`, por unidade — Salto e Tatuí, 24/11/2026): mensagem de Instagram/Facebook/Messenger fica
+  // com a equipe. Antes de Whisper, visão e modelo (nada disso é pago à toa) e depois do mesmo bookkeeping do fora-do-horário (voltar da espera). Só
+  // mensagem de chat, e o turno aberto pela Ponte passa (a equipe mandou a Sofia falar). Origem ausente/desconhecida e WhatsApp seguem como hoje.
+  // Sem nota, sem tarefa: quem atende já está olhando o canal. Em "só no papel" registra que calaria e responde.
+  if (isChatMessage && !passadoPelaPonteAgora(unit.id, leadId)) {
+    const porta = await portaDoCanal(
+      {
+        slug: unit.slug,
+        leadId,
+        origem: args.origem,
+        latenciaMs: () => Math.round(performance.now() - requestStart),
+        ultimaOrigemConhecida: () => origemDoPaciente(unit.id, leadId),
+      },
+      {
+        step: (st) => recorder.step(st),
+        finalizar: async (iaDecision, latencyMs) => {
+          await finishWidgetSilently();
+          await recorder.finalize({ status: 'SUCCESS', latencyMs, iaDecision });
+        },
+      },
+    );
+    if (porta === 'calou') {
+      logger.info({ traceId, leadId, unit: unit.slug, origem: args.origem }, 'agente pulado (canal sem a Sofia: Instagram/Facebook)');
+      return TURNO_PULADO;
+    }
   }
 
   // TODOS os áudios da rajada, não só o primeiro: em 7 dias 52 áudios ficaram sem

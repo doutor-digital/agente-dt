@@ -42,6 +42,7 @@ import { agendarIndice, chaveDoTelefone, consultarIndice } from './franquia-indi
 import { contatoPrincipal } from './kommo-lead-util.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
+import { cartaoDeRedeSocialCalado } from './sofia-so-whatsapp.js';
 import {
   ID_CUTUCADA,
   META_DA_CUTUCADA,
@@ -439,6 +440,12 @@ export async function varrerCutucada(unit: Unit, estado: Exclude<Estado, 'deslig
       // pausa com data do widget: uma consulta por candidato REAL (não uma por cartão da janela)
       if (await deps.leadPausadoPorJanela(unit.id, lead.id).catch(() => true)) {
         conta(r.barrados, 'pausa-com-data');
+        vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
+        continue;
+      }
+      // Chave `sofia-so-whatsapp` (Salto e Tatuí): paciente de Instagram/Facebook é da equipe — nada nosso sai. Chave desligada: nem lê.
+      if (await cartaoDeRedeSocialCalado(unit, lead.id, () => deps.kommo.listTalks(lead.id))) {
+        conta(r.barrados, 'canal-rede-social');
         vistoAte.set(chaveVisto, { atualizadoEm: lead.updated_at ?? 0, ateMs: agora.getTime() + SEGURADA_MS });
         continue;
       }

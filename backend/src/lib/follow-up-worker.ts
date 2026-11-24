@@ -9,6 +9,7 @@ import { ehFeriadoNacionalAgora } from './feriados.js';
 import { carimbarContato } from '../services/lead-memory.service.js';
 import { carimbarSemResposta } from '../services/lead-metrics.service.js';
 import { automacaoLigada } from './automacoes-estado.js';
+import { pacienteDeRedeSocialCalado } from './sofia-so-whatsapp.js';
 import { leadPausadoPorJanela } from './pausa-lead.js';
 import { enviosDeRetomadaRecentes, limiteDoDiaAtingido, LIMITE_COBRANCAS_POR_DIA, marcaDoDegrau } from './cobrancas-do-dia.js';
 import { fusoDaUnidade } from './fuso.js';
@@ -379,6 +380,11 @@ async function varrer(): Promise<void> {
         }
         if (alvo < 0) continue;
         const proximo = ESCADA_DA_REGRA[alvo];
+
+        // Chave `sofia-so-whatsapp` (Salto e Tatuí): paciente de Instagram/Facebook é da equipe — nada nosso sai por iniciativa própria.
+        // Só quem tem um degrau DEVIDO chega aqui (uma leitura por cartão a cada 10 min, e só com a chave ligada). Só pula: não grava motivo
+        // de parada nem mexe no degrau, então desligar a chave devolve a conversa à escada sem migração.
+        if (await pacienteDeRedeSocialCalado(unit, conv.leadId)) continue;
 
         // Quem ja pagou nao ouve falar de pagamento. O degrau e pulado, nao
         // adiado: se o proximo degrau tambem for de cobranca, ele cai aqui na

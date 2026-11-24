@@ -905,6 +905,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/ia-so-numeros-de-teste.ts',
   },
   {
+    id: 'sofia-so-whatsapp',
+    chave: 'SOFIA_SO_WHATSAPP_SLUGS',
+    nome: 'A Sofia só fala no WhatsApp (Instagram e Facebook ficam com a equipe)',
+    oQueFaz:
+      'Quando a mensagem do paciente chega pelo Instagram, Facebook ou Messenger (a origem que o Kommo informa no webhook), a Sofia não responde: o turno termina antes de transcrever áudio, ler imagem ou chamar o modelo, e o histórico da execução mostra «Instagram/Facebook — a Sofia não responde esse canal nesta unidade (quem atende é a equipe)». Também não saem, para esse paciente, a escada de follow-up, a reativação depois do handoff e a cutucada depois da equipe.',
+    pegadinha:
+      'WhatsApp (API oficial ou Lite) e origem desconhecida seguem como sempre: a chave só cala o que sabe que é rede social. Fora do webhook a origem vem dos últimos traces do cartão (a última conhecida), e a cutucada olha também a conversa do Kommo; paciente sem nenhuma origem registrada segue como WhatsApp. NÃO cala o que sai por outro motivo: lembretes e confirmação de consulta, cobrança do sinal Pix e cartão de chegada (só existem para quem já marcou) e tudo o que os robôs do próprio Kommo mandam. Turno aberto pela Ponte («Passar para a Sofia») passa: a equipe mandou a Sofia falar. Desligar a chave devolve a conversa à escada e à reativação (a chave só pula, não grava nada na conversa). Não confundir com «ig_enabled» da unidade (Instagram direto, outro canal). Em "só no papel" o webhook registra no histórico que calaria, mas responde; os envios por iniciativa própria seguem como hoje.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/sofia-so-whatsapp.ts',
+  },
+  {
     id: 'calar-cliente-do-escritorio',
     chave: 'CALAR_CLIENTE_ESCRITORIO_SLUGS',
     nome: 'IA calada para quem já é cliente do escritório',
