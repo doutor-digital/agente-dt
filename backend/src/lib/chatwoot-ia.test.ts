@@ -475,7 +475,7 @@ test('LIGADO: grava marcou (nome e dia) e Pix que saiu; a resposta com id vira r
 
 test('PAUSA DA UNIDADE: com pausa ativa a Sofia do CRM NÃO responde (nem chama o modelo), registra o desfecho e tira o selo; sem pausa responde igual', async () => {
   const em2h = new Date(Date.now() + 2 * 3_600_000);
-  const pausada = portas({ estado: 'ligado', unidade: { pausaAte: em2h, pausaDesde: null, pausaPor: 'Cleia Gerente' } });
+  const pausada = portas({ estado: 'ligado', unidade: { pausaAte: em2h, pausaDesde: null, pausaPor: 'Cleia Gerente', pausaMotivo: 'reunião sobre a Ana' } });
   const registros: Array<{ tipo: string; nome?: string | null; detalhe?: string | null }> = [];
   pausada.p.registrarEvento = async (e) => void registros.push({ tipo: e.tipo, nome: e.nome, detalhe: e.detalhe });
   assert.equal(await rodarSofia(M, pausada.p, novaMemoriaDaIa()), 'pausada-pela-unidade');
@@ -484,6 +484,7 @@ test('PAUSA DA UNIDADE: com pausa ativa a Sofia do CRM NÃO responde (nem chama 
   assert.equal(pausada.equipe.length, 0, 'e a conversa não é passada à equipe por isso');
   assert.deepEqual(pausada.encerradas, [12], 'o selo «Sofia atendendo» sai');
   assert.deepEqual(registros.filter((r) => r.tipo === 'decisao').map((r) => r.nome), ['pausada-pela-unidade'], 'o Registro mostra por que não respondeu');
+  assert.ok(!JSON.stringify(registros).includes('Cleia') && !JSON.stringify(registros).includes('Ana'), 'o motivo digitado e quem pausou não vão para o Registro');
   // o selo também não nasce na 1ª mensagem
   const nova = portas({ estado: 'ligado', unidade: { pausaAte: em2h, pausaDesde: null } });
   await aoChegar(M, nova.p, novaMemoriaDaIa());

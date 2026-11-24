@@ -16,7 +16,7 @@
  * NÃO responde paciente com cartão ATIVO no Kommo da unidade (decisão 31: quem atende é o Kommo; só nota) nem quando não dá para
  * conferir o Kommo; teto de rodadas da Sofia por unidade por dia (em memória); chave na URL (o log mascara `k=`).
  */
-import { descreverPausa, emPausa } from './pausa-unidade.js';
+import { emPausa } from './pausa-unidade.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { Request, Response } from 'express';
 import type { Unit } from '@prisma/client';
@@ -515,7 +515,8 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   // PAUSA DA UNIDADE (colunas `pausa_*`: a página /pausa da recepção e o botão do painel Agente): a Sofia do CRM também respeita, como o Kommo. A mensagem do
   // paciente fica sem resposta da Sofia (a equipe vê no Registro) e ela NÃO responde sozinha quando a pausa acaba. Sem pausa, nada muda.
   if (emPausa(unit)) {
-    info.motivo = descreverPausa(unit).slice(0, 60);
+    // texto fixo: o motivo digitado e quem pausou aparecem só na faixa do painel (quem pode ver), nunca no Registro que todas as atendentes leem
+    info.motivo = 'pausa da clínica';
     logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: unidade pausada — a Sofia não responde`);
     return 'pausada-pela-unidade';
   }

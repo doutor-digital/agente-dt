@@ -67,12 +67,13 @@ test('atendente comum VÊ o estado mas não pausa nem religa (403) e nada é esc
 test('administradora pausa: quem mudou é o login (o «por» da página não vale), o motivo e a hora vão, e o estado volta com podeMudar', async () => {
   const { h, chamadas } = montar({ papel: 'administrator' });
   const r = resposta();
-  await h.pausar(pedido({ slug: 'timbo', ate, motivo: 'o doutor atrasou', por: 'OUTRA PESSOA', confirmar: true }), r as unknown as Response);
+  await h.pausar(pedido({ slug: 'timbo', ate, desde: new Date(Date.now() + 5 * 86_400_000).toISOString(), motivo: 'o doutor atrasou', por: 'OUTRA PESSOA', confirmar: true }), r as unknown as Response);
   assert.equal(r.codigo, 200);
   assert.equal(chamadas.length, 1);
   assert.equal(chamadas[0]!.por, 'Cleia Gerente');
   assert.equal((chamadas[0]!.corpo as { por: string }).por, 'Cleia Gerente');
   assert.equal((chamadas[0]!.corpo as { motivo: string }).motivo, 'o doutor atrasou');
+  assert.equal((chamadas[0]!.corpo as { desde: unknown }).desde, null, 'o painel só pausa a partir de agora: o «desde» da página não vale');
   const j = r.corpo as { emPausa: boolean; por: string; podeMudar: boolean; codigo?: string };
   assert.equal(j.emPausa, true);
   assert.equal(j.por, 'Cleia Gerente');

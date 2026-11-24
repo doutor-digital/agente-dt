@@ -53,7 +53,8 @@ test('religar soSeHouver: sem pausa (count 0) não grava de novo e não avisa; c
   const livre = unidade();
   const a = await comUnit({ updateMany: async (x: { where: unknown }) => (chamadas.push(x.where), { count: 0 }), findUniqueOrThrow: async () => livre, update: async () => { throw new Error('sem update solto'); } }, () => retomar(livre, 'Cleia', { soSeHouver: true }));
   assert.equal(a.pausaAte, null);
-  assert.deepEqual(chamadas, [{ id: 'u1', pausaAte: { not: null } }]);
+  assert.equal((chamadas[0] as { id: string }).id, 'u1');
+  assert.ok('gt' in ((chamadas[0] as { pausaAte: object }).pausaAte), 'só conta pausa que ainda vale (pausa_ate no futuro): pausa vencida não gera aviso falso');
   const limpa = unidade();
   const b = await comUnit({ updateMany: async () => ({ count: 1 }), findUniqueOrThrow: async () => limpa }, () => retomar(unidade({ pausaAte: new Date(ate) }), 'Cleia', { soSeHouver: true }));
   assert.equal(b.pausaAte, null);

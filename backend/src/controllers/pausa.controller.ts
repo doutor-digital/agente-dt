@@ -91,11 +91,11 @@ export async function aplicarPausa(
   return { ok: true, unit: atualizada };
 }
 
-/** `soSeHouver`: só limpa (e só avisa) se havia pausa; religar uma Sofia que não estava pausada não grava nem avisa ninguém. */
+/** `soSeHouver`: só limpa (e só avisa) se havia pausa AINDA valendo (ativa ou marcada: `pausa_ate` no futuro, o mesmo critério de `emPausa`/`pausaAgendada`); religar uma Sofia que não estava pausada não grava nem avisa ninguém. */
 export async function retomar(unit: Unit, por: string | null, opcoes: { soSeHouver?: boolean } = {}): Promise<Unit> {
   const dados = { pausaAte: null, pausaDesde: null, pausaMotivo: null, pausaPor: null };
   if (opcoes.soSeHouver) {
-    const r = await prisma.unit.updateMany({ where: { id: unit.id, pausaAte: { not: null } }, data: dados });
+    const r = await prisma.unit.updateMany({ where: { id: unit.id, pausaAte: { gt: new Date() } }, data: dados });
     const atual = await prisma.unit.findUniqueOrThrow({ where: { id: unit.id } });
     if (r.count === 0) return atual;
     logger.info({ unit: unit.slug, por }, 'pausa da IA desligada pela unidade');

@@ -4,7 +4,7 @@
  * 7 dias) e a Sofia volta sozinha.
  *
  *   GET  /api/public/agente/pausa?slug=              como está (qualquer atendente da unidade vê) + `podeMudar`
- *   POST /api/public/agente/pausa                    { slug, ate, desde?, motivo?, confirmar: true }   só administradora/gerente
+ *   POST /api/public/agente/pausa                    { slug, ate, motivo, confirmar: true }            só administradora/gerente (pausa a partir de agora)
  *   POST /api/public/agente/pausa/retomar            { slug }                                          só administradora/gerente
  *
  * Quem pode: o administrador da CONTA do Chatwoot (ou e-mail em `CHATWOOT_GESTORES`, só na conta do ambiente) — a mesma regra de
@@ -82,7 +82,7 @@ export function fazerPausaDoAgente(portas: PortasDaPausaDoAgente = portasReais()
     }
     const por = r.a.nome.slice(0, 80) || 'atendente';
     // «por» é sempre o login: o que a página mandar não vale
-    const res2 = await portas.aplicar(r.unit, { ate: corpo.ate, desde: corpo.desde ?? null, motivo, por }, por, { soSeLivre: true });
+    const res2 = await portas.aplicar(r.unit, { ate: corpo.ate, desde: null, motivo, por }, por, { soSeLivre: true });
     if (!res2.ok) {
       if (res2.conflito) res.status(409).json({ error: res2.erro, ...paraATela(res2.conflito, portas.estado(res2.conflito), true) });
       else res.status(400).json({ error: res2.erro });
