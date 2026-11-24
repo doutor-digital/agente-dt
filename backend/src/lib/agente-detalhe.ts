@@ -26,8 +26,9 @@ export const lerMedida = (v: unknown): Medida | null => (typeof v === 'string' &
 
 /** teto de linhas devolvidas por lista; o total real vai junto para a tela avisar do corte */
 export const MAX_LINHAS_DE_DETALHE = 300;
-/** o Pix sai alguns segundos depois da linha do sinal ser criada; folga para casar o evento com ela */
-const FOLGA_DO_PIX_MS = 10 * 60_000;
+/** o Pix sai depois de a linha do sinal ser criada (a Sofia ainda escreve a resposta): janela para casar o evento com o sinal dele */
+const FOLGA_ANTES_MS = 10 * 60_000;
+const FOLGA_DEPOIS_MS = 2 * 60_000;
 
 export type SituacaoDoPix = 'pago' | 'pendente' | 'vencido';
 
@@ -123,7 +124,10 @@ export function montarDetalhe(medida: Medida, e: EntradaDoDetalhe): Detalhe {
     const sit = { pago: 0, pendente: 0, vencido: 0, semRegistro: 0 };
     linhas = porConversa(eventos('pix')).map((v) => {
       const lead = String(BASE_LEAD_CHATWOOT + v.conversa);
-      const s = maisRecente(e.sinais.filter((x) => x.leadId === lead && x.criadoEm.getTime() <= v.criadoEm.getTime() + FOLGA_DO_PIX_MS))[0] ?? null;
+      // o sinal é criado ANTES de a mensagem sair: só vale o que nasceu nos minutos antes do evento (nunca um sinal velho da mesma conversa);
+      // «criando» é reserva que o Asaas ainda não respondeu (ou que falhou): não é Pix que o paciente recebeu
+      const t0 = v.criadoEm.getTime();
+      const s = maisRecente(e.sinais.filter((x) => x.leadId === lead && x.status !== 'criando' && x.criadoEm.getTime() <= t0 + FOLGA_DEPOIS_MS && x.criadoEm.getTime() >= t0 - FOLGA_ANTES_MS))[0] ?? null;
       const situacao = s ? situacaoDoPix(s, hoje) : null;
       if (situacao) sit[situacao] += 1;
       else sit.semRegistro += 1;

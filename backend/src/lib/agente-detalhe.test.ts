@@ -88,6 +88,11 @@ test('Pix: situação PAGO / PENDENTE / VENCIDO a partir do sinal; sem sinal = s
   const r = montarDetalhe('pix', { ...base, eventos, sinais });
   assert.deepEqual(r.situacoes, { pago: 1, pendente: 1, vencido: 1, semRegistro: 1 });
   assert.deepEqual(r.linhas.map((l) => [l.conversa, l.pix!.situacao, l.pix!.valorCentavos]), [[1, 'pago', 5000], [2, 'pendente', 5000], [3, 'vencido', 5000], [4, null, null]]);
+  // um sinal VELHO da mesma conversa não vira o Pix de hoje, e reserva «criando» não é Pix enviado
+  const velho = montarDetalhe('pix', { ...base, eventos: [{ conversa: 42, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(42), status: 'pago', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(24 * 5), pagoEm: h(24 * 4) }] });
+  assert.equal(velho.linhas[0]!.pix!.situacao, null, 'sinal de 5 dias atrás não casa com o Pix de agora');
+  const reserva = montarDetalhe('pix', { ...base, eventos: [{ conversa: 43, tipo: 'pix', nome: null, detalhe: null, criadoEm: h(2) }], sinais: [{ leadId: lead(43), status: 'criando', venceEm: '2026-11-20', valorCentavos: 5000, criadoEm: h(2.05), pagoEm: null }] });
+  assert.equal(reserva.linhas[0]!.pix!.situacao, null, '«criando» (reserva órfã) não entra como pendente');
   const texto = JSON.stringify(r);
   assert.ok(!/url|linkId|paymentId|chave/i.test(texto), 'nada de link nem chave Pix na resposta');
   const p = montarPainel({ agora, periodo: '7', fuso: FUSO, respostas: [], marcadas: [], avaliacoes: [], eventos });

@@ -39,8 +39,8 @@ const limpar = (t: string): string => t.normalize('NFD').replace(/[̀-ͯ]/g, '')
 
 /** Regras na ordem: a primeira que casa vence (reclamação e pedido de pessoa antes; clínico antes de valor, para «dor forte» não virar preço). */
 const PALAVRAS: ReadonlyArray<[CodigoDoMotivo, RegExp]> = [
-  ['reclamacao', /reclam|insatisf|irritad|bravo|absurd|processo|procon|cancelar o atendimento|pessim/],
-  ['pediu-pessoa', /atendente|humano|(falar|conversar) com (uma |um )?(pessoa|alguem|a equipe|a recepcao|a secretaria|atendente)|pediu (para )?(falar|conversar)|quer (falar|conversar)|prefere (falar|conversar)/],
+  ['reclamacao', /reclam|insatisf|irritad|absurd|procon|processar|pessim/],
+  ['pediu-pessoa', /(pede|pediu|quer|prefere|precisa de|exige) (um |uma )?(atendente|humano|pessoa de verdade)|atendente humano|pessoa de verdade|(falar|conversar) com (uma |um )?(pessoa|alguem|a equipe|a recepcao|a secretaria|atendente)|pediu (para )?(falar|conversar)|quer (falar|conversar)|prefere (falar|conversar)/],
   ['convenio', /convenio|plano de saude|unimed|amil|bradesco saude|sulamerica|reembolso do plano/],
   ['clinico', /exame|laudo|ressonancia|tomografia|raio.?x|medicac|remedio|receita|dor (muito )?forte|urgenc|emergenc|cirurgia|pos.?operat|diagnostic|gravidez|gestante/],
   ['valor-pagamento', /valor|preco|desconto|pagamento|parcel|cartao de credito|boleto|pix|cobranca|reembolso|negoci/],

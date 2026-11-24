@@ -779,19 +779,21 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
     return cfg;
   }
   function urlDetalhe(medida){ return '/api/public/agente/detalhe?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO) + '&medida=' + enc(medida); }
+  var seqDetalhe = 0;
   async function abrirDetalhe(medida, filtroInicial){
+    var eu = ++seqDetalhe;
     renderJanela({ titulo: TITULOS[medida], sub: ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1), colunas: [], carregando: true, linhas: [] });
-    try { renderJanela(cfgDoDetalhe(medida, await api('GET', urlDetalhe(medida)), filtroInicial)); }
-    catch (e) { $('dlgConsultas').close(); toast(e.message, true); }
+    try { var r = await api('GET', urlDetalhe(medida)); if (eu === seqDetalhe) renderJanela(cfgDoDetalhe(medida, r, filtroInicial)); }
+    catch (e) { if (eu === seqDetalhe) { $('dlgConsultas').close(); toast(e.message, true); } }
   }
   $('dlgFechar').addEventListener('click', function(){ $('dlgConsultas').close(); });
   $('dlgConsultas').addEventListener('click', function(ev){ if (ev.target === $('dlgConsultas')) $('dlgConsultas').close(); });
 
   // dois blocos do painel que respondem «por que» e «pagou?» sem abrir nada
   async function carregarBlocos(){
-    var per = PERIODO;
-    try { var r = await api('GET', urlDetalhe('equipe')); if (per === PERIODO) desenharMotivos(r); } catch (e) { erroEm($('listaEquipe2'), e.message); }
-    try { var x = await api('GET', urlDetalhe('pix')); if (per === PERIODO) desenharPix(x); } catch (e) { erroEm($('listaPix'), e.message); }
+    var per = PERIODO, slug = U.slug, vale = function(){ return per === PERIODO && U && U.slug === slug; };
+    try { var r = await api('GET', urlDetalhe('equipe')); if (vale()) desenharMotivos(r); } catch (e) { if (vale()) erroEm($('listaEquipe2'), e.message); }
+    try { var x = await api('GET', urlDetalhe('pix')); if (vale()) desenharPix(x); } catch (e) { if (vale()) erroEm($('listaPix'), e.message); }
   }
   function desenharMotivos(r){
     var box = $('listaEquipe2'); box.textContent = ''; $('cEquipe').textContent = r.total ? String(r.total) : '';
@@ -980,8 +982,10 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
   var PAUSA = null;
   async function carregarPausa(){
     if (!U) return;
-    try { PAUSA = await api('GET', '/api/public/agente/pausa?slug=' + enc(U.slug)); } catch (e) { PAUSA = null; }
-    desenharFaixa();
+    var slug = U.slug, nova = null;
+    try { nova = await api('GET', '/api/public/agente/pausa?slug=' + enc(slug)); } catch (e) { nova = null; }
+    if (!U || U.slug !== slug) return; // a resposta é de uma unidade que a pessoa já deixou
+    PAUSA = nova; desenharFaixa();
   }
   function horaDaPausa(iso){ if (!iso) return ''; try { return new Date(iso).toLocaleString('pt-BR', { timeZone: PAUSA.tz || undefined, day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return dataHoraCurta(iso); } }
   function desenharFaixa(){

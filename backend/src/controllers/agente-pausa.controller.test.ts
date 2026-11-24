@@ -115,6 +115,18 @@ test('conta errada ou unidade que a pessoa não atende: recusa ANTES de ler ou e
   assert.deepEqual([...errada.chamadas, ...outra.chamadas], []);
 });
 
+test('pausar sem motivo é recusado, e não passa por cima de uma pausa que já existe (409)', async () => {
+  const a = montar({ papel: 'administrator' });
+  const r1 = resposta();
+  await a.h.pausar(pedido({ slug: 'timbo', ate, motivo: ' ', confirmar: true }), r1 as unknown as Response);
+  assert.equal(r1.codigo, 400);
+  const b = montar({ papel: 'administrator', unit: unidade({ pausaAte: new Date(Date.now() + 5 * 3_600_000), pausaPor: 'Recepção' }) });
+  const r2 = resposta();
+  await b.h.pausar(pedido({ slug: 'timbo', ate, motivo: 'outra', confirmar: true }), r2 as unknown as Response);
+  assert.equal(r2.codigo, 409);
+  assert.deepEqual([...a.chamadas, ...b.chamadas], [], 'nada foi escrito');
+});
+
 test('religar: administradora volta a Sofia e o estado sai sem pausa', async () => {
   const { h, chamadas } = montar({ papel: 'administrator', unit: unidade({ pausaAte: new Date(Date.now() + 3_600_000), pausaPor: 'Fulana' }) });
   const r = resposta();

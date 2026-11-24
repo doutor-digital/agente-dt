@@ -20,6 +20,8 @@ test('texto livre do modelo (pausar_ia) vira categoria por palavra-chave; o que 
   assert.equal(categoriaDoMotivo('paciente reclamou do atendimento'), 'reclamacao');
   assert.equal(categoriaDoMotivo('preciso remarcar para outro horário'), 'agenda');
   assert.equal(categoriaDoMotivo('assunto de trabalho do paciente'), 'outro');
+  assert.equal(categoriaDoMotivo('dúvida sobre o processo de tratamento da coluna'), 'outro', 'processo neutro não é reclamação');
+  assert.equal(categoriaDoMotivo('o atendente anterior já cuidou disso'), 'outro', 'só o pedido de uma pessoa conta, não a palavra solta');
   assert.equal(categoriaDoMotivo(''), 'outro');
 });
 

@@ -68,9 +68,20 @@ export function fazerPausaDoAgente(portas: PortasDaPausaDoAgente = portasReais()
       res.status(400).json({ error: 'confirme a pausa antes de enviar' });
       return;
     }
+    const motivo = typeof corpo.motivo === 'string' ? corpo.motivo.trim() : '';
+    if (motivo.length < 3) {
+      res.status(400).json({ error: 'escreva o motivo da pausa' });
+      return;
+    }
+    // não passa por cima de uma pausa que já existe (a da recepção, a de outra pessoa): religar é um passo à parte e fica registrado
+    const atual = portas.estado(r.unit);
+    if (atual.emPausa || atual.agendada) {
+      res.status(409).json({ error: 'A Sofia já está pausada (ou com pausa marcada). Religue antes de pausar de novo.', ...paraATela(r.unit, atual, true) });
+      return;
+    }
     const por = r.a.nome.slice(0, 80) || 'atendente';
     // «por» é sempre o login: o que a página mandar não vale
-    const res2 = await portas.aplicar(r.unit, { ate: corpo.ate, desde: corpo.desde ?? null, motivo: corpo.motivo ?? null, por }, por);
+    const res2 = await portas.aplicar(r.unit, { ate: corpo.ate, desde: corpo.desde ?? null, motivo, por }, por);
     if (!res2.ok) {
       res.status(400).json({ error: res2.erro });
       return;
