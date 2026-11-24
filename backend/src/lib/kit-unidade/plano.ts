@@ -119,7 +119,8 @@ export const automacoesEmSeco = (q: Questionario, soCrm = false) => AUTOMACOES.f
  * `--so-crm` é o modo que NUNCA escreve em `units` nem mexe na Sofia da unidade: não combina com nenhuma flag que faz isso (ou que liga o robô). UM lugar só: o CLI, o plano e o executor chamam esta.
  * Devolve o motivo (texto pronto) ou null.
  */
-export function conflitoDoSoCrm(o: { soCrm?: boolean; sobrescrever?: boolean; sobrescreverPrompt?: boolean; reimportarAprendizados?: boolean; ligarRobo?: boolean }): string | null {
+export function conflitoDoSoCrm(o: { soCrm?: boolean; semCaixa?: boolean; sobrescrever?: boolean; sobrescreverPrompt?: boolean; reimportarAprendizados?: boolean; ligarRobo?: boolean }): string | null {
+  if (o.semCaixa && !o.soCrm) return '--sem-caixa só vale junto de --so-crm (estrutura do CRM de unidade que já existe, número depois)';
   if (!o.soCrm) return null;
   const ruins = [o.sobrescrever && '--sobrescrever', o.sobrescreverPrompt && '--sobrescrever-prompt', o.reimportarAprendizados && '--reimportar-aprendizados', o.ligarRobo && '--ligar-robo'].filter(Boolean);
   return ruins.length ? `--so-crm não combina com ${ruins.join(', ')}: ele nunca escreve em units nem mexe na Sofia ou no robô da unidade (essas flags fazem exatamente isso)` : null;
@@ -137,6 +138,11 @@ export interface OpcoesDoPlano {
    * NÃO é tocada — nem campo vazio, nem persona, fontes, prompt ou aprendizados da Sofia. Não combina com `sobrescrever` (que faz o contrário).
    */
   soCrm?: boolean;
+  /**
+   * `--sem-caixa` (só com `--so-crm`): «estrutura agora, número depois». Monta conta, time, atendentes (convite), etiquetas, atributos, automações, abas e mensagens prontas SEM a caixa do WhatsApp, o webhook e os modelos da Meta
+   * (os três dependem do número no Kapso). Rodar de novo SEM a flag, com o número no questionário, completa só o que faltou (a caixa, os membros dela, o webhook, os modelos): nada duplica.
+   */
+  semCaixa?: boolean;
   /** `--reimportar-aprendizados`: repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `--sobrescrever` não mexe nos aprendizados que a clínica já administra. */
   reimportarAprendizados?: boolean;
 }
@@ -159,6 +165,8 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const { gravar: aEscrever, preservados } = aGravar(existente?.campos ?? null, campos, sobrescrever);
   const ativa = existente?.campos.isActive === true;
   const soCrm = !!opcoes.soCrm;
+  const semCaixa = !!opcoes.semCaixa;
+  const ADIADO = 'ADIADO (--sem-caixa): depende do número no Kapso; rode de novo SEM --sem-caixa, com o número e o kapso_phone_number_id no questionário';
   const divergentes = existente ? Object.keys(aGravar(existente.campos, campos, true).gravar) : [];
   add({
     id: 'unidade',
@@ -277,13 +285,13 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     id: 'caixa',
     sistema: 'chatwoot',
     titulo: q.whatsapp.modo === 'demonstracao' ? `Caixa «${q.chatwoot.caixa_nome}» — canal API (demonstração)` : `Caixa «${q.chatwoot.caixa_nome}» — WhatsApp Cloud pelo Kapso`,
-    acao: !cw ? 'criar' : caixaExiste ? 'nada' : 'criar',
-    itens: caixaExiste
+    acao: semCaixa ? 'manual' : !cw ? 'criar' : caixaExiste ? 'nada' : 'criar',
+    itens: semCaixa ? [ADIADO] : caixaExiste
       ? [`caixa ${caixaExiste.id} já existe`]
       : q.whatsapp.modo === 'demonstracao'
         ? ['DEMONSTRAÇÃO: canal API (não há número de WhatsApp nem Kapso)']
         : [`canal whatsapp_cloud, número ${mascararCampo(q.whatsapp.numero_oficial)}`, `phone_number_id ${mascararCampo(q.whatsapp.kapso_phone_number_id)} e WABA ${mascararCampo(q.whatsapp.waba_id)} (Kapso)`, 'chave do Kapso: KAPSO_API_KEY do ambiente (nunca impressa)'],
-    execucao: 'sim',
+    execucao: semCaixa ? 'manual' : 'sim',
     avisos: cw ? [] : [NAO_CONSULTADO],
     depende: ['conta'],
   });
@@ -302,12 +310,12 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'atendentes',
     sistema: 'chatwoot',
-    titulo: `Atendentes: convite, caixa e time (${q.chatwoot.atendentes.length})`,
+    titulo: semCaixa ? `Atendentes: convite e time (${q.chatwoot.atendentes.length}) — a caixa entra depois` : `Atendentes: convite, caixa e time (${q.chatwoot.atendentes.length})`,
     acao: !cw ? 'criar' : novos.length ? 'criar' : 'nada',
-    itens: q.chatwoot.atendentes.map((a) => `${a.nome} (${a.funcao}) — ${cw?.agentes[lc(a.email)] ? 'já é agente' : 'convite por e-mail'}; entra na caixa e no time`),
+    itens: q.chatwoot.atendentes.map((a) => `${a.nome} (${a.funcao}) — ${cw?.agentes[lc(a.email)] ? 'já é agente' : 'convite por e-mail'}; ${semCaixa ? 'entra no time (na caixa só na rodada com o número)' : 'entra na caixa e no time'}`),
     execucao: 'sim',
     avisos: [...(cw ? [] : [NAO_CONSULTADO]), 'o convite sai por e-mail: sem SMTP configurado no Chatwoot a atendente não recebe (ver relatório)'],
-    depende: ['caixa', 'time'],
+    depende: semCaixa ? ['time'] : ['caixa', 'time'],
   });
   if (q.chatwoot.usuario_celular_email) {
     add({
@@ -315,29 +323,29 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       sistema: 'chatwoot',
       titulo: 'Usuário «📱 Celular da unidade» (autor do que a equipe manda pelo aparelho)',
       acao: cw?.agentes[lc(q.chatwoot.usuario_celular_email)] ? 'nada' : 'criar',
-      itens: ['agente com o nome «📱 Celular da unidade», na caixa'],
+      itens: [semCaixa ? 'agente com o nome «📱 Celular da unidade» (entra na caixa só na rodada com o número)' : 'agente com o nome «📱 Celular da unidade», na caixa'],
       execucao: 'sim',
       avisos: cw ? [] : [NAO_CONSULTADO],
-      depende: ['caixa'],
+      depende: semCaixa ? ['conta'] : ['caixa'],
     });
   }
   add({
     id: 'registrar-caixa',
     sistema: 'banco',
     titulo: 'Registrar no banco a caixa criada (unit_chatwoot_caixa) e gravar gerente e usuário do celular na configuração',
-    acao: b && caixaExiste && b.caixasRegistradas.includes(caixaExiste.id) ? 'nada' : 'criar',
-    itens: ['caixa tipo cloud', 'gerente = a atendente com função «gerente»', ...(q.chatwoot.usuario_celular_email ? ['usuário do celular'] : [])],
-    execucao: 'sim',
+    acao: semCaixa ? 'manual' : b && caixaExiste && b.caixasRegistradas.includes(caixaExiste.id) ? 'nada' : 'criar',
+    itens: semCaixa ? [ADIADO, 'enquanto isso a configuração do CRM fica INERTE (sem caixa registrada o código a ignora): nada dispara'] : ['caixa tipo cloud', 'gerente = a atendente com função «gerente»', ...(q.chatwoot.usuario_celular_email ? ['usuário do celular'] : [])],
+    execucao: semCaixa ? 'manual' : 'sim',
     avisos: ['só depois deste passo a configuração passa a valer: antes, o código ignora a unidade (config sem caixa é inválida) e nada dispara'],
-    depende: ['config-chatwoot', 'caixa', 'atendentes', ...(q.chatwoot.usuario_celular_email ? ['usuario-celular'] : [])],
+    depende: semCaixa ? [] : ['config-chatwoot', 'caixa', 'atendentes', ...(q.chatwoot.usuario_celular_email ? ['usuario-celular'] : [])],
   });
   add({
     id: 'webhook',
     sistema: 'chatwoot',
     titulo: 'Webhook da conta para o agente, com a chave DESTA conta (derivada do token dela; a de outra conta não vale)',
-    acao: cw?.webhookDaConta ? 'nada' : 'criar',
-    itens: ['POST webhooks na conta, com os eventos de mensagem e conversa', 'o servidor só aceita o evento se a chave for a da conta que o evento diz ser'],
-    execucao: 'sim',
+    acao: semCaixa ? 'manual' : cw?.webhookDaConta ? 'nada' : 'criar',
+    itens: semCaixa ? [ADIADO, 'sem caixa não há conversa para avisar: o webhook nasce junto com a caixa (o servidor só reconhece a conta depois que a caixa é registrada)'] : ['POST webhooks na conta, com os eventos de mensagem e conversa', 'o servidor só aceita o evento se a chave for a da conta que o evento diz ser'],
+    execucao: semCaixa ? 'manual' : 'sim',
     avisos: [cw ? 'se o webhook já existe com a mesma chave, nada é criado' : NAO_CONSULTADO],
     depende: ['conta'],
   });
@@ -378,7 +386,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   add({
     id: 'numero',
     sistema: 'meta',
-    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `Número ${mascararCampo(q.whatsapp.numero_oficial)} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
+    titulo: q.whatsapp.modo === 'demonstracao' ? 'Número de WhatsApp: DEMONSTRAÇÃO, não há número nem WABA' : `${q.whatsapp.numero_oficial ? `Número ${mascararCampo(q.whatsapp.numero_oficial)}` : 'Número (ainda não definido)'} conectado ao Kapso (${q.whatsapp.conexao === 'coexistencia' ? 'coexistência: o número segue no celular' : 'número novo'})`,
     acao: q.whatsapp.modo === 'demonstracao' ? 'nada' : 'manual',
     itens: q.whatsapp.modo === 'demonstracao' ? ['a demonstração não usa WhatsApp de verdade'] : [q.whatsapp.conexao === 'coexistencia' ? 'quem tem o celular da unidade lê o QR/aceita a coexistência no app do WhatsApp Business' : 'verificar o número na Meta (código por SMS/ligação)'],
     execucao: 'manual',
@@ -393,11 +401,11 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     id: 'modelos',
     sistema: 'meta',
     titulo: `Modelos do WhatsApp na Meta (${modelos.length} da régua, gerados dos textos-base com os dados da unidade)`,
-    acao: q.whatsapp.modo === 'demonstracao' ? 'criar' : aEnviar.length ? 'criar' : 'nada',
-    itens: q.whatsapp.modo === 'demonstracao' ? [`SECO (demonstração, sem WABA): ${modelos.length} modelo(s) seriam gerados e NENHUM vai à Meta`] : aEnviar.length
+    acao: semCaixa ? 'manual' : q.whatsapp.modo === 'demonstracao' ? 'criar' : aEnviar.length ? 'criar' : 'nada',
+    itens: semCaixa ? [ADIADO, `${modelos.length} modelo(s) seriam enviados à Meta (prefixo ${config.prefixoModelos}); nenhum vai agora`] : q.whatsapp.modo === 'demonstracao' ? [`SECO (demonstração, sem WABA): ${modelos.length} modelo(s) seriam gerados e NENHUM vai à Meta`] : aEnviar.length
       ? [`${aEnviar.length} a enviar: ${aEnviar.map((m) => m.meta.name).slice(0, 4).join(', ')}${aEnviar.length > 4 ? '…' : ''}`, `categoria: ${modelos.filter((m) => m.meta.category === 'UTILITY').length} utilidade, ${modelos.filter((m) => m.meta.category === 'MARKETING').length} marketing (com «responda SAIR»)`]
       : ['todos já estão na Meta'],
-    execucao: 'sim',
+    execucao: semCaixa ? 'manual' : 'sim',
     depende: [],
     avisos: [
       ...(estado.kapso ? [] : [NAO_CONSULTADO]),
@@ -412,7 +420,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     sistema: 'meta',
     titulo: 'Dataset da CAPI (conversões do WhatsApp para a Meta)',
     acao: q.whatsapp.modo === 'demonstracao' || estado.meta?.datasetCapi || estado.segredos?.[q.meta.dataset_id_env] ? 'nada' : 'manual',
-    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${mascararCampo(q.whatsapp.waba_id)}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
+    itens: q.whatsapp.modo === 'demonstracao' ? ['DEMONSTRAÇÃO: sem WABA, sem CAPI'] : [`POST /${q.whatsapp.waba_id ? mascararCampo(q.whatsapp.waba_id) : '<WABA: ainda não definida>'}/dataset (ou usar ${q.meta.dataset_id_env} se o dataset já existe)`, `token: ${q.meta.token_env} (do ambiente)`],
     execucao: 'manual',
     avisos: estado.meta ? [] : [NAO_CONSULTADO, 'a criação do dataset usa o token da Meta da clínica: o script não faz (conferir a tela do Business Manager)'],
   });
@@ -471,7 +479,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     itens: [`o João roda ops/kit-unidade/regra-traefik-joao.sh ${q.chatwoot.subdominio} (acrescenta Host(\`${host}\`) à regra do serviço ${SERVICO_DO_PROXY}; idempotente)`, 'DNS: o curinga *.doutordigitalconsultoria.com já aponta para a VPS — não precisa criar registro', 'certificado: o Traefik emite sozinho (letsencryptresolver)'],
     execucao: 'manual',
     avisos: estado.vps ? [] : [NAO_CONSULTADO],
-    depende: ['caixa'],
+    depende: semCaixa ? ['conta'] : ['caixa'],
   });
   // --so-crm: a franquia da unidade já está em units (spine_*), não se pede o token dela no ambiente
   const variaveis = [...(soCrm ? [] : [q.franquia.token_env]), q.meta.token_env, q.meta.conta_env, q.meta.dataset_id_env];
@@ -495,19 +503,20 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     avisos: [],
   });
 
-  const relatorio = montarRelatorio(q, passos, { aEnviar: aEnviar.length, ausentes, inferidos: inferidos.length, soCrm });
+  const relatorio = montarRelatorio(q, passos, { aEnviar: aEnviar.length, ausentes, inferidos: inferidos.length, soCrm, semCaixa });
   return { unidade: slug, config, passos, relatorio };
 }
 
 /** O que falta para a unidade estar de pé, na ordem de quem faz. */
-function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number; ausentes: string[]; inferidos: number; soCrm?: boolean }): string[] {
+function montarRelatorio(q: Questionario, passos: Passo[], x: { aEnviar: number; ausentes: string[]; inferidos: number; soCrm?: boolean; semCaixa?: boolean }): string[] {
   const r: string[] = [];
+  if (x.semCaixa) r.push('SEM CAIXA (--sem-caixa): a conta, o time, os atendentes, as etiquetas, os atributos, as automações, as abas e as mensagens prontas foram montados; a CAIXA do WhatsApp, o webhook e os modelos da Meta ficaram para depois. Ordem combinada: número no Kapso → rodar de novo SEM --sem-caixa (com numero_oficial, kapso_phone_number_id e waba_id no questionário — os três obrigatórios; só o que falta é criado) → só então desvincular a Kommo');
   const tem = (id: string) => passos.find((p) => p.id === id)?.acao !== 'nada';
-  if (tem('numero')) r.push(x.soCrm ? `NÚMERO (decisão SEPARADA, não faz parte do --so-crm): conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje` : `NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
+  if (tem('numero')) r.push(x.soCrm ? `NÚMERO (decisão SEPARADA, não faz parte do --so-crm): conectar ${q.whatsapp.numero_oficial ? mascararCampo(q.whatsapp.numero_oficial) : 'o número (ainda não definido)'} ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje` : `NÚMERO: conectar ${mascararCampo(q.whatsapp.numero_oficial)} ao Kapso (${q.whatsapp.conexao}) — quem tem o celular da unidade`);
   if (q.whatsapp.modo === 'demonstracao') r.push('DEMONSTRAÇÃO: os modelos ficaram em SECO e a caixa é API. Para virar clínica de verdade: modo: real, número e WABA no questionário, e rodar de novo');
   r.push(q.assistente?.quer === false || x.soCrm ? `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) fica na pasta KIT_SEGREDOS_DIR (${x.soCrm ? '--so-crm: sem robô' : 'clínica SEM assistente: não há robô'}, então não há CHATWOOT_SOFIA_BOT_TOKEN; use cofre-para-servico-joao.sh ${sufixoDoQuestionario(q)} --sem-ia):` : `COFRE: o token do usuário conector (CHATWOOT_API_TOKEN_${sufixoDoQuestionario(q)}) e o do robô (CHATWOOT_SOFIA_BOT_TOKEN_${sufixoDoQuestionario(q)}) ficam na pasta KIT_SEGREDOS_DIR: o João os coloca no arquivo de segredos da VPS e no env do serviço ddagent_agent e REINICIA o serviço (é quando o servidor passa a conhecer a conta)`);
   r.push('PASTAS: cada atendente cria as 10 pastas dela depois do primeiro login (a pasta é da pessoa; o script não consegue)');
-  if (x.aEnviar && q.whatsapp.modo !== 'demonstracao') r.push(`MODELOS: ${x.aEnviar} modelo(s) vão à Meta e ficam PENDENTES (minutos a 48 h). Conferir a aprovação em Kapso → Modelos${x.inferidos ? `; revisar categoria/botões de ${x.inferidos} deles` : ''}`);
+  if (x.aEnviar && q.whatsapp.modo !== 'demonstracao' && !x.semCaixa) r.push(`MODELOS: ${x.aEnviar} modelo(s) vão à Meta e ficam PENDENTES (minutos a 48 h). Conferir a aprovação em Kapso → Modelos${x.inferidos ? `; revisar categoria/botões de ${x.inferidos} deles` : ''}`);
   if (x.ausentes.length) r.push(`SEGREDOS: colocar no ambiente do serviço e no arquivo de segredos da VPS: ${x.ausentes.join(', ')}`);
   if (!x.soCrm) r.push('FRANQUIA: gravar o token da API da franquia em units.spine_token, ligar spine_enabled e definir os turnos por profissional (spine_staff_por_turno)');
   r.push(`ATENDENTES: ${q.chatwoot.atendentes.length} convite(s) saem por e-mail — cada uma aceita e define a senha; só depois dá para criar as pastas dela`);

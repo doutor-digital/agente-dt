@@ -70,6 +70,8 @@ export interface OpcoesDeExecucao {
   sobrescrever?: boolean;
   /** `--so-crm`: a unidade já existe (pode estar ATIVA) e o kit monta SÓ o CRM dela; a linha de `units` e a Sofia dela não são escritas. Não combina com `sobrescrever`. */
   soCrm?: boolean;
+  /** `--sem-caixa` (só com `--so-crm`): monta o CRM SEM a caixa do WhatsApp, o webhook e os modelos da Meta (dependem do número no Kapso); a rodada seguinte, sem a flag, completa só o que falta. */
+  semCaixa?: boolean;
   /** repete a importação dos aprendizados da clínica (sem duplicar). Flag PRÓPRIA: `sobrescrever` NÃO mexe nos aprendizados que a clínica já administra em /aprendizados. */
   reimportarAprendizados?: boolean;
   /** escreve uma linha para quem está acompanhando */
@@ -84,6 +86,9 @@ export type SituacaoDoPasso = 'feito' | 'nada-a-fazer' | 'recusado' | 'esqueleto
 
 /** Passos de fora do banco que o executor roda (e que, quando o plano diz «nada», rodam só para LER o que existe e passar os ids adiante). */
 const PASSOS_EXTERNOS = new Set(['conta', 'etiquetas', 'atributos', 'automacoes-conta', 'mensagens-prontas', 'caixa', 'time', 'atendentes', 'usuario-celular', 'webhook', 'dashboard-app', 'robo-sofia', 'modelos']);
+
+/** Os passos que dependem do número no Kapso: ficam para depois com `--sem-caixa`. */
+const PASSOS_DA_CAIXA = new Set(['caixa', 'registrar-caixa', 'webhook', 'modelos']);
 
 export interface Resultado {
   id: string;
@@ -109,6 +114,11 @@ export async function executarPlano(plano: Plano, q: Questionario, o: OpcoesDeEx
     const soLer = p.acao === 'nada' && p.sistema === 'chatwoot' && PASSOS_EXTERNOS.has(p.id) && !!o.externas;
     if (p.acao === 'nada' && !soLer) {
       registrar('nada-a-fazer');
+      continue;
+    }
+    // --sem-caixa: caixa, registro da caixa, webhook e modelos ficam para a rodada com o número (nem perguntar, nem ler)
+    if (o.semCaixa && PASSOS_DA_CAIXA.has(p.id)) {
+      registrar('manual', ['ADIADO (--sem-caixa): depende do número no Kapso; rode de novo sem --sem-caixa, com o número e o kapso_phone_number_id no questionário']);
       continue;
     }
     // --so-crm NUNCA cria nem liga robô: nem lendo (soLer), nem perguntando (plano velho que dizia «criar»)
@@ -296,9 +306,9 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
     case 'time':
       return passoTime(q, execucao);
     case 'atendentes':
-      return passoAtendentes(q, execucao);
+      return passoAtendentes(q, execucao, !!o.semCaixa);
     case 'usuario-celular':
-      return passoUsuarioCelular(q, execucao);
+      return passoUsuarioCelular(q, execucao, !!o.semCaixa);
     case 'registrar-caixa': {
       const unitId = await garantirUnidade();
       const caixa = execucao.caixaId;

@@ -9,6 +9,8 @@
  *     (sem a flag: numa unidade que existe só se preenche campo VAZIO, e a ATIVA é recusada)
  *   ... --so-crm                                                                # unidade que JÁ EXISTE (pode estar ATIVA): monta só o CRM dela (unit_chatwoot, caixa, conta do Chatwoot,
  *     automações em seco); NÃO escreve em units (nem campo vazio) e NÃO mexe na Sofia dela. Não combina com --sobrescrever.
+ *   ... --so-crm --sem-caixa                                                    # «estrutura agora, número depois»: monta o CRM SEM a caixa do WhatsApp, o webhook e os modelos da Meta;
+ *     número, kapso_phone_number_id e WABA deixam de ser obrigatórios (ausentes ou PENDENTE). Depois, sem a flag e com o número no questionário, completa só o que faltou.
  *   npx tsx src/scripts/nova-unidade.ts --gerar-schema                          # regrava ops/kit-unidade/questionario.schema.json
  *
  * Fase 2: o --aplicar executa o banco E o Chatwoot (conta própria da clínica pela API de plataforma, etiquetas, atributos, automações, mensagens
@@ -235,27 +237,28 @@ async function main(): Promise<void> {
     return;
   }
   if (!arquivo) {
-    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--so-crm] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
+    console.error('uso: nova-unidade.ts <questionario.yaml> [--aplicar] [--sim] [--offline] [--so-crm [--sem-caixa]] [--sobrescrever] [--sobrescrever-prompt] [--reimportar-aprendizados] [--ligar-robo]   |   --gerar-schema');
     process.exit(2);
   }
-  const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'));
+  // flags que não combinam são recusadas ANTES de ler o questionário (o esquema frouxo do --sem-caixa só vale junto de --so-crm)
+  const conflito = conflitoDoSoCrm({ soCrm: flags.has('--so-crm'), semCaixa: flags.has('--sem-caixa'), sobrescrever: flags.has('--sobrescrever'), sobrescreverPrompt: flags.has('--sobrescrever-prompt'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), ligarRobo: flags.has('--ligar-robo') });
+  if (conflito) {
+    console.error(conflito);
+    process.exit(2);
+  }
+  const lido = lerQuestionario(readFileSync(resolve(arquivo), 'utf8'), { semCaixa: flags.has('--sem-caixa') });
   if (!lido.ok) {
     console.error('QUESTIONÁRIO INVÁLIDO:');
     for (const e of lido.erros) console.error(`  - ${e}`);
     process.exit(1);
   }
   const q = lido.q;
-  const conflito = conflitoDoSoCrm({ soCrm: flags.has('--so-crm'), sobrescrever: flags.has('--sobrescrever'), sobrescreverPrompt: flags.has('--sobrescrever-prompt'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), ligarRobo: flags.has('--ligar-robo') });
-  if (conflito) {
-    console.error(conflito);
-    process.exit(2);
-  }
   console.log('Questionário (campos sensíveis mascarados):');
   console.log(JSON.stringify(questionarioMascarado(q), null, 2));
   console.log('');
   const estado: EstadoAtual = flags.has('--offline') ? {} : await lerEstado(q);
   const molde = lerMolde();
-  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), soCrm: flags.has('--so-crm'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
+  const plano = montarPlano(q, estado, { molde, sobrescrever: flags.has('--sobrescrever'), soCrm: flags.has('--so-crm'), semCaixa: flags.has('--sem-caixa'), reimportarAprendizados: flags.has('--reimportar-aprendizados'), adminsDD: adminsDDEfetivos() });
   console.log(textoDoPlano(plano));
   if (!flags.has('--aplicar')) {
     console.log('\n(SECO: nada foi gravado. Para executar: --aplicar)');
@@ -273,6 +276,7 @@ async function main(): Promise<void> {
     sobrescreverPrompt: flags.has('--sobrescrever-prompt'),
     sobrescrever: flags.has('--sobrescrever'),
     soCrm: flags.has('--so-crm'),
+    semCaixa: flags.has('--sem-caixa'),
     reimportarAprendizados: flags.has('--reimportar-aprendizados'),
     externas: await portasExternas(),
     ligarRobo: flags.has('--ligar-robo'),

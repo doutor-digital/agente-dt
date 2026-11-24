@@ -512,3 +512,24 @@ test('--so-crm (unidade que já existe, ex.: Marabá): a flag vai ao seco, ao --
   assert.notEqual(f.status, 0);
   assert.match(f.stdout, /--so-crm não combina com --do-formulario/);
 });
+
+test('--sem-caixa (com --so-crm): a flag vai ao seco e ao --aplicar; o resumo manda esperar o número e não promete caixa/modelos; sozinha é recusada', () => {
+  const e = ambiente();
+  e.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  const r = e.rodar(['doutor-hernia-teste', '--so-crm', '--sem-caixa'], { entrada: 'aplicar\n' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /modo --sem-caixa: SEM a caixa do WhatsApp, o webhook e os modelos da Meta/);
+  assert.deepEqual(
+    scriptsDoKit(e.chamadas()).filter((x) => x.startsWith('nova-unidade')),
+    ["nova-unidade 'doutor-hernia-teste' --so-conferir", "nova-unidade 'doutor-hernia-teste' --so-crm --sem-caixa", "nova-unidade 'doutor-hernia-teste' --aplicar --so-crm --sem-caixa"],
+  );
+  assert.match(r.stdout, /CAIXA DO WHATSAPP, WEBHOOK E MODELOS \(adiados por --sem-caixa\).*Kapso → rodar de novo SEM --sem-caixa.*só então desvincular a Kommo/);
+  assert.doesNotMatch(r.stdout, /MODELOS NA META/);
+  // sozinha: recusada antes de qualquer ssh
+  const e2 = ambiente();
+  e2.gravarPrivado('doutor-hernia-teste', QUESTIONARIO_REAL);
+  const s = e2.rodar(['doutor-hernia-teste', '--sem-caixa']);
+  assert.notEqual(s.status, 0);
+  assert.match(s.stdout, /--sem-caixa só vale junto de --so-crm/);
+  assert.deepEqual(e2.chamadas(), []);
+});

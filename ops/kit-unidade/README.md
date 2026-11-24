@@ -46,6 +46,17 @@ O que muda: a linha de `units` é só LIDA (para achar o id) — nem campo vazio
 `unit_chatwoot` (config), conta/caixa/time/atendentes no Chatwoot, `unit_chatwoot_caixa`, automações do Chatwoot em SECO. Unidade que não existe: recusa (nunca cria linha vazia). Não combina com `--sobrescrever` nem com `--do-formulario`.
 O questionário deve repetir o que a unidade já tem (endereço, agenda, preços): o que diferir NÃO é gravado, mas vai para os textos dos modelos da Meta (`unit_chatwoot.dados_modelos`), então confira-os com o dono. O `--so-crm` NUNCA cria nem liga robô e não cria a automação `chatwoot-ia` (nem em seco), qualquer que seja o `assistente` do questionário: a Sofia da unidade segue só pelo Kommo. Dar IA ao CRM de uma unidade que já está no ar não tem caminho no kit hoje; é decisão à parte (teste de prompt + PR próprio). Também não mexe na franquia (`spine_*` já está em `units`) e não conecta o número ao Kapso: isso pode cortar a entrada de leads da Kommo (caso Tatuí, 18/11) e só se decide depois de confirmar como o canal está ligado lá.
 
+### «Estrutura agora, número depois»: `--so-crm --sem-caixa`
+Quando a unidade já existe, o CRM pode ser montado ANTES de o número entrar no Kapso (a ordem combinada para trocar de canal é: Kapso → CRM → só depois desvincular a Kommo):
+
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm --sem-caixa --so-conferir
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm --sem-caixa      # conta, time, atendentes (convite), etiquetas, atributos, automações em seco, abas, mensagens prontas, subdomínio
+    ... depois, com o número no Kapso e `numero_oficial`, `kapso_phone_number_id` e `waba_id` (os três) no questionário:
+    bash ops/kit-unidade/abrir-clinica-joao.sh <slug> --so-crm                  # completa SÓ o que faltou: caixa, os agentes na caixa, webhook, modelos da Meta e o registro da caixa
+
+Com `--sem-caixa` o questionário real não exige número, id do Kapso nem WABA (ausentes ou escritos `PENDENTE`; se vierem, o formato vale). A caixa do WhatsApp, o registro dela, o webhook e os modelos ficam ADIADOS (manuais, nada é perguntado nem lido).
+Enquanto não há caixa registrada a configuração `unit_chatwoot` fica INERTE (o servidor a ignora, com um aviso de log): nada dispara, e as telas por iframe da conta só passam a valer com a caixa. `--sem-caixa` só vale junto de `--so-crm`. A 2ª rodada reconhece o que já existe (conta, agentes, time, etiquetas…): nada duplica.
+
 ## O franqueado preenche sozinho: o formulário (link com código)
 Em vez de você perguntar tudo ao dono da clínica, mande um link. Do seu computador (o script faz o ssh; precisa de terminal):
 

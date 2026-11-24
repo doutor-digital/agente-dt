@@ -47,18 +47,21 @@ FORM_REF=""
 REFAZER=0
 SETS=()
 SO_CRM=0
+SEM_CAIXA=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --so-conferir) SO_CONFERIR=1 ;;
     --refazer) REFAZER=1 ;;
     --so-crm) SO_CRM=1 ;;
+    --sem-caixa) SEM_CAIXA=1 ;;
     --do-formulario) shift; FORM_REF="${1:-}"; [[ "$FORM_REF" =~ ^([A-Za-z0-9][A-Za-z0-9_-]{2,59}|[A-Za-z0-9_-]{24})$ ]] || { echo "--do-formulario precisa do id, do código ou do slug do formulário"; exit 2; } ;;
     --set) shift; [[ "${1:-}" =~ ^[a-z_]+(\.[a-z_]+)?=[A-Za-z0-9_.+-]+$ ]] || { echo "--set precisa ser caminho=valor, sem espaço (ex.: --set whatsapp.waba_id=123)"; exit 2; }; SETS+=("$1") ;;
-    -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --so-crm, --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
+    -*) echo "argumento desconhecido: $1 (use <slug>, --so-conferir, --so-crm [--sem-caixa], --do-formulario <ref>, --set k=v, --refazer)"; exit 2 ;;
     *) if [ -z "$SLUG" ]; then SLUG="$1"; else echo "mais de um slug: $SLUG e $1"; exit 2; fi ;;
   esac
   shift
 done
+[ "$SEM_CAIXA" = "1" ] && [ "$SO_CRM" != "1" ] && { echo "--sem-caixa só vale junto de --so-crm (estrutura do CRM de unidade que já existe, número depois)"; exit 2; }
 [ "$SO_CRM" = "1" ] && [ -n "$FORM_REF" ] && { echo "--so-crm não combina com --do-formulario (o formulário é de clínica NOVA; a unidade que já existe usa o questionário privado)"; exit 2; }
 [ -z "$FORM_REF" ] && { [ "${#SETS[@]}" -gt 0 ] || [ "$REFAZER" = "1" ]; } && { echo "--set e --refazer só valem com --do-formulario"; exit 2; }
 [ -n "$SLUG" ] || { echo "uso: bash ops/kit-unidade/abrir-clinica-joao.sh <slug> [--so-conferir] [--so-crm] [--do-formulario <ref> [--set k=v]... [--refazer]]   (ex.: clinica-demonstracao)"; exit 2; }
@@ -115,10 +118,11 @@ if ! git diff --quiet origin/main -- ops/kit-unidade; then
 fi
 
 SUB=""; SUF=""; MODO=""; QUER_IA=""; TIPO="clínica de verdade"; REAL=1
-FLAG_CRM=""; [ "$SO_CRM" = "1" ] && FLAG_CRM=" --so-crm"
+FLAG_CRM=""; [ "$SO_CRM" = "1" ] && FLAG_CRM=" --so-crm"; [ "$SEM_CAIXA" = "1" ] && FLAG_CRM="$FLAG_CRM --sem-caixa"
 mostrar_clinica() {
   echo "clínica: $SLUG · $TIPO · subdomínio $SUB.doutordigitalconsultoria.com · sufixo das chaves $SUF"
   [ "$SO_CRM" = "1" ] && echo "modo --so-crm: a unidade já existe; só o CRM dela é montado (units e a Sofia dela NÃO são escritas)"
+  [ "$SEM_CAIXA" = "1" ] && echo "modo --sem-caixa: SEM a caixa do WhatsApp, o webhook e os modelos da Meta (estrutura agora, número depois; rode de novo sem --sem-caixa com o número no questionário)"
   return 0
 }
 if [ -n "$FORM_REF" ]; then
@@ -304,6 +308,9 @@ n=1
 falta() { echo "  $n. $1"; n=$((n+1)); }
 if [ "$MODO" = "demonstracao" ]; then
   falta "NÚMERO/MODELOS: não se aplicam (demonstração: caixa API, modelos em seco). Para virar clínica de verdade: modo real, número e WABA no questionário, e rodar este comando de novo."
+elif [ "$SEM_CAIXA" = "1" ]; then
+  falta "CAIXA DO WHATSAPP, WEBHOOK E MODELOS (adiados por --sem-caixa): ordem combinada = número no Kapso → rodar de novo SEM --sem-caixa, com numero_oficial, kapso_phone_number_id e waba_id no questionário (os três; só o que falta é criado) → só então desvincular a Kommo.  bash ops/kit-unidade/abrir-clinica-joao.sh $SLUG --so-crm"
+  falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
 elif [ "$SO_CRM" = "1" ]; then
   falta "NÚMERO (decisão SEPARADA, fora do --so-crm): conectar o número ao Kapso pode CORTAR a entrada de leads da Kommo (coexistência derruba os aparelhos vinculados, como em Tatuí 18/11). Só depois de confirmar como o canal está ligado na Kommo hoje."
   falta "MODELOS NA META: conferir em Kapso → Modelos (ficam pendentes de minutos a 48 h até a Meta aprovar; precisam da WABA acessível ao Kapso)."
