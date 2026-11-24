@@ -56,7 +56,7 @@ test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; e
 test('Placar no modo Kommo: parseia, sem «para revisar», sem «quem agendou», consultas com «Abrir cartão»', () => {
   const html = paginaDoAgenteKommo('doutor-hernia-caxias');
   assert.doesNotThrow(() => new Function(scriptDe(html)));
-  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix{display:none}'));
+  assert.ok(html.includes('body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe{display:none}'));
   const js = scriptDe(html);
   assert.ok(js.includes("if (!KM) desenharRevisar("), 'sem revisão no Kommo');
   assert.ok(js.includes("'Abrir cartão'") && js.includes('Ver as consultas'));
@@ -95,6 +95,14 @@ test('abrirDialogo não reabre um dialog JÁ aberto (a 2ª chamada lança em nav
   const attrs: string[] = [];
   abrir({ open: false, setAttribute: (k: string) => attrs.push(k) });
   assert.deepEqual(attrs, ['open']);
+});
+
+test('PR 2b: bloco «Por que passou para a equipe» (motivo em categoria) no CRM e escondido no Kommo', () => {
+  const html = paginaDoAgente(CW);
+  const js = scriptDe(html);
+  for (const id of ['blocoEquipe', 'listaEquipe2', 'cEquipe']) assert.ok(html.includes(`id="${id}"`), id);
+  assert.ok(js.includes('l.motivo.codigo') && js.includes('r.grupos') && js.includes("abrirDetalhe('equipe', g.codigo)"), 'motivos agrupados, clicáveis, com filtro na lista');
+  assert.ok(html.includes('body.km #blocoEquipe'), 'sem o bloco no Kommo');
 });
 
 test('nenhum dado do servidor entra por innerHTML (só textContent)', () => {

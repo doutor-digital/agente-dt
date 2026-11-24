@@ -276,7 +276,7 @@ a.bt{text-decoration:none}
 .tipo-ia{color:var(--lnk)}.tipo-equipe{color:var(--ok)}.tipo-robo{color:var(--mut)}.tipo-consultoria{color:var(--amarelo)}
 @media (max-width:560px){body.km .abas{width:100%;gap:0 2px}body.km .abas button{padding:0 9px;font-size:13.5px}body.km .lado{width:100%;padding:8px 0}body.km .lado .sel{flex:1;min-height:40px}body.km .bt{min-height:40px}}
 
-body.km .col-quem,body.km #tRevisar,body.km #blocoPix{display:none}
+body.km .col-quem,body.km #tRevisar,body.km #blocoPix,body.km #blocoEquipe{display:none}
 @media (min-width:561px){body.km .b-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}}
 body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 /* filtros da janela e resumo do Pix */
@@ -287,6 +287,15 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 .chip .n{font-variant-numeric:tabular-nums;opacity:.8}
 .sits{display:flex;flex-wrap:wrap;gap:8px;padding:10px 0}
 .sits .chip{min-height:44px}
+/* motivos da passagem à equipe, clicáveis */
+.mot{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:2px 12px;align-items:center;width:100%;min-height:44px;padding:10px 0;border:0;border-top:1px solid var(--b);background:transparent;text-align:left;cursor:pointer;color:var(--txt)}
+.mot:first-child{border-top:0}
+.mot:hover .t{color:var(--lnk)}
+.mot .t{font-size:14px;font-weight:600}
+.mot .q{font:800 20px "Bricolage Grotesque",Figtree,sans-serif;font-variant-numeric:tabular-nums}
+.mot .barra{grid-column:1/3;height:6px;border-radius:3px;background:var(--sf2);overflow:hidden}
+.mot .barra i{display:block;height:100%;background:var(--so);border-radius:3px}
+.mot.nao .barra i{background:var(--b2)}
 /* esqueleto e aviso flutuante */
 .sk{display:block;border-radius:10px;background:linear-gradient(90deg,var(--sf2) 0,var(--b) 40%,var(--sf2) 80%);background-size:300% 100%;animation:brilho 1.2s ease-in-out infinite}
 @keyframes brilho{from{background-position:100% 0}to{background-position:0 0}}
@@ -376,6 +385,11 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       <div class="b-lista" id="listaRevisar"><span class="sk" style="height:60px"></span></div>
     </section>
     <div>
+      <section class="b-bloco" id="blocoEquipe">
+        <h3>Por que passou para a equipe <span class="c" id="cEquipe"></span></h3>
+        <div class="meta">Os motivos mais comuns no período. Clique para ver as conversas.</div>
+        <div class="b-lista" id="listaEquipe2"><span class="sk" style="height:60px"></span></div>
+      </section>
       <section class="b-bloco" id="blocoPix">
         <h3>Pix do sinal: pagou ou não <span class="c" id="cPix"></span></h3>
         <div class="meta">Os Pix que a Sofia gerou no período, para a equipe cobrar quem não pagou.</div>
@@ -672,8 +686,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     ULTIMO = null; graficos = []; diasDoGrafico = null;
     $('grandes').textContent = ''; $('peq').textContent = ''; $('nRevisar').textContent = '—'; $('cRevisar').textContent = ''; $('cMarcadas').textContent = ''; $('descPeriodo').textContent = '';
     $('tabDia').textContent = ''; $('lidoEm').hidden = true; $('lidoEm').textContent = '';
-    ['listaRevisar', 'listaMarcadas', 'listaPausadasPainel', 'listaPix'].forEach(function(id){ $(id).textContent = ''; });
-    $('cPix').textContent = ''; $('cPausadasPainel').textContent = ''; $('cPausadas').textContent = ''; $('contaPausadas').textContent = ''; $('nPausadas').textContent = '—';
+    ['listaRevisar', 'listaMarcadas', 'listaPausadasPainel', 'listaPix', 'listaEquipe2'].forEach(function(id){ $(id).textContent = ''; });
+    $('cPix').textContent = ''; $('cEquipe').textContent = ''; $('cPausadasPainel').textContent = ''; $('cPausadas').textContent = ''; $('contaPausadas').textContent = ''; $('nPausadas').textContent = '—';
   }
   // cada leitura do painel/pausadas/pedidos só vale se a unidade e a vez ainda são as dela (uma resposta lenta da unidade anterior não pinta a nova)
   var seqPainel = 0, seqPausadas = 0, seqPedidos = 0;
@@ -845,9 +859,10 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: l.consultaEm ? consultaEm(l.consultaEm) : '—', cls: 'n' }, { v: quandoTxt(l.quando), cls: 'n' }] }; });
       cfg.rodape = cortado + 'Conversas que a Sofia respondeu no período e em que ela marcou consulta: é o número do card «Marcaram».';
     } else if (medida === 'equipe') {
-      cfg.colunas = ['Conversa', 'Passou'];
-      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }] }; });
-      cfg.rodape = cortado + NOTA_NOME;
+      cfg.colunas = ['Conversa', 'Passou', 'Motivo'];
+      cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, filtro: l.motivo.codigo, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: pilula(l.motivo.codigo === 'sem-registro' ? 'ne' : 'so', l.motivo.rotulo) }] }; });
+      cfg.filtros = (r.grupos || []).map(function(g){ return { id: g.codigo, rot: g.rotulo, total: g.total }; });
+      cfg.rodape = cortado + 'O motivo é uma categoria gravada na hora em que a Sofia passa a conversa. Passagens de antes disso ficam como «Sem motivo registrado». ' + NOTA_NOME;
     } else if (medida === 'pix') {
       cfg.colunas = ['Conversa', 'Valor', 'Gerado', 'Situação'];
       cfg.linhas = r.linhas.map(function(l){
@@ -883,7 +898,20 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   var seqBlocos = 0;
   async function carregarBlocos(){
     var eu = ++seqBlocos, slug = U.slug, per = PERIODO, vale = function(){ return eu === seqBlocos && per === PERIODO && U && U.slug === slug; };
+    try { var r = await api('GET', urlDetalhe('equipe')); if (vale()) desenharMotivos(r); } catch (e) { if (vale()) { $('listaEquipe2').textContent = ''; erroEm($('listaEquipe2'), e.message); } }
     try { var x = await api('GET', urlDetalhe('pix')); if (vale()) desenharPix(x); } catch (e) { if (vale()) { $('listaPix').textContent = ''; erroEm($('listaPix'), e.message); } }
+  }
+  function desenharMotivos(r){
+    var box = $('listaEquipe2'); box.textContent = ''; $('cEquipe').textContent = r.total ? String(r.total) : '';
+    if (!r.total) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma passagem. ')); v.appendChild(document.createTextNode('Nenhuma conversa foi passada para a equipe neste período.')); box.appendChild(v); return; }
+    var max = 1; (r.grupos || []).forEach(function(g){ max = Math.max(max, g.total); });
+    (r.grupos || []).slice(0, 6).forEach(function(g){
+      var b = el('button', 'mot' + (g.codigo === 'sem-registro' ? ' nao' : '')); b.type = 'button';
+      b.appendChild(el('span', 't', g.rotulo)); b.appendChild(el('span', 'q', String(g.total)));
+      var bar = el('span', 'barra'), i = el('i'); i.style.width = Math.max(4, Math.round(100 * g.total / max)) + '%'; bar.appendChild(i); b.appendChild(bar);
+      b.onclick = function(){ abrirDetalhe('equipe', g.codigo); };
+      box.appendChild(b);
+    });
   }
   function desenharPix(x){
     var box = $('listaPix'); box.textContent = ''; $('cPix').textContent = x.total ? String(x.total) : '';
