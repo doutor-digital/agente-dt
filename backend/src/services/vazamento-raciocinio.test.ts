@@ -238,6 +238,19 @@ test('Boa Vista (22/11): "tinha perguntado… preciso retomar" é pego e cortado
   assert.equal(detectarVazamento(r), null);
 });
 
+test('Boa Vista (22/11): variantes do mesmo raciocínio também são pegas', () => {
+  for (const m of [
+    // achado do sênior no #441: a 1ª dupla relato/decisão fecha a frase sem vocabulário de bastidor; a 2ª entrega o raciocínio
+    'A equipe já tinha perguntado sobre o tipo de dor, preciso retomar. Ele ainda não respondeu à pergunta da equipe, então vou perguntar de novo.',
+    'A equipe já tinha falado sobre a dor, mas ainda não sei, preciso retomar com o paciente.',
+    'A equipe tinham perguntado sobre a dor, mas não tenho a resposta do paciente ainda, preciso retomar essa pergunta.',
+    'Ele já tinha perguntado sobre o valor e não tenho resposta do paciente, preciso retomar.',
+    'Marcelo já tinha confirmado a consulta, não tenho a resposta do paciente, preciso retomar.',
+  ]) {
+    assert.ok(detectarVazamento(m), m);
+  }
+});
+
 test('Boa Vista (22/11): as mesmas palavras faladas COM o paciente passam', () => {
   for (const m of [
     'A equipe já tinha perguntado sobre sua dor, preciso retomar essa pergunta com você: é no pescoço ou na lombar?',
@@ -245,6 +258,12 @@ test('Boa Vista (22/11): as mesmas palavras faladas COM o paciente passam', () =
     'Eu não tenho a resposta do exame ainda, preciso perguntar pra equipe e já te falo.',
     'A equipe tinha mandado o endereço, então preciso só confirmar: você recebeu?',
     'O exame não tinha chegado, preciso voltar nisso amanhã com a doutora.',
+    // achados do sênior no #441: com "preciso repetir/perguntar/voltar" isto era bloqueado; só "preciso retomar" conta
+    'A equipe tinha passado as instruções do preparo, preciso repetir: jejum de 8 horas e trazer os exames.',
+    'A equipe tinha mandado o link da triagem, preciso perguntar se chegou certinho.',
+    'A equipe havia explicado o fluxo de atendimento, preciso repetir rapidinho: primeiro a avaliação, depois o tratamento.',
+    'A resposta do exame não chegou, não tenho resposta da triagem ainda, preciso perguntar pra doutora.',
+    'A Ilma havia confirmado a consulta, preciso perguntar o horário para a qualificação do cadastro.',
   ]) {
     assert.equal(detectarVazamento(m), null, m);
   }

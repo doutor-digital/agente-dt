@@ -324,19 +324,21 @@ const BORDA_D = String.raw`(?![\p{L}\p{N}_])`;
  * Se o parágrafo se dirige à pessoa (você/seu/sua/te/vocês/pergunta com "?"), não conta.
  */
 const NARRA_SUJEITO = new RegExp(
-  `^\\s*(?:(?:a|o)\\s+(?:equipe|paciente|pessoa|mensagem|pergunta|resposta|[aá]udio|conversa|imagem|dor\\s+que\\s+(?:ela|ele))${BORDA_D}|(?:essa|esta|esse|este)\\s+(?:mensagem|texto|conte[uú]do|conversa|relato|caso)${BORDA_D}|(?:essa|esta)\\s+[eé]\\s+a\\s+\\S+\\s+vez${BORDA_D}|(?:ele|ela)\\s+(?:j[aá]\\s+|s[oó]\\s+|n[aã]o\\s+)?(?:agradeceu|perguntou|respondeu|disse|mandou|enviou|insistiu|repetiu|encerrou|reabre|reabriu|confirmou|pediu)${BORDA_D}|j[aá]\\s+tem\\s+uma\\s+conversa${BORDA_D})`,
+  `^\\s*(?:(?:a|o)\\s+(?:equipe|paciente|pessoa|mensagem|pergunta|resposta|[aá]udio|conversa|imagem|dor\\s+que\\s+(?:ela|ele))${BORDA_D}|(?:essa|esta|esse|este)\\s+(?:mensagem|texto|conte[uú]do|conversa|relato|caso)${BORDA_D}|(?:essa|esta)\\s+[eé]\\s+a\\s+\\S+\\s+vez${BORDA_D}|(?:ele|ela)\\s+(?:j[aá]\\s+|s[oó]\\s+|n[aã]o\\s+)?(?:agradeceu|perguntou|respondeu|disse|mandou|enviou|insistiu|repetiu|encerrou|reabre|reabriu|confirmou|pediu|(?:tinha|havia)\\s+(?:perguntado|confirmado|respondido|mandado|enviado|dito|pedido|falado|comentado|mencionado))${BORDA_D}|j[aá]\\s+tem\\s+uma\\s+conversa${BORDA_D})`,
   'iu',
 );
 // Nome próprio de abertura ("Marcelo já confirmou…", "A Ilma já havia confirmado…"): SEM a bandeira `i`, senão `\p{Lu}` casa qualquer palavra.
-const NARRA_NOME = /^\s*(?:[AO]\s+)?\p{Lu}\p{Ll}+(?:\s+\p{Lu}\p{Ll}+)?\s+(?:j[aá]\s+|s[oó]\s+)?(?:perguntou|confirmou|respondeu|disse|comentou|mencionou|havia\s+(?:confirmado|perguntado|dito|respondido))(?![\p{L}\p{N}_])/u;
+const NARRA_NOME = /^\s*(?:[AO]\s+)?\p{Lu}\p{Ll}+(?:\s+\p{Lu}\p{Ll}+)?\s+(?:j[aá]\s+|s[oó]\s+)?(?:perguntou|confirmou|respondeu|disse|comentou|mencionou|(?:tinha|havia)\s+(?:confirmado|perguntado|dito|respondido|falado|comentado|mencionado))(?![\p{L}\p{N}_])/u;
 const NARRA_RELATO = new RegExp(
-  `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|(?:tinha|havia)\\s+(?:perguntado|confirmado|respondido|mandado|enviado|dito|pedido|passado|explicado)|ainda\\s+n[aã]o\\s+tenho|n[aã]o\\s+tenho\\s+(?:a\\s+|uma\\s+)?resposta|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
+  `${BORDA_E}(?:perguntou|confirmou|respondeu|mandou|enviou|agradeceu|disse|encerrou|apresentou|pediu|insistiu|repetiu|reabre|reabriu|comentou|descreve|deu\\s+continuidade|j[aá]\\s+tem\\s+uma\\s+conversa|n[aã]o\\s+(?:traz|veio|corresponde)|veio\\s+(?:confus|mud|vazi)|j[aá]\\s+havia|(?:tinham?|haviam?)\\s+(?:perguntado|confirmado|respondido|mandado|enviado|dito|pedido|falado|comentado|mencionado)|ainda\\s+n[aã]o\\s+tenho|tratou|tentou|parece\\s+(?:estar|ser|ter\\s+vindo)|est[aá]\\s+encerrando)`,
   'iu',
 );
 const NARRA_DECISAO = new RegExp(
-  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:(?:vou|devo)\\s+(?:s[oó]\\s+|apenas\\s+)?(?:responder|retomar|aguardar|manter|refor[cç]ar|acolher|pedir|perguntar|seguir|continuar|insistir|tratar|parar|ignorar|reconhecer|deixar\\s+isso\\s+claro|considerar|corrigir)|respondo|mantenho|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas|retomar|perguntar|refazer|repetir|voltar)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
+  `(?:[—–,.;!]|\\s-\\s)\\s*(?:e\\s+|ent[aã]o\\s+|mas\\s+|como\\s+\\S+\\s+\\S+\\s+)?(?:(?:vou|devo)\\s+(?:s[oó]\\s+|apenas\\s+)?(?:responder|retomar|aguardar|manter|refor[cç]ar|acolher|pedir|perguntar|seguir|continuar|insistir|tratar|parar|ignorar|reconhecer|deixar\\s+isso\\s+claro|considerar|corrigir)|respondo|mantenho|n[aã]o\\s+(?:vou|preciso|devo|cabe)|preciso\\s+(?:responder|seguir|manter|apenas|retomar)|sigo\\s+o\\s+fluxo)${BORDA_D}`,
   'iu',
 );
+const NARRA_RELATO_TODOS = new RegExp(NARRA_RELATO.source, 'giu');
+const NARRA_DECISAO_TODAS = new RegExp(NARRA_DECISAO.source, 'giu');
 const NARRA_TERCEIRA = new RegExp(`${BORDA_E}(?:paciente|pessoa|equipe|teste|inst[aâ]ncia|ele|ela|cliente|lead)${BORDA_D}`, 'iu');
 // Só vira raciocínio quando a narração usa o vocabulário de quem PLANEJA o atendimento (paciente, lead, fluxo, regra, cumprimento,
 // transcrição, triagem, "não traz", "encerrou a conversa"…). "A equipe já confirmou, então vou aguardar o comprovante 😊" e "O áudio veio
@@ -353,21 +355,27 @@ export function paragrafoNarraDecisao(paragrafo: string): string | null {
   if (!NARRA_SUJEITO.test(p) && !NARRA_NOME.test(p)) return null;
   // olha só o começo: a narração acontece nas duas primeiras frases
   const inicio = p.slice(0, 260);
-  const rel = NARRA_RELATO.exec(inicio);
-  if (!rel) return null;
-  const depois = inicio.slice(rel.index + rel[0].length);
-  const dec = NARRA_DECISAO.exec(depois);
-  if (!dec) return null;
+  // Testa TODA dupla relato → decisão do começo, não só a primeira: "A equipe já tinha perguntado…, preciso retomar. Ele ainda
+  // não respondeu à pergunta da equipe, então vou perguntar de novo." — a 1ª dupla fecha a frase sem vocabulário de bastidor,
+  // a 2ª é que entrega o raciocínio (achado do sênior no #441).
+  for (const rel of inicio.matchAll(NARRA_RELATO_TODOS)) {
+    const fimDoRelato = rel.index + rel[0].length;
+    for (const dec of inicio.slice(fimDoRelato).matchAll(NARRA_DECISAO_TODAS)) {
+      if (duplaNarraBastidor(inicio, rel[0], fimDoRelato + dec.index + dec[0].length)) return p.slice(0, 80);
+    }
+  }
+  return null;
+}
+
+function duplaNarraBastidor(inicio: string, relato: string, ateDecisao: number): boolean {
   // "parece (estar|ser|ter vindo)" sozinho é fala de gente ("Esse conteúdo não parece ser deste atendimento, então vou ficar por
   // aqui" — recusa educada, dirigida à pessoa). Só vira raciocínio quando a mesma frase fala DE alguém em terceira pessoa.
-  const ateDecisao = rel.index + rel[0].length + dec.index + dec[0].length;
-  if (/^parece/i.test(rel[0]) && !NARRA_TERCEIRA.test(inicio.slice(0, ateDecisao))) return null;
+  if (/^parece/i.test(relato) && !NARRA_TERCEIRA.test(inicio.slice(0, ateDecisao))) return false;
   // Nada dirigido à pessoa (você/seu/te/pergunta) do começo até o fim da frase da decisão, em qualquer linha.
   const fimDaFrase = inicio.slice(ateDecisao).search(/[.!?\n]/);
   const ate = fimDaFrase < 0 ? inicio.length : ateDecisao + fimDaFrase;
-  if (NARRA_DIRIGIDO.test(inicio.slice(0, ate))) return null;
-  if (!NARRA_META.test(inicio.slice(0, ate))) return null;
-  return p.slice(0, 80);
+  if (NARRA_DIRIGIDO.test(inicio.slice(0, ate))) return false;
+  return NARRA_META.test(inicio.slice(0, ate));
 }
 
 function primeiro(padroes: RegExp[], texto: string): string | null {
