@@ -471,6 +471,14 @@ test('LIGADO: grava marcou (nome e dia) e Pix que saiu; a resposta com id vira r
   assert.deepEqual(respostas.map((r) => r.mensagem), [500], 'só a resposta da Sofia, não o Pix');
 });
 
+test('LIGADO: o evento do painel que EXPLODE (síncrono ou recusado) não atrapalha a resposta ao paciente', async () => {
+  for (const modo of ['sincrono', 'recusado'] as const) {
+    const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true, motivoDaPassagem: 'convenio' } });
+    a.p.registrarEvento = modo === 'sincrono' ? () => { throw new Error('prisma fora'); } : async () => { throw new Error('prisma fora'); };
+    await assert.doesNotReject(() => rodarSofia(M, a.p, novaMemoriaDaIa()), modo);
+  }
+});
+
 test('LIGADO: a categoria do motivo da passagem vai no evento «equipe» (detalhe)', async () => {
   const a = portas({ estado: 'ligado', sofia: { passouParaEquipe: true, motivoDaPassagem: 'convenio' } });
   const vistos: Array<{ tipo: string; detalhe?: string | null }> = [];

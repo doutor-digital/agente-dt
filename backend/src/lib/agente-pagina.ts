@@ -862,7 +862,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       cfg.colunas = ['Conversa', 'Passou', 'Motivo'];
       cfg.linhas = r.linhas.map(function(l){ return { conversa: l.conversa, filtro: l.motivo.codigo, cells: [{ v: nomeDe(l) }, { v: quandoTxt(l.quando), cls: 'n' }, { v: pilula(l.motivo.codigo === 'sem-registro' ? 'ne' : 'so', l.motivo.rotulo) }] }; });
       cfg.filtros = (r.grupos || []).map(function(g){ return { id: g.codigo, rot: g.rotulo, total: g.total }; });
-      cfg.rodape = cortado + 'O motivo é uma categoria gravada na hora em que a Sofia passa a conversa. Passagens de antes disso ficam como «Sem motivo registrado». ' + NOTA_NOME;
+      cfg.rodape = cortado + (cortado ? 'Os motivos acima contam todas as passagens; a lista mostra as mais recentes. ' : '') + 'O motivo é uma categoria gravada na hora em que a Sofia passa a conversa. Passagens de antes disso ficam como «Sem motivo registrado». ' + NOTA_NOME;
     } else if (medida === 'pix') {
       cfg.colunas = ['Conversa', 'Valor', 'Gerado', 'Situação'];
       cfg.linhas = r.linhas.map(function(l){
@@ -905,7 +905,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     var box = $('listaEquipe2'); box.textContent = ''; $('cEquipe').textContent = r.total ? String(r.total) : '';
     if (!r.total) { var v = el('p', 'vazio'); v.appendChild(el('b', null, 'Nenhuma passagem. ')); v.appendChild(document.createTextNode('Nenhuma conversa foi passada para a equipe neste período.')); box.appendChild(v); return; }
     var max = 1; (r.grupos || []).forEach(function(g){ max = Math.max(max, g.total); });
-    (r.grupos || []).slice(0, 6).forEach(function(g){
+    (r.grupos || []).forEach(function(g){
       var b = el('button', 'mot' + (g.codigo === 'sem-registro' ? ' nao' : '')); b.type = 'button';
       b.appendChild(el('span', 't', g.rotulo)); b.appendChild(el('span', 'q', String(g.total)));
       var bar = el('span', 'barra'), i = el('i'); i.style.width = Math.max(4, Math.round(100 * g.total / max)) + '%'; bar.appendChild(i); b.appendChild(bar);

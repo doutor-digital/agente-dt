@@ -270,7 +270,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       // cadastro duplicado, agenda sem conferir, cadastro recusado, vaga presa: sem tarefa no Kommo, a equipe fica sabendo pela conversa
       avisoSemKommo: (motivo, detalhe) => passarParaEquipe(`${motivo.replace(/_/g, ' ')} — ${detalhe}`, 'agenda'),
     },
-    { avisarEquipe: (motivo, detalhe) => passarParaEquipe(motivo === 'sinal_pix_falhou' ? `o Pix do sinal não saiu. ${detalhe}` : `Pix do sinal gerado mas sem registro. ${detalhe}`, 'pix') },
+    { avisarEquipe: (motivo, detalhe) => passarParaEquipe(motivo === 'sinal_pix_falhou' ? `o Pix do sinal não saiu. ${detalhe}` : `Pix do sinal gerado mas sem registro. ${detalhe}`, motivo === 'sinal_pix_falhou' ? 'pix' : 'pix-sem-registro') },
   );
 
   if (seco) {

@@ -11,6 +11,7 @@ test('avisos fixos do código têm categoria exata, qualquer que seja o texto', 
 
 test('texto livre do modelo (pausar_ia) vira categoria por palavra-chave; o que não casa é «outro»', () => {
   assert.equal(categoriaDoMotivo('o paciente quer falar com uma pessoa'), 'pediu-pessoa');
+  assert.equal(categoriaDoMotivo('', 'pix-sem-registro'), 'pix-sem-registro', 'Pix que SAIU mas não foi registrado não é «Pix não saiu»');
   assert.equal(categoriaDoMotivo('Pediu atendente humano'), 'pediu-pessoa');
   assert.equal(categoriaDoMotivo('pergunta sobre convênio Unimed'), 'convenio');
   assert.equal(categoriaDoMotivo('quer saber se aceita o plano de saúde'), 'convenio');
@@ -52,4 +53,13 @@ test('rótulo: código conhecido ganha o texto; vazio, nulo ou desconhecido = «
   assert.deepEqual(rotuloDoMotivo(null), { codigo: 'sem-registro', rotulo: 'Sem motivo registrado' });
   assert.deepEqual(rotuloDoMotivo(''), { codigo: 'sem-registro', rotulo: 'Sem motivo registrado' });
   assert.deepEqual(rotuloDoMotivo('2026-11-17T09:00'), { codigo: 'sem-registro', rotulo: 'Sem motivo registrado' });
+});
+
+test('palavra solta ou duas categorias = «outro»; limite de palavra (família não é Amil, devagar não é vaga)', () => {
+  assert.equal(categoriaDoMotivo('paciente quer falar com a família antes de decidir'), 'outro', 'família não é convênio');
+  assert.equal(categoriaDoMotivo('o paciente falou devagar e não deu para entender'), 'outro', 'devagar não é vaga');
+  assert.equal(categoriaDoMotivo('paciente pergunta o preço da ressonância e pede desconto'), 'outro', 'valor + clínico: não adivinha');
+  assert.equal(categoriaDoMotivo('quer saber o valor do exame'), 'outro', 'valor + clínico');
+  assert.equal(categoriaDoMotivo('paciente quer falar sobre desconto no pagamento'), 'valor-pagamento', 'quer falar SOBRE não é pedir uma pessoa');
+  assert.equal(categoriaDoMotivo('o atendente anterior já cuidou disso'), 'outro');
 });
