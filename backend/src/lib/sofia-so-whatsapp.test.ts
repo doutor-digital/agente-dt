@@ -137,28 +137,20 @@ test('sem `estado` explícito a porta lê a chave da unidade (a tela manda)', as
   assert.equal(await portaDoCanal({ slug: SALTO, leadId: 1, origem: 'instagram_business' }, b.g), 'segue', 'a outra unidade segue respondendo');
 });
 
-test('turno sem origem (widget, cartão adiado): a porta pergunta a ÚLTIMA origem conhecida do cartão — só com a chave ligada ou em seco', async () => {
-  let leu = 0;
-  const ultimaOrigemConhecida = async () => (leu++, 'instagram_business');
-  const a = gravador();
-  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: null, estado: 'ligado', ultimaOrigemConhecida }, a.g), 'calou');
-  assert.equal(a.w.finais[0]!.iaDecision, '__channel_not_allowed__');
-  const b = gravador();
-  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: undefined, estado: 'seco', ultimaOrigemConhecida }, b.g), 'segue');
-  assert.equal(b.w.steps[0]!.kind, 'THINKING');
-  assert.equal(leu, 2);
-  // desligada: nem pergunta; com origem na mensagem: a da mensagem manda (WhatsApp de hoje vale mais que o Instagram de ontem)
-  const c = gravador();
-  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: null, estado: 'desligado', ultimaOrigemConhecida }, c.g), 'segue');
-  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: 'waba', estado: 'ligado', ultimaOrigemConhecida }, c.g), 'segue');
-  assert.equal(leu, 2);
-  // sem nenhuma origem registrada, ou banco fora: segue como WhatsApp
-  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: null, estado: 'ligado', ultimaOrigemConhecida: async () => null }, c.g), 'segue');
-  assert.equal(
-    await portaDoCanal({ slug: TATUI, leadId: 1, origem: null, estado: 'ligado', ultimaOrigemConhecida: async () => { throw new Error('banco fora'); } }, c.g),
-    'segue',
-  );
-  assert.deepEqual(c.w, { steps: [], finais: [] });
+test('mensagem do webhook SEM origem, em cartão cuja última origem conhecida é instagram_business, com a chave LIGADA: a Sofia RESPONDE (não herda o canal)', async () => {
+  _semearParaTeste([{ slug: TATUI, automacao: 'sofia-so-whatsapp', estado: 'ligado' }]);
+  const origemDosTraces = async () => 'instagram_business'; // o cartão escreveu pelo Instagram antes
+  // a porta do webhook só olha a origem da mensagem: a leitura dos traces nem existe nela
+  for (const origem of [null, undefined, '']) {
+    const { w, g } = gravador();
+    assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem }, g), 'segue', String(origem));
+    assert.deepEqual(w, { steps: [], finais: [] });
+  }
+  // o contraste: o worker (sem mensagem) CALA esse mesmo cartão pela última origem
+  assert.equal(await pacienteDeRedeSocialCalado({ id: 'u1', slug: TATUI }, 1, { origem: origemDosTraces }), true);
+  // e a mensagem de WhatsApp de hoje, com origem, também segue
+  const { g } = gravador();
+  assert.equal(await portaDoCanal({ slug: TATUI, leadId: 1, origem: 'waba' }, g), 'segue');
 });
 
 test('decidirCanal é puro e cobre os três estados', () => {

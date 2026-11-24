@@ -13,7 +13,10 @@
  *                  seguem como hoje (o seco mede o que o webhook calaria; não há como «simular» um envio que não saiu);
  *  - `desligado` → como sempre.
  *
- * Origem ausente ou desconhecida = segue como hoje (a chave só cala o que sabe que é rede social). WhatsApp nunca é calado por aqui.
+ * Origem ausente ou desconhecida = segue como hoje (a chave só cala o que sabe que é rede social). WhatsApp nunca é calado por aqui. No WEBHOOK
+ * só a origem da PRÓPRIA mensagem decide — nunca a «última origem conhecida do cartão». Turno que não nasce de mensagem do webhook (modo widget,
+ * cartão adiado de conta dividida) não traz origem e segue como WhatsApp: fica fora desta chave. Só os workers (que não têm mensagem) leem a
+ * última origem do cartão.
  *
  * DE ONDE A ORIGEM VEM FORA DO WEBHOOK. Os workers não têm a mensagem na mão. A origem fica gravada no `input` do trace de toda mensagem
  * do paciente (`execution_traces.input`, canal `kommo_chat`) — a MESMA fonte, sem segundo escritor e sem migração: nada novo é gravado.
@@ -69,24 +72,12 @@ export async function portaDoCanal(
     origem: string | null | undefined;
     estado?: Estado;
     latenciaMs?: () => number;
-    /**
-     * Turno que não nasceu de uma mensagem do webhook (modo widget, cartão que ganhou a unidade depois, retomada sem a origem) chega SEM origem:
-     * com a chave ligada ou em seco, a porta pergunta qual foi a ÚLTIMA origem conhecida deste cartão (os traces). Erro = segue como WhatsApp.
-     */
-    ultimaOrigemConhecida?: () => Promise<string | null>;
   },
   gravador: GravadorDoCanal,
 ): Promise<'calou' | 'segue'> {
-  const estado = args.estado ?? sofiaSoWhatsappEstado(args.slug);
-  let origem = args.origem;
-  if (estado !== 'desligado' && !origem && args.ultimaOrigemConhecida) {
-    try {
-      origem = await args.ultimaOrigemConhecida();
-    } catch (err) {
-      logger.warn({ err: String(err), unit: args.slug, leadId: args.leadId }, 'sofia-so-whatsapp: não li a última origem do cartão (segue como WhatsApp)');
-    }
-  }
-  const canal = decidirCanal(estado, origem);
+  // SÓ a origem desta mensagem decide. Mensagem sem `origin` (ou de origem desconhecida) segue como WhatsApp: nunca se herda a origem de uma
+  // mensagem ANTERIOR do cartão (quem escreveu pelo Instagram ontem e pelo WhatsApp hoje tem de ser respondido hoje).
+  const canal = decidirCanal(args.estado ?? sofiaSoWhatsappEstado(args.slug), args.origem);
   if (canal.acao === 'segue') return 'segue';
   if (canal.acao === 'seco') {
     await gravador.step({
