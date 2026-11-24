@@ -328,9 +328,10 @@ async function agente(conta: ContaPorta, e: EstadoDaExecucao, nome: string, emai
   return { id: Number(novo.id), novo: true };
 }
 
-export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao, semCaixa = false): Promise<string[]> {
   const conta = daConta(e);
-  const caixa = precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
+  // --sem-caixa: a caixa ainda não existe; convida e põe no time. A rodada com o número põe todos na caixa (quem já é agente só falta entrar nela)
+  const caixa = semCaixa ? null : precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
   const time = precisa(e.timeId, 'o time ainda não existe (passo «time»)');
   const convidados: string[] = [];
   const ids: number[] = [];
@@ -339,7 +340,7 @@ export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao): Pro
     ids.push(r.id);
     if (r.novo) convidados.push(a.nome);
   }
-  const naCaixa = await membrosDaCaixa(conta, caixa);
+  const naCaixa = caixa === null ? new Set<number>(ids) : await membrosDaCaixa(conta, caixa);
   const noTime = await membrosDoTime(conta, time);
   const faltamNaCaixa = ids.filter((i) => !naCaixa.has(i));
   const faltamNoTime = ids.filter((i) => !noTime.has(i));
@@ -348,13 +349,13 @@ export async function passoAtendentes(q: Questionario, e: EstadoDaExecucao): Pro
   return [convidados.length ? `${convidados.length} convite(s) enviado(s): ${convidados.join(', ')}` : 'todas já eram agentes', faltamNaCaixa.length || faltamNoTime.length ? `${faltamNaCaixa.length} entraram na caixa ${caixa} e ${faltamNoTime.length} no time ${time}` : `já estavam na caixa ${caixa} e no time ${time}`];
 }
 
-export async function passoUsuarioCelular(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+export async function passoUsuarioCelular(q: Questionario, e: EstadoDaExecucao, semCaixa = false): Promise<string[]> {
   const conta = daConta(e);
   const email = precisa(q.chatwoot.usuario_celular_email, 'o questionário não tem usuario_celular_email');
-  const caixa = precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
+  const caixa = semCaixa ? null : precisa(e.caixaId, 'a caixa ainda não existe (passo «caixa»)');
   const r = await agente(conta, e, '📱 Celular da unidade', email, 'agent');
   e.celularId = r.id;
-  if (!(await membrosDaCaixa(conta, caixa)).has(r.id)) await postar(e, conta, 'inbox_members', { inbox_id: caixa, user_ids: [r.id] });
+  if (caixa !== null && !(await membrosDaCaixa(conta, caixa)).has(r.id)) await postar(e, conta, 'inbox_members', { inbox_id: caixa, user_ids: [r.id] });
   return [r.novo ? `usuário do celular ${r.id} criado` : `usuário do celular ${r.id} já existia`];
 }
 

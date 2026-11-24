@@ -29,7 +29,7 @@ set -euo pipefail
 umask 077
 
 SLUG="${1:-}"
-[ -n "$SLUG" ] || { echo "uso: nova-unidade-joao.sh <slug> [--so-conferir] [--aplicar] [--sim] [--ligar-robo] [--so-crm] [--sobrescrever] [--reimportar-aprendizados]"; exit 2; }
+[ -n "$SLUG" ] || { echo "uso: nova-unidade-joao.sh <slug> [--so-conferir] [--aplicar] [--sim] [--ligar-robo] [--so-crm [--sem-caixa]] [--sobrescrever] [--reimportar-aprendizados]"; exit 2; }
 shift || true
 SO_CONFERIR=0
 ARGS=()

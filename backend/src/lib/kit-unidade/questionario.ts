@@ -30,7 +30,7 @@ export const SUBDOMINIOS_RESERVADOS: readonly string[] = [
   'vps', 'ddagent', 'doutordigital', 'portal', 'status', 'docs', 'mcp', 'login', 'oauth', 'auth', 'webhook', 'webhooks', 'ftp', 'ns1', 'ns2', 'aulas', 'n8n', 'chamados', 'demo',
 ];
 
-export const Questionario = z
+const QuestionarioBase = z
   .object({
     versao: z.literal(1),
     unidade: obj({
@@ -149,8 +149,10 @@ export const Questionario = z
       faq: z.array(obj({ pergunta: z.string().min(5).max(120), resposta: z.string().min(3).max(300) })).max(10).optional(),
     }).optional(),
   })
-  .strict()
-  .superRefine((q, ctx) => {
+  .strict();
+
+/** As conferências que cruzam campos. `semCaixa`: o número, o id do Kapso e a WABA ainda não existem (`--sem-caixa`) e deixam de ser obrigatórios no modo real (se vierem, o formato continua valendo). */
+const conferirCruzado = (semCaixa: boolean) => (q: z.infer<typeof QuestionarioBase>, ctx: z.RefinementCtx): void => {
     const aviso = (path: (string | number)[], message: string) => ctx.addIssue({ code: z.ZodIssueCode.custom, path, message });
     const gerentes = q.chatwoot.atendentes.filter((a) => a.funcao === 'gerente');
     if (gerentes.length !== 1) aviso(['chatwoot', 'atendentes'], `precisa haver exatamente 1 gerente (há ${gerentes.length})`);
@@ -177,11 +179,15 @@ export const Questionario = z
     if (q.unidade.slug.includes('--')) aviso(['unidade', 'slug'], 'slug com "--"');
     if (SUBDOMINIOS_RESERVADOS.includes(q.chatwoot.subdominio) && !(q.chatwoot.subdominio === 'demo' && q.whatsapp.modo === 'demonstracao')) aviso(['chatwoot', 'subdominio'], `«${q.chatwoot.subdominio}» é um subdomínio reservado do nosso sistema: escolha outro`);
     if (q.whatsapp.modo === 'real') {
-      for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');
+      if (!semCaixa) for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');
     } else if (q.whatsapp.numero_oficial || q.whatsapp.kapso_phone_number_id || q.whatsapp.waba_id) {
       aviso(['whatsapp', 'modo'], 'modo demonstracao não tem número nem WABA: tire os campos (ou passe para modo: real)');
     }
-  });
+};
+
+export const Questionario = QuestionarioBase.superRefine(conferirCruzado(false));
+/** O mesmo esquema para `--sem-caixa`: sem exigir número, id do Kapso e WABA. */
+export const QuestionarioSemCaixa = QuestionarioBase.superRefine(conferirCruzado(true));
 
 export type Questionario = z.infer<typeof Questionario>;
 
@@ -244,20 +250,28 @@ export function caminhosDoEsquema(esquema: z.ZodTypeAny = Questionario, prefixo 
 
 export type ResultadoDaLeitura = { ok: true; q: Questionario } | { ok: false; erros: string[] };
 
-export function validarQuestionario(bruto: unknown): ResultadoDaLeitura {
-  const r = Questionario.safeParse(bruto);
+/** Campos do WhatsApp que, em `--sem-caixa`, podem estar ausentes ou escritos PENDENTE (= ainda não existem). */
+const CAMPOS_DO_NUMERO = ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const;
+
+export function validarQuestionario(bruto: unknown, opcoes: { semCaixa?: boolean } = {}): ResultadoDaLeitura {
+  if (opcoes.semCaixa && bruto && typeof bruto === 'object' && (bruto as { whatsapp?: unknown }).whatsapp && typeof (bruto as { whatsapp: unknown }).whatsapp === 'object') {
+    const w: Record<string, unknown> = { ...((bruto as { whatsapp: Record<string, unknown> }).whatsapp) };
+    for (const c of CAMPOS_DO_NUMERO) if (typeof w[c] === 'string' && /^\s*PENDENTE\s*$/i.test(w[c] as string)) delete w[c];
+    bruto = { ...(bruto as object), whatsapp: w };
+  }
+  const r = (opcoes.semCaixa ? QuestionarioSemCaixa : Questionario).safeParse(bruto);
   if (r.success) return { ok: true, q: r.data };
   return { ok: false, erros: r.error.issues.map((i) => `${i.path.join('.') || '(raiz)'}: ${i.message}`) };
 }
 
-export function lerQuestionario(fonte: string): ResultadoDaLeitura {
+export function lerQuestionario(fonte: string, opcoes: { semCaixa?: boolean } = {}): ResultadoDaLeitura {
   let bruto: unknown;
   try {
     bruto = lerYamlOuJson(fonte);
   } catch (err) {
     return { ok: false, erros: [`não consegui ler o arquivo: ${(err as Error).message}`] };
   }
-  return validarQuestionario(bruto);
+  return validarQuestionario(bruto, opcoes);
 }
 
 // ── derivados ────────────────────────────────────────────────────────────────────────────────────
