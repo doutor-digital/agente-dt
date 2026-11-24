@@ -19,7 +19,13 @@
  * O QUE NUNCA FAZ:
  *   - não sobrescreve campo que já tem valor (humano ou IA);
  *   - não inventa: o que a conversa não disser fica null e não é gravado;
- *   - em campo de lista, só aceita opção que existe naquela conta.
+ *   - em campo de lista, só aceita opção que existe naquela conta;
+ *   - não grava "Não informada" e equivalentes (valor que diz "não sei" não é dado);
+ *   - "Motivo do não agendamento" só entra em cartão em Em espera ou Perdido.
+ * Lote que o modelo devolve ilegível é partido ao meio e repetido; o que não se recupera é contado e listado no fim.
+ * Decisões em `lib/backfill-campos-regras.ts` (testadas).
+ *
+ * Unidade SEM `lead_field_rules` sai com "sem regras de conversa": instale antes com `instalar-regras-de-campo.js`.
  *
  * Modo simulação por padrão. Só grava com --aplicar.
  *
@@ -29,6 +35,14 @@
 import type { LeadFieldRule, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { createKommoClient, type KommoFieldType } from '../services/kommo.service.js';
+import {
+  DA_CONVERSA,
+  contagemVazia,
+  decidirCampos,
+  extrairComRetentativa,
+  lerExtracoes,
+  type Extracao,
+} from '../lib/backfill-campos-regras.js';
 
 const APLICAR = process.argv.includes('--aplicar');
 const arg = (nome: string) => (process.argv.find((a) => a.startsWith(`--${nome}=`)) ?? '').split('=')[1] ?? '';
@@ -37,18 +51,6 @@ const LIMITE = Number(arg('limite')) || Infinity;
 const MODELO = arg('modelo') || 'claude-haiku-4-5-20251001';
 /** Quantas conversas por chamada. Agrupar faz a instrução viajar uma vez, não dez. */
 const LOTE = Number(arg('lote')) || 10;
-
-/**
- * Campos que uma CONVERSA pode responder. Os outros da régua (data de pagamento,
- * situação da consulta, motivo da espera) são operacionais: quem sabe é a agenda
- * ou a recepção, não o texto — e chutar neles sujaria o relatório em vez de
- * enriquecê-lo.
- *
- * "Preferência de horário" ficou DE FORA por outro motivo: na amostra ele voltava
- * com data concreta e vencida ("17 de setembro às 14h"). Gravar isso hoje não
- * informa, engana — a recepção lê como se fosse o que a pessoa quer agora.
- */
-const DA_CONVERSA = /queixa|qualifica|sexo|cidade|bairro|estado|profiss|plano|tipo de lead|regi[ãa]o|tempo|idade|motivo do n[ãa]o/i;
 
 interface Conversa {
   leadId: number;
@@ -117,12 +119,7 @@ Nesses casos o cartão vazio é a informação correta.
 Devolva SÓ um array JSON, um objeto por conversa, na mesma ordem em que receber:
 [{"leadId": 123, "campos": {"Nome do campo": "valor", "Outro": null}}]`;
 
-interface Extracao {
-  leadId: number;
-  campos: Record<string, string | null>;
-}
-
-async function extrair(unit: Unit, regras: LeadFieldRule[], lote: Conversa[]): Promise<Extracao[]> {
+async function extrair(unit: Unit, regras: LeadFieldRule[], lote: ReadonlyArray<Conversa>): Promise<Extracao[] | null> {
   const chave = unit.anthropicApiKey ?? process.env.ANTHROPIC_API_KEY;
   if (!chave) throw new Error(`${unit.slug}: sem chave da Anthropic`);
 
@@ -148,23 +145,7 @@ async function extrair(unit: Unit, regras: LeadFieldRule[], lote: Conversa[]): P
   const data = (await resp.json()) as { content?: Array<{ text?: string }>; error?: unknown };
   if (data.error) throw new Error(`Anthropic: ${JSON.stringify(data.error).slice(0, 200)}`);
   const txt = (data.content ?? []).map((c) => c.text ?? '').join('');
-  const m = txt.match(/\[[\s\S]*\]/);
-  if (!m) return [];
-  try {
-    return JSON.parse(m[0]) as Extracao[];
-  } catch {
-    return [];
-  }
-}
-
-/** Só aceita opção que existe naquela conta — o modelo às vezes inventa um rótulo parecido. */
-function valorValido(regra: LeadFieldRule, bruto: string): string | null {
-  const v = String(bruto ?? '').trim();
-  if (!v || v.toLowerCase() === 'null') return null;
-  const enums = ((regra.kommoFieldEnums as Array<{ value: string }> | null) ?? []).map((e) => e.value);
-  if (enums.length === 0) return v;
-  const casa = enums.find((e) => e.toLowerCase() === v.toLowerCase());
-  return casa ?? null;
+  return lerExtracoes(txt);
 }
 
 async function main(): Promise<void> {
@@ -192,22 +173,25 @@ async function main(): Promise<void> {
 
     const kommo = createKommoClient(unit);
     const porNome = new Map(regras.map((r) => [r.kommoFieldName.toLowerCase(), r]));
+    // nome da etapa de cada cartão: "Motivo do não agendamento" só vale em Em espera / Perdido (ver lib/backfill-campos-regras)
+    const nomesDeEtapa = new Map<string, string>();
+    for (const p of await kommo.listPipelines()) for (const st of p.statuses) nomesDeEtapa.set(`${p.id}:${st.id}`, st.name);
+    const falhas = contagemVazia();
     let gravados = 0;
-    let pulados = 0;
+    let falhasDeGravacao = 0;
+    let semCartao = 0;
+    const descartes = { jaPreenchidos: 0, naoInformados: 0, motivoForaDaEtapa: 0 };
 
     for (let i = 0; i < conversas.length; i += LOTE) {
       const lote = conversas.slice(i, i + LOTE);
-      let extracoes: Extracao[] = [];
-      try {
-        extracoes = await extrair(unit, regras, lote);
-      } catch (err) {
-        console.log(`  ! lote ${i / LOTE + 1} falhou: ${String(err).slice(0, 120)}`);
-        continue;
-      }
+      const extracoes = await extrairComRetentativa(lote, (parte) => extrair(unit, regras, parte), falhas);
 
       for (const ex of extracoes) {
         const lead = await kommo.getLead(ex.leadId).catch(() => null);
-        if (!lead) continue;
+        if (!lead) {
+          semCartao++;
+          continue;
+        }
         const preenchidos = new Set(
           ((lead as { custom_fields_values?: Array<{ field_id: number; values?: Array<{ value?: unknown }> }> })
             .custom_fields_values ?? [])
@@ -218,51 +202,53 @@ async function main(): Promise<void> {
             .map((f) => f.field_id),
         );
 
-        // Qualificação sem queixa é chute: se a pessoa não contou a dor, não há
-        // base pra dizer se ela é quente. Na amostra de 22/09 o modelo carimbou
-        // "Quente" em conversa da equipe interna — o guarda aqui embaixo é o que
-        // impede isso de virar 3.319 cartões com qualificação inventada.
-        const temQueixa = Object.entries(ex.campos ?? {}).some(
-          ([nome, v]) => /queixa/i.test(nome) && v != null && String(v).trim() !== '',
-        );
-
-        const aGravar: Array<{ regra: LeadFieldRule; valor: string }> = [];
-        for (const [nome, bruto] of Object.entries(ex.campos ?? {})) {
-          const regra = porNome.get(String(nome).toLowerCase());
-          if (!regra || bruto == null) continue;
-          if (!temQueixa && /qualifica/i.test(regra.kommoFieldName)) continue;
-          if (preenchidos.has(regra.kommoFieldId)) {
-            pulados++;
-            continue; // já tem valor — nunca sobrescrevo
-          }
-          const valor = valorValido(regra, String(bruto));
-          if (valor) aGravar.push({ regra, valor });
-        }
+        const decisao = decidirCampos({
+          campos: ex.campos,
+          porNome,
+          preenchidos,
+          nomeDaEtapa: nomesDeEtapa.get(`${lead.pipeline_id}:${lead.status_id}`),
+        });
+        descartes.jaPreenchidos += decisao.jaPreenchidos;
+        descartes.naoInformados += decisao.naoInformados;
+        descartes.motivoForaDaEtapa += decisao.motivoForaDaEtapa;
+        const aGravar = decisao.aGravar;
         if (aGravar.length === 0) continue;
 
         console.log(
           `  ${String(ex.leadId).padEnd(9)} ${aGravar.map((g) => `${g.regra.kommoFieldName}="${g.valor.slice(0, 28)}"`).join(' · ')}`,
         );
-        if (APLICAR) {
-          for (const g of aGravar) {
-            await kommo
-              .setLeadCustomFieldValue(
-                ex.leadId,
-                g.regra.kommoFieldId,
-                g.regra.kommoFieldType as KommoFieldType,
-                g.valor,
-                ((g.regra.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? []),
-              )
-              .catch((err) => console.log(`     ! ${g.regra.kommoFieldName}: ${String(err).slice(0, 90)}`));
-            await new Promise((r) => setTimeout(r, 160));
+        if (!APLICAR) {
+          gravados += aGravar.length;
+          continue;
+        }
+        for (const g of aGravar) {
+          try {
+            await kommo.setLeadCustomFieldValue(
+              ex.leadId,
+              g.regra.kommoFieldId,
+              g.regra.kommoFieldType as KommoFieldType,
+              g.valor,
+              (g.regra.kommoFieldEnums as Array<{ id: number; value: string }> | null) ?? [],
+            );
+            gravados++;
+          } catch (err) {
+            falhasDeGravacao++;
+            console.log(`     ! ${g.regra.kommoFieldName}: ${String(err).slice(0, 90)}`);
           }
-          gravados += aGravar.length;
-        } else {
-          gravados += aGravar.length;
+          await new Promise((r) => setTimeout(r, 160));
         }
       }
     }
-    console.log(`  → ${gravados} campos ${APLICAR ? 'gravados' : 'seriam gravados'} · ${pulados} pulados (já tinham valor)`);
+    console.log(`  → ${gravados} campos ${APLICAR ? 'gravados' : 'seriam gravados'}`);
+    console.log(
+      `  descartados: ${descartes.jaPreenchidos} já tinham valor · ${descartes.naoInformados} "não informado" · ${descartes.motivoForaDaEtapa} motivo fora de Em espera/Perdido · ${semCartao} cartões não achados no Kommo`,
+    );
+    // o que NÃO foi lido tem de aparecer: antes, lote ilegível sumia sem rastro
+    console.log(
+      `  falhas: ${falhas.respostasInvalidas} respostas ilegíveis (lote partido e repetido) · ${falhas.lotesComErro} lotes com erro · ${falhas.perdidas.length} conversas NÃO lidas${APLICAR ? ` · ${falhasDeGravacao} gravações recusadas` : ''}`,
+    );
+    if (falhas.perdidas.length > 0) console.log(`  conversas não lidas (leadId): ${falhas.perdidas.join(', ')}`);
+    if (falhas.erros.length > 0) console.log(`  erros: ${[...new Set(falhas.erros)].join(' | ')}`);
   }
   await prisma.$disconnect();
 }
