@@ -650,16 +650,21 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   if (!KM) $('rotPausadas').textContent = 'conversas pausadas nas suas caixas';
   // erro ou «lendo…»: nada do período anterior (nem de OUTRA unidade) fica na tela
   function painelVazio(){
-    ULTIMO = null; graficos = [];
+    ULTIMO = null; graficos = []; diasDoGrafico = null;
     $('grandes').textContent = ''; $('peq').textContent = ''; $('nRevisar').textContent = '—'; $('cRevisar').textContent = ''; $('cMarcadas').textContent = ''; $('descPeriodo').textContent = '';
-    ['listaRevisar', 'listaMarcadas'].forEach(function(id){ $(id).textContent = ''; });
+    $('tabDia').textContent = ''; $('lidoEm').hidden = true; $('lidoEm').textContent = '';
+    ['listaRevisar', 'listaMarcadas', 'listaPausadasPainel'].forEach(function(id){ $(id).textContent = ''; });
+    $('cPausadasPainel').textContent = ''; $('cPausadas').textContent = ''; $('contaPausadas').textContent = ''; $('nPausadas').textContent = '—';
   }
+  // cada leitura do painel/pausadas/pedidos só vale se a unidade e a vez ainda são as dela (uma resposta lenta da unidade anterior não pinta a nova)
+  var seqPainel = 0, seqPausadas = 0, seqPedidos = 0;
   function abrirDialogo(d){ if (d.showModal) d.showModal(); else d.setAttribute('open', ''); }
   function fecharDialogo(d){ if (d.close) d.close(); else d.removeAttribute('open'); }
   async function carregarPainel(){
-    ULTIMO = null;
+    var eu = ++seqPainel, slug = U.slug;
     try {
       var p = await api('GET', KM ? kmRota('painel', 'periodo=' + enc(PERIODO)) : '/api/public/agente/painel?slug=' + enc(U.slug) + '&periodo=' + enc(PERIODO));
+      if (eu !== seqPainel || !U || U.slug !== slug) return;
       clearTimeout(tPainel);
       if (p.carregando) {
         // a primeira leitura de uma conta grande demora: pergunta de novo sozinha, sem martelar
@@ -676,7 +681,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       $('descPeriodo').textContent = ROT_PERIODO[PERIODO] + (SEM_ANTES ? '' : ', contra ' + (PERIODO === 'hoje' ? 'ontem até a mesma hora' : 'os ' + COMPARA[PERIODO]));
       var g = $('grandes'); g.textContent = ''; graficos = [];
       var gr = cartao('div', 'Pessoas respondidas', 'Conversas em que a Sofia mandou pelo menos uma resposta no período', String(p.respondidas.agora), variacao(p.respondidas.agora, p.respondidas.antes), 'b-grande');
-      var gm = cartao('button', 'Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia por uma conversa do CRM', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes), 'b-grande b-clicavel');
+      var gm = cartao('button', 'Consultas marcadas', 'Consultas que a Sofia marcou na agenda da franquia', String(p.marcadas.agora), variacao(p.marcadas.agora, p.marcadas.antes), 'b-grande b-clicavel');
       gm.setAttribute('aria-haspopup', 'dialog'); gm.onclick = abrirConsultas;
       [[gr, 'respondidas', 'g-r'], [gm, 'marcadas', 'g-m']].forEach(function(x){ var box = el('span', 'graf'); x[0].appendChild(box); g.appendChild(x[0]); graficos.push({ box: box, chave: x[1], cls: x[2] }); });
       gm.appendChild(el('span', 'b-ver', p.marcadas.agora ? (KM ? 'Ver as consultas' : 'Ver quem agendou') : 'Ver a lista'));
@@ -700,7 +705,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       desenharGraficos(p.porDia || []);
       desenharMarcadas(p.ultimasMarcadas || [], p.marcadas.agora);
       if (!KM) desenharRevisar(p.paraRevisar || [], nr);
-    } catch (e) { painelVazio(); erroEm($('grandes'), e.message); }
+    } catch (e) { if (eu !== seqPainel || !U || U.slug !== slug) return; painelVazio(); erroEm($('grandes'), e.message); }
     contarPausadas();
   }
   var NS = 'http://www.w3.org/2000/svg';
@@ -756,10 +761,10 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     var p = ULTIMO; if (!p) return;
     var lista = p.consultasDoPeriodo || p.ultimasMarcadas || [], tb = $('dlgLista'); tb.textContent = '';
     $('dlgPeriodo').textContent = ROT_PERIODO[PERIODO].charAt(0).toUpperCase() + ROT_PERIODO[PERIODO].slice(1) + ' · ' + plural(p.marcadas.agora, 'consulta', 'consultas');
-    if (!lista.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', 'A Sofia não marcou nenhuma consulta neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
+    if (!lista.length) { var tr0 = el('tr'), td0 = el('td'); td0.colSpan = 5; td0.style.textAlign = 'left'; td0.appendChild(el('span', 'mut', 'Nenhuma consulta marcada pela Sofia neste período.')); tr0.appendChild(td0); tb.appendChild(tr0); }
     lista.forEach(function(m){
       var tr = el('tr');
-      celula(tr, 'Paciente', m.nome || ('Conversa ' + m.conversa)).style.fontWeight = '700';
+      celula(tr, 'Paciente', m.nome || ((KM ? 'Cartão ' : 'Conversa ') + m.conversa)).style.fontWeight = '700';
       celula(tr, 'Consulta', m.agendadoPara ? consultaEm(m.agendadoPara) : '—', 'n');
       celula(tr, 'Marcada', dataHoraCurta(m.criadoEm) + ' · ' + ha(m.criadoEm), 'n');
       var q = m.quem ? el('span', 'pill so', m.quem) : el('span', 'mut', '—');
@@ -771,7 +776,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       tb.appendChild(tr);
     });
     var tot = p.consultasTotal != null ? p.consultasTotal : p.marcadas.agora;
-    $('dlgRodape').textContent = (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + (KM ? 'A lista traz as consultas mais recentes que o Kommo registrou.' : 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.');
+    $('dlgRodape').textContent = (tot > lista.length ? 'Mostrando as ' + lista.length + ' mais recentes de ' + tot + '. ' : '') + (KM ? 'No Kommo só as consultas mais recentes trazem o nome e o link do cartão.' : 'Aqui entram as consultas que a Sofia marcou. As que a equipe marca direto na agenda não são registradas por esta tela.');
     abrirDialogo($('dlgConsultas'));
   }
   $('dlgFechar').addEventListener('click', function(){ fecharDialogo($('dlgConsultas')); });
@@ -931,7 +936,11 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
 
   // ── PAUSADAS ──
   function mostrarContaPausadas(n){ $('contaPausadas').textContent = n ? String(n) : ''; $('cPausadas').textContent = n ? String(n) : ''; $('cPausadasPainel').textContent = n ? String(n) : ''; $('nPausadas').textContent = String(n || 0); }
-  async function contarPausadas(){ try { var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); mostrarContaPausadas(r.conversas.length); desenharPausadasPainel(r.conversas); } catch (e) {} }
+  async function contarPausadas(){
+    var eu = ++seqPausadas, slug = U.slug;
+    try { var r = await api('GET', KM ? kmRota('pausadas') : '/api/public/testar-ia/pausadas'); if (eu !== seqPausadas || !U || U.slug !== slug) return; mostrarContaPausadas(r.conversas.length); desenharPausadasPainel(r.conversas); }
+    catch (e) { if (eu !== seqPausadas || !U || U.slug !== slug) return; var box = $('listaPausadasPainel'); box.textContent = ''; erroEm(box, e.message); }
+  }
   async function devolverParaASofia(c, bt, depois){
     bt.disabled = true;
     try { await api('POST', '/api/public/assistente/pausa', { conversa: c.id, acao: 'reativar' }); toast('A Sofia voltou a responder nesta conversa.'); depois(); } catch (e) { bt.disabled = false; toast(e.message, true); }
@@ -1038,8 +1047,9 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     });
   }
   async function carregarPedidos(){
-    try { var r = await api('GET', KM ? kmRota('pedidos') : '/api/public/agente/pedidos?slug=' + enc(U.slug)); TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
-    catch (e) { erroEm($('listaPedidos'), e.message); }
+    var eu = ++seqPedidos, slug = U.slug;
+    try { var r = await api('GET', KM ? kmRota('pedidos') : '/api/public/agente/pedidos?slug=' + enc(U.slug)); if (eu !== seqPedidos || !U || U.slug !== slug) return; TIPOS = r.tipos || []; desenharTipos(); desenharPedidos(r.pedidos || []); }
+    catch (e) { if (eu !== seqPedidos || !U || U.slug !== slug) return; erroEm($('listaPedidos'), e.message); }
   }
   $('btPedir').addEventListener('click', async function(){
     var b = this, texto = $('pedidoTexto').value.trim(); some('avisoPedido');

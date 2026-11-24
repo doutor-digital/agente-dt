@@ -5,7 +5,8 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diasDaLeitura, painelDasLinhas, semAnterior, type LinhaDoRastro } from './agente-kommo-painel.js';
+import { diasDaLeitura, painelDasLinhas, painelDoKommo, semAnterior, type LinhaDoRastro } from './agente-kommo-painel.js';
+const { prisma } = await import('./prisma.js');
 
 const FUSO = 'America/Sao_Paulo';
 const agora = new Date('2026-11-24T18:00:00Z'); // terça, 15h em São Paulo
@@ -112,4 +113,25 @@ test('lerDoBanco loga a leitura que deu certo (unidade, dias, ms, linhas) com pr
   const { readFileSync } = await import('node:fs');
   const fonte = readFileSync(new URL('./agente-kommo-painel.ts', import.meta.url), 'utf8');
   assert.ok(fonte.includes("'agente-kommo: painel lido'") && /logger\.info\(\{ unitId, dias, ms: /.test(fonte));
+});
+
+test('Placar no Kommo: a lista completa do card «Consultas marcadas» tem nome e link do cartão (só as 10 últimas), e o total real vai em consultasTotal', async () => {
+  const p = prisma as unknown as Record<string, unknown>;
+  const antes = p.conversation;
+  p.conversation = { findMany: async (a: { where: { leadId: { in: string[] } } }) => a.where.leadId.in.map((id) => ({ leadId: id, contactName: `Paciente Teste ${id}` })) };
+  try {
+    const linhas: LinhaDoRastro[] = [];
+    for (let i = 1; i <= 14; i++) linhas.push(resp(String(100 + i), h(i)), { leadId: String(100 + i), criadoEm: h(i - 0.5), tipo: 'marcou', data: '2026-11-30', hora: '09:00' });
+    const unit = { id: 'u1', slug: 'caxias', kommoSubdomain: 'caxias', spineTimezone: FUSO, businessHoursTimezone: FUSO };
+    const r = await painelDoKommo(unit, '7', { valor: { linhas, pix: [], pixUsado: false } as never, lidoEm: agora.getTime(), desatualizado: false }, agora);
+    assert.equal(r.marcadas.agora, 14);
+    assert.equal(r.consultasTotal, 14, 'o total real');
+    assert.equal(r.consultasDoPeriodo.length, 10, 'só as 10 últimas têm nome e link no Kommo');
+    for (const m of r.consultasDoPeriodo) {
+      assert.ok(m.nome?.startsWith('Paciente Teste'), 'nome');
+      assert.equal(m.link, `https://caxias.kommo.com/leads/detail/${m.conversa}`, 'link do cartão');
+    }
+  } finally {
+    p.conversation = antes;
+  }
 });

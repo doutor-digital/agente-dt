@@ -47,8 +47,9 @@ test('Placar: trocar de unidade recarrega os pedidos abertos e limpa o painel; e
   const troca = /function escolherUnidade\(u\)\{[\s\S]*?\n  \}/.exec(js)?.[0] ?? '';
   assert.ok(troca.includes('carregarPedidos()') && troca.includes('painelVazio()'), 'a troca de unidade recarrega pedidos e limpa o painel');
   const vazio = /function painelVazio\(\)\{[\s\S]*?\n  \}/.exec(js)?.[0] ?? '';
-  for (const id of ["'grandes'", "'peq'", "'nRevisar'", "'listaRevisar'", "'listaMarcadas'"]) assert.ok(vazio.includes(id), id);
-  assert.ok(js.includes('catch (e) { painelVazio(); erroEm($(\'grandes\'), e.message); }'), 'o erro do painel limpa tudo antes de mostrar a mensagem');
+  for (const id of ["'grandes'", "'peq'", "'nRevisar'", "'listaRevisar'", "'listaMarcadas'", "'listaPausadasPainel'", "'tabDia'", "'lidoEm'", "'nPausadas'"]) assert.ok(vazio.includes(id), id);
+  for (const fn of ['carregarPainel', 'contarPausadas', 'carregarPedidos']) assert.ok(new RegExp(`async function ${fn}\\(\\)\\{[\\s\\S]*?U\\.slug !== slug`).test(js), `${fn} descarta resposta de outra unidade`);
+  assert.ok(js.includes('painelVazio(); erroEm($(\'grandes\'), e.message); }'), 'o erro do painel limpa tudo antes de mostrar a mensagem');
   assert.ok(js.includes('function fecharDialogo(d)') && !/\.close\(\)/.test(js.replace('if (d.close) d.close();', '')), 'o dialog tem fallback sem showModal/close');
 });
 
