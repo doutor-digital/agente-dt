@@ -117,12 +117,16 @@ test('conta errada ou unidade que a pessoa não atende: recusa ANTES de ler ou e
   assert.deepEqual([...errada.chamadas, ...outra.chamadas], []);
 });
 
-test('o estado diz se a unidade tem lembrete pela Kommo (a tela mostra a verdade da unidade)', async () => {
-  for (const [spine, esperado] of [[{ spineEnabled: true, spineToken: 'tok' }, true], [{ spineEnabled: false, spineToken: null }, false]] as const) {
+test('o estado diz o que a pausa PARA nos lembretes (a mesma função do worker): véspera/D-2 do servidor param, o robô da Kommo e o CRM não', async () => {
+  const casos: Array<[Partial<Unit>, { vesperaServidor: boolean; vesperaRoboKommo: boolean; d2Servidor: boolean }]> = [
+    [{ spineEnabled: true, spineToken: 'tok' } as Partial<Unit>, { vesperaServidor: true, vesperaRoboKommo: false, d2Servidor: false }],
+    [{ spineEnabled: false, spineToken: null } as Partial<Unit>, { vesperaServidor: false, vesperaRoboKommo: false, d2Servidor: false }],
+  ];
+  for (const [spine, esperado] of casos) {
     const { h } = montar({ papel: 'agent', unit: unidade(spine) });
     const r = resposta();
     await h.ver(pedido({}, { slug: 'timbo' }), r as unknown as Response);
-    assert.equal((r.corpo as { lembretesDaKommoParam: boolean }).lembretesDaKommoParam, esperado, JSON.stringify(spine));
+    assert.deepEqual((r.corpo as { lembretes: unknown }).lembretes, esperado, JSON.stringify(spine));
   }
 });
 

@@ -63,12 +63,3 @@ export function validarPedidoDePausa(p: PedidoDePausa, agora: Date = new Date())
   if (p.desde && p.desde >= p.ate) return 'o início precisa ser antes do término';
   return null;
 }
-
-/**
- * A unidade tem lembrete de consulta pela Kommo (o `reminder-worker` roda para ela: `spine_enabled` + token da franquia)? Nela a pausa da unidade TAMBÉM
- * para as confirmações D-2/D-1 dos cartões (o worker pula unidade em pausa, salvo a pausa do teto mensal). Os lembretes do CRM não olham a pausa.
- * Só serve para a tela dizer a verdade; o comportamento dos lembretes não muda.
- */
-export function lembretesDaKommoParam(u: { spineEnabled?: boolean | null; spineToken?: string | null }): boolean {
-  return !!u.spineEnabled && !!u.spineToken;
-}

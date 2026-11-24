@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { lembretesDaKommoParam, descreverPausa, emPausa, gerarCodigoPausa, pausaAgendada, validarPedidoDePausa } from './pausa-unidade.js';
+import { descreverPausa, emPausa, gerarCodigoPausa, pausaAgendada, validarPedidoDePausa } from './pausa-unidade.js';
 
 const agora = new Date('2026-09-14T13:00:00Z'); // 10:00 em Brasília
 const h = (n: number) => new Date(agora.getTime() + n * 3600_000);
@@ -29,11 +29,4 @@ test('validarPedidoDePausa: passado, mais de 7 dias e início depois do fim são
 
 test('gerarCodigoPausa: 6 dígitos', () => {
   for (let i = 0; i < 20; i++) assert.match(gerarCodigoPausa(), /^\d{6}$/);
-});
-
-test('lembretesDaKommoParam: só a unidade em que o reminder-worker roda (spine ligado + token) tem lembrete que a pausa também para', () => {
-  assert.equal(lembretesDaKommoParam({ spineEnabled: true, spineToken: 'tok' }), true, 'com Kommo');
-  assert.equal(lembretesDaKommoParam({ spineEnabled: false, spineToken: 'tok' }), false, 'spine desligado: só CRM');
-  assert.equal(lembretesDaKommoParam({ spineEnabled: true, spineToken: null }), false, 'sem token da franquia: o worker nem manda');
-  assert.equal(lembretesDaKommoParam({}), false);
 });

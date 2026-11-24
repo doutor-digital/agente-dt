@@ -1112,8 +1112,15 @@ dialog.janela.estreita{width:min(520px,calc(100vw - 24px))}
   // ── pausar e religar a Sofia da clínica (só no CRM; só administradora ou gerente da conta muda, as outras pessoas só veem o estado) ──
   // No Kommo a aba «Pausar» já faz isso com o código da unidade.
   var PAUSA = null, seqPausa = 0, tVence = null;
-  // o que a pausa NÃO para, dito com a verdade DA UNIDADE: com lembrete pela Kommo o worker de confirmações também pausa; os do CRM continuam
-  function fraseLembretes(p){ return p && p.lembretesDaKommoParam ? 'Os lembretes de confirmação de consulta da Kommo TAMBÉM param durante a pausa; os do CRM continuam.' : 'Os lembretes automáticos do CRM continuam.'; }
+  // o que a pausa para (e o que não) nos lembretes de consulta, dito com a verdade DA UNIDADE: o servidor diz o que ELE manda (a mesma função do worker)
+  function fraseLembretes(p){
+    var l = p && p.lembretes ? p.lembretes : {}, frase = '';
+    if (l.vesperaServidor && l.d2Servidor) frase = 'A confirmação da véspera e o reforço de D-2 enviados pelo nosso servidor TAMBÉM param durante a pausa.';
+    else if (l.vesperaServidor) frase = 'A confirmação da véspera enviada pelo nosso servidor TAMBÉM para durante a pausa.';
+    else if (l.d2Servidor) frase = 'O reforço de D-2 enviado pelo nosso servidor TAMBÉM para durante a pausa.';
+    if (l.vesperaRoboKommo) frase += (frase ? ' ' : '') + 'A véspera continua (é enviada pelo robô da Kommo).';
+    return (frase ? frase + ' ' : '') + 'Os lembretes do CRM continuam.';
+  }
   async function carregarPausa(){
     if (KM || !U) return;
     var eu = ++seqPausa, slug = U.slug, nova = null;
