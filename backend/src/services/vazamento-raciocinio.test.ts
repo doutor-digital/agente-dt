@@ -225,3 +225,55 @@ test('abertura que fala da transcrição continua sendo cortada como antes, sem 
   const m = 'A transcrição do áudio veio genérica, sem contar o que ele está sentindo. Vou pedir pra ele contar.\n\nEntendi! Me conta o que está sentindo?';
   assert.equal(cortarAberturaMetanarrativa(m), 'Entendi! Me conta o que está sentindo?');
 });
+
+// 22/11, Boa Vista, lead 1857470: foi para o paciente. Escapou por duas brechas: "tinha perguntado" não era relato
+// (só "perguntou" e "já havia") e "preciso retomar" não era decisão (só "preciso responder/seguir/manter/apenas").
+const CASO_BOA_VISTA_22_11 =
+  'A equipe já tinha perguntado sobre o tipo de dor, mas não tenho a resposta do paciente ainda, preciso retomar essa pergunta.\n\nOi! Que bom o seu interesse 😊 Me conta: sua dor é mais no pescoço/braço, ou é na lombar e desce pra perna (ciático)? Assim já entendo direito seu caso pra te explicar tudo certo.';
+
+test('Boa Vista (22/11): "tinha perguntado… preciso retomar" é pego e cortado, fica só a fala', () => {
+  assert.ok(detectarVazamento(CASO_BOA_VISTA_22_11));
+  const r = cortarAberturaMetanarrativa(CASO_BOA_VISTA_22_11);
+  assert.equal(r, 'Oi! Que bom o seu interesse 😊 Me conta: sua dor é mais no pescoço/braço, ou é na lombar e desce pra perna (ciático)? Assim já entendo direito seu caso pra te explicar tudo certo.');
+  assert.equal(detectarVazamento(r), null);
+});
+
+test('Boa Vista (22/11): variantes do mesmo raciocínio também são pegas', () => {
+  for (const m of [
+    // achado do sênior no #441: a 1ª dupla relato/decisão fecha a frase sem vocabulário de bastidor; a 2ª entrega o raciocínio
+    'A equipe já tinha perguntado sobre o tipo de dor, preciso retomar. Ele ainda não respondeu à pergunta da equipe, então vou perguntar de novo.',
+    'A equipe já tinha falado sobre a dor, mas ainda não sei, preciso retomar com o paciente.',
+    'A equipe tinham perguntado sobre a dor, mas não tenho a resposta do paciente ainda, preciso retomar essa pergunta.',
+    'Ele já tinha perguntado sobre o valor e não tenho resposta do paciente, preciso retomar.',
+    'Marcelo já tinha confirmado a consulta, não tenho a resposta do paciente, preciso retomar.',
+  ]) {
+    assert.ok(detectarVazamento(m), m);
+  }
+});
+
+test('Boa Vista (22/11): as mesmas palavras faladas COM o paciente passam', () => {
+  for (const m of [
+    'A equipe já tinha perguntado sobre sua dor, preciso retomar essa pergunta com você: é no pescoço ou na lombar?',
+    'A equipe já tinha confirmado o horário, preciso perguntar só uma coisa: você vem de carro?',
+    'Eu não tenho a resposta do exame ainda, preciso perguntar pra equipe e já te falo.',
+    'A equipe tinha mandado o endereço, então preciso só confirmar: você recebeu?',
+    'O exame não tinha chegado, preciso voltar nisso amanhã com a doutora.',
+    // achados do sênior no #441: com "preciso repetir/perguntar/voltar" isto era bloqueado; só "preciso retomar" conta
+    'A equipe tinha passado as instruções do preparo, preciso repetir: jejum de 8 horas e trazer os exames.',
+    'A equipe tinha mandado o link da triagem, preciso perguntar se chegou certinho.',
+    'A equipe havia explicado o fluxo de atendimento, preciso repetir rapidinho: primeiro a avaliação, depois o tratamento.',
+    'A resposta do exame não chegou, não tenho resposta da triagem ainda, preciso perguntar pra doutora.',
+    'A Ilma havia confirmado a consulta, preciso perguntar o horário para a qualificação do cadastro.',
+    // 2ª rodada do sênior: decisão de uma frase SEGUINTE não pode esticar a janela do vocabulário de bastidor
+    'A equipe confirmou o horário, então vou aguardar o comprovante. Mantenho a triagem marcada pra amanhã 😊',
+    'O áudio veio mudo, então vou pedir pra escrever. Respondo assim que chegar a transcrição 🙏',
+  ]) {
+    assert.equal(detectarVazamento(m), null, m);
+  }
+});
+
+test('2ª rodada do sênior (#441): instrução ao paciente na 2ª frase não é cortada', () => {
+  const m = 'A equipe confirmou o horário, então vou aguardar o comprovante. Mantenho a triagem marcada, sem jejum e com roupa leve.\n\nQualquer dúvida, me chama que te ajudo 😊';
+  assert.equal(cortarAberturaMetanarrativa(m), m);
+  assert.equal(detectarVazamento(m), null);
+});
