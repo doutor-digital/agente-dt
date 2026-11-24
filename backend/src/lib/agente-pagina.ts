@@ -348,7 +348,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
     <div class="b-hero-top"><h2>O que precisa de você agora</h2><span class="meta" id="heroUnidade"></span></div>
     <div class="b-tiles">
       <button class="b-tile alerta" id="tRevisar" type="button"><span class="num" id="nRevisar">—</span><span class="rot">respostas marcadas como ruins, sem revisão</span><span class="pill er">Para revisar</span></button>
-      <button class="b-tile" id="tPausadas" type="button"><span class="num" id="nPausadas">—</span><span class="rot">conversas com a Sofia pausada</span><span class="pill so">Equipe no comando</span></button>
+      <button class="b-tile" id="tPausadas" type="button"><span class="num" id="nPausadas">—</span><span class="rot" id="rotPausadas">conversas com a Sofia pausada</span><span class="pill so">Equipe no comando</span></button>
       <button class="b-tile" id="tPedidos" type="button"><span class="num" id="nPedidos">—</span><span class="rot">pedidos abertos à Doutor Digital</span><span class="pill at">Na fila</span></button>
     </div>
   </div>
@@ -646,6 +646,8 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
   function desvincular(){ revisando = null; pedidoConversa = null; mostrarVinculo(); }
   Array.prototype.forEach.call(document.querySelectorAll('[data-desvincular]'), function(b){ b.addEventListener('click', desvincular); });
   var ULTIMO = null, graficos = [];
+  // no CRM a contagem é das caixas da pessoa (podem ser várias unidades); no Kommo é a unidade do código
+  if (!KM) $('rotPausadas').textContent = 'conversas pausadas nas suas caixas';
   // erro ou «lendo…»: nada do período anterior (nem de OUTRA unidade) fica na tela
   function painelVazio(){
     ULTIMO = null; graficos = [];
@@ -745,7 +747,7 @@ body.km .b-duas{grid-template-columns:minmax(0,1fr)}
       bs.appendChild(ab);
       row.appendChild(q); row.appendChild(bs); box.appendChild(row);
     });
-    var mais = el('div', 'mais'), bm = el('button', 'bt link', 'Ver as ' + (total || l.length) + ' e quem agendou'); bm.type = 'button'; bm.onclick = abrirConsultas; mais.appendChild(bm); box.appendChild(mais);
+    var mais = el('div', 'mais'), bm = el('button', 'bt link', KM ? 'Ver as ' + (total || l.length) + ' consultas' : 'Ver as ' + (total || l.length) + ' e quem agendou'); bm.type = 'button'; bm.onclick = abrirConsultas; mais.appendChild(bm); box.appendChild(mais);
   }
   // a lista COMPLETA das consultas do período: paciente, dia e hora da consulta, quando foi marcada e quem agendou
   function dataHoraCurta(iso){ var d = new Date(iso); if (isNaN(d.getTime())) return ''; return d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }) + ' ' + d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); }
