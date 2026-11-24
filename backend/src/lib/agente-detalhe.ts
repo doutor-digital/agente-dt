@@ -4,7 +4,7 @@
  *
  *   respondidas  → `sofia_mensagem`: uma linha por conversa (a última resposta, quantas respostas)
  *   marcaram     → `sofia_evento` «marcou» de conversas que ela respondeu no período (o mesmo filtro do número)
- *   equipe       → `sofia_evento` «equipe» (uma linha por conversa; o motivo é de outro PR)
+ *   equipe       → `sofia_evento` «equipe», com o MOTIVO em categoria (`motivo-da-passagem.ts`; passagens de antes ficam «sem motivo registrado»)
  *   pix          → `sofia_evento` «pix» + a linha do sinal (`sinais_pix`, chave sintética `2 bilhões + conversa`): valor, gerado quando e a
  *                  situação PAGO / PENDENTE / VENCIDO. Nunca o link nem a chave Pix.
  *   fora         → respostas antes das 8h, a partir das 18h, sábado e domingo
@@ -18,6 +18,7 @@ import { prisma } from './prisma.js';
 import { fusoDaUnidade } from './fuso.js';
 import { BASE_LEAD_CHATWOOT } from './chatwoot-lead.js';
 import { instanteLocal } from './sinal-pix.js';
+import { SEM_MOTIVO, rotuloDoMotivo } from './motivo-da-passagem.js';
 import { foraDoHorario, janelas, partesLocais, type Periodo } from './agente-painel.js';
 
 export const MEDIDAS = ['respondidas', 'marcaram', 'equipe', 'pix', 'fora', 'avaliacoes'] as const;
@@ -37,6 +38,8 @@ export interface LinhaDeDetalhe {
   /** ISO: o momento que o número conta (última resposta, consulta marcada, passagem, Pix, avaliação) */
   quando: string;
   detalhe: string | null;
+  /** equipe: a categoria do motivo */
+  motivo?: { codigo: string; rotulo: string };
   /** avaliacoes */
   nota?: 'boa' | 'ruim';
   quem?: string;
@@ -54,6 +57,8 @@ export interface Detalhe {
   /** fora: o NÚMERO DO CARD conta respostas (169 de 412), a lista tem uma linha por conversa; aqui vão as respostas para o total bater com o card */
   totalRespostas?: number;
   linhas: LinhaDeDetalhe[];
+  /** equipe: quantas por motivo, da maior para a menor */
+  grupos?: Array<{ codigo: string; rotulo: string; total: number }>;
   /** pix: quantas em cada situação */
   situacoes?: { pago: number; pendente: number; vencido: number; semRegistro: number };
 }
@@ -95,7 +100,7 @@ export function montarDetalhe(medida: Medida, e: EntradaDoDetalhe): Detalhe {
   };
   const base = (conversa: number, quando: Date, detalhe: string | null = null): LinhaDeDetalhe => ({ conversa, nome: nomes.get(conversa) ?? null, quando: quando.toISOString(), detalhe });
   let linhas: LinhaDeDetalhe[] = [];
-  const out: Pick<Detalhe, 'situacoes' | 'totalRespostas'> = {};
+  const out: Pick<Detalhe, 'grupos' | 'situacoes' | 'totalRespostas'> = {};
 
   if (medida === 'respondidas' || medida === 'fora') {
     const alvo = medida === 'fora' ? respostas.filter((r) => foraDoHorario(r.criadoEm, e.fuso)) : respostas;
@@ -113,7 +118,13 @@ export function montarDetalhe(medida: Medida, e: EntradaDoDetalhe): Detalhe {
       .map((v) => ({ ...base(v.conversa, v.criadoEm), consultaEm: v.detalhe }));
     linhas = porConversa(linhas);
   } else if (medida === 'equipe') {
-    linhas = porConversa(eventos('equipe')).map((v) => base(v.conversa, v.criadoEm));
+    linhas = porConversa(eventos('equipe')).map((v) => ({ ...base(v.conversa, v.criadoEm), motivo: rotuloDoMotivo(v.detalhe) }));
+    const cont = new Map<string, { rotulo: string; total: number }>();
+    for (const l of linhas) cont.set(l.motivo!.codigo, { rotulo: l.motivo!.rotulo, total: (cont.get(l.motivo!.codigo)?.total ?? 0) + 1 });
+    out.grupos = [...cont.entries()]
+      .map(([codigo, v]) => ({ codigo, rotulo: v.rotulo, total: v.total }))
+      // «sem motivo registrado» fica por último, qualquer que seja o tamanho: é o que NÃO sabemos
+      .sort((a, b) => (a.codigo === SEM_MOTIVO ? 1 : b.codigo === SEM_MOTIVO ? -1 : b.total - a.total));
   } else if (medida === 'pix') {
     const hoje = partesLocais(e.agora, e.fuso).dia;
     const sit = { pago: 0, pendente: 0, vencido: 0, semRegistro: 0 };

@@ -493,7 +493,12 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   const chaveDia = `${m.slug}|${p.hoje()}`;
   // o painel do Agente conta daqui; falhar ao gravar não atrapalha o paciente
   const evento = async (tipo: EventoDaSofia['tipo'], extra: { nome?: string | null; detalhe?: string | null } = {}) => {
-    await p.registrarEvento?.({ slug: m.slug, conversa: m.conversa, tipo, ...extra }).catch((err) => logger.warn({ err: String(err), conversa: m.conversa, tipo }, `${ID_IA}: não consegui gravar o evento para o painel`));
+    // nunca atrapalha o paciente: nem a promessa recusada nem uma exceção síncrona da porta sobem daqui
+    try {
+      await p.registrarEvento?.({ slug: m.slug, conversa: m.conversa, tipo, ...extra });
+    } catch (err) {
+      logger.warn({ err: String(err), conversa: m.conversa, tipo }, `${ID_IA}: não consegui gravar o evento para o painel`);
+    }
   };
   if ((mem.rodadas.get(chaveDia) ?? 0) >= TETO_SOFIA_POR_DIA) return 'teto';
   const mensagens = await p.mensagens(m.conversa);
@@ -560,7 +565,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
           logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: horário combinado diverge da agenda, mas não consegui passar para a equipe`);
           return 'falhou';
         }
-        await evento('equipe');
+        await evento('equipe', { detalhe: 'horario-divergente' });
       }
       return 'horario-divergente';
     }
@@ -584,7 +589,8 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
   if (r.agendou) await evento('marcou', { nome: lida.nome || null, detalhe: `${r.agendou.data}T${r.agendou.hora}` });
   if (r.passouParaEquipe) {
-    await evento('equipe');
+    if (!r.motivoDaPassagem) logger.info({ conversa: m.conversa }, `${ID_IA}: passou para a equipe sem categoria de motivo (a tela mostra «sem motivo registrado»)`);
+    await evento('equipe', { detalhe: r.motivoDaPassagem ?? null });
     // a Sofia passou a conversa: a etiqueta sai (o webhook da etiqueta `esperando-humano` também conferiria, isto é só mais cedo)
     await p.encerrarAtendimento?.(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
   }

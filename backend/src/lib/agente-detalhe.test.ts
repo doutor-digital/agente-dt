@@ -59,15 +59,22 @@ test('marcaram: só consultas de conversas que ela respondeu no período (o filt
   assert.deepEqual(r.linhas.map((l) => [l.conversa, l.nome, l.consultaEm]), [[1, 'Maria Teste', '2026-11-18T09:00']]);
 });
 
-test('equipe: uma linha por conversa (a mais recente), o total bate com o número do painel', () => {
+test('equipe: motivo em categoria, agrupado e contado; sem categoria = «sem motivo registrado» (por último)', () => {
   const eventos = [
-    { conversa: 1, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(1) },
-    { conversa: 2, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(2) },
-    { conversa: 2, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(60) }, // a mesma conversa duas vezes: conta 1
-    { conversa: 3, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(24 * 9) }, // fora do período
+    { conversa: 1, tipo: 'equipe', nome: null, detalhe: 'convenio', criadoEm: h(1) },
+    { conversa: 2, tipo: 'equipe', nome: null, detalhe: 'convenio', criadoEm: h(2) },
+    { conversa: 3, tipo: 'equipe', nome: null, detalhe: 'pediu-pessoa', criadoEm: h(3) },
+    { conversa: 4, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(4) },
+    { conversa: 5, tipo: 'equipe', nome: null, detalhe: null, criadoEm: h(5) },
+    { conversa: 5, tipo: 'equipe', nome: null, detalhe: 'agenda', criadoEm: h(60) }, // a mesma conversa duas vezes: conta 1 (a mais recente)
+    { conversa: 6, tipo: 'equipe', nome: null, detalhe: '2026-11-17T09:00', criadoEm: h(6) }, // lixo no campo: nunca vira categoria
   ];
   const r = montarDetalhe('equipe', { ...base, eventos });
-  assert.deepEqual(r.linhas.map((l) => l.conversa), [1, 2]);
+  assert.equal(r.total, 6);
+  assert.deepEqual(r.grupos!.map((g) => [g.codigo, g.total]), [['convenio', 2], ['pediu-pessoa', 1], ['sem-registro', 3]], '«sem registro» sempre por último');
+  assert.equal(r.linhas.find((l) => l.conversa === 4)!.motivo!.rotulo, 'Sem motivo registrado');
+  assert.equal(r.linhas.find((l) => l.conversa === 1)!.motivo!.codigo, 'convenio');
+  // o total bate com o número do painel (conversas distintas)
   const p = montarPainel({ agora, periodo: '7', fuso: FUSO, respostas: [], marcadas: [], avaliacoes: [], eventos });
   assert.equal(r.total, p.equipe.agora);
 });
