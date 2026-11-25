@@ -86,6 +86,8 @@ test('linha em CONFLITO (a mesma que o sistema descarta com «configuração ign
     assert.ok(!o.includes('drinerteconflito'), 'a inerte com prefixo de outra unidade também não');
     assert.ok(!o.includes('drcaixarepetida'), 'nem a de caixa repetida');
     assert.ok(o.includes('drtimbo'), 'a inerte sem conflito (Timbó) continua entrando');
+    assert.ok(!U.dominiosDasClinicas(1)['drconflito'] && !U.dominiosDasClinicas(1)['drinerteconflito'], 'e o mapa subdomínio → conta (menu.js) também não leva as descartadas');
+    assert.equal(U.dominiosDasClinicas(1)['drtimbo'], 3, 'mas leva Timbó → conta 3');
   } finally {
     p.unitChatwoot = antes;
   }

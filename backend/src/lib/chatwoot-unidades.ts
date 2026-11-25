@@ -296,9 +296,30 @@ export const subdominioValido = (s: unknown): s is string => typeof s === 'strin
  */
 let dominiosDasLinhas: ReadonlyArray<{ subdominio: string; contaId: number | null }> = [];
 export function aplicarDominios(linhas: ReadonlyArray<{ subdominio?: string | null; contaId?: number | null }>): void {
-  const porSub = new Map<string, number | null>();
-  for (const l of linhas) if (subdominioValido(l.subdominio)) porSub.set(l.subdominio, Number.isInteger(l.contaId) && (l.contaId as number) > 0 ? (l.contaId as number) : null);
-  dominiosDasLinhas = [...porSub.entries()].map(([subdominio, contaId]) => ({ subdominio, contaId }));
+  // todas as linhas, repetidas inclusive: o mapa decide o que é ambíguo
+  dominiosDasLinhas = linhas.filter((l) => subdominioValido(l.subdominio)).map((l) => ({ subdominio: l.subdominio as string, contaId: Number.isInteger(l.contaId) && (l.contaId as number) > 0 ? (l.contaId as number) : null }));
+}
+
+/**
+ * subdomínio → conta, das clínicas válidas E das inertes (o `menu.js` leva só isto: subdomínio e número). Conta nula = a do ambiente (`contaDoAmbiente`) SÓ para a
+ * configuração válida (Parauapebas, que mora na conta do ambiente); uma linha crua sem conta própria NUNCA é atribuída à conta do ambiente (ficaria com os dados de
+ * outra clínica). Subdomínio repetido com contas diferentes é ambíguo: fica de fora.
+ */
+export function dominiosDasClinicas(contaDoAmbiente: number | null): Record<string, number> {
+  const contas = new Map<string, Set<number>>();
+  // `comAmbiente`: só a configuração VÁLIDA usa «conta nula = a do ambiente» (é a regra da semente de Parauapebas); linha crua sem conta própria fica de fora
+  const pôr = (sub: string | null | undefined, conta: number | null | undefined, comAmbiente: boolean): void => {
+    if (!subdominioValido(sub)) return;
+    const c = conta ?? (comAmbiente ? contaDoAmbiente : null);
+    if (typeof c !== 'number' || !Number.isInteger(c) || c <= 0) return;
+    contas.set(sub, (contas.get(sub) ?? new Set<number>()).add(c));
+  };
+  for (const c of dominiosDasLinhas) pôr(c.subdominio, c.contaId, false);
+  for (const c of configs.values()) pôr(c.subdominio, c.contaId, true);
+  const m: Record<string, number> = {};
+  // o mesmo subdomínio com contas diferentes (linhas ou configurações) é ambíguo: fica de fora, nunca decide pela ordem
+  for (const [sub, set] of contas) if (set.size === 1) m[sub] = [...set][0]!;
+  return m;
 }
 
 /** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado em `unit_chatwoot`, com ou sem caixa). Quem não tem subdomínio não entra. */
