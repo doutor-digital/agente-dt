@@ -16,7 +16,7 @@ import { chamar, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-rem
 
 export interface PortaDoRobo {
   /** mensagem PÚBLICA pelo robô; o «usuário» volta null (o remetente é o robô, não um usuário do Chatwoot) */
-  publica(conversa: number, texto: string): Promise<{ usuario: number | null; mensagem?: number | null }>;
+  publica(conversa: number, texto: string, marca?: Record<string, unknown>): Promise<{ usuario: number | null; mensagem?: number | null }>;
   /** robô → equipe: a conversa sai de «Pendentes» e vai para «Abertas» */
   abrirParaEquipe(conversa: number): Promise<void>;
 }
@@ -34,8 +34,8 @@ export function portaDoRobo(base: ContextoChatwoot, token: string, o: { fetch?: 
   if (!base.conta) return null;
   const ctx = criarContextoChatwoot({ ...base.conta, token }, { fetch: o.fetch });
   return {
-    async publica(conversa, texto) {
-      const r = (await chamar(ctx, 'POST', `conversations/${conversa}/messages`, { corpo: { content: texto, message_type: 'outgoing', private: false } })) as {
+    async publica(conversa, texto, marca) {
+      const r = (await chamar(ctx, 'POST', `conversations/${conversa}/messages`, { corpo: { content: texto, message_type: 'outgoing', private: false, ...(marca ? { content_attributes: marca } : {}) } })) as {
         id?: unknown;
       } | null;
       const mensagem = Number(r?.id);

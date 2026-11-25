@@ -278,7 +278,8 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
       return Array.isArray(r?.payload) ? r.payload : [];
     },
     nota: (conversa, texto) => chat.nota(conversa, texto),
-    publica: (conversa, texto) => (robo ? robo.publica(conversa, texto) : chat.publica(conversa, texto)),
+    // sem o robô, a Sofia sai pelo usuário conector: marca a publicação (content_attributes) para o CRM rotular «✨ Sofia (IA)» e não «modelo automático»
+    publica: (conversa, texto) => (robo ? robo.publica(conversa, texto) : chat.publica(conversa, texto, { dd_sofia: true })),
     registrarResposta: (r) => registrarRespostaDaSofia(r),
     registrarEvento: (e) => registrarEventoDaSofia(e),
     async agendaReal(unit, lida) {

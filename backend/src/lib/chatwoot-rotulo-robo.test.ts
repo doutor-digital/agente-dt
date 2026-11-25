@@ -72,34 +72,67 @@ const EQUIPE = { id: 9, name: 'Bianca', type: 'user' };
 const marcaNome = (t: ReturnType<typeof montar>, id: number) => t.nos.get(id)?.attrs['data-dd-nome'];
 const CELULAR = { id: 7, name: '📱 Celular da unidade', type: 'user' };
 
-test('Sofia (AgentBot) → «sofia»; conector da conta → «robo»; template_params → «robo»; decide pelo estado, nunca pelo texto', () => {
+test('Sofia (AgentBot) → «sofia»; «modelo automático» SÓ com template_params (conector ou sem remetente); conector SEM marca mostra o NOME dele; decide pelo estado, nunca pelo texto', () => {
   const t = montar({
     mensagens: [
       { id: 1, message_type: 1, sender: ROBO_SOFIA, content: 'Olá! Aqui é a Sofia.' },
-      { id: 2, message_type: 1, sender: { id: CONECTOR, name: '🤖 Robô automático', type: 'user' }, content: 'Lembrete: sua consulta é amanhã.' },
+      { id: 2, message_type: 1, sender: { id: CONECTOR, name: '🤖 Robô automático', type: 'user' }, additional_attributes: { template_params: { name: 'consulta_lembrete_vespera' } }, content: 'Lembrete: sua consulta é amanhã.' },
       { id: 3, message_type: 1, sender: null, additional_attributes: { template_params: { name: 'consulta_lembrete_vespera' } }, content: 'modelo sem pessoa por trás' },
       { id: 4, message_type: 3, sender: { id: 98, type: 'agent_bot' }, additional_attributes: { template_params: {} } },
-      { id: 5, message_type: 1, sender: { id: 99, name: '🤖 Robô automático', type: 'user' }, content: 'conector de uma clínica nova (nome padrão do usuário)' },
+      { id: 5, message_type: 1, sender: { id: 99, name: '🤖 Robô automático', type: 'user' }, additional_attributes: { template_params: {} }, content: 'conector de uma clínica nova (nome padrão do usuário), modelo' },
     ],
   });
   t.rodar();
   assert.deepEqual([1, 2, 3, 4, 5].map(t.marca), ['sofia', 'robo', 'robo', 'sofia', 'robo']);
   assert.equal(montar({ mensagens: [{ id: 3, message_type: 1, sender: EQUIPE, additional_attributes: { template_params: { name: 'x' } } }] }).marca(3), undefined, 'antes de rodar nada é marcado (o rodar é quem decide)');
   assert.equal(t.estilos.length, 1, 'o CSS entra uma vez, no <head>');
-  assert.ok(t.estilos[0]!.textContent.includes('🤖 Robô · modelo automático') && t.estilos[0]!.textContent.includes('✨ Sofia (IA)') && t.estilos[0]!.textContent.includes('attr(data-dd-nome)'));
+  assert.ok(t.estilos[0]!.textContent.includes('🤖 Robô · modelo automático') && t.estilos[0]!.textContent.includes('🤖 Robô · mensagem automática') && t.estilos[0]!.textContent.includes('✨ Sofia (IA)') && t.estilos[0]!.textContent.includes('attr(data-dd-nome)'));
 });
 
 test('conector de uma clínica NOVA (id desconhecido): reconhecido pelo nome «Conector…» ou «🤖…», no nome de exibição ou no cadastro; pessoa com outro nome continua gente', () => {
+  const tp = { template_params: { name: 'x' } };
   const t = montar({
     mensagens: [
-      { id: 40, message_type: 1, sender: { id: 31, type: 'user', name: 'Conector Timbó' } },
-      { id: 41, message_type: 1, sender: { id: 32, type: 'user', name: 'Robô automático', available_name: '🤖 Robô automático' } },
-      { id: 42, message_type: 1, sender: { id: 33, type: 'user', name: '🤖 Robô automático', available_name: 'Robô automático' } },
-      { id: 43, message_type: 1, sender: { id: 34, type: 'user', name: 'Conceição Silva' } },
+      { id: 40, message_type: 1, sender: { id: 31, type: 'user', name: 'Conector Timbó' }, additional_attributes: tp },
+      { id: 41, message_type: 1, sender: { id: 32, type: 'user', name: 'Robô automático', available_name: '🤖 Robô automático' }, additional_attributes: tp },
+      { id: 42, message_type: 1, sender: { id: 33, type: 'user', name: '🤖 Robô automático', available_name: 'Robô automático' }, additional_attributes: tp },
+      { id: 43, message_type: 1, sender: { id: 34, type: 'user', name: 'Conceição Silva' }, additional_attributes: tp },
     ],
   });
   t.rodar();
   assert.deepEqual([40, 41, 42, 43].map(t.marca), ['robo', 'robo', 'robo', 'gente']);
+});
+
+test('SONDA DO SÊNIOR 1: a Sofia publicada pelo CONECTOR NUNCA vira «modelo automático» — com a marca dd_sofia é «sofia»; SEM marca (histórico antigo) mostra o nome do conector, sem adivinhar', () => {
+  const conector = { id: CONECTOR, type: 'user', name: '🤖 Robô automático' };
+  const t = montar({
+    mensagens: [
+      { id: 1, message_type: 1, sender: conector, content_attributes: { dd_sofia: true }, content: 'Oi! Aqui é a Sofia' },
+      { id: 2, message_type: 1, sender: conector, content: 'texto antigo da Sofia, sem marca' },
+      { id: 3, message_type: 1, sender: conector, additional_attributes: { template_params: { name: 'x' } }, content: 'modelo da régua' },
+      { id: 4, message_type: 1, sender: { id: 99, type: 'user', name: 'Conector Timbó' }, content: 'conector de clínica nova, sem marca' },
+    ],
+  });
+  t.rodar();
+  assert.deepEqual([1, 2, 3, 4].map(t.marca), ['sofia', 'gente', 'robo', 'gente']);
+  assert.equal(marcaNome(t, 2), '🤖 Robô automático', 'sem marca: o NOME do conector, nunca «modelo»');
+  assert.equal(marcaNome(t, 4), '👤 Conector Timbó');
+  assert.equal(marcaNome(t, 1), undefined);
+});
+
+test('SONDA DO SÊNIOR 2: a espera fixa da demora (content_attributes.demora_espera) é «mensagem automática» pelo robô E pelo conector — nunca «Sofia (IA)»; e sem remetente nem marca (CSAT, automação nativa) não leva rótulo', () => {
+  const t = montar({
+    mensagens: [
+      { id: 1, message_type: 1, sender: ROBO_SOFIA, content_attributes: { demora_espera: true }, content: 'Já já alguém da equipe te responde.' },
+      { id: 2, message_type: 1, sender: { id: CONECTOR, type: 'user', name: '🤖 Robô automático' }, content_attributes: { demora_espera: true }, content: 'Já já alguém da equipe te responde.' },
+      { id: 3, message_type: 1, sender: ROBO_SOFIA, content: 'resposta da Sofia' },
+      { id: 4, message_type: 3, sender: null, content: 'Avalie o atendimento (CSAT)' },
+      { id: 5, message_type: 1, sender: null, content: 'mensagem de automação do Chatwoot' },
+    ],
+  });
+  t.rodar();
+  assert.deepEqual([1, 2, 3, 4, 5].map(t.marca), ['auto', 'auto', 'sofia', undefined, undefined]);
+  assert.ok(t.estilos[0]!.textContent.includes('[data-dd-rotulo="auto"]::before{content:"🤖 Robô · mensagem automática"}'));
 });
 
 test('um contêiner repetido por uma citação («responder a») não rouba o rótulo: vale o id «message<id>»', () => {
@@ -153,7 +186,7 @@ test('GENTE: quem respondeu aparece pelo NOME do remetente (available_name antes
   assert.equal(marcaNome(t, 34), '👤 Ana Paula');
   assert.ok((marcaNome(t, 36) ?? '').length <= 45, 'nome cortado em 40 letras');
   // robô e Sofia não levam nome
-  const u = montar({ mensagens: [{ id: 1, message_type: 1, sender: ROBO_SOFIA }, { id: 2, message_type: 1, sender: { id: CONECTOR, type: 'user', name: '🤖 Robô automático' } }] });
+  const u = montar({ mensagens: [{ id: 1, message_type: 1, sender: ROBO_SOFIA }, { id: 2, message_type: 1, sender: { id: CONECTOR, type: 'user', name: '🤖 Robô automático' }, additional_attributes: { template_params: {} } }] });
   u.rodar();
   assert.equal(marcaNome(u, 1), undefined);
   assert.equal(marcaNome(u, 2), undefined);
@@ -224,7 +257,7 @@ test('o conector vem do padrão (2 e 14) + CHATWOOT_CONECTORES_IDS (soma; lixo i
   assert.deepEqual([...CONECTORES_PADRAO], [2, 14]);
   assert.deepEqual(conectoresDoRotulo({} as NodeJS.ProcessEnv), [2, 14]);
   assert.deepEqual(conectoresDoRotulo({ CHATWOOT_CONECTORES_IDS: '21, 5,abc,-3,14,2.5' } as NodeJS.ProcessEnv), [2, 5, 14, 21]);
-  const t = montar({ mensagens: [{ id: 1, message_type: 1, sender: { id: 21, type: 'user' } }], env: { CHATWOOT_CONECTORES_IDS: '21' } as NodeJS.ProcessEnv });
+  const t = montar({ mensagens: [{ id: 1, message_type: 1, sender: { id: 21, type: 'user' }, additional_attributes: { template_params: {} } }], env: { CHATWOOT_CONECTORES_IDS: '21' } as NodeJS.ProcessEnv });
   t.rodar();
   assert.equal(t.marca(1), 'robo');
   assert.equal(rotuloDoRoboLigado({} as NodeJS.ProcessEnv), true);

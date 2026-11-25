@@ -174,7 +174,7 @@ export function mundoReal(): MundoDaDemora {
       const token = tokenDoRoboDaConta(ctx.conta?.conta, u.slug);
       const robo = token ? portaDoRobo(ctx, token) : null;
       if (robo) {
-        const r = await robo.publica(conversaId, texto);
+        const r = await robo.publica(conversaId, texto, { demora_espera: true }); // a mesma marca do caminho do conector: o CRM rotula «mensagem automática»
         return { id: r.mensagem ?? null };
       }
       const r = (await chamar(ctx, 'POST', `conversations/${conversaId}/messages`, {
