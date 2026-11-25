@@ -8,6 +8,7 @@
  * Duas regras de honestidade: página que falha LANÇA (página vazia quer dizer «acabou», nunca «deu erro»), e o teto de páginas também lança
  * (leitura pela metade nunca vira «importado»). Conversa que a Kommo não entrega (conta sem escopo de chats) vira «sem conversa», contada.
  */
+import type { MapaDeEtapas } from './chatwoot-etapas.js';
 import type { KommoLead, KommoPipeline, KommoTalk, KommoTalkMessage } from '../services/kommo.service.js';
 import { atributosDoCartao, chaveDoTelefone, compararOrdem, consultaDePe, linhaDoCartao, ordemDoCartao, type CartaoDaKommo, type ContatoDaKommo, type LinhaDoCartao, type MensagemDaKommo, foneParaWhatsApp } from './kommo-historico-crm.js';
 
@@ -54,6 +55,8 @@ export interface Ambiente {
   agora: () => Date;
   /** só dado agregado: sem nome, telefone nem texto */
   log: (texto: string) => void;
+  /** as etapas da conta de destino (nomes da Kommo); sem ele, o molde da rede */
+  mapa?: MapaDeEtapas | null;
 }
 
 /** Hoje − 6 meses (calendário), em segundos. */
@@ -332,7 +335,7 @@ export async function exportar(
   for (const c of sel.cartoes) {
     if (c.statusId === STATUS_GANHO || c.statusId === STATUS_PERDIDO) r.fechados++;
     else r.abertos++;
-    const m = atributosDoCartao(c, agora);
+    const m = atributosDoCartao(c, agora, amb.mapa);
     for (const a of m.avisos) r.avisos[a] = (r.avisos[a] ?? 0) + 1; // os avisos valem para TODOS os cartões, não só os da amostra
     const foneDoCartao = foneParaWhatsApp(sel.contatos.get(c.id)?.telefone);
     if (foneDoCartao) {
@@ -393,7 +396,7 @@ export async function exportar(
     }
     segundos += (Date.now() - t0) / 1000;
     lidos.add(c.id);
-    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, agora, amb.eventosCapi);
+    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, agora, amb.eventosCapi, amb.mapa);
     r.mensagens += linha.mensagens.length;
     if (linha.mensagens.length) r.cartoesComMensagem++;
     if (opcoes.gravar) {

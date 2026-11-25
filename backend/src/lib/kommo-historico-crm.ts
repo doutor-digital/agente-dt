@@ -18,6 +18,7 @@
  * gravada na conversa pelo importador (`kommo_capi_inicial`). Enquanto ninguém mexe na conversa ela é ARQUIVO (`ehArquivo`); depois, é conversa como qualquer outra. */
 
 import { SITUACOES_DE_CONSULTA_DE_PE } from './chatwoot-regua.js';
+import { ETAPAS_DO_MOLDE, atributosParaGravar, type MapaDeEtapas } from './chatwoot-etapas.js';
 
 export const ETIQUETA_HISTORICO = 'historico'; // a mesma de `chatwoot-regua.ts` (este módulo não o importa para ficar sem dependências do servidor)
 export const ETIQUETA_CONFERIR_ETAPA = 'conferir-etapa';
@@ -278,7 +279,15 @@ export interface Traducao {
   aviso: string | null;
 }
 
-export function traduzirEtapa(c: CartaoDaKommo): Traducao {
+/** A conta tem etapa PRÓPRIA para este papel? (o molde: as 11 de sempre; conta com mapa: as do mapa) */
+const temEtapa = (mapa: MapaDeEtapas | null | undefined, papel: string): boolean => (mapa ?? ETAPAS_DO_MOLDE).comercial.some((e) => e.papel === papel);
+
+/**
+ * Cartão da Kommo → etapa em PAPEL (o nome do molde; a conta com etapas próprias é traduzida só ao gravar, em `linhaDoCartao`). Com o mapa da conta, as etapas que a Kommo tem e o molde nunca teve
+ * (EM ESPERA, CONFERIR NA FRANQUIA, NÃO COMPARECEU, RETORNO PÓS-TRATAMENTO) viram etapa de verdade em vez de «sem coluna» + `conferir-etapa`; «Atendimento assumido por humano» =
+ * Sim, que a conta não tem como etapa, vira a qualificação com a etiqueta `esperando-humano`. Sem mapa: exatamente o de antes.
+ */
+export function traduzirEtapa(c: CartaoDaKommo, mapa?: MapaDeEtapas | null): Traducao {
   const funil = semAcento(c.funil);
   const etapa = semAcento(c.etapa);
   const base: Traducao = { funil: null, etapa: null, etapaTratamento: null, situacao: null, categoria: null, etiquetas: [], aviso: null };
@@ -291,21 +300,27 @@ export function traduzirEtapa(c: CartaoDaKommo): Traducao {
       case 'INCOMING LEADS':
         return { ...base, funil: 'Comercial', etapa: 'Novo lead' };
       case 'EM QUALIFICACAO':
-        return { ...base, funil: 'Comercial', etapa: ehSim(valorDoCampo(c, 'Atendimento assumido por humano')) ? 'Esperando humano' : 'Sofia qualifica' };
+      {
+        const humano = ehSim(valorDoCampo(c, 'Atendimento assumido por humano'));
+        if (humano && !temEtapa(mapa, 'Esperando humano')) return { ...base, funil: 'Comercial', etapa: 'Sofia qualifica', etiquetas: ['esperando-humano'] };
+        return { ...base, funil: 'Comercial', etapa: humano ? 'Esperando humano' : 'Sofia qualifica' };
+      }
       case 'AGENDADO':
         return { ...base, funil: 'Comercial', etapa: semAcento(txt(valorDoCampo(c, 'Situação da consulta'))) === 'CONFIRMADO' ? 'Confirmado' : 'Agendado' };
       case 'NAO COMPARECEU':
-        return { ...base, funil: 'Comercial', etapa: 'Agendado', situacao: 'Não compareceu' };
+        return { ...base, funil: 'Comercial', etapa: temEtapa(mapa, 'Faltou') ? 'Faltou' : 'Agendado', situacao: 'Não compareceu' };
       case 'COMPARECEU':
         return { ...base, funil: 'Comercial', etapa: 'Compareceu' };
       case 'EM NEGOCIACAO':
         return { ...base, funil: 'Comercial', etapa: 'Pós-consulta' };
       case 'EM ESPERA':
-        return semColuna('etapa-em-espera');
+        return temEtapa(mapa, 'Em espera') ? { ...base, funil: 'Comercial', etapa: 'Em espera' } : semColuna('etapa-em-espera');
       case 'CONFERIR NA FRANQUIA':
-        return semColuna('etapa-conferir-na-franquia');
+        return temEtapa(mapa, 'Conferir na franquia') ? { ...base, funil: 'Comercial', etapa: 'Conferir na franquia' } : semColuna('etapa-conferir-na-franquia');
       case 'RETORNO POS-TRATAMENTO':
-        return semColuna('etapa-retorno-pos-tratamento', { categoria: 'Retorno após tratamento' });
+        return temEtapa(mapa, 'Retorno pós-tratamento')
+          ? { ...base, funil: 'Comercial', etapa: 'Retorno pós-tratamento', categoria: 'Retorno após tratamento' }
+          : semColuna('etapa-retorno-pos-tratamento', { categoria: 'Retorno após tratamento' });
       default:
         return semColuna('etapa-desconhecida');
     }
@@ -355,8 +370,8 @@ function diaDoCampo(c: CartaoDaKommo, nome: string, epoch: number): string {
   return tipo === 'date' ? dataSoDoCrm(epoch) : dataDoCrm(epoch);
 }
 
-export function atributosDoCartao(c: CartaoDaKommo, agora: Date = new Date()): Montagem {
-  const t = traduzirEtapa(c);
+export function atributosDoCartao(c: CartaoDaKommo, agora: Date = new Date(), mapa?: MapaDeEtapas | null): Montagem {
+  const t = traduzirEtapa(c, mapa);
   const a: Record<string, string | number | boolean> = {};
   const avisos: string[] = [];
   const etiquetas = new Set<string>([ETIQUETA_HISTORICO, ...t.etiquetas]);
@@ -586,8 +601,8 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
  * `eventosCapi` = `eventosAlcancados` do CAPI (injetada: este módulo não depende do worker do CAPI nem da configuração do servidor): a MESMA função que o CAPI usa decide
  * `capi_inicial`, sem uma cópia da regra aqui.
  */
-export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date, eventosCapi: (atributos: Record<string, unknown>) => readonly string[]): LinhaDoCartao {
-  const m = atributosDoCartao(c, agora);
+export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date, eventosCapi: (atributos: Record<string, unknown>) => readonly string[], mapa?: MapaDeEtapas | null): LinhaDoCartao {
+  const m = atributosDoCartao(c, agora, mapa);
   const { mensagens, total } = mensagensParaCrm(msgs ?? []);
   const telefone = foneParaWhatsApp(contato?.telefone);
   const nome = (contato?.nome ?? '').trim() || c.nome.trim() || `Cartão ${c.id}`;
@@ -605,7 +620,8 @@ export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, 
     criado_em: c.criadoEm,
     atualizado_em: c.atualizadoEm,
     fechado_em: c.fechadoEm,
-    atributos: m.atributos,
+    // em PAPEL por dentro; o que vai para o CRM leva o nome que a conta dá à etapa (sem mapa: o mesmo objeto). `capi_inicial` (abaixo) e a nota usam o papel
+    atributos: atributosParaGravar(mapa, m.atributos),
     etiquetas: m.etiquetas,
     nota: notaDoCartao(c, m, { importadoEm: agora, mensagensTotal: total, mensagensNaConversa: mensagens.length, conversaNaoLida: msgs === null }),
     mensagens,

@@ -307,7 +307,7 @@ def importar!
         end
         contagem_por_valor(c, 'etapa', linha[:atributos]['etapa'])
         contagem_por_valor(c, 'etapa_tratamento', linha[:atributos]['etapa_tratamento'])
-        c[:perdidos] += 1 if linha[:atributos]['etapa'] == 'Perdido'
+        c[:perdidos] += 1 if linha[:atributos]['etapa'].to_s.casecmp?('Perdido')
         c[:mensagens_no_arquivo] += linha[:mensagens].size
         unless GRAVAR
           c[:erros_seguidos] = 0
