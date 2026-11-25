@@ -39,7 +39,9 @@ import { ehMensagemDeEspera } from './crm-demora/marca.js';
 import { atendimentoLigado, comecarAtendimento, conferirAtendimento, encerrarAtendimento, eventoDeAtendimento, portaDoAtendimento } from './chatwoot-sofia-atendendo.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
-import { confereCartaoNoKommo } from './kommo-cortado.js';
+import { confereCartaoNoKommo, kommoCortado, tratamentoNaFranquia } from './kommo-cortado.js';
+import { consultarFranquia } from './paciente-em-tratamento.js';
+import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
@@ -189,6 +191,11 @@ export interface PortasDaIa {
   conversa(conversa: number): Promise<ConversaLida | null>;
   /** cartão ativo no Kommo da unidade para este telefone; null = nenhum (ou unidade sem Kommo); LANÇA se não deu para conferir */
   cartaoNoKommo(unit: Unit, telefone: string): Promise<{ leadId: number } | null>;
+  /**
+   * Só na unidade que saiu da Kommo (kommo-cortado.ts): o paciente está EM TRATAMENTO na franquia? Devolve o motivo (a Sofia cala) ou null.
+   * Nunca lança (franquia fora do ar = null, a Sofia segue). Opcional: os testes que não tratam disso não precisam.
+   */
+  tratamentoNaFranquia?(unit: Unit, telefone: string): Promise<string | null>;
   sofia(unit: Unit, falas: Fala[], pedido: { conversa: number; modo: ModoDaSofia; lida: ConversaLida }): Promise<ResultadoDaSofia | null>;
   agendar(fn: () => void, ms: number): unknown;
   cancelar(t: unknown): void;
@@ -212,6 +219,19 @@ export interface PortasDaIa {
   conferirAtendimento?(conversa: number): Promise<void>;
   /** o recurso está ligado aqui (robô configurado e `CHATWOOT_SOFIA_ATENDENDO` != 0)? Define se o webhook confere ou recolhe. */
   atendimentoAtivo?: boolean;
+}
+
+/**
+ * O cartão ativo no Kommo que segura a Sofia do CRM (decisão 31). Unidade sem Kommo ou que SAIU da Kommo (kommo-cortado.ts): não consulta.
+ * `consultar` só o teste troca.
+ */
+export async function cartaoNoKommoDaIa(
+  unit: Unit,
+  telefone: string,
+  consultar: (u: Unit) => CartaoNoKommo = (u) => cartaoNoKommoDaUnidade(u),
+): Promise<{ leadId: number } | null> {
+  if (!confereCartaoNoKommo(unit)) return null;
+  return consultar(unit)(telefone);
 }
 
 /** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
@@ -274,10 +294,9 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
       return (await transcribeAudio(unit, url)).text;
     },
     conversa: (id) => chat.conversa(id),
-    async cartaoNoKommo(unit, telefone) {
-      // unidade que saiu da Kommo (kommo-cortado.ts): os cartões abertos lá não seguram mais a Sofia do CRM
-      if (!confereCartaoNoKommo(unit)) return null;
-      return cartaoNoKommoDaUnidade(unit)(telefone);
+    cartaoNoKommo: (unit, telefone) => cartaoNoKommoDaIa(unit, telefone),
+    async tratamentoNaFranquia(unit, telefone) {
+      return tratamentoNaFranquia(await consultarFranquia(unit, telefone));
     },
     sofia: (unit, falas, pedido) => rodarSofiaDoChatwoot({ unit, falas, ...pedido, chat }, { rodarTeste: rodarTesteDaSofia }),
     agendar: (fn, ms) => setTimeout(fn, ms),
@@ -331,7 +350,10 @@ async function vaiAtender(m: MensagemDoPaciente, lida: ConversaLida, p: PortasDa
     const unit = await p.unidade(m.slug);
     if (!unit) return false;
     if (emPausa(unit)) return false; // unidade pausada: não ganha o selo «Sofia atendendo»
-    return (await p.cartaoNoKommo(unit, lida.telefone)) === null;
+    if ((await p.cartaoNoKommo(unit, lida.telefone)) !== null) return false;
+    // unidade que saiu da Kommo: paciente em tratamento na franquia também não ganha o selo (a rodada vai calar)
+    if (kommoCortado(unit.slug) && p.tratamentoNaFranquia && (await p.tratamentoNaFranquia(unit, lida.telefone))) return false;
+    return true;
   };
   // a PROMESSA fica guardada: mensagens que chegam enquanto a primeira ainda consulta o Kommo esperam a mesma resposta
   const vai = decidir().catch(() => false);
@@ -556,6 +578,21 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
       );
     }
     return 'cartao-no-kommo';
+  }
+
+  // unidade que SAIU da Kommo (kommo-cortado.ts): a trava do cartão não vale mais, e ela era quem segurava o paciente EM TRATAMENTO
+  // (cartão ativo no funil TRATAMENTO). Aqui quem responde é a franquia: tratamento ativo ou sessão futura = a Sofia não responde.
+  if (kommoCortado(unit.slug) && p.tratamentoNaFranquia) {
+    const tratamento = await p.tratamentoNaFranquia(unit, lida.telefone);
+    if (tratamento) {
+      info.motivo = tratamento;
+      const aviso = `${m.conversa}|tratamento`;
+      if (!mem.avisosDoKommo.has(aviso)) {
+        mem.avisosDoKommo.add(aviso);
+        await p.nota(m.conversa, `${modo === 'seco' ? '🧪 [SECO] ' : '⏸ '}Sofia NÃO responde aqui: ${tratamento}. Quem atende é a equipe; nada foi enviado.`);
+      }
+      return 'calada';
+    }
   }
 
   // a equipe já combinou horário na conversa e não bate com a agenda da franquia: a Sofia não afirma horário nenhum, passa para a equipe

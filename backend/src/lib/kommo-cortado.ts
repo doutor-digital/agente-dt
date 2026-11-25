@@ -9,15 +9,21 @@
  * A credencial da Kommo continua na unidade (o importador do histórico e os relatórios ainda leem de lá): por isso a trava é uma
  * chave própria, e não «unidade sem token».
  *
- * Env: `CHATWOOT_KOMMO_CORTADO_SLUGS` — slugs separados por vírgula (ex.: `doutor-hernia-timbo`). Vazio = nenhuma unidade cortada.
+ * Env: `CHATWOOT_KOMMO_CORTADO_SLUGS` — slugs separados por vírgula (ex.: `doutor-hernia-timbo`), sem diferença de maiúscula. Vazio =
+ * nenhuma unidade cortada.
+ *
+ * A trava do cartão também segurava o paciente EM TRATAMENTO (cartão ativo no funil TRATAMENTO). Na unidade cortada quem responde isso
+ * é a FRANQUIA (`consultarFranquia`, a mesma pergunta do incidente de 14/11): tratamento ativo ou sessão futura = a Sofia não responde.
  */
+import type { SinalDaFranquia } from './paciente-em-tratamento.js';
 export function kommoCortado(slug: string | null | undefined, lista: string | undefined = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS): boolean {
-  if (!slug || !lista) return false;
+  const alvo = (slug ?? '').trim().toLowerCase();
+  if (!alvo || !lista) return false;
   return lista
     .split(',')
-    .map((s) => s.trim())
+    .map((s) => s.trim().toLowerCase())
     .filter(Boolean)
-    .includes(slug.trim());
+    .includes(alvo);
 }
 
 /**
@@ -29,4 +35,15 @@ export function confereCartaoNoKommo(
   lista: string | undefined = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS,
 ): boolean {
   return !!unit.kommoSubdomain && !!unit.kommoAccessToken && !kommoCortado(unit.slug, lista);
+}
+
+/**
+ * Puro: o sinal da franquia cala a Sofia na unidade cortada? Devolve o motivo (vai para a nota e o Registro) ou null.
+ * Franquia sem resposta (`indisponivel`), lead ou paciente sem tratamento ativo e sem sessão futura → null (a Sofia segue), a mesma regra
+ * do `decidir` de paciente-em-tratamento.ts.
+ */
+export function tratamentoNaFranquia(s: SinalDaFranquia): string | null {
+  if (s.tipo !== 'paciente' || (!s.tratamentoAtivo && !s.sessaoFutura)) return null;
+  const por = [s.tratamentoAtivo ? 'tratamento ativo' : '', s.sessaoFutura ? 'sessão futura' : ''].filter(Boolean).join(' + ');
+  return `paciente da franquia (idClient ${s.idClient}) com ${por}`;
 }

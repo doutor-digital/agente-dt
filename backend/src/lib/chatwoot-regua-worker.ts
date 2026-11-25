@@ -192,6 +192,18 @@ export function finalDoTelefone(telefone: string | undefined): string | null {
   return d.length >= 8 ? d.slice(-8) : null;
 }
 
+/**
+ * O conferidor de «cartão ativo no Kommo» que a régua usa nesta unidade: nenhum para unidade sem Kommo ou que SAIU da Kommo
+ * (kommo-cortado.ts). ATENÇÃO: na unidade cortada a régua fica sem essa trava; antes de ligá-la lá, a conversa importada precisa da
+ * etiqueta `historico` (importador do Kommo) e o paciente em tratamento precisa estar no funil Tratamento. `fabricar` só o teste troca.
+ */
+export function kommoDaRegua(
+  unit: Parameters<typeof createKommoClientSemFreio>[0] & { slug: string },
+  fabricar: (u: Parameters<typeof createKommoClientSemFreio>[0]) => CartaoNoKommo = cartaoNoKommoDaUnidade,
+): CartaoNoKommo | undefined {
+  return confereCartaoNoKommo(unit) ? fabricar(unit) : undefined;
+}
+
 export function cartaoNoKommoDaUnidade(unit: Parameters<typeof createKommoClientSemFreio>[0]): CartaoNoKommo {
   const kommo = createKommoClientSemFreio(unit);
   return async (telefone) => {
@@ -691,8 +703,7 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           textos: textosDoSlug(slug),
           prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
         };
-        // unidade que saiu da Kommo (kommo-cortado.ts): a régua não confere mais cartão aberto lá
-        const kommo = confereCartaoNoKommo(unit) ? cartaoNoKommoDaUnidade(unit) : undefined;
+        const kommo = kommoDaRegua(unit);
         const chat = chatDaCaixa(ctx, Number(caixaTxt));
         if (!chat) {
           logger.warn({ slug, caixa: caixaTxt }, `${ID_REGUA}: a caixa ${caixaTxt} não tem conta do Chatwoot válida (unidade desconhecida ou token ausente) — pulo, sem chamar o Chatwoot`);
