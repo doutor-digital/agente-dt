@@ -283,6 +283,18 @@ test('menu.js: o rótulo está no arquivo, em bloco próprio com try, e o arquiv
   }
 });
 
+test('menu.js com TODOS os blocos (guia sem antecipado, domínio da clínica e rótulo): cada um no seu try, na ordem, e o arquivo todo PARSEIA (resolução do conflito com #451/#457)', () => {
+  const js = montarMenuJs('https://agente.exemplo.test', [3, 11], { drtimbo: 3 });
+  assert.doesNotThrow(() => new Function(js));
+  const marcas = ['window.__funilMenu', 'window.__guiaEtapaDD', 'window.__seloSofiaDD', 'window.__dominioContaDD', 'window.__rotuloRoboDD'];
+  const pos = marcas.map((m) => js.indexOf(m));
+  assert.ok(pos.every((p) => p >= 0), 'todos os blocos estão no arquivo: ' + JSON.stringify(pos));
+  assert.deepEqual([...pos].sort((a, b) => a - b), pos, 'na ordem de sempre: menu, guia, selo, domínio, rótulo');
+  for (const m of marcas.slice(1)) assert.match(js.slice(js.lastIndexOf(';try{', js.indexOf(m)), js.indexOf(m)), /^;try\{\s*\(function\(\)\{/, m + ' em bloco próprio');
+  assert.ok(js.includes('"semAntecipado":[3,11]'), 'a lista do guia chegou');
+  assert.ok(js.includes('"drtimbo":3'), 'o mapa de domínios chegou');
+});
+
 test('CSS: claro e escuro (.dark), 400 px; o rótulo é ::before (não existe nó novo); a mensagem sem tipo marcável não ganha margem', () => {
   const css = (rotuloRoboJs({} as NodeJS.ProcessEnv).match(/function css\(\)\{[\s\S]*?\n  \}/) ?? [''])[0];
   assert.ok(css.includes("::before"));
