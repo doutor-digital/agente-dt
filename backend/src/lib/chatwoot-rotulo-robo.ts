@@ -16,7 +16,7 @@
  * `data-dd-rotulo` no contêiner do balão (`#message<id>`) e o rótulo é o `::before` dele (CSS). Sai sozinho quando a mensagem deixa de ser marcável.
  *
  * Quem é o conector: ids de USUÁRIO (únicos na instalação inteira, valem para qualquer conta). Padrão `2` (conta 1) e `14` (conta 3, Timbó); outras clínicas somam o id
- * em `CHATWOOT_CONECTORES_IDS` (lista separada por vírgula, que SOMA ao padrão) ou dão ao usuário o nome padrão «🤖 Robô automático» (o nome do usuário começa com 🤖).
+ * em `CHATWOOT_CONECTORES_IDS` (lista separada por vírgula, que SOMA ao padrão) ou dão ao usuário o nome padrão «🤖 Robô automático» (o nome do usuário começa com 🤖) ou «Conector…» (o que o kit de nova clínica cria).
  *
  * Chave: `CHATWOOT_ROTULO_ROBO=0` tira o rótulo do `menu.js` (vale em até 5 min, o cache do navegador). Padrão: ligado.
  * Bloco INDEPENDENTE dentro do `menu.js` (`;try{ … }catch(e){}`): se falhar ao executar, o menu, a assistente, o guia e o selo seguem.
@@ -89,7 +89,8 @@ const ROTULO_JS = String.raw`(function(){
     if (quem === 'agentbot') return { t: 'sofia' };
     if (quem === 'contact') return null;
     // o usuário CONECTOR: o id conhecido, ou o nome padrão das contas («🤖 Robô automático»; o nome do USUÁRIO, não o texto da mensagem)
-    var conector = CONECTORES.indexOf(Number(s.id)) >= 0 || String(s.name || '').indexOf('🤖') === 0;
+    // (o nome padrão: «🤖 Robô automático», ou «Conector…» que o kit de nova clínica dá ao usuário; vale o de exibição e o do cadastro)
+    var conector = CONECTORES.indexOf(Number(s.id)) >= 0 || [s.available_name, s.name].some(function(x){ return /^\s*(🤖|conector)/i.test(String(x || '')); });
     if (conector && (quem === 'user' || quem === '')) return { t: 'robo' };
     if (quem === 'user') { var n = nomeDe(s); return n ? { t: 'gente', nome: /^[A-Za-zÀ-ÿ0-9]/.test(n) ? '👤 ' + n : n } : null; } // uma PESSOA (nem quando manda um modelo pelo botão); o eco do celular já traz o 📱 no nome
     var tp = atributos(m).template_params; // modelo aprovado do WhatsApp sem ninguém por trás (régua, tarefa, disparo)
@@ -97,7 +98,8 @@ const ROTULO_JS = String.raw`(function(){
     return null;
   }
   function contentorDaMensagem(id){
-    return document.querySelector('[data-message-id="' + id + '"]') || document.getElementById('message' + id);
+    // o id «message<id>» é o do contêiner do balão; data-message-id é só reserva (uma citação «responder a» pode repetir o número)
+    return document.getElementById('message' + id) || document.querySelector('[data-message-id="' + id + '"]');
   }
 
   function passar(){
@@ -123,7 +125,8 @@ const ROTULO_JS = String.raw`(function(){
   }
   // freio: no máximo uma passada a cada 400 ms, por mais que o Chatwoot mexa na tela (o Vue mexe muito)
   function agendar(){ if (!espera) espera = setTimeout(passar, 400); }
-  new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true });
+  // nós novos E o Vue reaproveitando o contêiner (só troca o id / data-message-id): as duas coisas pedem uma passada
+  new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['id', 'data-message-id'] });
   document.addEventListener('visibilitychange', agendar);
   agendar();
 })();`;

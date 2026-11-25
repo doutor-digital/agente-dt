@@ -89,6 +89,32 @@ test('Sofia (AgentBot) → «sofia»; conector da conta → «robo»; template_p
   assert.ok(t.estilos[0]!.textContent.includes('🤖 Robô · modelo automático') && t.estilos[0]!.textContent.includes('✨ Sofia (IA)') && t.estilos[0]!.textContent.includes('attr(data-dd-nome)'));
 });
 
+test('conector de uma clínica NOVA (id desconhecido): reconhecido pelo nome «Conector…» ou «🤖…», no nome de exibição ou no cadastro; pessoa com outro nome continua gente', () => {
+  const t = montar({
+    mensagens: [
+      { id: 40, message_type: 1, sender: { id: 31, type: 'user', name: 'Conector Timbó' } },
+      { id: 41, message_type: 1, sender: { id: 32, type: 'user', name: 'Robô automático', available_name: '🤖 Robô automático' } },
+      { id: 42, message_type: 1, sender: { id: 33, type: 'user', name: '🤖 Robô automático', available_name: 'Robô automático' } },
+      { id: 43, message_type: 1, sender: { id: 34, type: 'user', name: 'Conceição Silva' } },
+    ],
+  });
+  t.rodar();
+  assert.deepEqual([40, 41, 42, 43].map(t.marca), ['robo', 'robo', 'robo', 'gente']);
+});
+
+test('um contêiner repetido por uma citação («responder a») não rouba o rótulo: vale o id «message<id>»', () => {
+  const t = montar({ mensagens: [{ id: 10, message_type: 1, sender: ROBO_SOFIA }], usarDataId: true });
+  const citacao = new El('');
+  citacao.attrs['data-message-id'] = '10';
+  // o contêiner de verdade tem id message10; a citação só repete o número
+  t.nos.get(10)!.id = 'message10';
+  const original = t.nos.get(10)!;
+  t.nos.set(999, citacao);
+  t.rodar();
+  assert.equal(original.attrs['data-dd-rotulo'], 'sofia');
+  assert.equal(citacao.attrs['data-dd-rotulo'], undefined);
+});
+
 test('NÃO marca: paciente, atividade, nota privada (nem a da Sofia/conector), remetente desconhecido, nem texto parecido', () => {
   const t = montar({
     mensagens: [
