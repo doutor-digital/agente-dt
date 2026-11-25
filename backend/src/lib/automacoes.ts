@@ -419,6 +419,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/agendamento-perdido-worker.ts',
   },
   {
+    id: 'aviso-clinica-agendamento',
+    chave: 'AVISO_CLINICA_AGENDAMENTO_SLUGS',
+    nome: 'Aviso à recepção no WhatsApp quando a Sofia mexe com agendamento',
+    oQueFaz:
+      'Manda no grupo de WhatsApp da recepção da unidade dois avisos curtos: «✅ A Sofia marcou *Maria* para sexta-feira, 28/11 às 12:30 (avaliação). Cartão: <link>» no instante em que a consulta é gravada na franquia (remarcar diz «remarcou»), e «⚠️ A Sofia ofereceu horário a *Maria* e não fechou. Última fala do paciente: "…". Vale retomar. Cartão: <link>» quando o vigia de agendamento perdido decide que a oferta não fechou.',
+    pegadinha:
+      'NASCE DESLIGADA. Em «só no papel» anota «mandaria…» na tela e não manda nada. Precisa do destino da unidade em AVISO_CLINICA_AGENDAMENTO_DESTINOS (JSON {"slug": "<grupo>@g.us"}) e da instância que envia em AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL (…/message/sendText/<instância>; a chave é a do EVOLUTION_ALERT_* se não houver uma própria); sem destino, sem URL ou sem chave não manda e diz no log. O «não fechou» usa a MESMA decisão da chave «agendamento-perdido-filtro» (quem adiou, quem nunca respondeu e a madrugada de 21h às 8h não geram aviso) — sempre, mesmo na unidade em que aquela chave está desligada — e confere o cartão (consulta marcada pela recepção não avisa). Um aviso por lead e evento: o «marcou» não repete (remarcar para outro horário é evento novo) e o «não fechou» sai no máximo 1 vez por lead a cada 24 h; a marca fica no banco e vale entre reinícios. Envio recusado pela Evolution tenta de novo na próxima varredura; sem resposta (pode ter saído) nunca repete. Sem CPF, telefone nem dado clínico: só primeiro nome, dia, hora, tipo e link; o trecho da fala do paciente perde link, e-mail e número de 4 dígitos ou mais, e vai cortado em 80 caracteres (o que o paciente escreve em palavras ainda vai; AVISO_CLINICA_AGENDAMENTO_SEM_TRECHO=1 tira a fala do aviso). Não substitui o «Aviso no WhatsApp quando a IA marca» (esse é do João, com outro texto).',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/aviso-clinica-agendamento.ts',
+  },
+  {
     id: 'rotina-exlead',
     chave: 'ROTINA_EXLEAD_SLUGS',
     nome: 'Rotina diária: ex-lead que nunca agendou',
