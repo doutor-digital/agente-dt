@@ -24,6 +24,7 @@ import { MENSAGEM_SEM_CONTA, contaPedida, contextoDaRequisicao, ctxEhDoAmbiente,
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
+import { conversaCrua, etapasDoContexto } from '../lib/chatwoot-etapas.js';
 import {
   credenciaisDeAnuncio,
   emailDoPerfil,
@@ -394,7 +395,7 @@ export async function funilQuadroHandler(req: Request, res: Response): Promise<v
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
     // o tempo de cada parte no log (como na aba Automações): quadro lento aparece com o motivo
     if (Date.now() - t0 > 2000) logger.warn({ conta: a.c.conta!.conta, paginas: paginas.length, ms: { definicoes: tDefs, leitura: tPaginas, tarefas: Date.now() - t0 - tDefs - tPaginas } }, 'funil: quadro demorou');
-    res.json({ ...montarQuadro(paginas, lista, tarefas, doTrat, funilPedido), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
+    res.json({ ...montarQuadro(paginas, lista, tarefas, doTrat, funilPedido, etapasDoContexto(a.c)), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
     falhou(res, e, 'quadro');
   }
@@ -409,7 +410,9 @@ export async function funilHojeHandler(req: Request, res: Response): Promise<voi
   if (!a) return;
   try {
     const paginas = await paginasDasCaixas(a, Number(req.query.caixa));
-    const conversas = conversasDasPaginas(paginas);
+    // a tela Hoje decide por PAPEL (a conta pode chamar a etapa de outro nome): as conversas entram com a etapa em papel; o nome que aparece é o da conta
+    const mapa = etapasDoContexto(a.c);
+    const conversas = conversasDasPaginas(paginas).map((c) => conversaCrua(mapa, c));
     const agora = Date.now();
     const inicioDoDia = new Date(Date.parse(`${diaEmBelem(agora)}T03:00:00Z`));
     const ids = conversas.map((c) => Number(c.id));
@@ -419,7 +422,7 @@ export async function funilHojeHandler(req: Request, res: Response): Promise<voi
           select: { conversationId: true },
         })
       : [];
-    res.json({ ...montarHoje(conversas, agora, new Set(agendadas.map((x) => x.conversationId))), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta });
+    res.json({ ...montarHoje(conversas, agora, new Set(agendadas.map((x) => x.conversationId)), mapa), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta });
   } catch (e) {
     falhou(res, e, 'hoje');
   }
@@ -483,8 +486,9 @@ export async function funilOportunidadesHandler(req: Request, res: Response): Pr
   try {
     const agora = Date.now();
     const v = await memo(`op|${a.c.conta!.conta}|${a.logadoId ?? a.logado}`, VALE_TELA_MS, async () => {
-      const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0, 'com-etapa'));
-      return { ...montarOportunidades(conversas, agora), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta };
+      const mapa = etapasDoContexto(a.c);
+      const conversas = conversasDasPaginas(await paginasDasCaixas(a, 0, 'com-etapa')).map((c) => conversaCrua(mapa, c));
+      return { ...montarOportunidades(conversas, agora, mapa), eu: a.logado, chatwoot: a.c.conta!.url, conta: a.c.conta!.conta };
     });
     res.json(v);
   } catch (e) {
@@ -563,7 +567,8 @@ const slugDaCaixa = (c: any): string | null => CAIXAS_REGUA[Number(c?.inbox_id)]
 /** As conversas das caixas de unidade que a pessoa enxerga (com o login dela), e os slugs dessas unidades. */
 async function conversasDasUnidades(a: Acesso, caixa: number): Promise<{ conversas: any[]; slugs: string[]; cortou: boolean }> {
   const { paginas, cortou } = await lerCaixas(a, caixa, 24, true, 4);
-  const conversas = conversasDasPaginas(paginas).filter((c) => slugDaCaixa(c));
+  const mapa = etapasDoContexto(a.c);
+  const conversas = conversasDasPaginas(paginas).filter((c) => slugDaCaixa(c)).map((c) => conversaCrua(mapa, c));
   return { conversas, slugs: [...new Set(conversas.map(slugDaCaixa).filter((s): s is string => !!s))], cortou };
 }
 
@@ -924,7 +929,7 @@ async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, e
     res.status(400).json({ error: `etapa do tratamento desconhecida: ${etapa}` });
     return;
   }
-  if (exigeConfirmacao(etapa) && !confirmou) {
+  if (exigeConfirmacao(etapa, etapasDoContexto(a.c)) && !confirmou) {
     res.status(409).json({ error: `mover para «${etapa}» pode mandar mensagem ao paciente (a régua observa essa etapa): confirme`, precisaConfirmar: true });
     return;
   }

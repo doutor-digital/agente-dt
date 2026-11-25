@@ -15,6 +15,8 @@
  * Módulo PURO (sem banco nem rede). A leitura da coluna `unit_chatwoot.etapas` está em `chatwoot-unidades-banco.ts`.
  */
 
+import { contaDaCaixa } from './chatwoot-unidades.js';
+
 /** Papéis do funil COMERCIAL. Os 11 primeiros são o molde da rede; os 4 últimos só existem nas contas que os mapeiam. */
 export const PAPEIS_COMERCIAIS = [
   'Novo lead',
@@ -142,6 +144,12 @@ export function etapasDaConta(contaId: number | null | undefined): MapaDeEtapas 
   return (typeof contaId === 'number' ? porConta.get(contaId) : undefined) ?? ETAPAS_DO_MOLDE;
 }
 
+/** O mapa de quem fala pela CAIXA (régua, CAPI, disparos…): a caixa diz a unidade, a unidade diz a conta. Caixa desconhecida: o molde. */
+export const etapasDaCaixa = (caixa: number): MapaDeEtapas => etapasDaConta(contaDaCaixa(caixa));
+
+/** O mapa de quem fala pelo contexto do Chatwoot (a conta que a chamada usa). `conta` = a conta do ambiente para Parauapebas, que nunca tem mapa. */
+export const etapasDoContexto = (ctx: { conta: { conta: number } | null } | null | undefined): MapaDeEtapas => etapasDaConta(ctx?.conta?.conta ?? null);
+
 /** As contas que têm mapa próprio (para os testes e para o log de boot). */
 export const contasComEtapasProprias = (): number[] => [...porConta.keys()].sort((a, b) => a - b);
 
@@ -223,8 +231,9 @@ export function nomeDoTratamentoParaGravar(mapa: MapaDeEtapas | null | undefined
 /**
  * O que vai ser gravado, com `etapa` / `etapa_tratamento` em nomes da conta. Papel que a conta não tem: o campo SAI da gravação (a etapa que a
  * conversa já tem não é trocada nem apagada). Sem mapa: o MESMO objeto.
+ * `objetoInteiro`: quem manda TODOS os atributos de uma vez (o Chatwoot substitui o objeto): o papel que a conta não tem fica como veio, nunca some.
  */
-export function atributosParaGravar<T extends Record<string, unknown>>(mapa: MapaDeEtapas | null | undefined, parcial: T): T {
+export function atributosParaGravar<T extends Record<string, unknown>>(mapa: MapaDeEtapas | null | undefined, parcial: T, objetoInteiro = false): T {
   if (ehMolde(mapa)) return parcial;
   let saida: Record<string, unknown> | null = null;
   const trocar = (campo: 'etapa' | 'etapa_tratamento', f: (m: MapaDeEtapas | null | undefined, p: string) => string | null): void => {
@@ -233,8 +242,10 @@ export function atributosParaGravar<T extends Record<string, unknown>>(mapa: Map
     const nome = f(mapa, v);
     if (nome === v) return;
     saida ??= { ...parcial };
-    if (nome === null) delete saida[campo];
-    else saida[campo] = nome;
+    // objeto INTEIRO (o Chatwoot troca todos os atributos de uma vez): omitir o campo o APAGARIA — o valor que a conta não conhece fica como veio
+    if (nome === null) {
+      if (!objetoInteiro) delete saida[campo];
+    } else saida[campo] = nome;
   };
   trocar('etapa', nomeParaGravar);
   trocar('etapa_tratamento', nomeDoTratamentoParaGravar);
@@ -256,6 +267,12 @@ export function listaDeEtapasDoTratamento(mapa: MapaDeEtapas | null | undefined)
  * Dos valores que o atributo tem AGORA no Chatwoot, os PAPÉIS que a conta tem (é a pergunta «esta conta tem a etapa X?»: Sofia só move para etapa que existe).
  * Valor desconhecido passa como veio. Sem mapa: a própria lista. Papel com substituto não aparece (a conta não tem etapa dele).
  */
+export function papeisDoTratamentoDaLista(mapa: MapaDeEtapas | null | undefined, valores: readonly string[]): string[] {
+  if (ehMolde(mapa)) return [...valores];
+  return [...new Set(valores.map((v) => papelDaEtapaDoTratamento(mapa, v)))];
+}
+
+/** (comercial) */
 export function papeisDaLista(mapa: MapaDeEtapas | null | undefined, valores: readonly string[]): string[] {
   if (ehMolde(mapa)) return [...valores];
   return [...new Set(valores.map((v) => papelDaEtapa(mapa, v)))];

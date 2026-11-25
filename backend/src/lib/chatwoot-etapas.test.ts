@@ -27,30 +27,9 @@ import {
   problemasDoMapa,
   type MapaDeEtapas,
 } from './chatwoot-etapas.js';
+import { ETAPAS_DE_TIMBO_NA_COLUNA } from './chatwoot-etapas-timbo.js';
 
-/** O mapa de Timbó como a Kommo tem (ordem real da pipeline; entrada do Tratamento = «Leads de entrada»). */
-export const COLUNA_DE_TIMBO = {
-  comercial: [
-    { papel: 'Novo lead', nome: 'Leads de entrada' },
-    { papel: 'Sofia qualifica', nome: 'EM QUALIFICAÇÃO' },
-    { papel: 'Em espera', nome: 'EM ESPERA' },
-    { papel: 'Conferir na franquia', nome: 'CONFERIR NA FRANQUIA' },
-    { papel: 'Agendado', nome: 'AGENDADO' },
-    { papel: 'Confirmado', nome: 'AGENDADO' },
-    { papel: 'Faltou', nome: 'NÃO COMPARECEU' },
-    { papel: 'Compareceu', nome: 'COMPARECEU' },
-    { papel: 'Pós-consulta', nome: 'EM NEGOCIAÇÃO' },
-    { papel: 'Retorno pós-tratamento', nome: 'RETORNO PÓS-TRATAMENTO' },
-    { papel: 'Fechou', nome: 'GANHO / CONCLUÍDO' },
-    { papel: 'Perdido', nome: 'PERDIDO' },
-  ],
-  tratamento: [
-    { papel: 'Entrada', nome: 'Leads de entrada' },
-    { papel: 'Em tratamento', nome: 'EM TRATAMENTO' },
-    { papel: 'Alta', nome: 'ALTA' },
-    { papel: 'Tratamento cancelado', nome: 'TRATAMENTO CANCELADO' },
-  ],
-};
+const COLUNA_DE_TIMBO = ETAPAS_DE_TIMBO_NA_COLUNA;
 const TIMBO = mapaDaColuna(COLUNA_DE_TIMBO) as MapaDeEtapas;
 
 test('o mapa de Timbó é válido e o molde são os 11 papéis + 4 do tratamento que Parauapebas tem', () => {

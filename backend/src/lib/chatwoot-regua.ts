@@ -20,6 +20,7 @@ import { SEMENTE_PARAUAPEBAS, ehUsuarioCelular } from './chatwoot-unidades.js';
 // `unit_chatwoot`); os nomes e o formato antigos continuam aqui para quem já importava deles daqui.
 export { CAIXAS_REGUA, CAIXAS_CLOUD, CAIXAS_HISTORICO, GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
 import { padraoMin } from './robos-tempo.js';
+import { papeisDosAtributos, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { ehMensagemDeEspera } from './crm-demora/marca.js';
 
 export const ID_REGUA = 'chatwoot-regua';
@@ -921,7 +922,7 @@ export function decidirEtiquetaCelular(c: ConversaRegua, slug: string): 'por' | 
  * Uma conversa da listagem do Chatwoot → o que a régua precisa. null = não é paciente (grupo, bot do Evolution).
  * `last_non_activity_message` vem na própria listagem: nenhuma chamada por conversa.
  */
-export function conversaDoChatwoot(raw: any): ConversaRegua | null {
+export function conversaDoChatwoot(raw: any, mapa?: MapaDeEtapas | null): ConversaRegua | null {
   const id = Number(raw?.id);
   if (!Number.isInteger(id) || id <= 0) return null;
   const sender = raw?.meta?.sender ?? {};
@@ -934,7 +935,8 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
     id,
     nome: str(sender.name),
     etiquetas: Array.isArray(raw?.labels) ? raw.labels.map(String) : [],
-    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? raw.custom_attributes : {},
+    // `etapa` e `etapa_tratamento` entram como PAPEL (o nome da conta vira o do molde): a régua só conhece papéis. Sem mapa: o mesmo objeto de sempre.
+    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? papeisDosAtributos(mapa, raw.custom_attributes) : {},
     criadaEm: new Date(Number(raw?.created_at) * 1000 || 0),
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,

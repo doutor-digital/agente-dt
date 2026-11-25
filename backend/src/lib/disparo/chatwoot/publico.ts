@@ -7,6 +7,7 @@
  */
 import { conversaDoChatwoot, type ConversaRegua } from '../../chatwoot-regua.js';
 import { conversaLidaDoChatwoot } from '../../chatwoot-porta.js';
+import { papeisDosAtributos, type MapaDeEtapas } from '../../chatwoot-etapas.js';
 import { quemFalaPorTelefone } from '../../chatwoot-regua-worker.js';
 import { chaveDaPessoa, rotuloDaExclusao, telefoneWhatsapp, triar, type Candidato, type Elegivel, type MotivoDeExclusao, type SituacaoNaFranquia } from '../regras.js';
 import { ETIQUETA_SEM_FOLLOW_UP, passaNoFiltro, precisaResolverInteracao, type ConversaDoPublico, type Filtro } from './filtro.js';
@@ -227,8 +228,10 @@ export async function calcularPublico(filtro: Filtro, deps: DepsDoPublico, opcoe
 }
 
 /** O que a etapa do CRM diz da pessoa, para a unidade SEM agenda da franquia (o substituto honesto, e só dele). */
-export function situacaoPeloCrm(attrs: Record<string, unknown>): SituacaoNaFranquia {
+export function situacaoPeloCrm(atributos: Record<string, unknown>, mapa?: MapaDeEtapas | null): SituacaoNaFranquia {
   const s = (v: unknown) => (typeof v === 'string' ? v.trim() : '');
+  // o filtro da onda compara o nome da conta; aqui a decisão é por PAPEL
+  const attrs = papeisDosAtributos(mapa, atributos);
   const etapa = s(attrs.etapa);
   const tratamento = s(attrs.etapa_tratamento);
   if (['Agendado', 'Confirmado'].includes(etapa)) return 'consulta-futura';

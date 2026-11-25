@@ -34,6 +34,7 @@ import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot
 import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 import { referraisGuardados } from './kapso-referral.js';
 import { CAIXAS_CAPI, sufixoEnvDaUnidade } from './chatwoot-unidades.js';
+import { etapasDaCaixa } from './chatwoot-etapas.js';
 
 export const ID_CAPI = 'chatwoot-capi';
 
@@ -384,13 +385,14 @@ function cliqueGuardado(texto: string): CliqueDoAnuncio | null {
 }
 
 async function lerConversas(chat: ChatDoCapi, caixa: number): Promise<ConversaRegua[]> {
+  const mapa = etapasDaCaixa(caixa);
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
   for (let p = 1; p <= MAX_PAGINAS; p++) {
     const pagina = await chat.pagina(caixa, p);
     if (pagina.length === 0) break;
     for (const raw of pagina) {
-      const c = conversaDoChatwoot(raw);
+      const c = conversaDoChatwoot(raw, mapa);
       // arquivo do histórico não vira evento de conversão para a Meta
       if (!c || vistas.has(c.id) || ehArquivo(raw)) continue;
       vistas.add(c.id);

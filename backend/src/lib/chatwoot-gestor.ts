@@ -19,6 +19,7 @@
  */
 import { createHash } from 'node:crypto';
 import { sufixoEnvDaUnidade } from './chatwoot-unidades.js';
+import { nomeParaGravar, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { DIA_MS, data10, diaEmBelem, nomeDe, semInteracao, somar, str, sim } from './chatwoot-hoje.js';
 
 const UTC_MENOS_3 = 3 * 3600_000;
@@ -727,7 +728,7 @@ const PESO_SEMAFORO: Record<Semaforo, number> = { Vermelho: 0, Amarelo: 1, Verde
 const ETAPAS_ENCERRADAS = new Set(['Compareceu', 'Fechou', 'Pós-consulta', 'Perdido', 'Frio']);
 const SITUACOES_ENCERRADAS = new Set(['Atendido', 'Não compareceu', 'Desmarcado', 'Remarcado']);
 
-export function montarOportunidades(conversas: any[], agora: number): Oportunidades {
+export function montarOportunidades(conversas: any[], agora: number, mapa?: MapaDeEtapas | null): Oportunidades {
   const dia = diaEmBelem(agora);
   const nao: Array<Oportunidade & { _k: number }> = [];
   const ret: Array<Oportunidade & { _k: string }> = [];
@@ -743,7 +744,7 @@ export function montarOportunidades(conversas: any[], agora: number): Oportunida
 
     if ((etapa === 'Compareceu' || etapa === 'Pós-consulta') && !fechouDe(c)) {
       const sem = semaforoDe(c, dia);
-      const partes = [consulta ? `Consulta ${dm(consulta)}` : 'Sem data da consulta na conversa', etapa];
+      const partes = [consulta ? `Consulta ${dm(consulta)}` : 'Sem data da consulta na conversa', nomeParaGravar(mapa, etapa) ?? etapa];
       const motivo = str(a.motivo_espera);
       if (motivo) partes.push(motivo);
       nao.push({ ...base, detalhe: partes.join(' · '), semaforo: sem, _k: PESO_SEMAFORO[sem] * 1e6 + (consulta ? Date.parse(consulta) / DIA_MS - 19000 : 0) });

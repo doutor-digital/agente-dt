@@ -7,6 +7,7 @@
  * Aqui só a lógica pura (chave, montar o quadro); quem fala HTTP é `controllers/funil.controller.ts`.
  */
 import { ehMensagemDeEspera } from './crm-demora/marca.js';
+import { ehMolde, nomeDoTratamentoParaGravar, nomeParaGravar, papelDaEtapa, papelDaEtapaDoTratamento, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { createHmac, timingSafeEqual } from 'node:crypto';
 
 export const ATRIBUTO_ETAPA = 'etapa';
@@ -150,13 +151,22 @@ export function situacaoDaTarefa(vencimentos: Date[], agora: Date): SituacaoTare
 }
 
 /** Uma conversa do Chatwoot vira cartão. Etapa vazia ou fora da lista = a 1ª etapa (o lead novo cai em "Novo"). */
-export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTarefa = { tipo: 'sem' }, etapasDoTrat: readonly string[] = []): Cartao {
+export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTarefa = { tipo: 'sem' }, etapasDoTrat: readonly string[] = [], mapa?: MapaDeEtapas | null): Cartao {
   const attrs = c?.custom_attributes && typeof c.custom_attributes === 'object' ? c.custom_attributes : {};
   const bruta = typeof attrs[ATRIBUTO_ETAPA] === 'string' ? attrs[ATRIBUTO_ETAPA].trim() : '';
   // conta SEM `etapa_tratamento`: um funil só, como sempre. Com ela, a conversa do Tratamento mostra a etapa DO tratamento
   const funil: FunilDoQuadro = etapasDoTrat.length ? funilDaConversa(attrs) : 'comercial';
   const brutaTrat = typeof attrs[ATRIBUTO_ETAPA_TRATAMENTO] === 'string' ? attrs[ATRIBUTO_ETAPA_TRATAMENTO].trim() : '';
-  const etapa = funil === 'tratamento' ? (etapasDoTrat.includes(brutaTrat) ? brutaTrat : etapasDoTrat[0]!) : etapas.includes(bruta) ? bruta : etapas[0]!;
+  // a coluna é um NOME da conta. Conversa que ainda tem o nome antigo do molde (conta recém-trocada) cai na coluna do mesmo papel, não na 1ª
+  const colunaDe = (nome: string, lista: readonly string[], paraNome: (m: MapaDeEtapas | null | undefined, papel: string) => string | null, paraPapel: (m: MapaDeEtapas | null | undefined, n: string) => string): string => {
+    if (lista.includes(nome)) return nome;
+    if (nome && !ehMolde(mapa)) {
+      const dela = paraNome(mapa, paraPapel(mapa, nome));
+      if (dela && lista.includes(dela)) return dela;
+    }
+    return lista[0]!;
+  };
+  const etapa = funil === 'tratamento' ? colunaDe(brutaTrat, etapasDoTrat, nomeDoTratamentoParaGravar, papelDaEtapaDoTratamento) : colunaDe(bruta, etapas, nomeParaGravar, papelDaEtapa);
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
   // a última mensagem de verdade (avisos do sistema, tipo 2, como "Atribuído a…", não contam)
   const reais = msgs.filter((m: any) => Number(m?.message_type) !== 2);
@@ -197,7 +207,7 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
  * Junta as páginas da API (`data.payload`), sem repetir conversa, e monta as colunas na ordem das etapas (com a soma em R$).
  * Com `etapasDoTrat` (a conta tem `etapa_tratamento`) o quadro vira DOIS: o pedido (`funil`) mostra só as conversas daquele funil, com as etapas dele, e `funis` traz os dois totais para o seletor.
  */
-export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<number, SituacaoTarefa> = new Map(), etapasDoTrat: readonly string[] = [], funil: FunilDoQuadro = 'comercial') {
+export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<number, SituacaoTarefa> = new Map(), etapasDoTrat: readonly string[] = [], funil: FunilDoQuadro = 'comercial', mapa?: MapaDeEtapas | null) {
   const vistos = new Set<number>();
   const cartoes: Cartao[] = [];
   for (const p of paginas) {
@@ -206,7 +216,7 @@ export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<
       const k = Number(c?.id);
       if (!Number.isInteger(k) || vistos.has(k)) continue;
       vistos.add(k);
-      cartoes.push(cartaoDaConversa(c, etapas, tarefas.get(k), etapasDoTrat));
+      cartoes.push(cartaoDaConversa(c, etapas, tarefas.get(k), etapasDoTrat, mapa));
     }
   }
   cartoes.sort((a, b) => b.atividade - a.atividade);
@@ -325,7 +335,7 @@ export function notaDaMudanca(de: string, para: string, quem: string | null): st
 
 /** Etapas do tratamento que a RÉGUA observa (mandam mensagem ao paciente): mover para elas pelo funil pede confirmação. */
 export const ETAPAS_DO_TRATAMENTO_QUE_A_REGUA_OBSERVA: readonly string[] = ['Alta', 'Tratamento cancelado'];
-export const exigeConfirmacao = (etapa: string): boolean => ETAPAS_DO_TRATAMENTO_QUE_A_REGUA_OBSERVA.includes(etapa);
+export const exigeConfirmacao = (etapa: string, mapa?: MapaDeEtapas | null): boolean => ETAPAS_DO_TRATAMENTO_QUE_A_REGUA_OBSERVA.includes(papelDaEtapaDoTratamento(mapa, etapa));
 
 /** A mesma nota para a etapa DO TRATAMENTO (outro prefixo: `desdeAEtapa` só lê as notas da etapa comercial). */
 export function notaDaMudancaDeTratamento(de: string, para: string, quem: string | null): string {

@@ -5,6 +5,7 @@
  */
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
+import { atributosParaGravar, etapasDoContexto, papeisDaLista, papeisDoTratamentoDaLista, papeisDosAtributos, type MapaDeEtapas } from './chatwoot-etapas.js';
 
 export interface ConversaLida {
   id: number;
@@ -48,7 +49,7 @@ const USUARIO_DA_INTEGRACAO = 2;
 const ehSim = (v: unknown): boolean => v === true || v === 1 || (typeof v === 'string' && ['true', 'sim', '1', 'yes'].includes(v.trim().toLowerCase()));
 export const texto = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
 
-export function conversaLidaDoChatwoot(raw: any): ConversaLida | null {
+export function conversaLidaDoChatwoot(raw: any, mapa?: MapaDeEtapas | null): ConversaLida | null {
   const id = Number(raw?.id);
   if (!Number.isInteger(id) || id <= 0) return null;
   const sender = raw?.meta?.sender ?? {};
@@ -59,7 +60,8 @@ export function conversaLidaDoChatwoot(raw: any): ConversaLida | null {
     id,
     nome: texto(sender.name),
     telefone: texto(sender.phone_number) || null,
-    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? { ...raw.custom_attributes } : {},
+    // `etapa` / `etapa_tratamento` em PAPÉIS (a Sofia e o resto só conhecem papéis); sem mapa, como veio
+    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? { ...papeisDosAtributos(mapa, raw.custom_attributes) } : {},
     etiquetas,
     grupo,
     interno: etiquetas.some((e) => e.trim().toLowerCase() === 'interno') || ehSim(sender.custom_attributes?.interno),
@@ -71,16 +73,20 @@ const VALIDADE_LISTAS_MS = 5 * 60_000;
 export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
   const listas = new Map<string, { em: number; valores: string[] }>();
   let contaEtiquetas: { em: number; valores: string[] } | null = null;
-  const ler = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`));
+  const mapa = etapasDoContexto(ctx);
+  const ler = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`), mapa);
+  /** a conversa COMO O CHATWOOT A TEM (nomes da conta): é o que se mescla na gravação, para nunca regravar uma etapa que ninguém pediu para mudar */
+  const lerCrua = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`));
   return {
     conversa: ler,
     async gravarAtributos(id, parcial) {
-      const atual = await ler(id);
+      const atual = await lerCrua(id);
       if (!atual) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
-      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...parcial } } });
+      // papel → nome da conta; papel que a conta não tem sai da gravação (a etapa de agora fica); sem mapa, `parcial` segue igual
+      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...atributosParaGravar(mapa, parcial) } } });
     },
     async adicionarEtiquetas(id, etiquetas) {
-      const atual = await ler(id);
+      const atual = await lerCrua(id);
       if (!atual) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
       const lista = [...new Set([...atual.etiquetas, ...etiquetas])];
       if (lista.length !== atual.etiquetas.length) await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: lista } });
@@ -101,10 +107,13 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
     async valoresDoAtributo(chave) {
       const g = listas.get(chave);
       if (g && Date.now() - g.em < VALIDADE_LISTAS_MS) return g.valores;
+      // (a lista guardada JÁ está em papéis)
       const defs = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'conversation_attribute' } })) as unknown;
       const lista = Array.isArray(defs) ? defs : [];
       const def = lista.find((d: any) => d?.attribute_key === chave) as { attribute_values?: unknown } | undefined;
-      const valores = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((v) => String(v).trim()).filter(Boolean) : [];
+      const doChatwoot = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((v) => String(v).trim()).filter(Boolean) : [];
+      // a pergunta é «esta conta tem a etapa X?»: `etapa` volta em PAPÉIS (o que a conta não tem não aparece); `etapa_tratamento` idem
+      const valores = chave === 'etapa' ? papeisDaLista(mapa, doChatwoot) : chave === 'etapa_tratamento' ? papeisDoTratamentoDaLista(mapa, doChatwoot) : doChatwoot;
       listas.set(chave, { em: Date.now(), valores });
       return valores;
     },
