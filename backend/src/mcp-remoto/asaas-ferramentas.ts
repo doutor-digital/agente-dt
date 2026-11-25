@@ -14,6 +14,7 @@ import { asaasCobranca, type ContextoAsaas } from './asaas.js';
 import { cancelarCobranca, editarCliente, editarCobranca, estornarCobranca, limitesEDestinos, transferir } from './asaas-operacoes.js';
 import { contaDeEscrita, criarCliente, criarCobranca, LIMITES_ASAAS, mascararPedido, recusarCamposDesconhecidos, sanear, type CtxEscrita, type EstadoEscritaAsaas, type Quem, type Registrar } from './asaas-escrita.js';
 import { PADRAO_TETOS } from './asaas-limites.js';
+import { asaasAssinaturas, cancelarAssinatura, CICLOS, criarAssinatura, editarAssinatura, type PedidoDeAssinatura } from './asaas-assinaturas.js';
 import { asaasNota, asaasNotas, STATUS_DO_FILTRO } from './asaas-notas.js';
 import { confirmarNota, MAX_DIAS_EMISSAO, prepararNota, type PedidoDePreparo } from './asaas-notas-escrita.js';
 import { executar } from './ferramenta.js';
@@ -245,6 +246,91 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
       annotations: apaga,
     },
     (args) => transferir(ctx, quem, args, registrar),
+  );
+
+  // ----------------------------------------------------------------- assinaturas (cobrança recorrente)
+  const formaAssinatura = z.enum(['BOLETO', 'PIX', 'CARTAO', 'CLIENTE_ESCOLHE']);
+  const ciclo = z.enum(CICLOS as unknown as [string, ...string[]]);
+  server.registerTool(
+    'asaas_assinaturas',
+    {
+      title: 'Assinaturas / cobranças recorrentes (Asaas)',
+      description:
+        'Lista as ASSINATURAS (cobrança recorrente) de UMA clínica: de um cliente (clienteId cus_… ou cpfCnpj), por status (ATIVA, INATIVA, ENCERRADA) ou todas (até 50). ' +
+        'Com assinaturaId (sub_…) traz a assinatura completa e as cobranças que ela já gerou (status, vencimento e link para pagar). Use para conferir antes de editar/cancelar e depois de criar. ' +
+        'Não grava nada. Só para quem tem permissão de escrita (devolve os links de pagamento).',
+      inputSchema: {
+        unidade,
+        assinaturaId: z.string().optional().describe('sub_…'),
+        clienteId: z.string().optional().describe('cus_…'),
+        cpfCnpj: z.string().optional(),
+        status: z.string().optional().describe('ATIVA, INATIVA ou ENCERRADA'),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: true },
+    },
+    (args) => executarSeguro('asaas_assinaturas', mascararPedido(args), auditar, () => asaasAssinaturas(ctx, args)),
+  );
+  tool(
+    'asaas_criar_assinatura',
+    {
+      title: 'Criar assinatura / cobrança recorrente (Asaas)',
+      description:
+        'CRIA uma ASSINATURA (cobrança recorrente) no Asaas de UMA clínica: o Asaas gera uma cobrança a cada ciclo (MENSAL é o padrão), começando em primeiroVencimento ' +
+        `(de hoje até ${LIMITES_ASAAS.maxDiasVencimento} dias; se for hoje, a 1ª cobrança já nasce vencendo hoje). "valor" é o de CADA cobrança (a mensalidade), não o total. ` +
+        'Forma: BOLETO (padrão), PIX, CARTAO (link de pagamento: o cliente digita o cartão no Asaas, NUNCA no chat) ou CLIENTE_ESCOLHE (o cliente escolhe boleto, Pix ou cartão ao pagar). ' +
+        'Cliente: só quem JÁ está cadastrado, por clienteId (cus_…) OU cpfCnpj (cadastrar é asaas_criar_cliente). Se o cliente já tem assinatura ATIVA com o mesmo valor e ciclo, recusa ' +
+        '(segunda de propósito: permitirOutraIgual=true). Descrição obrigatória (aparece para o cliente, sem CPF/telefone). ' +
+        `A mensalidade conta como uma cobrança nos tetos: ${tetos} Assinatura igual em 10 minutos é recusada. Cada assinatura criada avisa o João no Telegram. ` +
+        'Devolve o id (sub_…) e, quando o Asaas já gerou, a 1ª cobrança com o link para pagar. Se a resposta for erro de rede, NÃO repita às cegas: confira com asaas_assinaturas. ' + SO_QUEM_PODE,
+      inputSchema: {
+        unidade,
+        clienteId: z.string().optional().describe('cus_… (use asaas_cliente para achar)'),
+        cpfCnpj: z.string().optional().describe('alternativa ao clienteId: o CPF/CNPJ de um cliente já cadastrado'),
+        valor: z.number().describe('valor de CADA cobrança, em reais, até 2 casas'),
+        ciclo: ciclo.optional().describe('padrão MENSAL'),
+        primeiroVencimento: z.string().describe(`AAAA-MM-DD, de hoje até ${LIMITES_ASAAS.maxDiasVencimento} dias; o dia do mês se repete nos próximos vencimentos`),
+        descricao: z.string().min(1).max(500),
+        forma: formaAssinatura.optional().describe('padrão BOLETO; CLIENTE_ESCOLHE = boleto, Pix ou cartão, à escolha do cliente'),
+        externalReference: z.string().max(100).optional().describe('identificador seu desta assinatura (ex. nº do contrato)'),
+        avisarCliente,
+        permitirOutraIgual: z.boolean().optional().describe('só true se a pessoa confirmou que quer uma SEGUNDA assinatura igual para o mesmo cliente'),
+      },
+      annotations: escreve,
+    },
+    (args) => criarAssinatura(ctx, quem, args as PedidoDeAssinatura, registrar),
+  );
+  tool(
+    'asaas_editar_assinatura',
+    {
+      title: 'Editar assinatura (Asaas)',
+      description:
+        'ALTERA uma assinatura pelo id (sub_…): valor, próximo vencimento, descrição, forma ou ciclo. Só vai o que você informar. Por padrão vale para as PRÓXIMAS cobranças; ' +
+        'atualizarCobrancasPendentes=true muda também as já geradas e ainda não pagas. Se o valor subir, o acréscimo conta no teto do dia. Cada edição avisa o João no Telegram. ' + SO_QUEM_PODE,
+      inputSchema: {
+        unidade,
+        assinaturaId: z.string().min(4).describe('sub_… (veja em asaas_assinaturas)'),
+        valor: z.number().optional().describe('novo valor de CADA cobrança'),
+        proximoVencimento: z.string().optional().describe(`AAAA-MM-DD, de hoje até ${LIMITES_ASAAS.maxDiasVencimento} dias`),
+        descricao: z.string().min(1).max(500).optional(),
+        forma: formaAssinatura.optional(),
+        ciclo: ciclo.optional(),
+        atualizarCobrancasPendentes: z.boolean().optional().describe('padrão false; true = as cobranças já geradas e não pagas também mudam'),
+      },
+      annotations: apaga,
+    },
+    (args) => editarAssinatura(ctx, quem, args, registrar),
+  );
+  tool(
+    'asaas_cancelar_assinatura',
+    {
+      title: 'Cancelar assinatura (Asaas)',
+      description:
+        'CANCELA uma assinatura pelo id (sub_…): não sai mais cobrança nova, e o Asaas APAGA junto as cobranças dela ainda não pagas (as pagas ficam; para devolver dinheiro, asaas_estornar_cobranca). ' +
+        'Irreversível: para voltar, crie outra assinatura. Entra no limite de cancelamentos por hora e avisa o João no Telegram. ' + SO_QUEM_PODE,
+      inputSchema: { unidade, assinaturaId: z.string().min(4).describe('sub_…') },
+      annotations: apaga,
+    },
+    (args) => cancelarAssinatura(ctx, quem, args, registrar),
   );
 }
 

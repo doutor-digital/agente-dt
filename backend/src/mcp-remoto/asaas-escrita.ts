@@ -721,7 +721,7 @@ export async function criarCliente(
 
 // ----------------------------------------------------------------- cobrança
 
-type Alvo = { tipo: 'existente'; cliente: ClienteAsaas } | { tipo: 'novo'; dados: DadosDoCliente };
+export type Alvo = { tipo: 'existente'; cliente: ClienteAsaas } | { tipo: 'novo'; dados: DadosDoCliente };
 
 /** Acha o cliente (por id ou por CPF/CNPJ) ou diz que será cadastrado. Mais de um cadastro com o mesmo documento: não adivinha. */
 async function acharAlvo(c: ContaAsaas, p: { clienteId?: string; novo?: DadosDoCliente }): Promise<Alvo> {
@@ -733,7 +733,7 @@ async function acharAlvo(c: ContaAsaas, p: { clienteId?: string; novo?: DadosDoC
 }
 
 /** O aviso automático do Asaas é decisão: um cadastro que já existe com aviso LIGADO só recebe cobrança com avisarCliente=true. */
-function decidirAviso(alvo: Alvo, avisar: boolean): { vaiAvisar: boolean; texto: string } {
+export function decidirAviso(alvo: Alvo, avisar: boolean): { vaiAvisar: boolean; texto: string } {
   if (alvo.tipo === 'novo') return { vaiAvisar: avisar, texto: avisar ? 'O Asaas PODE mandar e-mail/SMS da cobrança ao cliente (cadastro novo com avisos ligados).' : INSTRUCAO_AVISO_OFF };
   const liga = alvo.cliente.notificationDisabled !== true;
   if (liga && !avisar) {

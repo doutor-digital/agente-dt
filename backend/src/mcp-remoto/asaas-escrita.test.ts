@@ -494,7 +494,7 @@ async function conectar(m: ReturnType<typeof montar>, usuario: string, registros
 }
 const texto = (r: any) => String(r.content?.[0]?.text ?? '');
 
-const FERRAMENTAS = ['asaas_cancelar_cobranca', 'asaas_cobranca', 'asaas_criar_cliente', 'asaas_criar_cobranca', 'asaas_editar_cliente', 'asaas_editar_cobranca', 'asaas_estornar_cobranca', 'asaas_limites', 'asaas_transferir'];
+const FERRAMENTAS = ['asaas_assinaturas', 'asaas_cancelar_assinatura', 'asaas_cancelar_cobranca', 'asaas_cobranca', 'asaas_criar_assinatura', 'asaas_criar_cliente', 'asaas_criar_cobranca', 'asaas_editar_assinatura', 'asaas_editar_cliente', 'asaas_editar_cobranca', 'asaas_estornar_cobranca', 'asaas_limites', 'asaas_transferir'];
 
 test('protocolo: as ferramentas são diretas (nada de preparar/confirmar) e NÃO existe nada de banco da clínica, chaves, webhooks, usuários, antecipação, empréstimo ou pagar conta', async () => {
   const m = montar({ clientes: [EXISTENTE] });

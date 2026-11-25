@@ -77,9 +77,14 @@ export interface Opc {
   statusAoEmitir?: string;
   /** POST /invoices/{id}/cancel devolve este status (padrão PROCESSING_CANCELLATION) */
   statusAoCancelar?: string;
+  /** assinaturas que já existem na conta */
+  assinaturas?: Sub[];
   /** falha por método + rota (a primeira que casa) */
   falhas?: Array<{ metodo: string; caminho: RegExp; erro: Error }>;
   falhaNoPagamento?: Error;
+  falhaNaAssinatura?: Error;
+  /** a assinatura nasce sem a 1ª cobrança (o Asaas ainda não gerou) */
+  assinaturaSemCobranca?: boolean;
   falhaNoCliente?: Error;
   semNomeDaConta?: boolean;
   semEscrita?: boolean;
@@ -98,12 +103,15 @@ export interface Opc {
   statusDaTransferencia?: string;
 }
 
+export interface Sub { id: string; customer: string; value: number; cycle: string; nextDueDate: string; billingType: string; description: string; status: string; deleted?: boolean; externalReference?: string }
+
 export interface Chamada { metodo: string; caminho: string; corpo?: Record<string, any> }
 
 export function asaasFalso(o: Opc = {}) {
   const clientes = [...(o.clientes ?? [])];
   const pagamentos: Pg[] = [...(o.pagamentos ?? [])];
   const notas: Nf[] = [...(o.notas ?? [])];
+  const assinaturas: Sub[] = [...(o.assinaturas ?? [])];
   const servicos: ServicoMunicipal[] = o.servicos ?? [
     { id: '3544', description: '4.08 - Terapia ocupacional, fisioterapia e fonoaudiologia', issTax: 2 },
     { id: '2360', description: '4.01 - Medicina e biomedicina', issTax: 3 },
@@ -171,6 +179,17 @@ export function asaasFalso(o: Opc = {}) {
         if (nf) {
           const x = notas.find((y) => y.id === nf[1]);
           if (!x) throw new ErroHttp('Asaas 404 em /invoices', 404);
+          return x as T;
+        }
+        if (caminho === '/subscriptions') {
+          const xs = assinaturas.filter((x) => !x.deleted && (!query.customer || x.customer === query.customer) && (!query.status || x.status === query.status));
+          return { data: xs, totalCount: xs.length } as T;
+        }
+        const sp = caminho.match(/^\/subscriptions\/([^/]+)(\/payments)?$/);
+        if (sp) {
+          const x = assinaturas.find((y) => y.id === sp[1]);
+          if (!x) throw new ErroHttp('Asaas 404 em /subscriptions', 404);
+          if (sp[2]) return { data: pagamentos.filter((p) => (p as Pg & { subscription?: string }).subscription === x.id) } as T;
           return x as T;
         }
         if (caminho === '/payments') return { data: pagamentos.filter((p) => p.externalReference === query.externalReference) } as T;
@@ -289,13 +308,38 @@ export function asaasFalso(o: Opc = {}) {
                 n.status = nfe[2] === 'authorize' ? (o.statusAoEmitir ?? 'SCHEDULED') : (o.statusAoCancelar ?? 'PROCESSING_CANCELLATION');
                 return n as T;
               }
+              if (metodo === 'POST' && caminho === '/subscriptions') {
+                if (o.falhaNaAssinatura) throw o.falhaNaAssinatura;
+                const x: Sub = { id: `sub_${++seq}abcdef`, customer: String(corpo!.customer), value: corpo!.value as number, cycle: String(corpo!.cycle), nextDueDate: String(corpo!.nextDueDate), billingType: String(corpo!.billingType), description: String(corpo!.description), status: 'ACTIVE' };
+                assinaturas.push(x);
+                if (!o.assinaturaSemCobranca) {
+                  pagamentos.push({ id: `pay_${++seq}0000000002`, status: 'PENDING', customer: x.customer, value: x.value, dueDate: x.nextDueDate, description: x.description, billingType: x.billingType, subscription: x.id, invoiceUrl: 'https://www.asaas.com/i/sub123' } as Pg);
+                }
+                return x as T;
+              }
+              const su = caminho.match(/^\/subscriptions\/([^/]+)$/);
+              if (su) {
+                const x = assinaturas.find((y) => y.id === su[1])!;
+                if (metodo === 'PUT') {
+                  if (corpo!.value !== undefined) x.value = corpo!.value as number;
+                  if (corpo!.nextDueDate) x.nextDueDate = String(corpo!.nextDueDate);
+                  if (corpo!.description) x.description = String(corpo!.description);
+                  if (corpo!.billingType) x.billingType = String(corpo!.billingType);
+                  if (corpo!.cycle) x.cycle = String(corpo!.cycle);
+                  return x as T;
+                }
+                if (metodo === 'DELETE') {
+                  x.deleted = true;
+                  return { deleted: true, id: x.id } as T;
+                }
+              }
               if (metodo === 'POST' && caminho === '/transfers') return { id: `tra_${++seq}`, status: o.statusDaTransferencia ?? 'PENDING', value: corpo!.value } as T;
               throw new Error(`escrita não simulada: ${metodo} ${caminho}`);
             },
           },
         }),
   };
-  return { conta, clientes, pagamentos, notas, chamadas, gets, consultas, posts: () => chamadas.filter((c) => c.metodo !== 'GET') };
+  return { conta, clientes, pagamentos, notas, assinaturas, chamadas, gets, consultas, posts: () => chamadas.filter((c) => c.metodo !== 'GET') };
 }
 
 export const AGORA = Date.parse('2026-10-28T15:00:00-03:00');
