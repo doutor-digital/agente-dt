@@ -56,6 +56,7 @@ import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import { dominioContaJs } from '../lib/chatwoot-dominio-conta.js';
 import { dominiosDasClinicas } from '../lib/chatwoot-unidades.js';
 import { rotuloRoboJs } from '../lib/chatwoot-rotulo-robo.js';
+import { cartaoEnxutoJs } from '../lib/chatwoot-cartao-enxuto.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1857,7 +1858,9 @@ export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly
   // o rótulo «🤖 Robô / ✨ Sofia» acima do balão é o sexto bloco independente: só visual, só lê o estado do Chatwoot; falhou, o resto segue
   const rotulo = rotuloRoboJs();
   // cada bloco opcional entra na ordem de sempre, cada um no seu try (uma lista: PR novo soma um item sem brigar com a linha dos outros)
-  const opcionais = [guia, selo, dominio, rotulo].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
+  // o cartão enxuto (só os campos da etapa no painel «Informação da conversa»): só visual, lê o estado do Chatwoot; falhou, o resto segue
+  const cartao = cartaoEnxutoJs(process.env, contasDoGuiaSemAntecipado); // as mesmas contas sem antecipado do guia (banco)
+  const opcionais = [guia, selo, dominio, rotulo, cartao].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
   return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
 }
 
