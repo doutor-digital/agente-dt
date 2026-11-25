@@ -160,7 +160,7 @@ import {
   funilTarefaFeitaHandler,
   funilTarefaHandler,
 } from '../controllers/funil.controller.js';
-import { assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
+import { assistenteModeloPreenchidoHandler, assistenteAvaliarHandler, assistenteRespostasHandler, assistenteEstadoHandler, assistentePausaAcaoHandler, assistentePausaEstadoHandler, assistentePerguntarHandler, assistenteSugerirHandler } from '../controllers/assistente.controller.js';
 import { robosAutomacaoMudarHandler, robosAutomacoesHandler, robosEnviadosHandler, robosHandler, robosMudarHandler } from '../controllers/robos.controller.js';
 import { tarefasBuscarHandler, tarefasCancelarHandler, tarefasConfirmarHandler, tarefasContextoHandler, tarefasCriarHandler, tarefasEditarHandler, tarefasFeitaHandler, tarefasHandler, tarefasModelosHandler, tarefasRecentesHandler, tarefasResultadoHandler, tarefasZapHandler } from '../controllers/tarefas.controller.js';
 import { disparosAjusteHandler, disparosAprovarHandler, disparosCancelarHandler, disparosContarHandler, disparosHandler, disparosMontarHandler, disparosOndaHandler, disparosOpcoesHandler, disparosRelatorioHandler } from '../controllers/disparos.controller.js';
@@ -478,6 +478,7 @@ apiRouter.get('/public/assistente/pausa', assistentePausaEstadoHandler);
 apiRouter.post('/public/assistente/pausa', assistentePausaAcaoHandler);
 apiRouter.post('/public/assistente/avaliar', assistenteAvaliarHandler);
 apiRouter.get('/public/assistente/respostas', assistenteRespostasHandler);
+apiRouter.post('/public/assistente/modelo-preenchido', assistenteModeloPreenchidoHandler);
 
 // Widgets privados do Kommo (coluna do cartão) leem a agenda da franquia com chave por unidade (sem sessão).
 apiRouter.get('/public/widget/:slug/ping', widgetPingHandler);
