@@ -17,6 +17,8 @@
  * por ele. Por isso ela vai em TODA conversa importada (e o importador não a tira).
  */
 
+import { SITUACOES_DE_CONSULTA_DE_PE } from './chatwoot-regua.js';
+
 export const ETIQUETA_HISTORICO = 'historico';
 export const ETIQUETA_CONFERIR_ETAPA = 'conferir-etapa';
 export const TETO_DE_MENSAGENS = 50;
@@ -308,14 +310,12 @@ export function traduzirEtapa(c: CartaoDaKommo): Traducao {
 
 /** O dia de hoje em Belém (AAAA-MM-DD), o mesmo formato de `data_consulta`. */
 const hojeEmBelem = (agora: Date): string => dataDoCrm(Math.floor(agora.getTime() / 1000));
-/** Situações em que a consulta marcada ainda vai acontecer. */
-const SITUACOES_VIVAS: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado']);
 
 /** Cartão ABERTO, consulta de hoje em diante (Belém) e situação de pé: a conversa nasce viva. Fechado (Ganho/Perdido/Alta), consulta passada e etapa sem consulta: arquivo. */
 export function consultaDePe(c: CartaoDaKommo, m: { atributos: Record<string, unknown> }, agora: Date): boolean {
   const aberto = c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO;
   const dia = m.atributos.data_consulta;
-  return aberto && typeof dia === 'string' && dia >= hojeEmBelem(agora) && SITUACOES_VIVAS.has(String(m.atributos.situacao_consulta ?? ''));
+  return aberto && typeof dia === 'string' && dia >= hojeEmBelem(agora) && SITUACOES_DE_CONSULTA_DE_PE.has(String(m.atributos.situacao_consulta ?? ''));
 }
 
 /**

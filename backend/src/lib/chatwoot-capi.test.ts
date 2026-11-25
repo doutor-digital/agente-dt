@@ -661,3 +661,18 @@ test('token: env primeiro; sem env, o token de anúncios da unidade no banco', (
   assert.equal(configDaUnidade('doutor-hernia-parauapebas', { META_ADS_TOKEN_PARAUAPEBAS: 'TOKEN_ENV' }, 'TOKEN_DO_BANCO').token, 'TOKEN_ENV');
   assert.equal(configDaUnidade('doutor-hernia-parauapebas', {}, null).token, null);
 });
+
+test('histórico da Kommo: conversa ACORDADA (o paciente voltou) conta o que acontece depois; a de consulta de pé ainda intacta mantém «inicial»', async () => {
+  const IMP = unix('2026-11-01T12:00:00Z');
+  const kommo = { kommo_lead_id: 9, kommo_importado_em: IMP, kommo_aberto: true };
+  const da = (id: number, attrs: Record<string, unknown>, extra: Record<string, unknown>) => ({ ...bruta(id, attrs), labels: ['historico'], additional_attributes: kommo, ...extra });
+  const acordada = (attrs: Record<string, unknown>) => da(20, attrs, { status: 'open', last_activity_at: IMP + 3600 });
+  const intacta = (attrs: Record<string, unknown>) => da(21, attrs, { status: 'resolved', last_activity_at: IMP - 100 });
+  const t = montar({ conversas: [bruta(1, {}), acordada({ etapa: 'Perdido' })], cliques: { 20: CLIQUE, 21: CLIQUE } });
+  await t.ciclo('seco', T0);
+  // a conversa acordada passa a Agendado; a intacta (consulta de pé: viva desde o nascimento) já aparece em Agendado na 1ª vez que o CAPI a vê
+  t.estado.conversas = [bruta(1, {}), acordada({ etapa: 'Agendado' }), intacta({ etapa: 'Agendado', data_consulta: '2099-01-10', situacao_consulta: 'Agendado' })];
+  await t.ciclo('ligado', min(10));
+  await t.ciclo('ligado', min(20));
+  assert.deepEqual(t.enviados.map((e) => e.evento.event_id), ['chatwoot-20-AddToCart'], 'só a acordada vai; o estado que veio do cartão importado é «inicial» e nunca vai');
+});

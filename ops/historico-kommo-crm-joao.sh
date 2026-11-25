@@ -94,7 +94,8 @@ if [ -z "$DESFAZER" ]; then
   H="$(date +%H)"
   if [ "$H" -ge 7 ] && [ "$H" -lt 19 ]; then
     echo "ATENÇÃO: são ${H}h. O exportador usa o mesmo token da Kommo do atendimento ao vivo (cerca de 1.300 chamadas em ~25 min): prefira rodar à NOITE ou de madrugada."
-    if [ -t 0 ]; then read -r -p "Continuar mesmo assim? [s/N] " R; [[ "$R" =~ ^[sS]$ ]] || { echo "ok, não rodei."; exit 0; }; fi
+    if [ -t 0 ]; then read -r -p "Continuar mesmo assim? [s/N] " R; [[ "$R" =~ ^[sS]$ ]] || { echo "ok, não rodei."; exit 0; }
+    elif [ "${EM_HORARIO_OK:-}" != "1" ]; then echo "RECUSO: sem terminal para perguntar (rodar com EM_HORARIO_OK=1 se for de propósito)."; exit 1; fi
   fi
 fi
 

@@ -74,18 +74,22 @@ export function importadaDaKommo(raw: any): boolean {
  */
 function intactaDesdeAImportacao(raw: any): boolean {
   if (raw?.status !== 'resolved') return false;
-  const t = Number(raw?.last_activity_at) * 1000;
+  // alguns avisos do Chatwoot não trazem `last_activity_at` (só `timestamp`); sem nenhum dos dois não dá para provar que ninguém mexeu: vale como mexida
+  const t = Number(raw?.last_activity_at ?? raw?.timestamp) * 1000;
   const importadaEm = Number(raw?.additional_attributes?.[KOMMO_IMPORTADO_EM]) * 1000;
-  return !(Number.isFinite(t) && t > importadaEm);
+  return Number.isFinite(t) && t > 0 && t <= importadaEm;
 }
 
-/** Consulta de pé: a de hoje em diante (Belém) ou de até `diasAtras` dias atrás, com situação Agendado/Confirmado/Remarcado/Atendido/Não compareceu. */
-function consultaDePe(raw: any, agora: Date, diasAtras: number = DIAS_DA_CONSULTA_VIVA): boolean {
+/** As situações em que a consulta marcada AINDA VAI acontecer: as únicas que fazem a conversa da Kommo nascer viva (o exportador usa a mesma lista). */
+export const SITUACOES_DE_CONSULTA_DE_PE: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado']);
+
+/** Consulta de pé: a de hoje em diante (Belém) ou de até `diasAtras` dias atrás, com uma das `situacoes` (padrão: Agendado/Confirmado/Remarcado/Atendido/Não compareceu). */
+function consultaDePe(raw: any, agora: Date, diasAtras: number = DIAS_DA_CONSULTA_VIVA, situacoes: ReadonlySet<string> = SITUACOES_QUE_TIRAM_DO_ARQUIVO): boolean {
   const a = raw?.custom_attributes;
   const dia = lerData(a?.data_consulta);
   const hoje = lerData(diaEmBelem(agora));
   if (!dia || !hoje) return false;
-  return dia.iso >= somarDias(hoje, -diasAtras).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta));
+  return dia.iso >= somarDias(hoje, -diasAtras).iso && situacoes.has(str(a?.situacao_consulta));
 }
 
 /**
@@ -109,7 +113,7 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   // conversa como qualquer outra — régua, agenda, CAPI, telas e o aviso de demora a enxergam. O corte de 14/11 abaixo é de Parauapebas (as datas importadas
   // de Timbó são recentes e o tirariam do arquivo todas de uma vez): aqui vale o instante da importação. A consulta de pé (cartão ABERTO — AGENDADO, NÃO COMPARECEU remarcado… — com
   // consulta de HOJE em diante; a dos últimos 35 dias e as etapas Perdido/Fechou/Alta nascem arquivo e acordam quando o paciente fala) mantém a conversa VIVA desde o nascimento: o paciente recebe os lembretes do CRM.
-  if (importadaDaKommo(raw)) return intactaDesdeAImportacao(raw) && !(raw.additional_attributes[KOMMO_ABERTO] === true && consultaDePe(raw, agora, 0));
+  if (importadaDaKommo(raw)) return intactaDesdeAImportacao(raw) && !(raw.additional_attributes[KOMMO_ABERTO] === true && consultaDePe(raw, agora, 0, SITUACOES_DE_CONSULTA_DE_PE));
   const t = Number(raw?.last_activity_at) * 1000;
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
   return !consultaDePe(raw, agora);
@@ -177,6 +181,8 @@ export interface ConversaRegua {
   ultima: MensagemResumo | null;
   /** telefone do contato (`+55…`), para conferir cartão ativo no Kommo antes de falar com o paciente */
   telefone?: string;
+  /** conversa criada pela importação da Kommo em que alguém já mexeu depois (o paciente voltou, a equipe respondeu ou reabriu): a etiqueta `historico` já não vale como «estado antigo» */
+  kommoAcordada?: boolean;
 }
 
 /** A 1ª vez que o worker viu a conversa com este valor neste campo. */
@@ -927,5 +933,6 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,
     telefone: str(sender.phone_number),
+    ...(importadaDaKommo(raw) && !intactaDesdeAImportacao(raw) ? { kommoAcordada: true } : {}),
   };
 }

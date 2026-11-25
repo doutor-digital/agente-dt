@@ -438,10 +438,11 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
       for (const evento of eventos) {
         if (minhas.has(chaveDe(`capi:${evento}`, 'v1'))) continue; // já resolvido (enviado, sem clique, expirado…)
 
-        // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado
+        // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado. A etiqueta `historico` faz o que já estava lá ser «inicial» — menos na conversa da Kommo
+        // em que alguém já mexeu (`kommoAcordada`): o que aparece DEPOIS (a equipe marca Agendado) é conversão nova e vale, como em qualquer conversa
         let visto = minhas.get(chaveDe(`capi-visto:${evento}`, 'v1'));
         if (!visto) {
-          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || c.etiquetas.includes('historico') ? 'inicial' : 'novo', texto: '', criadoEm: agora };
+          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || (c.etiquetas.includes('historico') && !c.kommoAcordada) ? 'inicial' : 'novo', texto: '', criadoEm: agora };
           if (!(await armazem.registrar({ caixa, ...linha }))) continue; // outra cópia do servidor acabou de ver
           minhas.set(chaveDe(linha.regra, linha.chave), linha);
           visto = linha;

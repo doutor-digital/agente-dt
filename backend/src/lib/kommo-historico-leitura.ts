@@ -73,6 +73,8 @@ export interface Selecao {
   lidosNaConta: number;
   /** cartões que só a 2ª passada da paginação achou (um cartão apagado no meio da leitura empurra a lista e faz a 1ª pular um) */
   recuperadosNaPaginacao: number;
+  /** cartões do escopo cujo funil/etapa a Kommo não lista mais (funil arquivado, etapa apagada): NÃO entram — contados para o seco não parecer completo */
+  semEtapaConhecida: number;
 }
 
 function valorDoCampoDaKommo(f: { field_type?: string; values: Array<{ value: unknown }> }): unknown {
@@ -183,15 +185,19 @@ export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
 
   const cartoes: CartaoDaKommo[] = [];
   const contatos = new Map<number, ContatoDaKommo>();
+  let semEtapaConhecida = 0;
   for (const l of ordenados) {
     const c = cartaoDoLead(l, porId, motivos, usuarios);
-    if (!c) continue;
+    if (!c) {
+      semEtapaConhecida++;
+      continue;
+    }
     cartoes.push(c);
     const cid = contatoDoLead.get(l.id);
     const b = cid ? basicos.get(cid) : undefined;
     if (cid) contatos.set(l.id, { id: cid, nome: b?.nome ?? null, telefone: b?.telefone ?? null });
   }
-  return { cartoes, contatos, fechadosForaDaJanela: fora, lidosNaConta: daConta.length, recuperadosNaPaginacao: recuperados + recuperadosNaEntrada };
+  return { cartoes, contatos, fechadosForaDaJanela: fora, lidosNaConta: daConta.length, recuperadosNaPaginacao: recuperados + recuperadosNaEntrada, semEtapaConhecida };
 }
 
 /** O erro da Kommo que quer dizer «esta conta/cartão/conversa não tem o que entregar» (sem escopo de chats, ou sem conversa). */
@@ -257,6 +263,7 @@ export interface Relatorio {
   fechadosForaDaJanela: number;
   lidosNaConta: number;
   recuperadosNaPaginacao: number;
+  semEtapaConhecida: number;
   porEtapa: Record<string, number>;
   semTelefone: number;
   telefoneInvalido: number;
@@ -288,7 +295,7 @@ export interface Relatorio {
 }
 
 const vazioRelatorio = (): Relatorio => ({
-  cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, lidosNaConta: 0, recuperadosNaPaginacao: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
+  cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, lidosNaConta: 0, recuperadosNaPaginacao: 0, semEtapaConhecida: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
   semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0, nascemVivas: 0, consultaDePeForaDoDestino: 0, telefonesComVariasConsultasDePe: 0, vivasForaDoTopo: 0,
 });
 
@@ -312,6 +319,7 @@ export async function exportar(
   r.fechadosForaDaJanela = sel.fechadosForaDaJanela;
   r.lidosNaConta = sel.lidosNaConta;
   r.recuperadosNaPaginacao = sel.recuperadosNaPaginacao;
+  r.semEtapaConhecida = sel.semEtapaConhecida;
   const fones = new Map<string, number>();
   const agora = amb.agora();
   const agoraSeg = Math.floor(agora.getTime() / 1000);

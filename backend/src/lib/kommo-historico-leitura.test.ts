@@ -284,6 +284,14 @@ test('o seco mede o DESTINO e o TOPO: consulta de pé vem na frente no mesmo tel
   assert.equal(rm.vivasForaDoTopo, 0);
 });
 
+test('cartão numa etapa que a Kommo não lista mais não some calado: entra na conta `semEtapaConhecida`', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10), lead(2, 1, 4242), lead(3, 77, 10)]);
+  const sel = await lerSelecao(amb);
+  assert.equal(sel.cartoes.length, 1);
+  assert.equal(sel.semEtapaConhecida, 2);
+  assert.equal((await exportar(amb, { gravar: false, entregar: () => undefined })).semEtapaConhecida, 2);
+});
+
 test('lista opcional (motivos de perda e usuários): 403 é engolido com aviso; 5xx/429 repete e, se persistir, SOBE o erro', async () => {
   const { amb } = kommoDeMentira([lead(1, 1, 10)]);
   const avisos: string[] = [];

@@ -675,6 +675,9 @@ test('ehArquivo: histórico importado da KOMMO é arquivo SÓ enquanto ninguém 
   assert.equal(ehArquivo(c({ additional_attributes: { ...kommo, kommo_aberto: false }, custom_attributes: { etapa: 'Fechou', data_consulta: '2026-11-27', situacao_consulta: 'Agendado' } }), agora), true, 'cartão FECHADO (Fechou/Perdido/Alta): arquivo mesmo com consulta futura');
   assert.equal(ehArquivo(c({ additional_attributes: { kommo_lead_id: 1, kommo_importado_em: importadoEm }, custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-27', situacao_consulta: 'Agendado' } }), agora), true, 'sem kommo_aberto não presume aberto');
   assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-27', situacao_consulta: 'Desmarcado' } }), agora), true, 'desmarcada: arquivo');
+  assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Compareceu', data_consulta: '2026-11-27', situacao_consulta: 'Atendido' } }), agora), true, 'só situação de pé (Agendado/Confirmado/Remarcado) nasce viva: Atendido e Não compareceu não — a mesma lista do exportador');
+  assert.equal(ehArquivo(c({ last_activity_at: undefined }), agora), false, 'sem última atividade no aviso: não dá para provar que ninguém mexeu');
+  assert.equal(ehArquivo(c({ last_activity_at: undefined, timestamp: importadoEm - 100 }), agora), true, 'o aviso do webhook pode trazer só `timestamp`');
   // o paciente que fala DEPOIS acorda o que nasceu arquivo, e a consulta de pé volta ao normal
   assert.equal(ehArquivo(c({ status: 'open', last_activity_at: depoisDaImportacao, custom_attributes: { etapa: 'Fechou', data_consulta: '2026-10-01', situacao_consulta: 'Atendido' } }), agora), false);
   // sem o instante da importação (conversa que não é nossa de verdade) cai na regra geral, a do corte de 14/11
