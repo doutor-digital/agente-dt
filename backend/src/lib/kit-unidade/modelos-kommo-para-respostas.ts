@@ -93,7 +93,12 @@ function avisosDoTexto(textoOriginal: string, nomeDoCampo: (id: number) => strin
   return out;
 }
 
-const ehFinanceiro = (nome: string): boolean => atalhoDoNome(nome).startsWith('financeiro');
+/** Nomes dos modelos que só existem para quem aceita pagamento antecipado (cobrança de parcela, dados do Pix, pré-pagamento). */
+const NOME_DE_PAGAMENTO = /^(?:financeiro|consulta-dados-pix|consulta-prepagamento)(?:-|$)/;
+/** Texto que pede Pix, sinal ou pagamento antecipado (não pega «sinal de alerta»). */
+const TEXTO_DE_PAGAMENTO = /\bpix\b|\bsinal\s+(?:de\s+)?(?:reserva|r\$|\d|antecipado)|pagamento\s+antecipado|pr[eé]-?\s?pagamento/i;
+/** Em conta SEM antecipado este modelo não serve: pelo nome (a lista acima) ou porque o texto pede Pix/sinal. */
+export const pedePagamentoAntecipado = (nome: string, texto: string): boolean => NOME_DE_PAGAMENTO.test(atalhoDoNome(nome)) || TEXTO_DE_PAGAMENTO.test(texto);
 
 /**
  * O plano: uma linha por modelo geral do Kommo. `prefixo` sem o `_` (`timbocrm`). Dois modelos do Kommo que dariam o MESMO atalho ficam
@@ -129,7 +134,7 @@ export function planejarImportacao(
     const texto = textoParaOCrm(r.texto);
     const avisos = avisosDoTexto(originais.get(r.id) ?? '', nomeDoCampo);
     const comum = { atalho, nome, kommoId: r.id, texto, temAnexo: r.temAnexo, completar: paraCompletar(texto) };
-    if (opcoes.semAntecipado && ehFinanceiro(nome)) return { ...comum, situacao: 'de-fora', avisos, motivo: 'sem pagamento antecipado' };
+    if (opcoes.semAntecipado && pedePagamentoAntecipado(nome, texto)) return { ...comum, situacao: 'de-fora', avisos, motivo: 'sem pagamento antecipado' };
     if (chaveSolta(texto)) return { ...comum, situacao: 'bloqueado', avisos: [...avisos, 'sobrou «{{» ou «}}» fora do padrão: o CRM mostraria o marcador cru'] };
     const ja = noCrm.get(atalho);
     if (ja !== undefined) return { ...comum, situacao: normalizar(ja) === normalizar(texto) ? 'ja-existe' : 'divergente', avisos };

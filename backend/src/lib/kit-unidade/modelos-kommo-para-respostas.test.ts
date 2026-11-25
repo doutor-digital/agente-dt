@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
-import { BACKUP_MAX_MODELOS, atalhoDoNome, chaveSolta, importar, lerBackup, modelosDoBackup, planejarImportacao, relatorio, textoParaOCrm, type Portas } from './modelos-kommo-para-respostas.js';
+import { BACKUP_MAX_MODELOS, pedePagamentoAntecipado, atalhoDoNome, chaveSolta, importar, lerBackup, modelosDoBackup, planejarImportacao, relatorio, textoParaOCrm, type Portas } from './modelos-kommo-para-respostas.js';
 import type { KommoChatTemplate } from '../../services/kommo.service.js';
 
 const CAMPOS: Record<number, string> = { 385924: '◷ Data da Consulta' };
@@ -265,4 +265,23 @@ test('mesmo texto sob o atalho de OUTRA unidade da conta não impede criar o da 
 test('lerBackup: lê a entrada em pedaços e para no limite de tamanho', async () => {
   assert.equal(await lerBackup(Readable.from([Buffer.from('[{"id":1,'), Buffer.from('"name":"a"}]')])), '[{"id":1,"name":"a"}]');
   await assert.rejects(lerBackup(Readable.from([Buffer.alloc(600_000), Buffer.alloc(600_000)])), /passa de/);
+});
+
+test('sem antecipado: dados do Pix, pré-pagamento e qualquer texto que peça Pix ou sinal ficam de fora; sinal de alerta e reservar horário NÃO', () => {
+  const lista = [
+    um('Seguem os dados: chave', '⚡ Consulta dados pix', 1),
+    um('Seu horário está pré-agendado', '⚡ Consulta prepagamento', 2),
+    um('O pagamento não foi identificado', '⚡ Consulta prepagamento pendente', 3),
+    um('Me manda o Pix de R$ 50 para garantir', '⚡ 10 Reservar horário', 4),
+    um('Para reservar, o sinal de R$ 50 antecipado', '⚡ Outro', 5),
+    um('Fique atento a qualquer sinal de alerta e para reservar o horário me diga o nome', '⚡ 04 Triagem', 6),
+    um('Consulta confirmada para amanhã', '⚡ Consulta confirmada', 7),
+  ];
+  const sem = planejarImportacao(lista, nomeDoCampo, [], 'timbocrm_', { semAntecipado: true });
+  assert.deepEqual(Object.fromEntries(sem.map((x) => [x.kommoId, x.situacao])), { 1: 'de-fora', 2: 'de-fora', 3: 'de-fora', 4: 'de-fora', 5: 'de-fora', 6: 'criar', 7: 'criar' });
+  assert.ok(sem.filter((x) => x.situacao === 'de-fora').every((x) => x.motivo === 'sem pagamento antecipado'));
+  assert.ok(planejarImportacao(lista, nomeDoCampo, [], 'timbocrm_').every((x) => x.situacao === 'criar'));
+  assert.equal(pedePagamentoAntecipado('Financeiro em aberto', 'x'), true);
+  assert.equal(pedePagamentoAntecipado('Consulta prepagamento pendente', 'x'), true);
+  assert.equal(pedePagamentoAntecipado('Consulta pós atendimento', 'Ficou alguma dúvida?'), false);
 });
