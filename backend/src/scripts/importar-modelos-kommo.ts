@@ -13,15 +13,16 @@ import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { prisma } from '../lib/prisma.js';
 import { contaDaUnidade, configDaUnidade } from '../lib/chatwoot-unidades.js';
-import { listaDaResposta } from '../lib/kit-unidade/fase2.js';
 import { importar, relatorio } from '../lib/kit-unidade/modelos-kommo-para-respostas.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
-import { chamar, contaChatwootDoAmbiente, contextoDoAmbiente, donaDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { chamar, contaChatwootDoAmbiente, contextoDaUnidade, contextoDoAmbiente, temTokenProprio, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 
 async function principal(): Promise<number> {
   const args = process.argv.slice(2);
-  const slug = args.find((a) => !a.startsWith('--'));
+  const posicionais = args.filter((a) => !a.startsWith('--'));
+  const slug = posicionais[0];
   const flags = args.filter((a) => a.startsWith('--'));
+  if (posicionais.length > 1) return console.error(`mais de uma unidade (${posicionais.join(', ')}): rode uma por vez`), 2;
   for (const f of flags) if (f !== '--so-conferir' && f !== '--aplicar') return console.error(`argumento desconhecido: ${f} (use --so-conferir ou --aplicar)`), 2;
   if (!slug) return console.error('uso: importar-modelos-kommo <slug> [--so-conferir | --aplicar]'), 2;
   if (flags.includes('--so-conferir') && flags.includes('--aplicar')) return console.error('--so-conferir e --aplicar juntos: escolha um'), 2;
@@ -36,15 +37,16 @@ async function principal(): Promise<number> {
     const ambiente = contaChatwootDoAmbiente();
     if (conta === 1 || ambiente?.conta === conta) return console.error(`a conta ${conta} é a do ambiente (Parauapebas): recuso`), 1;
     const base = contextoDoAmbiente();
-    const dona = base ? donaDaConta(base, conta) : null;
-    if (!dona || dona.ctx.conta?.conta !== conta) return console.error(`não achei credencial do CRM para a conta ${conta}`), 1;
-    const ctx: ContextoChatwoot = dona.ctx;
+    // o contexto DESTA unidade (não o da «dona» da conta, que pode ser outra unidade que divide a conta)
+    const ctx: ContextoChatwoot | null = base ? contextoDaUnidade(base, slug) : null;
+    if (!ctx || ctx.conta?.conta !== conta) return console.error(`não achei credencial do CRM para a unidade ${slug} (conta ${conta})`), 1;
+    const propria = temTokenProprio(slug);
 
     const unit = await prisma.unit.findUnique({ where: { slug } });
     if (!unit?.kommoSubdomain || !unit.kommoAccessToken) return console.error(`a unidade «${slug}» não tem credencial do Kommo no banco`), 1;
     const kommo = createKommoClientSemFreio(unit);
 
-    console.log(`${aplicar ? 'APLICANDO' : 'SÓ CONFERIR (padrão): nada será escrito'} — unidade ${slug}, Kommo ${unit.kommoSubdomain}, CRM conta ${conta}${dona.propria ? '' : ' (token global da instalação: a conta não tem token próprio)'}.`);
+    console.log(`${aplicar ? 'APLICANDO' : 'SÓ CONFERIR (padrão): nada será escrito'} — unidade ${slug}, Kommo ${unit.kommoSubdomain}, CRM conta ${conta}${propria ? '' : ' (token global da instalação: a conta não tem token próprio)'}.`);
     const r = await importar(
       {
         modelosDoKommo: () => kommo.listChatTemplates(8),
@@ -53,7 +55,13 @@ async function principal(): Promise<number> {
           const por = new Map((await kommo.listarCamposDoCartao()).map((c) => [c.id, c.name]));
           return (id) => por.get(id) ?? null;
         },
-        respostasDoCrm: async () => listaDaResposta(await chamar(ctx, 'GET', 'canned_responses')).map((x) => ({ short_code: String(x.short_code ?? ''), content: String(x.content ?? '') })),
+        respostasDoCrm: async () => {
+          // falha FECHADO: resposta que não é lista não vira «não existe nenhuma» (aí tudo apareceria como «criar»)
+          const r = (await chamar(ctx, 'GET', 'canned_responses')) as unknown;
+          const lista = Array.isArray(r) ? r : Array.isArray((r as { payload?: unknown } | null)?.payload) ? ((r as { payload: unknown[] }).payload) : null;
+          if (!lista) throw new Error('o CRM não devolveu a lista de respostas prontas (formato inesperado): não vou adivinhar o que já existe');
+          return lista.map((x) => ({ short_code: String((x as { short_code?: unknown }).short_code ?? ''), content: String((x as { content?: unknown }).content ?? '') }));
+        },
         criarNoCrm: async (atalho, texto) => {
           await chamar(ctx, 'POST', 'canned_responses', { corpo: { short_code: atalho, content: texto } });
         },

@@ -27,6 +27,8 @@ export interface LinhaDaImportacao {
   situacao: Situacao;
   /** marcadores do Kommo que o CRM não troca sozinho (viraram «[…]») */
   avisos: string[];
+  /** o modelo tem arquivo anexo no Kommo: só o texto vai para o CRM */
+  temAnexo: boolean;
 }
 
 export interface ExistenteNoCrm {
@@ -47,6 +49,9 @@ export function atalhoDoNome(nome: string): string {
     .replace(/-+$/g, '');
 }
 
+/** Para comparar: o Kommo manda `\r\n`, o Chatwoot guarda `\n`; espaço no fim da linha não é diferença. */
+export const normalizar = (t: string): string => t.replace(/\r\n?/g, '\n').split('\n').map((l) => l.trimEnd()).join('\n').trim();
+
 /** O texto do Kommo na linguagem do Chatwoot. Os `{{lead.cf.N}}` já chegam trocados por `[Campo]` (`respostasProntas`). */
 export function textoParaOCrm(texto: string): string {
   return texto.replace(/\{\{\s*contact\.(?:first_)?name\s*\}\}/gi, '{{contact.first_name}}');
@@ -66,8 +71,9 @@ function avisosDoTexto(textoOriginal: string, nomeDoCampo: (id: number) => strin
 }
 
 /**
- * O plano: uma linha por modelo geral do Kommo. `prefixo` sem o `_` (`timbocrm`). Atalhos repetidos entre dois modelos do Kommo ganham `-2`, `-3`…
- * (na ordem alfabética do nome, para o resultado ser o mesmo em toda rodada).
+ * O plano: uma linha por modelo geral do Kommo. `prefixo` sem o `_` (`timbocrm`). Dois modelos do Kommo que dariam o MESMO atalho ficam
+ * os dois com o id do Kommo no fim (`timbocrm-retorno-123`): o atalho não depende de quem vem antes na lista, então apagar ou
+ * acrescentar um modelo no Kommo nunca troca o texto de um atalho já criado.
  */
 export function planejarImportacao(
   modelos: ReadonlyArray<KommoChatTemplate>,
@@ -75,20 +81,22 @@ export function planejarImportacao(
   existentes: ReadonlyArray<ExistenteNoCrm>,
   prefixo: string,
 ): LinhaDaImportacao[] {
-  const p = prefixo.replace(/_+$/, '');
+  const p = atalhoDoNome(prefixo.replace(/_+$/, ''));
+  if (!p) throw new Error('prefixo dos modelos vazio: o atalho ficaria sem o nome da unidade');
   const noCrm = new Map(existentes.map((e) => [e.short_code, e.content]));
-  const usados = new Set<string>();
   const originais = new Map(modelos.map((m) => [m.id, String(m.content ?? '')]));
-  return respostasProntas(modelos, nomeDoCampo).map((r) => {
+  const prontas = respostasProntas(modelos, nomeDoCampo).map((r) => {
     const nome = r.nome.replace(/^[^\p{L}\p{N}]+/u, '').trim() || `modelo ${r.id}`;
-    const base = `${p}-${atalhoDoNome(nome) || `modelo-${r.id}`}`;
-    let atalho = base;
-    for (let n = 2; usados.has(atalho); n++) atalho = `${base}-${n}`;
-    usados.add(atalho);
+    return { r, nome, base: `${p}-${atalhoDoNome(nome) || `modelo-${r.id}`}` };
+  });
+  const quantos = new Map<string, number>();
+  for (const x of prontas) quantos.set(x.base, (quantos.get(x.base) ?? 0) + 1);
+  return prontas.map(({ r, nome, base }) => {
+    const atalho = (quantos.get(base) ?? 0) > 1 ? `${base}-${r.id}` : base;
     const texto = textoParaOCrm(r.texto);
     const ja = noCrm.get(atalho);
-    const situacao: Situacao = ja === undefined ? 'criar' : ja.trim() === texto.trim() ? 'ja-existe' : 'divergente';
-    return { atalho, nome, kommoId: r.id, texto, situacao, avisos: avisosDoTexto(originais.get(r.id) ?? '', nomeDoCampo) };
+    const situacao: Situacao = ja === undefined ? 'criar' : normalizar(ja) === normalizar(texto) ? 'ja-existe' : 'divergente';
+    return { atalho, nome, kommoId: r.id, texto, situacao, avisos: avisosDoTexto(originais.get(r.id) ?? '', nomeDoCampo), temAnexo: r.temAnexo };
   });
 }
 
@@ -104,6 +112,8 @@ export interface Portas {
 
 export interface Resultado {
   linhas: LinhaDaImportacao[];
+  /** o que NÃO entra, por motivo (modelo do WhatsApp fica na WABA; sem texto não há o que levar) */
+  deFora: { waba: number; semTexto: number };
   criadas: string[];
   falhas: Array<{ atalho: string; erro: string }>;
 }
@@ -123,7 +133,9 @@ export async function importar(portas: Portas, prefixo: string, aplicar: boolean
       }
     }
   }
-  return { linhas, criadas, falhas };
+  const ehWaba = (m: KommoChatTemplate) => { const t = String(m.type ?? '').trim().toLowerCase(); return t === 'waba' || t.includes('whatsapp'); };
+  const waba = modelos.filter(ehWaba).length;
+  return { linhas, deFora: { waba, semTexto: modelos.length - waba - linhas.length }, criadas, falhas };
 }
 
 const ROTULO = { criar: 'CRIAR', 'ja-existe': 'já existe', divergente: 'DIVERGENTE (não sobrescrevo)' } as const;
@@ -132,10 +144,10 @@ export function relatorio(r: Resultado, aplicar: boolean): string[] {
   const l: string[] = [];
   for (const x of r.linhas) {
     const feito = aplicar && r.criadas.includes(x.atalho) ? ' → CRIADA' : aplicar && r.falhas.some((f) => f.atalho === x.atalho) ? ' → FALHOU' : '';
-    l.push(`  /${x.atalho}  [${ROTULO[x.situacao]}${feito}]  (${x.texto.length} car.)${x.avisos.length ? `  ATENÇÃO marcador não traduzido: ${x.avisos.join(', ')}` : ''}`);
+    l.push(`  /${x.atalho}  [${ROTULO[x.situacao]}${feito}]  (${x.texto.length} car.)${x.avisos.length ? `  ATENÇÃO marcador não traduzido: ${x.avisos.join(', ')}` : ''}${x.temAnexo ? '  ATENÇÃO: tem anexo no Kommo, só o texto vai' : ''}`);
   }
   const por = (s: string) => r.linhas.filter((x) => x.situacao === s).length;
-  l.push(`${r.linhas.length} modelo(s) gerais do Kommo: ${por('criar')} a criar, ${por('ja-existe')} já existem, ${por('divergente')} divergentes.`);
+  l.push(`${r.linhas.length} modelo(s) gerais do Kommo: ${por('criar')} a criar, ${por('ja-existe')} já existem, ${por('divergente')} divergentes. Ficam de fora: ${r.deFora.waba} do WhatsApp (já estão na WABA) e ${r.deFora.semTexto} sem texto.`);
   if (aplicar) l.push(`Criadas agora: ${r.criadas.length}. Falhas: ${r.falhas.length}${r.falhas.length ? ` (${r.falhas.map((f) => `/${f.atalho}: ${f.erro}`).join('; ')})` : ''}.`);
   else if (por('criar')) l.push('SÓ CONFERIR: nada foi escrito. Para criar os que faltam, rode de novo com --aplicar.');
   return l;

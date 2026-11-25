@@ -42,14 +42,31 @@ test('plano: casa pelo atalho — igual = já existe; texto diferente = divergen
   assert.deepEqual(l.map((x) => x.situacao), ['divergente', 'ja-existe']);
 });
 
-test('plano: dois modelos com o mesmo atalho ganham -2 (estável)', () => {
+test('plano: dois modelos com o mesmo atalho ficam os DOIS com o id (não depende da posição)', () => {
   const dois: KommoChatTemplate[] = [
     { id: 10, name: '⚡ Retorno', type: 'amocrm', content: 'a' },
     { id: 11, name: 'Retorno!', type: 'amocrm', content: 'b' },
   ];
-  const l = planejarImportacao(dois, nomeDoCampo, [], 'x_');
-  assert.equal(new Set(l.map((x) => x.atalho)).size, 2);
-  assert.ok(l.every((x) => /^x-retorno(-2)?$/.test(x.atalho)));
+  assert.deepEqual(planejarImportacao(dois, nomeDoCampo, [], 'x_').map((x) => x.atalho).sort(), ['x-retorno-10', 'x-retorno-11']);
+  // apagou um no Kommo: o que sobrou vira o atalho simples (novo) e nenhum texto antigo é trocado de dono
+  const sobrou = planejarImportacao([dois[1]!], nomeDoCampo, [{ short_code: 'x-retorno-10', content: 'a' }, { short_code: 'x-retorno-11', content: 'b' }], 'x_');
+  assert.deepEqual(sobrou.map((x) => [x.atalho, x.situacao]), [['x-retorno', 'criar']]);
+});
+
+test('plano: quebra de linha CRLF do Kommo e espaço no fim não viram «divergente»', () => {
+  const m: KommoChatTemplate[] = [{ id: 1, name: '⚡ Dois parágrafos', type: 'amocrm', content: 'Linha um  \r\nLinha dois\r\n' }];
+  const l = planejarImportacao(m, nomeDoCampo, [{ short_code: 'x-dois-paragrafos', content: 'Linha um\nLinha dois' }], 'x');
+  assert.equal(l[0]!.situacao, 'ja-existe');
+});
+
+test('plano: prefixo vazio é recusado (atalho sem o nome da unidade)', () => {
+  assert.throws(() => planejarImportacao(modelos, nomeDoCampo, [], '_'), /prefixo/);
+});
+
+test('plano: modelo com anexo é avisado (só o texto vai)', () => {
+  const m: KommoChatTemplate[] = [{ id: 1, name: 'Com PDF', type: 'amocrm', content: 'texto', attachment: { id: 9 } }];
+  const l = planejarImportacao(m, nomeDoCampo, [], 'x');
+  assert.equal(l[0]!.temAnexo, true);
 });
 
 function portasFalsas(existentes: Array<{ short_code: string; content: string }>) {
@@ -71,7 +88,9 @@ test('--so-conferir (padrão): NÃO escreve nada, nem os que faltam', async () =
   assert.equal(criados.length, 0);
   assert.equal(r.criadas.length, 0);
   assert.equal(r.linhas.filter((x) => x.situacao === 'criar').length, 2);
+  assert.deepEqual(r.deFora, { waba: 1, semTexto: 1 });
   assert.match(relatorio(r, false).join('\n'), /SÓ CONFERIR: nada foi escrito/);
+  assert.match(relatorio(r, false).join('\n'), /Ficam de fora: 1 do WhatsApp .* e 1 sem texto/);
 });
 
 test('--aplicar: cria só os que faltam e, rodando de novo, não duplica', async () => {
