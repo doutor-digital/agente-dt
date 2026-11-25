@@ -13,6 +13,7 @@ import {
   silencioDepoisDe,
   destinoDoAvisoClinica,
   estadoDoAvisoClinica,
+  nomeDeGente,
   primeiroNome,
   textoMarcou,
   textoNaoFechou,
@@ -86,6 +87,7 @@ function montar(over: Partial<DepsDoAviso> = {}) {
     estado: 'ligado',
     marcador,
     agora: marcador.agora,
+    nomeDoContato: async () => null,
     enviar: async (a) => {
       enviados.push(a);
       return 'ok';
@@ -640,4 +642,134 @@ test('reenvio do «marcou»: unidade inativa não recebe', async () => {
   };
   assert.equal(await reenviarMarcouPendentes({ ...a.deps, unidade: async () => ({ ...SALTO, isActive: false }) }), 0);
   assert.equal(a.enviados.length, 0);
+});
+
+// ── Nome do paciente: franquia → conversations.contact_name → cartão do Kommo → «paciente (sem nome)» (7 avisos de Salto saíram sem nome em 25/11) ──
+
+test('«não fechou»: cartão com título genérico («Lead 23 16/11/2026») + contact_name preenchido = primeiro nome do contact_name', async () => {
+  const casos: Array<[string, string, string]> = [
+    ['Odete', 'Lead 23 16/11/2026', 'Odete'],
+    ['Paulo', 'Lead #4921723', 'Paulo'],
+    ['Maria Simone Rodrigues', 'Lead 5020739', 'Maria'],
+  ];
+  for (const [contato, cartao, esperado] of casos) {
+    const { deps, enviados } = montar({ nomeDoContato: async () => contato });
+    await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: cartao }, deps);
+    assert.match(enviados[0].texto, new RegExp(`a \\*${esperado}\\* e não fechou`), contato);
+    assert.doesNotMatch(enviados[0].texto, /sem nome/);
+  }
+});
+
+test('«não fechou»: a conversa é buscada na unidade e no lead certos', async () => {
+  const buscas: Array<[string, number]> = [];
+  const { deps } = montar({
+    nomeDoContato: async (u, l) => {
+      buscas.push([u, l]);
+      return 'Odete';
+    },
+  });
+  await avisarClinicaNaoFechou(NAO_FECHOU, deps);
+  assert.deepEqual(buscas, [[SALTO.id, NAO_FECHOU.leadId]]);
+});
+
+test('«não fechou»: sem contact_name usa o nome do cartão; título genérico do Kommo NUNCA vira nome', async () => {
+  const a = montar();
+  await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: 'Joana Pereira' }, a.deps);
+  assert.match(a.enviados[0].texto, /a \*Joana\* e não fechou/);
+
+  for (const generico of ['Lead #123', 'Lead 23 16/11/2026', 'lead 77', 'Novo lead', 'Contato', 'Sem nome', null, '', '   ']) {
+    const b = montar();
+    await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: generico }, b.deps);
+    assert.match(b.enviados[0].texto, /a \*paciente \(sem nome\)\* e não fechou/, String(generico));
+  }
+  // contact_name também genérico ou lixo (emoji, inicial, usuário com número) não vira nome
+  for (const lixo of ['.', '💖', 'D', 'cabralcacilda39', 'Lead 12']) {
+    const c = montar({ nomeDoContato: async () => lixo });
+    await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: 'Joana' }, c.deps);
+    assert.match(c.enviados[0].texto, /a \*Joana\* e não fechou/, lixo);
+  }
+});
+
+test('«marcou»: franquia sem nome + contact_name preenchido = primeiro nome do contact_name; a franquia, quando tem nome, vence', async () => {
+  const a = montar({ nomeDoContato: async () => 'Maria Simone Rodrigues' });
+  await avisarClinicaMarcou({ ...MARCOU, nome: null }, a.deps);
+  assert.match(a.enviados[0].texto, /marcou \*Maria\* para/);
+
+  const b = montar({ nomeDoContato: async () => 'Odete' });
+  await avisarClinicaMarcou({ ...MARCOU, nome: 'PAULO ANTUNES' }, b.deps);
+  assert.match(b.enviados[0].texto, /marcou \*Paulo\* para/);
+});
+
+test('«marcou»: ordem franquia → contact_name → cartão → «paciente (sem nome)», cada fonte só consultada se as de antes falharam', async () => {
+  let cartao = 0;
+  const a = montar({ nomeDoContato: async () => 'Lead 9' });
+  await avisarClinicaMarcou(
+    {
+      ...MARCOU,
+      nome: 'Lead 55',
+      nomeDoCartao: async () => {
+        cartao++;
+        return 'Joana Lima';
+      },
+    },
+    a.deps,
+  );
+  assert.match(a.enviados[0].texto, /marcou \*Joana\* para/);
+  assert.equal(cartao, 1);
+
+  let contato = 0;
+  const b = montar({
+    nomeDoContato: async () => {
+      contato++;
+      return 'Odete';
+    },
+  });
+  await avisarClinicaMarcou(
+    {
+      ...MARCOU,
+      nome: null,
+      nomeDoCartao: async () => {
+        cartao++;
+        return 'Joana Lima';
+      },
+    },
+    b.deps,
+  );
+  assert.match(b.enviados[0].texto, /marcou \*Odete\* para/);
+  assert.equal(cartao, 1, 'o cartão não foi consultado: o contact_name já deu o nome');
+  assert.equal(contato, 1);
+
+  const c = montar({
+    nomeDoContato: async () => {
+      throw new Error('banco fora');
+    },
+  });
+  await avisarClinicaMarcou({ ...MARCOU, nome: null, nomeDoCartao: async () => 'Lead #1' }, c.deps);
+  assert.match(c.enviados[0].texto, /\*paciente \(sem nome\)\*/);
+});
+
+test('primeiroNome: «Maria Simone Rodrigues» vira «Maria»; título genérico do Kommo vira null', () => {
+  assert.equal(primeiroNome('Maria Simone Rodrigues'), 'Maria');
+  assert.equal(primeiroNome('Odete'), 'Odete');
+  for (const g of ['Lead #123', 'Lead 23 16/11/2026', 'Novo lead', 'Contato', 'Sem nome', 'Paciente', 'WhatsApp']) assert.equal(primeiroNome(g), null, g);
+  assert.equal(primeiroNome('Leandro Silva'), 'Leandro', 'só o título «lead» inteiro é genérico');
+  assert.equal(primeiroNome('Contatinho'), 'Contatinho');
+});
+
+test('nome do contato/cartão passa pelo filtro de nome-lixo do cadastro («Ocupado», «Fly link», «Oi», emoji) — não vira nome do paciente', async () => {
+  for (const lixo of ['Ocupado', 'Ocupada', 'Fly link', 'Oi', 'Bom dia', 'Quero marcar consulta', 'Doutor Hérnia Salto']) {
+    const a = montar({ nomeDoContato: async () => lixo });
+    await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: 'Joana Pereira' }, a.deps);
+    assert.match(a.enviados[0].texto, /a \*Joana\* e não fechou/, lixo);
+    const b = montar({ nomeDoContato: async () => null });
+    await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: lixo }, b.deps);
+    assert.match(b.enviados[0].texto, /\*paciente \(sem nome\)\*/, `cartão ${lixo}`);
+  }
+  // enfeite colado no nome do perfil sai: «Rosa❤️» é Rosa
+  const c = montar({ nomeDoContato: async () => 'Rosa❤️' });
+  await avisarClinicaNaoFechou({ ...NAO_FECHOU, nome: 'Lead 1' }, c.deps);
+  assert.match(c.enviados[0].texto, /a \*Rosa\* e não fechou/);
+  assert.equal(nomeDeGente('Maria Simone Rodrigues'), 'Maria Simone Rodrigues');
+  assert.equal(nomeDeGente('😃'), null);
+  assert.equal(nomeDeGente('Lead 23 16/11/2026'), null);
 });

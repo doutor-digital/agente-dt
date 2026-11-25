@@ -45,6 +45,7 @@ import { registrarSimulacao } from './so-no-papel.js';
 import { diaDaSemana } from './feriados.js';
 import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { ehLeadDoChatwoot } from './chatwoot-lead.js';
+import { avaliarNome } from '../services/spine-sync.service.js';
 
 export const ID_DA_AUTOMACAO = 'aviso-clinica-agendamento';
 
@@ -107,7 +108,8 @@ const TITULOS = new Set(['dr', 'dra', 'sr', 'sra', 'srta', 'doutor', 'doutora', 
  */
 export function primeiroNome(nome: string | null | undefined): string | null {
   const t = (nome ?? '').trim();
-  if (!t || /\d/.test(t) || /^lead\b/i.test(t)) return null;
+  // «Lead #123», «Lead 23 16/11/2026», «Novo lead», «Contato», «Sem nome»…: título que o sistema ou o Kommo põe quando não sabe o nome
+  if (!t || /\d/.test(t) || /^(novo\s+)?(lead|contato|cliente|paciente|visitante|whatsapp|sem\s+nome|desconhecid[oa]|unknown)\b/i.test(t)) return null;
   const palavras = t.split(/\s+/).map((p) => p.replace(/[^\p{L}'-]/gu, ''));
   // a primeira palavra que não é título nem inicial solta («J. Silva» → Silva)
   const primeiro = palavras.find((p) => (p.match(/\p{L}/gu) ?? []).length >= 2 && !TITULOS.has(p.toLocaleLowerCase('pt-BR')));
@@ -117,6 +119,66 @@ export function primeiroNome(nome: string | null | undefined): string | null {
     .split('-')
     .map((x) => (x ? x[0].toLocaleUpperCase('pt-BR') + x.slice(1) : x))
     .join('-');
+}
+
+/** De onde vem um nome: o valor já pronto, ou uma busca que só roda se as fontes de antes não deram um nome de gente. */
+export type FonteDeNome = string | null | undefined | (() => Promise<string | null | undefined>);
+
+/** Emoji e enfeite colados no nome do perfil («Rosa❤️»). */
+const ENFEITE = /[\p{Extended_Pictographic}☀-➿️‍]/gu;
+
+/**
+ * O nome só se for de PESSOA: passa por `primeiroNome` e pelo mesmo filtro de nome-lixo do cadastro na franquia (`avaliarNome`:
+ * «Ocupado», «Fly link», «Oi», saudação, pedaço de mensagem, número, nome da clínica). Devolve o nome sem enfeite, ou null.
+ */
+export function nomeDeGente(nome: string | null | undefined): string | null {
+  const limpo = String(nome ?? '').replace(ENFEITE, ' ').replace(/\s+/g, ' ').trim();
+  return limpo && primeiroNome(limpo) && avaliarNome(limpo).ok ? limpo : null;
+}
+
+/** A fonte passada pelo filtro de `nomeDeGente` (o nome do perfil do WhatsApp e o título do cartão são texto livre de gente e de robô). */
+export function soDeGente(f: FonteDeNome): FonteDeNome {
+  return async () => nomeDeGente(typeof f === 'function' ? await f() : f);
+}
+
+/**
+ * A primeira fonte que dá um nome de gente (`primeiroNome` não nulo), na ordem em que vieram; null se nenhuma. Fonte que lança
+ * é pulada. Ordem dos avisos: nome da franquia → nome do contato da conversa (`conversations.contact_name`) → nome do cartão do
+ * Kommo → «paciente (sem nome)».
+ */
+export async function primeiraFonteComNome(fontes: FonteDeNome[]): Promise<string | null> {
+  for (const f of fontes) {
+    try {
+      const n = typeof f === 'function' ? await f() : f;
+      if (primeiroNome(n)) return n ?? null;
+    } catch {
+      /* próxima fonte */
+    }
+  }
+  return null;
+}
+
+/**
+ * `conversations.contact_name` das conversas deste lead NESTA unidade (as 5 mais recentes: o lead pode ter WhatsApp e Instagram),
+ * o primeiro que for nome de gente. Nunca lança.
+ */
+export async function nomeDoContatoDaConversa(unitId: string, leadId: number): Promise<string | null> {
+  try {
+    const cs = await prisma.conversation.findMany({
+      where: { unitId, leadId: String(leadId), contactName: { not: null } },
+      orderBy: { lastMessageAt: 'desc' },
+      take: 5,
+      select: { contactName: true },
+    });
+    for (const c of cs) {
+      const n = nomeDeGente(c.contactName);
+      if (n) return n;
+    }
+    return null;
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId }, 'aviso-clinica-agendamento: não li o nome do contato da conversa');
+    return null;
+  }
 }
 
 /**
@@ -318,6 +380,8 @@ export interface DepsDoAviso {
   env?: Partial<NodeJS.ProcessEnv>;
   estado?: Estado;
   agora?: () => Date;
+  /** só teste: o `conversations.contact_name` do lead nesta unidade */
+  nomeDoContato?: (unitId: string, leadId: number) => Promise<string | null>;
 }
 
 export type Desfecho =
@@ -536,7 +600,8 @@ export const prefixoNaoFechou = (unitId: string, leadId: string | number): strin
 /**
  * A Sofia acabou de gravar a consulta na franquia. Nunca lança.
  * `tipo`: «avaliação» (categoria 1, a consulta inicial) ou «consulta».
- * Nome: o da franquia; se ela não devolveu um nome de gente, o do cartão do Kommo (`nomeDoCartao`, só consultado nesse caso).
+ * Nome, em ordem: o da franquia → `conversations.contact_name` do lead nesta unidade → o do cartão do Kommo (`nomeDoCartao`) →
+ * «paciente (sem nome)». Cada fonte só é consultada se as de antes não deram um nome de gente.
  * De madrugada (21h–7h na unidade) o aviso fica guardado e sai pelo vigia depois das 7h.
  */
 export async function avisarClinicaMarcou(
@@ -556,8 +621,11 @@ export async function avisarClinicaMarcou(
   deps: DepsDoAviso = {},
 ): Promise<Desfecho> {
   try {
-    let nome = a.nome;
-    if (!primeiroNome(nome) && a.nomeDoCartao) nome = await a.nomeDoCartao().catch(() => null);
+    const nome = await primeiraFonteComNome([
+      a.nome,
+      a.leadId ? soDeGente(() => (deps.nomeDoContato ?? nomeDoContatoDaConversa)(a.unit.id, a.leadId!)) : null,
+      a.nomeDoCartao ? soDeGente(a.nomeDoCartao) : null,
+    ]);
     const texto = textoMarcou({
       nome,
       data: a.data,
@@ -589,17 +657,19 @@ export async function avisarClinicaMarcou(
 
 /** O vigia decidiu que a oferta não fechou (mesma decisão do alerta de «agendamento perdido»). Nunca lança. */
 export async function avisarClinicaNaoFechou(
+  /** `nome` = o do CARTÃO do Kommo: só vale se não for título genérico, e só depois do nome do contato da conversa. */
   a: { unit: UnidadeDoAviso; leadId: number; nome: string | null | undefined; ultimaFala: string | null | undefined; ofereceuEm: Date },
   deps: DepsDoAviso = {},
 ): Promise<Desfecho> {
   try {
+    const nome = await primeiraFonteComNome([soDeGente(() => (deps.nomeDoContato ?? nomeDoContatoDaConversa)(a.unit.id, a.leadId)), soDeGente(a.nome)]);
     const prefixo = prefixoNaoFechou(a.unit.id, a.leadId);
     return await entregar(
       a.unit,
       {
         evento: 'nao-fechou',
         leadId: a.leadId,
-        texto: textoNaoFechou({ nome: a.nome, ultimaFala: avisoSemTrecho(deps.env ?? process.env) ? null : a.ultimaFala, link: linkDoCartao(a.unit, a.leadId) }),
+        texto: textoNaoFechou({ nome, ultimaFala: avisoSemTrecho(deps.env ?? process.env) ? null : a.ultimaFala, link: linkDoCartao(a.unit, a.leadId) }),
         idDaMarca: `${prefixo}${a.ofereceuEm.getTime()}`,
         leadDaMarca: String(a.leadId),
         titulo: `AVISO CLÍNICA · ofereceu e não fechou — lead ${a.leadId}`,
