@@ -12,6 +12,13 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 export const ATRIBUTO_ETAPA = 'etapa';
 /** Etapas de partida, se o atributo ainda não existir no Chatwoot. A lista que vale é a do atributo. */
 export const ETAPAS_PADRAO = ['Novo', 'Em atendimento', 'Aguardando paciente', 'Agendado', 'Compareceu', 'Fechou tratamento', 'Perdido'] as const;
+/** O funil do paciente (Comercial × Tratamento) e a etapa dele DENTRO do tratamento: dois atributos que a régua, a Sofia e o kit já usam. */
+export const ATRIBUTO_FUNIL = 'funil';
+export const ATRIBUTO_ETAPA_TRATAMENTO = 'etapa_tratamento';
+export type FunilDoQuadro = 'comercial' | 'tratamento';
+export const NOME_DO_FUNIL: Readonly<Record<FunilDoQuadro, string>> = { comercial: 'Comercial', tratamento: 'Tratamento' };
+export const ehFunilDoQuadro = (v: unknown): v is FunilDoQuadro => v === 'comercial' || v === 'tratamento';
+
 /** Quantas páginas de conversa (25 cada) o quadro lê de uma vez. */
 export const MAX_PAGINAS = 8;
 
@@ -66,6 +73,25 @@ export function etapasDoAtributo(definicoes: unknown): string[] {
   return vals.length ? [...new Set(vals)] : [...ETAPAS_PADRAO];
 }
 
+/**
+ * As etapas do funil de TRATAMENTO (opções do atributo `etapa_tratamento`: Entrada, Em tratamento, Alta, Tratamento cancelado). Lista vazia = a conta não tem esse atributo:
+ * o quadro segue como sempre, um funil só.
+ */
+export function etapasDoTratamento(definicoes: unknown): string[] {
+  return valoresDoAtributo(definicoes, ATRIBUTO_ETAPA_TRATAMENTO);
+}
+
+/**
+ * De qual funil é a conversa? `funil` explícito (Comercial/Tratamento) manda; sem ele, quem tem `etapa_tratamento` preenchida é do Tratamento. O resto é Comercial.
+ * (A conversa de Tratamento não tem etapa comercial: antes de existir o quadro do Tratamento ela caía na 1ª coluna do Comercial, «Novo lead».)
+ */
+export function funilDaConversa(attrs: Record<string, unknown>): FunilDoQuadro {
+  const f = typeof attrs[ATRIBUTO_FUNIL] === 'string' ? attrs[ATRIBUTO_FUNIL].trim().toLowerCase() : '';
+  if (f === 'tratamento') return 'tratamento';
+  if (f === 'comercial') return 'comercial';
+  return typeof attrs[ATRIBUTO_ETAPA_TRATAMENTO] === 'string' && attrs[ATRIBUTO_ETAPA_TRATAMENTO].trim() ? 'tratamento' : 'comercial';
+}
+
 /** Atributos da conversa que a ficha do funil edita (os outros, ela só mostra). */
 export const CAMPOS_EDITAVEIS = ['qualificacao', 'valor_fechado', 'motivo_nao_agendamento'] as const;
 export type CampoEditavel = (typeof CAMPOS_EDITAVEIS)[number];
@@ -79,7 +105,9 @@ export interface Cartao {
   telefone: string | null;
   avatar: string | null;
   caixaId: number | null;
+  /** a etapa no funil em que o cartão aparece: do Comercial (`etapa`) ou do Tratamento (`etapa_tratamento`) */
   etapa: string;
+  funil: FunilDoQuadro;
   status: string;
   responsavel: string | null;
   responsavelId: number | null;
@@ -123,10 +151,13 @@ export function situacaoDaTarefa(vencimentos: Date[], agora: Date): SituacaoTare
 }
 
 /** Uma conversa do Chatwoot vira cartão. Etapa vazia ou fora da lista = a 1ª etapa (o lead novo cai em "Novo"). */
-export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTarefa = { tipo: 'sem' }): Cartao {
+export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTarefa = { tipo: 'sem' }, etapasDoTrat: readonly string[] = []): Cartao {
   const attrs = c?.custom_attributes && typeof c.custom_attributes === 'object' ? c.custom_attributes : {};
   const bruta = typeof attrs[ATRIBUTO_ETAPA] === 'string' ? attrs[ATRIBUTO_ETAPA].trim() : '';
-  const etapa = etapas.includes(bruta) ? bruta : etapas[0];
+  // conta SEM `etapa_tratamento`: um funil só, como sempre. Com ela, a conversa do Tratamento mostra a etapa DO tratamento
+  const funil: FunilDoQuadro = etapasDoTrat.length ? funilDaConversa(attrs) : 'comercial';
+  const brutaTrat = typeof attrs[ATRIBUTO_ETAPA_TRATAMENTO] === 'string' ? attrs[ATRIBUTO_ETAPA_TRATAMENTO].trim() : '';
+  const etapa = funil === 'tratamento' ? (etapasDoTrat.includes(brutaTrat) ? brutaTrat : etapasDoTrat[0]!) : etapas.includes(bruta) ? bruta : etapas[0]!;
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
   // a última mensagem de verdade (avisos do sistema, tipo 2, como "Atribuído a…", não contam)
   const reais = msgs.filter((m: any) => Number(m?.message_type) !== 2);
@@ -147,6 +178,7 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
     avatar,
     caixaId: Number.isInteger(c?.inbox_id) ? c.inbox_id : null,
     etapa,
+    funil,
     status: String(c?.status ?? ''),
     responsavel: texto(c?.meta?.assignee?.name, 40) || null,
     responsavelId: Number.isInteger(Number(c?.meta?.assignee?.id)) && Number(c?.meta?.assignee?.id) > 0 ? Number(c.meta.assignee.id) : null,
@@ -162,8 +194,11 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
   };
 }
 
-/** Junta as páginas da API (`data.payload`), sem repetir conversa, e monta as colunas na ordem das etapas (com a soma em R$). */
-export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<number, SituacaoTarefa> = new Map()) {
+/**
+ * Junta as páginas da API (`data.payload`), sem repetir conversa, e monta as colunas na ordem das etapas (com a soma em R$).
+ * Com `etapasDoTrat` (a conta tem `etapa_tratamento`) o quadro vira DOIS: o pedido (`funil`) mostra só as conversas daquele funil, com as etapas dele, e `funis` traz os dois totais para o seletor.
+ */
+export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<number, SituacaoTarefa> = new Map(), etapasDoTrat: readonly string[] = [], funil: FunilDoQuadro = 'comercial') {
   const vistos = new Set<number>();
   const cartoes: Cartao[] = [];
   for (const p of paginas) {
@@ -172,15 +207,20 @@ export function montarQuadro(paginas: unknown[], etapas: string[], tarefas: Map<
       const k = Number(c?.id);
       if (!Number.isInteger(k) || vistos.has(k)) continue;
       vistos.add(k);
-      cartoes.push(cartaoDaConversa(c, etapas, tarefas.get(k)));
+      cartoes.push(cartaoDaConversa(c, etapas, tarefas.get(k), etapasDoTrat));
     }
   }
   cartoes.sort((a, b) => b.atividade - a.atividade);
-  const colunas = etapas.map((etapa) => {
-    const cs = cartoes.filter((c) => c.etapa === etapa);
+  const separa = etapasDoTrat.length > 0;
+  const funilPedido: FunilDoQuadro = separa ? funil : 'comercial';
+  const doFunil = separa ? cartoes.filter((c) => c.funil === funilPedido) : cartoes;
+  const etapasDoFunil = funilPedido === 'tratamento' ? [...etapasDoTrat] : etapas;
+  const colunas = etapasDoFunil.map((etapa) => {
+    const cs = doFunil.filter((c) => c.etapa === etapa);
     return { etapa, soma: Math.round(cs.reduce((t, c) => t + c.valor, 0) * 100) / 100, cartoes: cs };
   });
-  return { etapas, total: cartoes.length, colunas };
+  const funis = separa ? (['comercial', 'tratamento'] as const).map((id) => ({ id, nome: NOME_DO_FUNIL[id], total: cartoes.filter((c) => c.funil === id).length })) : [];
+  return { etapas: etapasDoFunil, total: doFunil.length, colunas, funil: funilPedido, funis };
 }
 
 /** Os ids das conversas que aparecem nas páginas (para buscar as tarefas delas de uma vez). */
@@ -281,4 +321,9 @@ export function telefoneParaCadastro(v: unknown): string | null {
 /** Nota interna deixada na conversa a cada mudança (histórico de quem moveu e quando). */
 export function notaDaMudanca(de: string, para: string, quem: string | null): string {
   return `📋 Etapa: ${de} → ${para}${quem ? ` (por ${quem})` : ''} — pelo funil`;
+}
+
+/** A mesma nota para a etapa DO TRATAMENTO (outro prefixo: `desdeAEtapa` só lê as notas da etapa comercial). */
+export function notaDaMudancaDeTratamento(de: string, para: string, quem: string | null): string {
+  return `📋 Etapa do tratamento: ${de} → ${para}${quem ? ` (por ${quem})` : ''} — pelo funil`;
 }
