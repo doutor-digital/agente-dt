@@ -72,7 +72,8 @@ export function eventosAlcancados(attrs: Record<string, unknown>): EventoCapi[] 
   const etapa = normalizar(attrs.etapa);
   const situacao = normalizar(attrs.situacao_consulta);
   const saida: EventoCapi[] = [];
-  if (etapa === 'agendado' || etapa === 'confirmado') saida.push('AddToCart');
+  // «faltou» (NÃO COMPARECEU, só em conta com etapas próprias): ele já tinha agendado
+  if (etapa === 'agendado' || etapa === 'confirmado' || etapa === 'faltou') saida.push('AddToCart');
   if (etapa === 'compareceu' || situacao === 'atendido') saida.push('InitiateCheckout');
   // compra só com «Fechou tratamento» marcado (decisão do João, 13/11/2026): a etapa Fechou sozinha pode ser engano de
   // arrasto no funil, e compra falsa na Meta não tem desfazer

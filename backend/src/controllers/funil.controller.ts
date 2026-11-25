@@ -24,7 +24,7 @@ import { MENSAGEM_SEM_CONTA, contaPedida, contextoDaRequisicao, ctxEhDoAmbiente,
 import { createHash } from 'node:crypto';
 import { prisma } from '../lib/prisma.js';
 import { conversasDasPaginas, diaEmBelem, montarHoje } from '../lib/chatwoot-hoje.js';
-import { conversaCrua, ehMolde, etapasDoContexto } from '../lib/chatwoot-etapas.js';
+import { conversaCrua, ehMolde, etapasDoContexto, etapasNoNavegadorJs } from '../lib/chatwoot-etapas.js';
 import {
   credenciaisDeAnuncio,
   emailDoPerfil,
@@ -1881,7 +1881,10 @@ export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly
   // o modelo do WhatsApp com os parâmetros preenchidos (mandado à mão): só preenche as caixinhas vazias, nunca envia; falhou, o resto segue
   const modelo = modeloPreenchidoJs(agente);
   const opcionais = [guia, selo, dominio, rotulo, cartao, modelo].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
+  // as etapas das contas com nome próprio (window.__ddEtapas): antes de todo bloco que decide pela etapa; vazio quando nenhuma conta tem mapa (o menu.js fica como era)
+  const etapas = etapasNoNavegadorJs();
+  const antes = etapas ? `;try{\n${etapas}\n}catch(e){}\n` : '';
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n${antes};try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).

@@ -12,6 +12,8 @@ process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 
 const { cartaoEnxutoJs, cartaoEnxutoLigado, mapaDoCartao, CARTAO_PADRAO } = await import('./chatwoot-cartao-enxuto.js');
 const { montarMenuJs } = await import('../controllers/funil.controller.js');
+const { aplicarEtapasDasContas, etapasNoNavegadorJs } = await import('./chatwoot-etapas.js');
+const { ETAPAS_DE_TIMBO_NA_COLUNA } = await import('./chatwoot-etapas-timbo.js');
 
 class No {
   children: No[] = [];
@@ -40,7 +42,7 @@ const DEFS = [
   ['motivo_nao_agendamento', 'Motivo do não agendamento'], ['valor_tratamento', 'Valor do tratamento'], ['proxima_sessao', 'Próxima sessão'], ['data_alta', 'Data de alta'],
 ].map(([attribute_key, attribute_display_name]) => ({ attribute_key, attribute_display_name, attribute_model: 'conversation_attribute' }));
 
-interface Cenario { attrs?: Record<string, unknown>; conversa?: number; caminho?: string; semStore?: boolean; semPainel?: boolean; repetido?: boolean; titulo?: string; nativoAberto?: boolean; defs?: typeof DEFS; valores?: Record<string, unknown>; cliqueFalha?: boolean; contas?: number[]; paginaGrande?: number; contagemDeBuscas?: { n: number }; env?: NodeJS.ProcessEnv }
+interface Cenario { attrs?: Record<string, unknown>; conversa?: number; caminho?: string; semStore?: boolean; semPainel?: boolean; repetido?: boolean; titulo?: string; nativoAberto?: boolean; defs?: typeof DEFS; valores?: Record<string, unknown>; cliqueFalha?: boolean; contas?: number[]; paginaGrande?: number; contagemDeBuscas?: { n: number }; env?: NodeJS.ProcessEnv; etapasDaConta?: boolean; etiquetas?: string[] }
 
 function montar(c: Cenario = {}) {
   const conversa = c.conversa ?? 5;
@@ -77,7 +79,7 @@ function montar(c: Cenario = {}) {
   for (let i = 0; i < (c.paginaGrande ?? 0); i++) body.appendChild(new No('div', 'x' + i)).appendChild(new No('span', 'texto ' + i)); // página cheia (a Chatwoot real tem milhares de nós)
   body.appendChild(new No('div', 'Outra coisa da página')).appendChild(new No('span', 'Etapa')); // o mesmo texto fora do painel não confunde
   body.appendChild(acordeao);
-  let chat: unknown = { id: conversa, custom_attributes: c.attrs ?? {} };
+  let chat: unknown = { id: conversa, custom_attributes: c.attrs ?? {}, labels: c.etiquetas ?? [] };
   const estilos: No[] = [];
   const doc = {
     body, documentElement: new No('html'), head: { appendChild: (e: No) => estilos.push(e) },
@@ -102,6 +104,8 @@ function montar(c: Cenario = {}) {
   class Obs { constructor(public f: () => void) { obs.push(this); } observe(_alvo?: unknown, o?: unknown) { opcoesDoObservador.push(o); } }
   const opcoesDoObservador: unknown[] = [];
   const obs: Obs[] = [];
+  // conta com etapas próprias: o servidor põe window.__ddEtapas no menu.js antes dos blocos
+  if (c.etapasDaConta) { const pre = etapasNoNavegadorJs(); assert.ok(pre); new Function('window', pre)(win); }
   const js = cartaoEnxutoJs(c.env ?? ({} as NodeJS.ProcessEnv), c.contas ?? []);
   assert.ok(js);
   new Function('window', 'document', 'location', 'setTimeout', 'clearTimeout', 'MutationObserver', js)(win, doc, loc, (f: () => void, ms: number) => { timers.push({ f, ms }); return timers.length; }, () => {}, Obs);
@@ -458,4 +462,37 @@ test('menu.js com TODOS os blocos (guia, selo, domínio, rótulo e cartão): cad
   assert.deepEqual([...pos].sort((a, b) => a - b), pos, 'na ordem: menu, guia, selo, domínio, rótulo, cartão');
   for (const m of marcas.slice(1)) assert.match(js.slice(js.lastIndexOf(';try{', js.indexOf(m)), js.indexOf(m)), /^;try\{\s*\(function\(\)\{/, m + ' em bloco próprio');
   assert.ok(js.includes('"drtimbo":3'));
+});
+
+test('CONTA COM ETAPAS PRÓPRIAS (Timbó): o nome da Kommo vira papel — EM QUALIFICAÇÃO recolhe como a qualificação, AGENDADO como Agendado, ALTA soma os campos de alta; esperando-humano é a etiqueta', () => {
+  aplicarEtapasDasContas([{ contaId: 3, etapas: ETAPAS_DE_TIMBO_NA_COLUNA }]);
+  try {
+    const caminho = '/app/accounts/3/conversations/5';
+    const q = montar({ attrs: { etapa: 'EM QUALIFICAÇÃO' }, caminho, etapasDaConta: true });
+    q.rodar();
+    assert.ok(q.visiveis().includes('qualificacao') && q.visiveis().includes('queixa') && !q.visiveis().includes('data_consulta'));
+    const a = montar({ attrs: { etapa: 'AGENDADO' }, caminho, etapasDaConta: true });
+    a.rodar();
+    assert.ok(a.visiveis().includes('data_consulta') && !a.visiveis().includes('queixa'));
+    const p = montar({ attrs: { etapa: 'PERDIDO' }, caminho, etapasDaConta: true });
+    p.rodar();
+    assert.ok(p.visiveis().includes('motivo_nao_agendamento') && !p.visiveis().includes('queixa'));
+    const alta = montar({ attrs: { funil: 'Tratamento', etapa_tratamento: 'ALTA' }, caminho, etapasDaConta: true });
+    alta.rodar();
+    assert.ok(alta.visiveis().includes('data_alta') && alta.visiveis().includes('proxima_sessao'));
+    // a etapa nova (papel «Faltou» = NÃO COMPARECEU): os campos da consulta
+    const f = montar({ attrs: { etapa: 'NÃO COMPARECEU' }, caminho, etapasDaConta: true });
+    f.rodar();
+    assert.ok(f.visiveis().includes('data_consulta'));
+    // sem o mapa no navegador (menu.js antigo): o nome da Kommo é «etapa desconhecida»: nada recolhido, como antes
+    const sem = montar({ attrs: { etapa: 'EM QUALIFICAÇÃO' }, caminho });
+    sem.rodar();
+    assert.deepEqual(sem.ocultas(), []);
+    // a conta SEM mapa (Parauapebas) não muda: o nome do molde segue valendo, mesmo com o mapa de Timbó no navegador
+    const parau = montar({ attrs: { etapa: 'Agendado' }, etapasDaConta: true });
+    parau.rodar();
+    assert.ok(parau.visiveis().includes('data_consulta'));
+  } finally {
+    aplicarEtapasDasContas([]);
+  }
 });

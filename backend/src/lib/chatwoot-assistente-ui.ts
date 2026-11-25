@@ -380,8 +380,10 @@ const BOTAO_JS = String.raw`(function(){
       body: corpo ? JSON.stringify(corpo) : undefined
     }).then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); });
   }
+  // a etapa em PAPEL (a conta pode chamar «Perdido» de PERDIDO e «Fechou» de GANHO / CONCLUÍDO): o mapa da conta vem do servidor (window.__ddEtapas); sem ele, o nome como está
+  function papelEt(nome){ try { return window.__ddEtapas ? window.__ddEtapas.papel(contaDaUrl(), nome) : String(nome || '').trim(); } catch (e) { return String(nome || '').trim(); } }
   function faltandoAoResolver(a){
-    var f = [], etapa = String((a && a.etapa) || '').trim();
+    var f = [], etapa = papelEt(a && a.etapa);
     if (!etapa) f.push('etapa');
     if (etapa === 'Perdido' && !String(a.motivo_nao_agendamento || '').trim()) f.push('motivo_nao_agendamento');
     if (etapa === 'Fechou' && !(Number(a.valor_fechado) > 0)) f.push('valor_fechado');
@@ -427,7 +429,7 @@ const BOTAO_JS = String.raw`(function(){
     var lEtapa = linha('Etapa', etapa), lMotivo = linha('Motivo do não agendamento', motivo), lValor = linha('Valor fechado (R$)', valor);
     cx.appendChild(lEtapa); cx.appendChild(lMotivo); cx.appendChild(lValor);
     var erro = document.createElement('div'); erro.setAttribute('role', 'alert'); erro.style.cssText = 'color:#c53030;font-size:12.5px;min-height:16px;margin-bottom:6px'; cx.appendChild(erro);
-    function mostrar(){ lMotivo.style.display = etapa.value === 'Perdido' ? 'block' : 'none'; lValor.style.display = etapa.value === 'Fechou' ? 'block' : 'none'; }
+    function mostrar(){ lMotivo.style.display = papelEt(etapa.value) === 'Perdido' ? 'block' : 'none'; lValor.style.display = papelEt(etapa.value) === 'Fechou' ? 'block' : 'none'; }
     etapa.onchange = mostrar; mostrar();
     var bs = document.createElement('div'); bs.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px';
     var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar';
@@ -440,8 +442,8 @@ const BOTAO_JS = String.raw`(function(){
     cx.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') fecharJanelaResolver(); });
     ok.onclick = function(){
       var novos = { etapa: etapa.value };
-      if (etapa.value === 'Perdido') novos.motivo_nao_agendamento = motivo.value;
-      if (etapa.value === 'Fechou') novos.valor_fechado = Number(valor.value);
+      if (papelEt(etapa.value) === 'Perdido') novos.motivo_nao_agendamento = motivo.value;
+      if (papelEt(etapa.value) === 'Fechou') novos.valor_fechado = Number(valor.value);
       var falta = faltandoAoResolver(Object.assign({}, atual, novos));
       if (falta.length) { erro.textContent = falta[0] === 'etapa' ? 'Escolha a etapa.' : falta[0] === 'valor_fechado' ? 'Informe o valor fechado.' : 'Escolha o motivo.'; return; }
       ok.disabled = true; ok.textContent = 'Salvando…'; erro.textContent = '';

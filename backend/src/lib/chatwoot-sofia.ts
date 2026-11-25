@@ -66,9 +66,11 @@ export type ModoDaSofia = 'seco' | 'ligado';
 // ── regras da conversa (puras) ─────────────────────────────────────────────────────────────────────
 
 /** Etapas de quem já tem consulta de pé ou já passou por ela: a Sofia não as muda. */
-export const ETAPAS_PROTEGIDAS: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou']);
+// «Em espera», «Conferir na franquia», «Faltou» e «Retorno pós-tratamento» só existem em conta com etapas próprias (chatwoot-etapas.ts): são da equipe, a etapa delas não é da Sofia
+export const ETAPAS_PROTEGIDAS: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Pós-consulta', 'Fechou', 'Em espera', 'Conferir na franquia', 'Faltou', 'Retorno pós-tratamento']);
 /** Etapas em que o agendamento da Sofia leva a conversa para «Agendado». */
-const ETAPAS_QUE_VIRAM_AGENDADO = new Set(['', 'Novo lead', 'Sofia qualifica', 'Frio', 'Resgate', 'Perdido']);
+// («Em espera», «Conferir na franquia» e «Faltou» só existem em conta com etapas próprias: quem marcou consulta sai delas para Agendado)
+const ETAPAS_QUE_VIRAM_AGENDADO = new Set(['', 'Novo lead', 'Sofia qualifica', 'Frio', 'Resgate', 'Perdido', 'Em espera', 'Conferir na franquia', 'Faltou']);
 /** O que `mover_etapa` aceita da Sofia. As outras etapas são efeito de outra ação (agendar, passar à equipe) ou da equipe. */
 export const ETAPAS_DA_SOFIA = ['Sofia qualifica', 'Frio', 'Perdido'] as const;
 export const ETIQUETA_HUMANO = 'esperando-humano';

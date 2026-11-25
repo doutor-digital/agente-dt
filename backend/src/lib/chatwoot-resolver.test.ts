@@ -78,3 +78,28 @@ test('janela do menu: parseia, mesma regra, só o botão «Resolver», deixa res
   assert.ok(bloco.includes("Object.assign({}, base, novos)"), 'manda TODOS os atributos (o Chatwoot troca o conjunto inteiro)');
   assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
 });
+
+test('janela de resolver no navegador: decide por PAPEL (PERDIDO / GANHO / CONCLUÍDO da conta com etapas próprias), e a conta sem mapa segue como sempre', async () => {
+  const { aplicarEtapasDasContas, etapasNoNavegadorJs } = await import('./chatwoot-etapas.js');
+  const { ETAPAS_DE_TIMBO_NA_COLUNA } = await import('./chatwoot-etapas-timbo.js');
+  const js = assistenteJs({}).split('__AGENTE__').join(JSON.stringify('https://agente.exemplo.test'));
+  const trecho = /function papelEt\(nome\)[\s\S]*?function faltandoAoResolver\(a\)\{[\s\S]*?\n  \}/.exec(js)?.[0];
+  assert.ok(trecho, 'achou as duas funções no script');
+  aplicarEtapasDasContas([{ contaId: 3, etapas: ETAPAS_DE_TIMBO_NA_COLUNA }]);
+  try {
+    const roda = (conta: string, attrs: Record<string, unknown>, comMapa: boolean): string[] => {
+      const win: Record<string, unknown> = {};
+      if (comMapa) new Function('window', etapasNoNavegadorJs())(win);
+      return new Function('window', 'location', `${trecho}\nvar contaDaUrl = function(){ return ${JSON.stringify(conta)}; }; return faltandoAoResolver(${JSON.stringify(attrs)});`)(win, {}) as string[];
+    };
+    assert.deepEqual(roda('3', { etapa: 'PERDIDO' }, true), ['motivo_nao_agendamento']);
+    assert.deepEqual(roda('3', { etapa: 'GANHO / CONCLUÍDO' }, true), ['valor_fechado']);
+    assert.deepEqual(roda('3', { etapa: 'GANHO / CONCLUÍDO', valor_fechado: 900 }, true), []);
+    assert.deepEqual(roda('3', {}, true), ['etapa']);
+    assert.deepEqual(roda('1', { etapa: 'Perdido' }, true), ['motivo_nao_agendamento'], 'conta sem mapa: o nome do molde');
+    assert.deepEqual(roda('1', { etapa: 'PERDIDO' }, true), [], 'conta sem mapa: PERDIDO não é Perdido (como antes)');
+    assert.deepEqual(roda('1', { etapa: 'Perdido' }, false), ['motivo_nao_agendamento'], 'menu.js sem o mapa: como antes');
+  } finally {
+    aplicarEtapasDasContas([]);
+  }
+});

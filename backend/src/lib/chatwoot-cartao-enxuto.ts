@@ -52,6 +52,11 @@ export const CARTAO_PADRAO: MapaDoCartao = {
     Fechou: FECHOU,
     'Pós-consulta': FECHOU,
     Resgate: ['motivo_nao_agendamento', 'motivo_nao_fechamento', 'retomar_em'],
+    // os papéis que só as contas com etapas próprias têm (chatwoot-etapas.ts): a chave é o PAPEL, o nome na tela é o da conta
+    'Em espera': [...QUALIFICAR, 'motivo_espera', 'retomar_em'],
+    'Conferir na franquia': AGENDADO,
+    Faltou: AGENDADO,
+    'Retorno pós-tratamento': AGENDADO,
     Frio: ['motivo_nao_agendamento', 'retomar_em'],
     Perdido: ['motivo_nao_agendamento', 'motivo_nao_fechamento'],
   },
@@ -133,14 +138,20 @@ const CARTAO_JS = String.raw`(function(){
   // ── quais campos aparecem nesta etapa ─────────────────────────────────────────────────────────────────────────────────────────
   function semAcento(t){ return norm(t).normalize ? norm(t).normalize('NFD').replace(/[\u0300-\u036f]/g, '') : norm(t); }
   // devolve os campos visíveis da etapa, ou null quando a etapa NÃO é conhecida (nome novo, grafia diferente): aí nada é recolhido — o painel fica como o Chatwoot o entrega
-  function camposDaEtapa(attrs, conta){
+  function camposDaEtapa(attrs, conta, chat){
     var vis = {}; function pôr(l){ (l || []).forEach(function(k){ vis[k] = 1; }); }
     pôr(MAPA.sempre);
     // o FUNIL decide primeiro: «Comercial» é lead (mesmo com um etapa_tratamento antigo de quando já foi paciente); só sem funil o etapa_tratamento preenchido indica tratamento
     var funil = norm(attrs.funil), tratamento = funil === 'tratamento' || (funil !== 'comercial' && preenchido(attrs.etapa_tratamento));
-    if (tratamento) { pôr(MAPA.tratamento); if (/alta/.test(norm(attrs.etapa_tratamento))) pôr(MAPA.alta); }
+    // o nome que a conta dá à etapa vira PAPEL (as chaves do mapa são papéis); conta sem mapa: o nome como está
+    var E = window.__ddEtapas, tem = E && E.mapa(conta);
+    var papelC = tem ? E.papel(conta, String(attrs.etapa || '')) : attrs.etapa;
+    var papelT = tem ? E.papelT(conta, String(attrs.etapa_tratamento || '')) : attrs.etapa_tratamento;
+    // «Esperando humano» não tem coluna na conta com etapas próprias: é a qualificação com a etiqueta esperando-humano
+    if (tem && papelC === 'Sofia qualifica' && !E.tem(conta, 'Esperando humano') && chat && Array.isArray(chat.labels) && chat.labels.indexOf('esperando-humano') >= 0) papelC = 'Esperando humano';
+    if (tratamento) { pôr(MAPA.tratamento); if (/alta/.test(norm(papelT))) pôr(MAPA.alta); }
     else {
-      var e = semAcento(attrs.etapa || 'Novo lead'), lista = null;
+      var e = semAcento(papelC || 'Novo lead'), lista = null;
       Object.keys(MAPA.etapas).forEach(function(nome){ if (semAcento(nome) === e) lista = MAPA.etapas[nome]; });
       if (!lista) return null;
       pôr(lista);
@@ -283,7 +294,7 @@ const CARTAO_JS = String.raw`(function(){
     if (!achados) { limpar(); return; }
     garantirEstilo();
     var attrs = chat.custom_attributes && typeof chat.custom_attributes === 'object' ? chat.custom_attributes : {};
-    var vis = camposDaEtapa(attrs, contaDaUrl());
+    var vis = camposDaEtapa(attrs, contaDaUrl(), chat);
     if (!vis) { limpar(); return; } // etapa desconhecida: nada recolhido
     abrirNativo(achados.lista);
     Object.keys(achados.linhas).forEach(function(k){

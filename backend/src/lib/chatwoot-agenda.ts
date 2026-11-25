@@ -19,7 +19,7 @@ import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
-import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
+import { atributosParaGravar, etapasDoContexto, nomeParaGravar, papeisDosAtributos, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
 import { desfechoDaAgenda } from './franquia-calendario.js';
@@ -77,7 +77,7 @@ export function desejadoDe(s: SpineSchedule): Desejado | null {
 }
 
 /** Etapas em que a conversa ainda não é «paciente marcado»: com consulta de pé na agenda, a etapa passa a Agendado/Confirmado (como a sincronização franquia → Kommo move para AGENDADO). */
-const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate']);
+const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate', 'Em espera', 'Conferir na franquia', 'Faltou']);
 /** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
 const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
 /** Só estas duas (igual a `agendamentoQueVale`): Remarcado é horário que NÃO vale mais, a data nova pode estar fora da janela lida. */
@@ -103,8 +103,21 @@ export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoj
   return { etapa: d.situacao_consulta === 'Confirmado' ? 'Confirmado' : 'Agendado' };
 }
 
+/**
+ * A falta: quem estava Agendado/Confirmado e a agenda diz «Não compareceu» vai para «Faltou» — SÓ na conta que tem essa etapa (Timbó: NÃO COMPARECEU; Parauapebas
+ * não tem e nada muda). Tratamento, Perdido/Frio e as demais etapas não são tocados. A régua segue pela `situacao_consulta`, como sempre.
+ */
+export function etapaDaFalta(atual: Record<string, unknown>, d: Desejado, mapa?: MapaDeEtapas | null): string | undefined {
+  if (d.situacao_consulta !== 'Não compareceu' || nomeParaGravar(mapa, 'Faltou') === null) return undefined;
+  // a falta de uma Sessão ou de um Retorno após tratamento é de paciente em tratamento, não de lead: a mesma regra de categoria que promove a Agendado (`etapaDaConsulta`)
+  if (!d.categoria_consulta || !CATEGORIAS_COMERCIAIS.has(d.categoria_consulta)) return undefined;
+  if (String(atual.funil ?? '').trim() === 'Tratamento' || String(atual.etapa_tratamento ?? '').trim() !== '') return undefined;
+  const etapa = String(atual.etapa ?? '').trim();
+  return etapa === 'Agendado' || etapa === 'Confirmado' ? 'Faltou' : undefined;
+}
+
 /** O que muda nos atributos da conversa (só chaves com valor novo). Vazio = nada a fazer. `hoje` (AAAA-MM-DD) liga a etapa da consulta de pé. */
-export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: string): Record<string, string> {
+export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: string, mapa?: MapaDeEtapas | null): Record<string, string> {
   const o: Record<string, string> = {};
   const dataAtual = String(atual.data_consulta ?? '').slice(0, 10);
   if (dataAtual !== d.data_consulta) o.data_consulta = d.data_consulta;
@@ -113,6 +126,10 @@ export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: str
   if (d.categoria_consulta && String(atual.categoria_consulta ?? '') !== d.categoria_consulta) o.categoria_consulta = d.categoria_consulta;
   const e = hoje ? etapaDaConsulta(atual, d, hoje) : {};
   if (e.etapa) o.etapa = e.etapa;
+  else {
+    const falta = etapaDaFalta(atual, d, mapa);
+    if (falta) o.etapa = falta;
+  }
   return o;
 }
 
@@ -139,6 +156,7 @@ export function casar(
   conversas: ConversaDaCaixa[],
   whatsDoNome: (nome: string) => string[] | null,
   hoje: string,
+  mapa?: MapaDeEtapas | null,
 ): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string; porCategoria?: string }> {
   const porNome = new Map<string, SpineSchedule[]>();
   for (const s of agenda) {
@@ -156,7 +174,7 @@ export function casar(
     const s = agendamentoQueVale(lista, hoje);
     const d = s ? desejadoDe(s) : null;
     if (!d) continue;
-    const muda = mudancas(alvo.attrs, d, hoje);
+    const muda = mudancas(alvo.attrs, d, hoje, mapa);
     const { segurada, porCategoria } = etapaDaConsulta(alvo.attrs, d, hoje);
     if (Object.keys(muda).length || segurada || porCategoria) {
       saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}), ...(porCategoria ? { porCategoria } : {}) });
@@ -241,7 +259,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     await new Promise((ok) => setTimeout(ok, 250));
   }
   const conversas = await conversasDaCaixa(ctx, caixa);
-  const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
+  const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje, etapasDoContexto(ctx));
   let gravadas = 0;
   for (const { conversa, muda, nome, segurada, porCategoria } of plano) {
     if (porCategoria) {
