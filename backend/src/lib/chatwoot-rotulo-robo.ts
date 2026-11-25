@@ -2,10 +2,14 @@
  * «Rótulo do robô» nas conversas do CRM (Chatwoot) — pedido do João, 25/11/2026: as mensagens automáticas precisam ter um rótulo VISÍVEL em cima do balão
  * (hoje só aparece no hover «Enviado por: 🤖 Robô automático»).
  *
+ *  Todo balão de SAÍDA mostra em cima QUEM mandou, no mesmo estilo e no mesmo lugar (o João bate o olho: gente, IA ou robô):
  *  - «🤖 Robô · modelo automático»: a mensagem saiu pelo usuário CONECTOR da conta (o que manda os modelos e lembretes da régua; renomeado «🤖 Robô automático»)
- *    ou traz `additional_attributes.template_params` (modelo aprovado do WhatsApp) sem uma PESSOA da equipe por trás (quem manda modelo pelo botão não é robô);
- *  - «✨ Sofia (IA)»: a mensagem saiu pelo AgentBot (o robô «Sofia»).
- *  Mensagem de PESSOA da equipe, o eco do celular da unidade (usuário «📱 Celular da unidade»), nota privada e mensagem do paciente NUNCA são marcadas.
+ *    ou traz `additional_attributes.template_params` (modelo aprovado do WhatsApp) sem uma PESSOA por trás;
+ *  - «✨ Sofia (IA)»: a mensagem saiu pelo AgentBot (o robô «Sofia»);
+ *  - «👤 <nome>»: uma PESSOA respondeu (a SDR, a gerente, a secretária): o nome que vem no remetente (`sender.available_name` / `sender.name`). Só o NOME: o Chatwoot não diz de
+ *    forma confiável se a pessoa é SDR ou gerente (o papel dele é só «administrador»/«agente»), e papel não se inventa. O eco do celular da unidade (usuário «📱 Celular da
+ *    unidade») aparece com esse nome («📱 Celular da unidade»), sem o 👤.
+ *  Nota privada, mensagem do paciente e atividade NUNCA levam rótulo.
  *
  * Como detecta: pelo ESTADO (store) do próprio Chatwoot — as mensagens da conversa aberta (`getSelectedChat.messages`: tipo, privada, quem enviou, `template_params`) —
  * nunca pelo texto da mensagem. Só visual: o script não grava nada e NÃO cria nó dentro do que o Vue controla (como o selo da Sofia): põe um atributo
@@ -35,7 +39,7 @@ export function conectoresDoRotulo(env: NodeJS.ProcessEnv = process.env): number
 // String.raw: o que está aqui é o JavaScript que o navegador recebe. Sem crases nem «${» aqui dentro.
 const ROTULO_JS = String.raw`(function(){
   if (window.top !== window || window.__rotuloRoboDD) return; window.__rotuloRoboDD = 1;
-  var CONECTORES = __CONECTORES__, ATTR = 'data-dd-rotulo', ESTILO = 'data-dd-rotulo-estilo';
+  var CONECTORES = __CONECTORES__, ATTR = 'data-dd-rotulo', NOME = 'data-dd-nome', ESTILO = 'data-dd-rotulo-estilo';
   var TEXTO = { robo: '🤖 Robô · modelo automático', sofia: '✨ Sofia (IA)' };
   var espera = null;
 
@@ -48,8 +52,11 @@ const ROTULO_JS = String.raw`(function(){
       + '[' + ATTR + ']::before{position:absolute;z-index:1;top:-19px;right:10px;' + base + '}'
       + '[' + ATTR + '="robo"]::before{content:"' + TEXTO.robo + '";background:#eceef5;color:#454c6b;border:1px solid #cdd2e3}'
       + '[' + ATTR + '="sofia"]::before{content:"' + TEXTO.sofia + '";background:#efe8fd;color:#5b21b6;border:1px solid #d9c7fb}'
+      // gente: o NOME vem do atributo (a CSS lê attr(); nada é interpretado como HTML), cortado com reticências se for longo
+      + '[' + ATTR + '="gente"]::before{content:attr(' + NOME + ');background:#e6f3ec;color:#1f5f43;border:1px solid #b9dcc9;max-width:62%;overflow:hidden;text-overflow:ellipsis}'
       + '.dark [' + ATTR + '="robo"]::before{background:#2a2d3a;color:#c3c9e4;border-color:#43484e}'
       + '.dark [' + ATTR + '="sofia"]::before{background:#2c1c5c;color:#d4c0ff;border-color:#4b3490}'
+      + '.dark [' + ATTR + '="gente"]::before{background:#12372a;color:#9be0bf;border-color:#2a6a4e}'
       + '@media (max-width:560px){[' + ATTR + ']::before{right:6px;font-size:10.5px;padding:0 6px}}';
   }
   function garantirEstilo(){
@@ -69,17 +76,24 @@ const ROTULO_JS = String.raw`(function(){
     } catch (e) { return null; }
   }
   function atributos(m){ var a = m && m.additional_attributes; return a && typeof a === 'object' ? a : {}; }
+  // o NOME de quem mandou, como o Chatwoot entrega (available_name = o de exibição; name = o cadastro); limpo e curto
+  function nomeDe(s){
+    var n = String((s && (s.available_name || s.name)) || '').replace(/\s+/g, ' ').trim().slice(0, 40);
+    return n;
+  }
+  // devolve { t: 'robo' | 'sofia' | 'gente', nome } ou null (paciente, atividade, nota privada, remetente desconhecido)
   function tipoDaMensagem(m){
     if (!m || m.private === true) return null; // nota privada nunca
     var t = Number(m.message_type); if (t !== 1 && t !== 3) return null; // só o que SAIU (1 = enviada, 3 = modelo); paciente (0) e atividade (2) nunca
     var s = m.sender || {}, quem = String(s.type || m.sender_type || '').toLowerCase().replace(/[^a-z]/g, '');
-    if (quem === 'agentbot') return 'sofia';
+    if (quem === 'agentbot') return { t: 'sofia' };
+    if (quem === 'contact') return null;
     // o usuário CONECTOR: o id conhecido, ou o nome padrão das contas («🤖 Robô automático»; o nome do USUÁRIO, não o texto da mensagem)
     var conector = CONECTORES.indexOf(Number(s.id)) >= 0 || String(s.name || '').indexOf('🤖') === 0;
-    if (quem === 'user' && !conector) return null; // pessoa da equipe (e o eco do celular): nunca, nem quando manda um modelo pelo botão
-    if (conector && (quem === 'user' || quem === '')) return 'robo';
-    var tp = atributos(m).template_params; // modelo aprovado do WhatsApp sem pessoa por trás (régua, tarefa, disparo)
-    if (tp && typeof tp === 'object' && quem !== 'contact') return 'robo';
+    if (conector && (quem === 'user' || quem === '')) return { t: 'robo' };
+    if (quem === 'user') { var n = nomeDe(s); return n ? { t: 'gente', nome: /^[A-Za-zÀ-ÿ0-9]/.test(n) ? '👤 ' + n : n } : null; } // uma PESSOA (nem quando manda um modelo pelo botão); o eco do celular já traz o 📱 no nome
+    var tp = atributos(m).template_params; // modelo aprovado do WhatsApp sem ninguém por trás (régua, tarefa, disparo)
+    if (tp && typeof tp === 'object') return { t: 'robo' };
     return null;
   }
   function contentorDaMensagem(id){
@@ -95,15 +109,16 @@ const ROTULO_JS = String.raw`(function(){
     garantirEstilo();
     var devido = {};
     for (var i = 0; i < msgs.length; i++) {
-      var t = tipoDaMensagem(msgs[i]); if (!t) continue;
+      var r = tipoDaMensagem(msgs[i]); if (!r) continue;
       var el = contentorDaMensagem(msgs[i].id); if (!el) continue;
-      devido[msgs[i].id] = t;
-      if (el.getAttribute(ATTR) !== t) el.setAttribute(ATTR, t);
+      devido[msgs[i].id] = r.t + '|' + (r.nome || '');
+      if (el.getAttribute(ATTR) !== r.t) el.setAttribute(ATTR, r.t);
+      if (r.nome) { if (el.getAttribute(NOME) !== r.nome) el.setAttribute(NOME, r.nome); } else if (el.hasAttribute && el.hasAttribute(NOME)) el.removeAttribute(NOME);
     }
     // o contêiner que o Vue reaproveitou para outra mensagem (ou que deixou de ser marcável) perde o rótulo
     for (var j = 0; j < marcados.length; j++) {
       var m = String(marcados[j].getAttribute('data-message-id') || marcados[j].id || '').replace(/^message/, '');
-      if (devido[m] !== marcados[j].getAttribute(ATTR)) marcados[j].removeAttribute(ATTR);
+      if (!devido[m]) { marcados[j].removeAttribute(ATTR); if (marcados[j].hasAttribute && marcados[j].hasAttribute(NOME)) marcados[j].removeAttribute(NOME); }
     }
   }
   // freio: no máximo uma passada a cada 400 ms, por mais que o Chatwoot mexa na tela (o Vue mexe muito)
