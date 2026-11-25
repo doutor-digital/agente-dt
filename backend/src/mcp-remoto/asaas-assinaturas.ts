@@ -206,6 +206,11 @@ export async function criarAssinatura({ asaas, esc }: CtxEscrita, quem: Quem, a:
           'Não criei outra. Se é mesmo uma segunda assinatura, repita com permitirOutraIgual=true.',
       );
     }
+    if (externalReference) {
+      const comRef = await c.fonte.get<{ data?: AssinaturaAsaas[] }>('/subscriptions', { externalReference, limit: 10 });
+      const usada = (comRef?.data ?? []).find((x) => !x.deleted && x.externalReference === externalReference);
+      if (usada) throw new ErroDeEntrada(`a externalReference "${externalReference}" já está na assinatura ${usada.id}. Não criei outra.`);
+    }
     const chave = chaveDeOperacao('assinatura', c.slug, cliente.id, Math.round(valor * 100), CICLO_ASAAS[ciclo], vencimento, descricao.trim(), externalReference ?? '', BILLING[forma]);
     const base = {
       conta: c.slug, assinatura: true, valor, ciclo, primeiroVencimento: vencimento, forma, clienteId: cliente.id,
@@ -259,7 +264,7 @@ export async function criarAssinatura({ asaas, esc }: CtxEscrita, quem: Quem, a:
       cliente: { id: cliente.id, nome: cliente.name ?? null },
       avisouOCliente: aviso.vaiAvisar,
       aviso: aviso.texto,
-      ...(igual ? { atencao: `o cliente já tinha a assinatura ativa ${igual.id} igual; criei OUTRA porque permitirOutraIgual=true` } : {}),
+      ...(igual ? { outraIgual: `o cliente já tinha a assinatura ativa ${igual.id} igual; criei OUTRA porque permitirOutraIgual=true` } : {}),
       avisos,
       limites: await consumoSeguro(esc, c),
       registro: 'Registrado com quem pediu. O João foi avisado no Telegram.',
@@ -284,7 +289,7 @@ export async function criarAssinatura({ asaas, esc }: CtxEscrita, quem: Quem, a:
 export async function editarAssinatura(
   { asaas, esc }: CtxEscrita,
   quem: Quem,
-  a: { unidade: string; assinaturaId: string; valor?: number; proximoVencimento?: string; descricao?: string; forma?: unknown; ciclo?: unknown; atualizarCobrancasPendentes?: boolean },
+  a: { unidade: string; assinaturaId: string; valor?: number; proximoVencimento?: string; descricao?: string; forma?: unknown; atualizarCobrancasPendentes?: boolean },
   registrar: Registrar,
 ) {
   const c = contaDeEscrita(asaas, esc, a.unidade);
@@ -296,19 +301,26 @@ export async function editarAssinatura(
   if (a.proximoVencimento !== undefined) { corpo.nextDueDate = vencimentoValido(a.proximoVencimento, esc.agora(), fusoDe(c)); campos.push('próximo vencimento'); }
   if (a.descricao !== undefined) { corpo.description = descricaoValida(a.descricao); campos.push('descrição'); }
   if (a.forma !== undefined) { corpo.billingType = BILLING[formaDaAssinatura(a.forma)]; campos.push('forma'); }
-  if (a.ciclo !== undefined) { corpo.cycle = CICLO_ASAAS[cicloValido(a.ciclo)]; campos.push('ciclo'); }
-  if (!campos.length) throw new ErroDeEntrada('nada para alterar: informe ao menos um de valor, proximoVencimento, descricao, forma ou ciclo');
+  if (!campos.length) throw new ErroDeEntrada('nada para alterar: informe ao menos um de valor, proximoVencimento, descricao ou forma (o ciclo não muda por aqui: cancele e crie outra)');
   const pendentes = a.atualizarCobrancasPendentes === true;
   corpo.updatePendingPayments = pendentes;
 
   return comAvisos(esc, c.slug, async (avisarJoao) => {
     const { cabecalho } = await cabecalhoDaConta(c, esc);
     const atual = await assinaturaPorId(c, id);
+    if (atual.status === 'EXPIRED') throw new ErroDeEntrada(`a assinatura ${id} está encerrada e não pode ser editada: crie outra com asaas_criar_assinatura. Nada foi feito.`);
     const acrescimo = novoValor !== undefined ? Math.max(0, Math.round((novoValor - (atual.value ?? 0)) * 100) / 100) : 0;
-    const base0 = { conta: c.slug, operacao: 'editar_assinatura', valor: novoValor ?? 0, noTeto: acrescimo, idAsaas: id, campos, atualizarCobrancasPendentes: pendentes, pediuPor: quem.id };
+    // com atualizarCobrancasPendentes, o aumento vale para CADA cobrança já gerada e não paga: o teto conta todas
+    let vezes = 1;
+    if (acrescimo > 0 && pendentes) {
+      const geradas = await cobrancasDaAssinatura(c, id, 50);
+      vezes = Math.max(1, geradas.filter((p) => p.status === 'PENDING' || p.status === 'OVERDUE').length);
+    }
+    const noTeto = Math.round(acrescimo * vezes * 100) / 100;
+    const base0 = { conta: c.slug, operacao: 'editar_assinatura', valor: novoValor ?? 0, noTeto, idAsaas: id, campos, atualizarCobrancasPendentes: pendentes, pediuPor: quem.id };
     let ids: Record<string, unknown> = {};
     if (acrescimo > 0) {
-      const r = await reservar(esc, c, quem, { tipo: 'edicao', valor: novoValor!, noTeto: acrescimo, evento: EVENTO_OPERACAO, argumentos: base0 });
+      const r = await reservar(esc, c, quem, { tipo: 'edicao', valor: novoValor!, noTeto, evento: EVENTO_OPERACAO, argumentos: base0 });
       ids = { intencaoId: r.intencaoId, chaveAsaas: r.grupo };
     }
     const base = { ...base0, ...ids };
@@ -320,6 +332,7 @@ export async function editarAssinatura(
       const incerto = podeTerGravado(e);
       esquecerLeituras(asaas, c.slug);
       registrar(EVENTO_OPERACAO, { ...base, ...(incerto ? { incerto: true } : {}) }, false, s.message);
+      if (incerto) avisarJoao(textoDoAviso({ titulo: 'EDIÇÃO DE ASSINATURA INCERTA', conta: c.slug, nomeDaConta: cabecalho.nomeDaConta, quem, valor: novoValor ?? atual.value ?? 0, id, detalhe: 'O Asaas não confirmou. Conferir no painel.' }));
       throw incerto ? new Error(`${s.message} — a alteração PODE ter sido feita: confira com asaas_assinaturas antes de repetir.`) : s;
     }
     esquecerLeituras(asaas, c.slug);
@@ -355,7 +368,8 @@ export async function cancelarAssinatura({ asaas, esc }: CtxEscrita, quem: Quem,
     // limite de QUANTIDADE de cancelamentos por hora (o mesmo das cobranças), com a intenção gravada antes
     const reserva = await reservar(esc, c, quem, { tipo: 'cancelamento', valor, noTeto: 0, evento: EVENTO_OPERACAO, argumentos: base0 });
     const base = { ...base0, intencaoId: reserva.intencaoId, chaveAsaas: reserva.grupo };
-    const detalhe = `${CICLO_PT[atual.cycle ?? ''] ?? atual.cycle ?? ''} · cliente ${atual.customer ?? '?'} · ${atual.description ?? ''}`.slice(0, 200);
+    // a descrição NÃO vai ao Telegram (assinatura criada no painel pode trazer nome, tratamento ou documento), como no cancelarCobranca
+    const detalhe = `${CICLO_PT[atual.cycle ?? ''] ?? atual.cycle ?? ''} · cliente ${atual.customer ?? '?'}`;
     let r: { deleted?: boolean } | null;
     try {
       r = await c.escrita.enviar<{ deleted?: boolean }>('DELETE', `/subscriptions/${id}`);

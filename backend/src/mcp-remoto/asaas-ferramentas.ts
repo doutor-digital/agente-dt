@@ -304,8 +304,8 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
     {
       title: 'Editar assinatura (Asaas)',
       description:
-        'ALTERA uma assinatura pelo id (sub_…): valor, próximo vencimento, descrição, forma ou ciclo. Só vai o que você informar. Por padrão vale para as PRÓXIMAS cobranças; ' +
-        'atualizarCobrancasPendentes=true muda também as já geradas e ainda não pagas. Se o valor subir, o acréscimo conta no teto do dia. Cada edição avisa o João no Telegram. ' + SO_QUEM_PODE,
+        'ALTERA uma assinatura pelo id (sub_…): valor, próximo vencimento, descrição ou forma. Só vai o que você informar (o CICLO não muda por aqui: cancele e crie outra). Por padrão vale para as PRÓXIMAS cobranças; ' +
+        'atualizarCobrancasPendentes=true muda também as já geradas e ainda não pagas. Se o valor subir, o acréscimo conta no teto do dia (com atualizarCobrancasPendentes, uma vez por cobrança pendente). Cada edição avisa o João no Telegram. ' + SO_QUEM_PODE,
       inputSchema: {
         unidade,
         assinaturaId: z.string().min(4).describe('sub_… (veja em asaas_assinaturas)'),
@@ -313,7 +313,6 @@ export function registrarEscritaAsaas(server: McpServer, asaas: ContextoAsaas, e
         proximoVencimento: z.string().optional().describe(`AAAA-MM-DD, de hoje até ${LIMITES_ASAAS.maxDiasVencimento} dias`),
         descricao: z.string().min(1).max(500).optional(),
         forma: formaAssinatura.optional(),
-        ciclo: ciclo.optional(),
         atualizarCobrancasPendentes: z.boolean().optional().describe('padrão false; true = as cobranças já geradas e não pagas também mudam'),
       },
       annotations: apaga,

@@ -182,7 +182,7 @@ export function asaasFalso(o: Opc = {}) {
           return x as T;
         }
         if (caminho === '/subscriptions') {
-          const xs = assinaturas.filter((x) => !x.deleted && (!query.customer || x.customer === query.customer) && (!query.status || x.status === query.status));
+          const xs = assinaturas.filter((x) => !x.deleted && (!query.customer || x.customer === query.customer) && (!query.status || x.status === query.status) && (!query.externalReference || x.externalReference === query.externalReference));
           return { data: xs, totalCount: xs.length } as T;
         }
         const sp = caminho.match(/^\/subscriptions\/([^/]+)(\/payments)?$/);
@@ -310,7 +310,7 @@ export function asaasFalso(o: Opc = {}) {
               }
               if (metodo === 'POST' && caminho === '/subscriptions') {
                 if (o.falhaNaAssinatura) throw o.falhaNaAssinatura;
-                const x: Sub = { id: `sub_${++seq}abcdef`, customer: String(corpo!.customer), value: corpo!.value as number, cycle: String(corpo!.cycle), nextDueDate: String(corpo!.nextDueDate), billingType: String(corpo!.billingType), description: String(corpo!.description), status: 'ACTIVE' };
+                const x: Sub = { id: `sub_${++seq}abcdef`, customer: String(corpo!.customer), value: corpo!.value as number, cycle: String(corpo!.cycle), nextDueDate: String(corpo!.nextDueDate), billingType: String(corpo!.billingType), description: String(corpo!.description), status: 'ACTIVE', ...(corpo!.externalReference ? { externalReference: String(corpo!.externalReference) } : {}) };
                 assinaturas.push(x);
                 if (!o.assinaturaSemCobranca) {
                   pagamentos.push({ id: `pay_${++seq}0000000002`, status: 'PENDING', customer: x.customer, value: x.value, dueDate: x.nextDueDate, description: x.description, billingType: x.billingType, subscription: x.id, invoiceUrl: 'https://www.asaas.com/i/sub123' } as Pg);

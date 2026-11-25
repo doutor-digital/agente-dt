@@ -23,7 +23,7 @@ test('asaasEscrever: só as rotas da lista saem da máquina; o resto (item 6: ba
     ['POST', '/myAccount/bankAccount'], ['PUT', '/myAccount/commercialInfo'], ['POST', '/accessTokens'], ['DELETE', '/accessTokens/abc123'],
     ['POST', '/webhooks'], ['PUT', '/webhooks/abc123'], ['DELETE', '/webhooks/abc123'], ['POST', '/accounts'], ['POST', '/users'],
     ['POST', '/anticipations'], ['POST', '/payments/pay_1/anticipate'], ['POST', '/loans'], ['POST', '/bill'], ['POST', '/bill/simulate'],
-    ['POST', '/subscriptions'], ['DELETE', '/customers/cus_1'], ['POST', '/payments/pay_1/remind'], ['POST', '/pix/qrCodes/pay'], ['POST', '/pix/addressKeys'],
+    ['PUT', '/subscriptions'], ['DELETE', '/subscriptions'], ['POST', '/subscriptions/sub_1234567890'], ['DELETE', '/subscriptions/sub_1'], ['DELETE', '/customers/cus_1'], ['POST', '/payments/pay_1/remind'], ['POST', '/pix/qrCodes/pay'], ['POST', '/pix/addressKeys'],
     // método errado para uma rota da lista, caminho com lixo, query e barra dupla
     ['DELETE', '/transfers'], ['PUT', '/payments'], ['DELETE', '/payments/pay_1/refund'], ['PUT', '/transfers/tra_1'], ['POST', '/payments/pay_1'],
     // link de pagamento: só o POST na coleção; editar, excluir, consultar e subrotas continuam fora
@@ -35,10 +35,13 @@ test('asaasEscrever: só as rotas da lista saem da máquina; o resto (item 6: ba
     assert.equal(rotaPermitida(metodo, caminho), false, `${metodo} ${caminho}`);
   }
   assert.equal(chamadas.length, 0, 'nada pode ter saído');
+  // a recusa local é definitiva (nada saiu): nunca "pode ter gravado"
+  const recusa = await asaasEscrever('c1', CHAVE, 'POST', '/bill', {}, fetcher).then(() => null, (e: Error & { status?: number | null }) => e);
+  assert.equal(recusa?.status, 400);
   const liberadas: Array<['POST' | 'PUT' | 'DELETE', string]> = [
     ['POST', '/customers'], ['PUT', '/customers/cus_000005401844'], ['POST', '/payments'], ['PUT', '/payments/pay_1234567890'],
     ['DELETE', '/payments/pay_1234567890'], ['POST', '/payments/pay_1234567890/refund'], ['POST', '/transfers'],
-    ['POST', '/paymentLinks'],
+    ['POST', '/paymentLinks'], ['POST', '/subscriptions'], ['PUT', '/subscriptions/sub_VXJBYgP2u0eO'], ['DELETE', '/subscriptions/sub_VXJBYgP2u0eO'],
   ];
   for (const [metodo, caminho] of liberadas) await asaasEscrever('c1', CHAVE, metodo, caminho, metodo === 'DELETE' ? undefined : { x: 1 }, fetcher);
   assert.equal(chamadas.length, liberadas.length);

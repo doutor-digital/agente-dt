@@ -5,10 +5,11 @@
  * cancelar (excluir) cobrança pendente; estornar cobrança recebida; transferir (Pix/conta) — esta última só chega aqui depois
  * da lista de destinos e dos tetos de `mcp-remoto/asaas-limites.ts`; CRIAR link de pagamento (só o POST: é o sinal da
  * consulta que a Sofia manda ao paciente, `lib/sinal-pix.ts`); e NOTA FISCAL de serviço (NFS-e): agendar, emitir e cancelar — só pelo
- * preparar → confirmar do conector (`mcp-remoto/asaas-notas-escrita.ts`). Editar nota (PUT) não existe aqui.
+ * preparar → confirmar do conector (`mcp-remoto/asaas-notas-escrita.ts`). Editar nota (PUT) não existe aqui. ASSINATURA (cobrança
+ * recorrente, 25/11/2026, pedido do João para a Lia): criar, editar e cancelar — com as travas da cobrança (`mcp-remoto/asaas-assinaturas.ts`).
  *
  * PROIBIDO SEMPRE (não existe rota, então não há o que configurar): dados bancários da clínica, chaves de API, webhooks, usuários
- * do Asaas, antecipação, empréstimo, pagamento de contas (bill payment), assinatura, exclusão de cliente. A leitura continua em
+ * do Asaas, antecipação, empréstimo, pagamento de contas (bill payment), exclusão de cliente. A leitura continua em
  * `asaas.ts` (só GET).
  *
  * Escrita não é repetida sozinha: timeout ou 5xx pode ter gravado, e repetir cobraria ou pagaria duas vezes. Só o 429 (o Asaas
@@ -25,6 +26,7 @@ export type MetodoDeEscrita = 'POST' | 'PUT' | 'DELETE';
 const CLIENTE = 'cus_[A-Za-z0-9]{6,40}';
 const COBRANCA = 'pay_[A-Za-z0-9]{6,40}';
 const NOTA = 'inv_[A-Za-z0-9]{6,40}';
+const ASSINATURA = 'sub_[A-Za-z0-9]{6,40}';
 /** As ÚNICAS rotas em que este cliente escreve (método + caminho inteiro, sem query). */
 export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho: RegExp; nome: string }> = [
   { metodo: 'POST', caminho: /^\/customers$/, nome: 'cadastrar cliente' },
@@ -42,6 +44,10 @@ export const ROTAS_DE_ESCRITA: ReadonlyArray<{ metodo: MetodoDeEscrita; caminho:
   { metodo: 'POST', caminho: /^\/invoices$/, nome: 'agendar nota fiscal' },
   { metodo: 'POST', caminho: new RegExp(`^/invoices/${NOTA}/authorize$`), nome: 'emitir nota fiscal' },
   { metodo: 'POST', caminho: new RegExp(`^/invoices/${NOTA}/cancel$`), nome: 'cancelar nota fiscal' },
+  // ASSINATURA (25/11/2026): criar, editar e cancelar; as travas (tetos, duplicata, Telegram) ficam em mcp-remoto/asaas-assinaturas.ts
+  { metodo: 'POST', caminho: /^\/subscriptions$/, nome: 'criar assinatura' },
+  { metodo: 'PUT', caminho: new RegExp(`^/subscriptions/${ASSINATURA}$`), nome: 'editar assinatura' },
+  { metodo: 'DELETE', caminho: new RegExp(`^/subscriptions/${ASSINATURA}$`), nome: 'cancelar assinatura' },
 ];
 
 export function rotaPermitida(metodo: string, caminho: string): boolean {
@@ -80,7 +86,8 @@ export async function asaasEscrever<T = unknown>(
   fetcher: Fetcher = fetch,
 ): Promise<T> {
   if (!rotaPermitida(metodo, caminho)) {
-    throw new ErroAsaas('escrita recusada: essa operação não existe neste conector (dados bancários, chaves, webhooks, usuários, antecipação, empréstimo e pagamento de contas nunca são alterados por aqui)', null);
+    // recusada AQUI, antes de sair da máquina: status definitivo (400), para nunca virar "pode ter gravado" (teto consumido, Telegram falso)
+    throw new ErroAsaas('escrita recusada: essa operação não existe neste conector (dados bancários, chaves, webhooks, usuários, antecipação, empréstimo e pagamento de contas nunca são alterados por aqui)', 400);
   }
   const ritmo = ritmoDaConta(contaId);
   for (let tentativa = 0; tentativa < 3; tentativa++) {

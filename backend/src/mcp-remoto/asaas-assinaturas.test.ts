@@ -7,6 +7,7 @@ import { ErroHttp, montar, type Cli, type Sub } from './asaas-falso.js';
 import { asaasAssinaturas, cancelarAssinatura, cicloValido, criarAssinatura, editarAssinatura, formaDaAssinatura, type PedidoDeAssinatura } from './asaas-assinaturas.js';
 import { EVENTO_COBRANCA, EVENTO_OPERACAO } from './asaas-escrita.js';
 import { registrarEscritaAsaas } from './asaas-ferramentas.js';
+import { asaasEscrever } from '../lib/integracoes/asaas-escrita.js';
 
 const Q = { id: 'u1', email: 'lia@exemplo.com' };
 const CNPJ = '11.222.333/0001-81';
@@ -65,7 +66,7 @@ test('criar: igual em 10 min recusa; ativa igual (valor e ciclo) recusa sem perm
   await assert.rejects(() => criarAssinatura(n.ctx, Q, pedido(), n.registrar), /sub_existente01/);
   const ok = (await criarAssinatura(n.ctx, Q, pedido({ permitirOutraIgual: true }), n.registrar)) as any;
   assert.equal(ok.criada, true);
-  assert.match(ok.atencao, /criei OUTRA/);
+  assert.match(ok.outraIgual, /criei OUTRA/);
   const t = montar({ clientes: [EMPRESA] }, { tetoOperacao: () => 300 });
   await assert.rejects(() => criarAssinatura(t.ctx, Q, pedido(), t.registrar), /teto/i);
   assert.equal(t.f.posts().length, 0);
@@ -124,6 +125,7 @@ test('editar: PUT só com o pedido; aumento reserva o acréscimo; avisa o João;
   assert.ok(m.f.posts().some((p) => p.metodo === 'DELETE' && p.caminho === `/subscriptions/${id}`));
   assert.match(m.avisos.join('\n'), /ASSINATURA EDITADA/);
   assert.match(m.avisos.join('\n'), /ASSINATURA CANCELADA/);
+  assert.ok(!m.avisos.join('\n').includes('Mensalidade Doutor Digital'), 'descrição fora do Telegram');
   await assert.rejects(() => cancelarAssinatura(m.ctx, Q, { unidade: 'serra', assinaturaId: id }, m.registrar), /não existe/);
   const n = montar({ clientes: [EMPRESA] }, { cancelamentosPorHora: () => 0 });
   const c2 = (await criarAssinatura(n.ctx, Q, pedido(), n.registrar)) as any;
@@ -143,4 +145,44 @@ test('ferramentas: as 4 de assinatura existem para quem escreve e o pedido com c
   assert.equal(r.isError, true);
   assert.equal(m.f.posts().length, 0);
   await cli.close();
+});
+
+test('editar: com atualizarCobrancasPendentes o aumento conta uma vez por cobrança pendente; encerrada não edita; ciclo não é campo da edição', async () => {
+  const m = montar({ clientes: [EMPRESA] });
+  const c = (await criarAssinatura(m.ctx, Q, pedido(), m.registrar)) as any;
+  m.f.pagamentos.push({ id: 'pay_extra0000001', status: 'OVERDUE', customer: EMPRESA.id, value: 400, subscription: c.assinatura.id } as any);
+  await editarAssinatura(m.ctx, Q, { unidade: 'serra', assinaturaId: c.assinatura.id, valor: 500, atualizarCobrancasPendentes: true }, m.registrar);
+  const ev = m.eventos.find((x) => x.evento === EVENTO_OPERACAO && x.args.operacao === 'editar_assinatura')!;
+  assert.equal(ev.args.noTeto, 200);
+  assert.equal(m.f.posts().find((p) => p.metodo === 'PUT')!.corpo!.updatePendingPayments, true);
+  m.f.assinaturas[0]!.status = 'EXPIRED';
+  await assert.rejects(() => editarAssinatura(m.ctx, Q, { unidade: 'serra', assinaturaId: c.assinatura.id, descricao: 'x' }, m.registrar), /encerrada/);
+});
+
+test('criar: externalReference já usada em outra assinatura recusa sem chamar o Asaas', async () => {
+  const m = montar({ clientes: [EMPRESA] });
+  await criarAssinatura(m.ctx, Q, pedido({ externalReference: 'contrato-biazzi' }), m.registrar);
+  m.f.assinaturas[0]!.status = 'INACTIVE';
+  const antes = m.f.posts().length;
+  await assert.rejects(() => criarAssinatura(m.ctx, Q, pedido({ externalReference: 'contrato-biazzi', descricao: 'Outra' }), m.registrar), /já está na assinatura/);
+  assert.equal(m.f.posts().length, antes);
+});
+
+test('caminho de PRODUÇÃO: criar passa pela lista fechada de rotas (asaasEscrever) e chega ao Asaas uma vez, com a chave só no cabeçalho', async () => {
+  const m = montar({ clientes: [EMPRESA] });
+  const saidas: Array<{ url: string; method?: string; body?: string }> = [];
+  const fetcher = (async (url: string, init: RequestInit) => {
+    saidas.push({ url, method: init.method, body: String(init.body ?? '') });
+    return new Response(JSON.stringify({ id: 'sub_VXJBYgP2u0eO', status: 'ACTIVE', value: 400, cycle: 'MONTHLY', nextDueDate: '2026-10-28', billingType: 'UNDEFINED' }), { status: 200 });
+  }) as unknown as typeof fetch;
+  (m.f.conta as any).escrita.enviar = (metodo: 'POST' | 'PUT' | 'DELETE', caminho: string, corpo?: Record<string, unknown>) => asaasEscrever('c-prod', 'aact_chave_falsa_1234567890', metodo, caminho, corpo, fetcher);
+  const r = (await criarAssinatura(m.ctx, Q, pedido(), m.registrar)) as any;
+  assert.equal(r.criada, true);
+  assert.equal(r.assinatura.id, 'sub_VXJBYgP2u0eO');
+  assert.equal(saidas.length, 1);
+  assert.equal(saidas[0]!.method, 'POST');
+  assert.match(saidas[0]!.url, /\/subscriptions$/);
+  assert.equal(JSON.parse(saidas[0]!.body!).billingType, 'UNDEFINED');
+  assert.equal(await m.usado(), 400);
+  assert.match(m.avisos[0]!, /ASSINATURA CRIADA/);
 });
