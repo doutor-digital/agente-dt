@@ -55,6 +55,7 @@ import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import { dominioContaJs } from '../lib/chatwoot-dominio-conta.js';
 import { dominiosDasClinicas } from '../lib/chatwoot-unidades.js';
+import { rotuloRoboJs } from '../lib/chatwoot-rotulo-robo.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1853,7 +1854,11 @@ export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly
   const selo = seloSofiaJs();
   // o endereço da clínica abre a conta dela é o quinto bloco independente: só lê o perfil da sessão e troca de URL; falhou, o resto segue
   const dominio = dominioContaJs(dominios);
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}${selo ? `;try{\n${selo}\n}catch(e){}\n` : ''}${dominio ? `;try{\n${dominio}\n}catch(e){}\n` : ''}`;
+  // o rótulo «🤖 Robô / ✨ Sofia» acima do balão é o sexto bloco independente: só visual, só lê o estado do Chatwoot; falhou, o resto segue
+  const rotulo = rotuloRoboJs();
+  // cada bloco opcional entra na ordem de sempre, cada um no seu try (uma lista: PR novo soma um item sem brigar com a linha dos outros)
+  const opcionais = [guia, selo, dominio, rotulo].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
