@@ -334,6 +334,9 @@ export function atributosDoCartao(c: CartaoDaKommo): Montagem {
   const situacao = t.situacao ?? (situacaoKommo ? daLista(situacaoKommo, LISTAS_DO_CRM.situacao_consulta) : null);
   if (situacao) a.situacao_consulta = situacao;
   else if (situacaoKommo) avisos.push('situacao-fora-da-lista');
+  // cartão na etapa AGENDADO (ou Confirmado) com data de consulta e o campo «Situação» em branco: a situação é a da etapa — sem ela a régua não manda véspera/dia
+  // (SITUACOES_DE_PE) e a conversa importada nasceria como arquivo, sem lembrete
+  else if (consulta && (t.etapa === 'Agendado' || t.etapa === 'Confirmado') && t.funil === 'Comercial') a.situacao_consulta = t.etapa;
   const categoriaKommo = txt(valorDoCampo(c, 'Categoria da consulta'));
   const categoria = t.categoria ?? (categoriaKommo ? daLista(categoriaKommo, LISTAS_DO_CRM.categoria_consulta) : null);
   if (categoria) a.categoria_consulta = categoria;

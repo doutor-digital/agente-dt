@@ -115,13 +115,14 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
 
 /**
  * O rótulo `historico` SILENCIA o aviso de demora e a etiqueta `falta-etapa` (a conversa não é de um paciente a atender). Na conversa da Kommo o rótulo
- * só silencia enquanto ela é arquivo: o paciente que voltou é atendido como qualquer outro. Nas demais (Parauapebas, Instagram/Messenger) vale o rótulo,
- * como sempre valeu.
+ * só silencia enquanto NINGUÉM mexeu depois da importação (resolvida e sem atividade nova): o paciente que voltou é atendido como qualquer outro. A consulta de
+ * pé NÃO tira esse silêncio (ela decide só a régua, a agenda e as telas: `ehArquivo`) — a equipe nunca tocou na conversa, não há paciente esperando. Nas demais
+ * (Parauapebas, Instagram/Messenger) vale o rótulo, como sempre valeu.
  */
-export function historicoSilencia(raw: any, agora: Date = new Date()): boolean {
+export function historicoSilencia(raw: any): boolean {
   const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
   if (!etiquetas.some((e) => String(e) === ETIQUETA_HISTORICO)) return false;
-  return importadaDaKommo(raw) ? ehArquivo(raw, agora) : true;
+  return importadaDaKommo(raw) ? intactaDesdeAImportacao(raw) : true;
 }
 /** Arquivo que mesmo assim vale no funil: tem etapa (a do Kommo, gravada na unificação). */
 export function arquivoComEtapa(raw: any): boolean {

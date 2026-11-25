@@ -676,14 +676,15 @@ test('ehArquivo: histórico importado da KOMMO é arquivo SÓ enquanto ninguém 
 
 test('historicoSilencia: o rótulo historico silencia demora e resolver — na conversa da Kommo só enquanto ela é arquivo', () => {
   const importadoEm = Math.floor(Date.parse('2026-11-25T12:00:00Z') / 1000);
-  const agora = Z('2026-11-26T12:00:00Z');
   const kommo = { kommo_lead_id: 7, kommo_importado_em: importadoEm };
-  assert.equal(historicoSilencia({ labels: ['historico'], status: 'resolved', last_activity_at: importadoEm - 100, additional_attributes: kommo }, agora), true);
-  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: kommo }, agora), false, 'o paciente voltou: o aviso de demora e a obrigatoriedade ao resolver valem');
-  assert.equal(historicoSilencia({ labels: ['quente'], status: 'open', additional_attributes: kommo }, agora), false, 'sem o rótulo nunca silencia');
+  assert.equal(historicoSilencia({ labels: ['historico'], status: 'resolved', last_activity_at: importadoEm - 100, additional_attributes: kommo }), true);
+  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: kommo }), false, 'o paciente voltou: o aviso de demora e a obrigatoriedade ao resolver valem');
+  // consulta de pé: a conversa nasce viva para a régua, mas a equipe não a tocou — o aviso de demora e o resolver seguem em silêncio
+  assert.equal(historicoSilencia({ labels: ['historico'], status: 'resolved', last_activity_at: importadoEm - 100, additional_attributes: kommo, custom_attributes: { data_consulta: '2026-11-27', situacao_consulta: 'Agendado' } }), true);
+  assert.equal(historicoSilencia({ labels: ['quente'], status: 'open', additional_attributes: kommo }), false, 'sem o rótulo nunca silencia');
   // as demais (Parauapebas, Instagram/Messenger): vale o rótulo, como sempre valeu — mesmo com atividade recente
-  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: {} }, agora), true);
-  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: { meta_conversation_id: 'x' } }, agora), true);
+  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: {} }), true);
+  assert.equal(historicoSilencia({ labels: ['historico'], status: 'open', last_activity_at: importadoEm + 100, additional_attributes: { meta_conversation_id: 'x' } }), true);
 });
 
 /** O ciclo da régua como o worker faz: arquivo não é lido; conversa viva atualiza os vistos (1ª vista com `historico` = inicial) e decide. */

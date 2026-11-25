@@ -311,3 +311,11 @@ test('a linha é JSON puro (vai para o arquivo) e não traz URL nem token', () =
   assert.deepEqual(JSON.parse(j), l);
   assert.ok(!/https?:\/\//.test(j));
 });
+
+test('AGENDADO com data de consulta e «Situação da consulta» em branco: a situação é a da etapa (sem ela a conversa nasceria arquivo, sem lembrete)', () => {
+  const dia = campo('◷ Data da Consulta', 1_790_000_000, 'date_time');
+  assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO', campos: [dia] })).atributos.situacao_consulta, 'Agendado');
+  assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO', campos: [dia, campo('✓ Situação da consulta', 'Confirmado', 'select')] })).atributos.situacao_consulta, 'Confirmado');
+  assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO' })).atributos.situacao_consulta, undefined, 'sem data de consulta não inventa situação');
+  assert.equal(atributosDoCartao(cartao({ etapa: 'EM QUALIFICAÇÃO', campos: [dia] })).atributos.situacao_consulta, undefined, 'só nas etapas Agendado/Confirmado');
+});

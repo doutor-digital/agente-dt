@@ -452,7 +452,7 @@ async function tratarConversa(c: Ctx, a: Alvo, atual: Estado1, devidos: Passo[],
   const fresco = lerConversa(raw, msgs, a.robos, a.u.conectorEhSofia);
   if (!fresco) return;
   const agora = mundo.agora();
-  const d = decidirDemora({ espera: fresco.espera, agora, fuso: a.u.fuso, janela, status: fresco.status, lida: fresco.lida, historicoSilencia: historicoSilencia(fresco.raw, agora), iaLigada: a.u.iaLigada, caixaOficial: a.caixa.oficial, conectorEhSofia: a.u.conectorEhSofia });
+  const d = decidirDemora({ espera: fresco.espera, agora, fuso: a.u.fuso, janela, status: fresco.status, lida: fresco.lida, historicoSilencia: historicoSilencia(fresco.raw), iaLigada: a.u.iaLigada, caixaOficial: a.caixa.oficial, conectorEhSofia: a.u.conectorEhSofia });
   for (const b of d.barrados) contar(c.resumo.barrados, `${b.passo}: ${b.motivo}`);
   if (abertaAntesDeLigar(a, fresco.espera)) {
     contar(c.resumo.barrados, 'espera aberta antes de ligar (fila antiga)');
@@ -548,7 +548,7 @@ export async function rodarCicloDaDemora(deps: { armazem: Armazem; mundo: MundoD
           if (!guardada.espera) continue;
           resumo.esperando++;
           c.agora = mundo.agora();
-          const d = decidirDemora({ espera: guardada.espera, agora: c.agora, fuso: u.fuso, janela, status: String(raw?.status ?? ''), lida, historicoSilencia: historicoSilencia(raw, c.agora), iaLigada: u.iaLigada, caixaOficial: caixa.oficial, conectorEhSofia: u.conectorEhSofia });
+          const d = decidirDemora({ espera: guardada.espera, agora: c.agora, fuso: u.fuso, janela, status: String(raw?.status ?? ''), lida, historicoSilencia: historicoSilencia(raw), iaLigada: u.iaLigada, caixaOficial: caixa.oficial, conectorEhSofia: u.conectorEhSofia });
           for (const b of d.barrados) contar(resumo.barrados, `${b.passo}: ${b.motivo}`);
           if (!d.devidos.length) continue;
           if (abertaAntesDeLigar(a, guardada.espera)) {

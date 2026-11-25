@@ -20,8 +20,8 @@
 #
 # Pré-requisito: o deploy do PR que traz o exportador (backend/dist/scripts/kommo-historico-exportar.js); o script recusa, dizendo o motivo, se faltar.
 # O processo sobrevive à queda do ssh (roda desacoplado na VPS); o log fica em /root/kit/logs/historico-kommo-<data>-<modo>.txt e esta tela só o
-# acompanha (`--acompanhar=<arquivo>` para voltar a olhar). Repetir é seguro: cartão já importado (id do cartão da Kommo) só ganha mensagem nova e
-# atributo que ainda esteja vazio. Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps).
+# acompanha (`--acompanhar=<arquivo>` para voltar a olhar). Repetir é seguro: cartão já importado (id do cartão da Kommo) só ganha mensagem nova
+# (atributo e etiqueta nunca são escritos em conversa que já existe). Variáveis: VPS (padrão root@89.116.214.130), CHAVE_SSH (padrão ~/.ssh/doutordigital_vps).
 set -euo pipefail
 
 VPS="${VPS:-root@89.116.214.130}"

@@ -128,8 +128,17 @@ export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
   const { porta, pausa } = amb;
   const pipelines = await porta.listPipelines();
   const porId = new Map(pipelines.map((p) => [p.id, p]));
-  const motivos = new Map((await porta.listLossReasons()).map((m) => [m.id, m.name]));
-  const usuarios = new Map((await porta.listUsers()).map((u) => [u.id, u.name]));
+  // motivo de perda e responsável só enfeitam a nota: a conta sem escopo para listá-los (403) não pode derrubar a exportação de ~25 min
+  const opcional = async <T>(nome: string, ler: () => Promise<T[]>): Promise<T[]> => {
+    try {
+      return await ler();
+    } catch (e) {
+      amb.log(`AVISO ${nome} indisponível (http ${String((e as { status?: number })?.status ?? '?')}): a nota segue sem esse dado`);
+      return [];
+    }
+  };
+  const motivos = new Map((await opcional('motivos de perda', () => porta.listLossReasons())).map((m) => [m.id, m.name]));
+  const usuarios = new Map((await opcional('usuários', () => porta.listUsers())).map((u) => [u.id, u.name]));
 
   // TODOS os cartões da conta por id (estável) e o escopo B aplicado AQUI: aberto (qualquer etapa) OU ganho/perdido fechado dentro da janela.
   // (Ler «os abertos» e «os fechados» em duas consultas deixaria passar o cartão que muda de uma para a outra no meio da leitura.)

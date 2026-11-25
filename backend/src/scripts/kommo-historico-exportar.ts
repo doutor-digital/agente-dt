@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     for (const [etapa, n] of Object.entries(r.porEtapa).sort()) log(`ETAPA ${etapa} = ${n}`);
     log(`TELEFONE sem=${r.semTelefone} invalido=${r.telefoneInvalido} sem_contato=${r.semContato} distintos=${r.telefonesDistintos} repetidos_em_mais_de_um_cartao=${r.telefonesRepetidos}`);
     log(`CONVERSA ${SECO ? `amostra=${r.amostra}` : `lidas=${r.amostra}`} sem_conversa=${r.semConversa} falhas_de_leitura=${r.falhasDeLeitura} com_mensagem=${r.cartoesComMensagem} mensagens=${r.mensagens}${SECO ? ` estimativa_total=${r.mensagensEstimadas}` : ''} segundos_por_cartao=${r.segundosPorCartao}`);
-    log(`NASCEM_VIVAS = ${r.nascemVivas} (cartões cuja conversa já nasce VIVA — consulta de pé: recebem os lembretes do CRM; as demais nascem arquivo até o paciente voltar)`);
+    log(`NASCEM_VIVAS = ${r.nascemVivas} (ESTIMATIVA MÁXIMA: cartões com consulta de pé, cuja conversa já nasce VIVA e recebe os lembretes do CRM — só se a conta definir os atributos de consulta; as demais nascem arquivo até o paciente voltar)`);
     if (SECO) log(`DURACAO estimada da exportação = ${r.duracaoEstimadaMin} min`);
     for (const [a, n] of Object.entries(r.avisos).sort()) log(`AVISO ${a} = ${n}`);
     if (!SECO) log(`ARQUIVO linhas=${r.linhasGravadas}`);
