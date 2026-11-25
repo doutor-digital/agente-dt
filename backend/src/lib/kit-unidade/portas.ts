@@ -20,6 +20,8 @@ export interface ContaPorta {
   conta: number;
   get(caminho: string, query?: Record<string, string>): Promise<unknown>;
   post(caminho: string, corpo?: Record<string, unknown>): Promise<unknown>;
+  /** muda parte de uma coisa que já existe (ex.: as opções de uma lista de atributo) */
+  patch(caminho: string, corpo: Record<string, unknown>): Promise<unknown>;
 }
 
 /** A conta de REFERÊNCIA: só leitura. Não tem `post` — nem no tipo nem no objeto —, então nada do kit consegue escrever em Parauapebas. */

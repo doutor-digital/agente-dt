@@ -310,6 +310,90 @@
           "maxLength": 120,
           "x-sensivel": true,
           "x-motivo": "e-mail de acesso"
+        },
+        "atributos_extras": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chave": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]{2,40}$"
+              },
+              "nome": {
+                "type": "string",
+                "minLength": 3,
+                "maxLength": 60
+              },
+              "tipo": {
+                "type": "string",
+                "enum": [
+                  "texto",
+                  "numero",
+                  "moeda",
+                  "data",
+                  "checkbox",
+                  "lista",
+                  "lista-multipla"
+                ]
+              },
+              "opcoes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "minItems": 2,
+                "maxItems": 60
+              },
+              "descricao": {
+                "type": "string",
+                "maxLength": 200
+              }
+            },
+            "required": [
+              "chave",
+              "nome",
+              "tipo"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 30
+        },
+        "listas": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "chave": {
+                "type": "string",
+                "enum": [
+                  "origem",
+                  "motivo_nao_agendamento",
+                  "motivo_nao_fechamento",
+                  "motivo_espera",
+                  "categoria_consulta"
+                ]
+              },
+              "opcoes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "minItems": 2,
+                "maxItems": 60
+              }
+            },
+            "required": [
+              "chave",
+              "opcoes"
+            ],
+            "additionalProperties": false
+          },
+          "maxItems": 10
         }
       },
       "required": [

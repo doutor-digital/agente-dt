@@ -146,6 +146,13 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
       c2.labels.push(novo);
       return resposta(200, novo);
     }
+    if (metodo === 'PATCH' && (m = /^custom_attribute_definitions\/(\d+)$/.exec(rota))) {
+      const a = c2.attrs.find((x) => x.id === Number(m![1]));
+      if (!a) return resposta(404, { error: 'Resource could not be found' });
+      if (Array.isArray(corpo.attribute_values)) a.attribute_values = corpo.attribute_values;
+      if (typeof corpo.attribute_display_name === 'string') a.attribute_display_name = corpo.attribute_display_name;
+      return resposta(200, a);
+    }
     if (rota === 'custom_attribute_definitions') {
       const modelo = Number(u.searchParams.get('attribute_model') ?? 0);
       if (metodo === 'GET') return resposta(200, c2.attrs.filter((x) => x.attribute_model === modelo));

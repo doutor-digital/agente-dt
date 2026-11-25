@@ -24,6 +24,7 @@ const { lerAdminsDD, ADMINS_DD_PADRAO } = await import('./fase2.js');
 const { lerQuestionario } = await import('./questionario.js');
 const { chatwootFalso } = await import('./chatwoot-falso.js');
 const { contaHttp, contaHttpSoLeitura, plataformaHttp } = await import('./chatwoot-http.js');
+const { ATRIBUTOS_DE_CONTATO } = await import('./catalogo.js');
 const { kapsoHttp } = await import('./kapso-http.js');
 const { segredosEmArquivo } = await import('./segredos.js');
 const { chaveDoEvento } = await import('../chatwoot-ia.js');
@@ -168,8 +169,8 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   // atributos: copiados com tipo e lista da referência; os que a referência não tem entram como texto
   const etapa = conta.attrs.find((a) => a.attribute_key === 'etapa')!;
   assert.deepEqual([etapa.attribute_display_type, etapa.attribute_values], [6, ['Novo lead', 'Agendado']]);
-  assert.equal(conta.attrs.filter((a) => a.attribute_model === 0).length, 23);
-  assert.equal(conta.attrs.filter((a) => a.attribute_model === 1).length, 1);
+  assert.equal(conta.attrs.filter((a) => a.attribute_model === 0).length, 24); // os 23 do molde + quem_agendou (o Gestor lê)
+  assert.equal(conta.attrs.filter((a) => a.attribute_model === 1).length, ATRIBUTOS_DE_CONTATO.length);
   // automações nativas: a segura foi copiada; a que aponta para caixa/agente da OUTRA conta NÃO (e o relatório... as notas dizem)
   assert.deepEqual(conta.rules.map((r) => r.name), ['parar de receber']);
   assert.ok(resultados.find((r) => r.id === 'automacoes-conta')!.notas.some((n) => /NÃO copiei.*distribuir para a Cleia/.test(n)));

@@ -57,6 +57,18 @@ Quando a unidade já existe, o CRM pode ser montado ANTES de o número entrar no
 Com `--sem-caixa` o questionário real não exige número, id do Kapso nem WABA (ausentes ou escritos `PENDENTE`; se vierem, o formato vale). A caixa do WhatsApp, o registro dela, o webhook e os modelos ficam ADIADOS (manuais, nada é perguntado nem lido).
 Enquanto não há caixa registrada a configuração `unit_chatwoot` fica INERTE (o servidor a ignora, com um aviso de log): nada dispara, e as telas por iframe da conta só passam a valer com a caixa. `--sem-caixa` só vale junto de `--so-crm`. A 2ª rodada reconhece o que já existe (conta, agentes, time, etiquetas…): nada duplica.
 
+### Campos e listas DESTA clínica: `chatwoot.atributos_extras` e `chatwoot.listas`
+Dois blocos opcionais do questionário para a conta ficar igual ao Kommo que a clínica já usa (a 2ª rodada, idempotente, cria/atualiza SÓ isso):
+- `atributos_extras`: atributos de conversa a mais (chave, nome, tipo `texto|numero|moeda|data|checkbox|lista|lista-multipla`, opções). Cria os que faltam; o que já existe NÃO é trocado. O Chatwoot não tem lista de várias escolhas: `lista-multipla` vira texto, com as opções na descrição.
+- `listas`: troca as OPÇÕES de uma lista que o kit copia — só `origem`, `motivo_nao_agendamento`, `motivo_nao_fechamento`, `motivo_espera` e `categoria_consulta`. A lista nova precisa conservar o que o código grava por nome (`origem`: «Meta Ads»; `categoria_consulta`: as 5 da agenda; `motivo_espera`: Exames, Viajando, Vai decidir, Financeiro agora não). O seco mostra, por lista, o que ENTRA e o que SAI, e quais motivos de espera não têm modelo da régua (a régua só manda lembrete para os 4 acima). Os botões `perdido-*` gravam a opção parecida da lista da conta («Plano de Saúde», «Não deu continuidade ao atendimento»).
+O kit agora também copia `quem_agendou`, `origem`, `campanha_codigo`, `campanha_nome`, `conjunto` e as etiquetas de fluxo (`boas-vindas`, `confirmar-retorno`, `reativacao`, `retomada`, `frio`, `morno`) para toda conta nova (e a conta que já existe ganha o que faltar na rodada seguinte).
+
+Rodar só isso numa conta que já existe (ex.: Timbó, conta 3), depois do deploy do kit novo:
+
+    bash ops/kit-unidade/levar-kit-para-vps.sh && bash ops/kit-unidade/levar-kit-para-vps.sh --questionario <slug>
+    ssh -t -i ~/.ssh/doutordigital_vps root@89.116.214.130 "cd /root/kit && bash ops/kit-unidade/nova-unidade-joao.sh <slug> --so-crm --sem-caixa"            # SECO (lê a conta; não grava)
+    ssh -t -i ~/.ssh/doutordigital_vps root@89.116.214.130 "cd /root/kit && bash ops/kit-unidade/nova-unidade-joao.sh <slug> --so-crm --sem-caixa --aplicar"   # pergunta etapa por etapa: responda «s» às que mostram CRIAR/ALTERAR
+
 ## O franqueado preenche sozinho: o formulário (link com código)
 Em vez de você perguntar tudo ao dono da clínica, mande um link. Do seu computador (o script faz o ssh; precisa de terminal):
 
