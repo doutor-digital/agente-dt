@@ -41,6 +41,7 @@ import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { confereCartaoNoKommo, kommoCortado, tratamentoNaFranquia } from './kommo-cortado.js';
 import { consultarFranquia } from './paciente-em-tratamento.js';
+import { agendarIndice } from './franquia-indice-telefones.js';
 import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
@@ -234,6 +235,30 @@ export async function cartaoNoKommoDaIa(
   return consultar(unit)(telefone);
 }
 
+/**
+ * Unidade que saiu da Kommo: pergunta à franquia se o telefone é de paciente EM TRATAMENTO (motivo = a Sofia cala; null = segue).
+ * Pede antes a carga do índice de telefones (idempotente, 1 por dia): na unidade cortada este é o único caminho que pede — os outros
+ * que pedem (paciente-em-tratamento-porta, perdido-reabre, cutucada) são do Kommo, que não recebe mais a unidade. Nunca lança.
+ * `deps` só o teste troca.
+ */
+export async function perguntarTratamentoNaFranquia(
+  unit: Unit,
+  telefone: string,
+  deps: { agendar?: (u: Unit) => void; consultar?: typeof consultarFranquia } = {},
+): Promise<string | null> {
+  try {
+    (deps.agendar ?? agendarIndice)(unit);
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, `${ID_IA}: não consegui pedir a carga do índice de telefones da franquia`);
+  }
+  const sinal = await (deps.consultar ?? consultarFranquia)(unit, telefone);
+  const motivo = tratamentoNaFranquia(sinal);
+  if (!motivo && sinal.tipo === 'indisponivel') {
+    logger.warn({ unit: unit.slug, motivo: sinal.motivo }, `${ID_IA}: unidade sem Kommo — a franquia não achou o telefone (${sinal.motivo}); a Sofia segue`);
+  }
+  return motivo;
+}
+
 /** `tokenRobo`: o token do robô DESTA conta (undefined = o de Parauapebas, `CHATWOOT_SOFIA_BOT_TOKEN`; null = sem robô; texto = o da clínica de conta própria). */
 export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string | null } = {}): PortasDaIa {
   const chat: PortaDoChatwoot = portaDoChatwoot(ctx);
@@ -295,9 +320,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     },
     conversa: (id) => chat.conversa(id),
     cartaoNoKommo: (unit, telefone) => cartaoNoKommoDaIa(unit, telefone),
-    async tratamentoNaFranquia(unit, telefone) {
-      return tratamentoNaFranquia(await consultarFranquia(unit, telefone));
-    },
+    tratamentoNaFranquia: (unit, telefone) => perguntarTratamentoNaFranquia(unit, telefone),
     sofia: (unit, falas, pedido) => rodarSofiaDoChatwoot({ unit, falas, ...pedido, chat }, { rodarTeste: rodarTesteDaSofia }),
     agendar: (fn, ms) => setTimeout(fn, ms),
     cancelar: (t) => clearTimeout(t as NodeJS.Timeout),

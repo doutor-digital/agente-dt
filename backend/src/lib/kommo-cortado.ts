@@ -38,11 +38,25 @@ export function confereCartaoNoKommo(
 }
 
 /**
- * Puro: o sinal da franquia cala a Sofia na unidade cortada? Devolve o motivo (vai para a nota e o Registro) ou null.
- * Franquia sem resposta (`indisponivel`), lead ou paciente sem tratamento ativo e sem sessão futura → null (a Sofia segue), a mesma regra
- * do `decidir` de paciente-em-tratamento.ts.
+ * `indisponivel` em que a franquia NÃO achou o telefone (ou nem dava para perguntar): a Sofia segue, com log. Os motivos vêm de
+ * `consultarFranquia` (paciente-em-tratamento.ts): unidade sem franquia, telefone ilegível, índice ainda não carregado ou vencido
+ * (só chega aqui quando o telefone NÃO estava no índice como paciente).
+ */
+const SEGUE_SEM_FRANQUIA = /^(unidade sem franquia conectada|telefone ilegível|índice de telefones)/;
+
+/**
+ * Puro: o sinal da franquia cala a Sofia na unidade cortada? Devolve o motivo (vai para a nota e o Registro) ou null (a Sofia segue).
+ *  - paciente com tratamento ativo ou sessão futura → cala (a mesma regra do `decidir` de paciente-em-tratamento.ts);
+ *  - lead, não achado, paciente sem tratamento e sem sessão → segue;
+ *  - franquia NÃO CONFERIU (ficha que não veio, estouro do tempo, erro): CALA. Na unidade cortada a franquia é a única barreira contra
+ *    responder paciente em tratamento — melhor calar que errar, como fazia a trava do Kommo («kommo-indisponivel»);
+ *  - índice vencido/não carregado com o telefone NÃO achado, telefone ilegível, unidade sem franquia: segue (quem chama loga).
  */
 export function tratamentoNaFranquia(s: SinalDaFranquia): string | null {
+  if (s.tipo === 'indisponivel') {
+    if (SEGUE_SEM_FRANQUIA.test(s.motivo)) return null;
+    return `não consegui conferir na franquia se é paciente em tratamento (${s.motivo.slice(0, 120)})`;
+  }
   if (s.tipo !== 'paciente' || (!s.tratamentoAtivo && !s.sessaoFutura)) return null;
   const por = [s.tratamentoAtivo ? 'tratamento ativo' : '', s.sessaoFutura ? 'sessão futura' : ''].filter(Boolean).join(' + ');
   return `paciente da franquia (idClient ${s.idClient}) com ${por}`;

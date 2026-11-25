@@ -87,14 +87,22 @@ test('régua (kommoDaRegua): unidade cortada fica SEM conferidor do Kommo; não 
   }
 });
 
-test('tratamentoNaFranquia: só paciente com tratamento ativo OU sessão futura cala; lead, não achado, franquia fora e paciente sem nada seguem', () => {
+test('tratamentoNaFranquia: paciente com tratamento ativo OU sessão futura cala; franquia que não conferiu cala; lead, não achado e paciente sem nada seguem', () => {
   assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: true, sessaoFutura: false })), /idClient 42\) com tratamento ativo$/);
   assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: true })), /com sessão futura$/);
   assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: true, sessaoFutura: true })), /tratamento ativo \+ sessão futura$/);
   assert.equal(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: false }), null);
   assert.equal(tratamentoNaFranquia({ tipo: 'lead' }), null);
   assert.equal(tratamentoNaFranquia({ tipo: 'nao_achou' }), null);
-  assert.equal(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'timeout' }), null);
+  // índice vencido / não carregado (telefone NÃO achado), telefone ilegível, unidade sem franquia: segue
+  assert.equal(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'índice de telefones vencido (40 h)' }), null);
+  assert.equal(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'índice de telefones da franquia ainda não carregado' }), null);
+  assert.equal(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'telefone ilegível' }), null);
+  assert.equal(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'unidade sem franquia conectada' }), null);
+  // a franquia NÃO conferiu (paciente achado e ficha que não veio, estouro do tempo, erro): cala — melhor calar que errar
+  assert.match(String(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'ficha do paciente não veio' })), /^não consegui conferir na franquia/);
+  assert.match(String(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'Error: timeout de 3000 ms' })), /^não consegui conferir na franquia/);
+  assert.match(String(tratamentoNaFranquia({ tipo: 'indisponivel', motivo: 'paciente no índice sem id' })), /^não consegui conferir na franquia/);
 });
 
 test('confereCartaoNoKommo: confere só com Kommo configurado e unidade NÃO cortada (a mesma regra na Sofia e na régua)', () => {
@@ -104,4 +112,23 @@ test('confereCartaoNoKommo: confere só com Kommo configurado e unidade NÃO cor
   assert.equal(confereCartaoNoKommo(com, TIMBO), false);
   assert.equal(confereCartaoNoKommo({ ...com, kommoAccessToken: null }, ''), false);
   assert.equal(confereCartaoNoKommo({ ...com, kommoSubdomain: '' }, ''), false);
+});
+
+test('perguntarTratamentoNaFranquia: pede a carga do índice ANTES de perguntar (na unidade cortada ninguém mais pede) e devolve o motivo', async () => {
+  const ordem: string[] = [];
+  const unidade = { id: 'u1', slug: TIMBO } as never;
+  const motivo = await IA.perguntarTratamentoNaFranquia(unidade, '5547999990001', {
+    agendar: () => void ordem.push('agendar'),
+    consultar: (async () => (ordem.push('consultar'), { tipo: 'paciente', idClient: 9, tratamentoAtivo: true, sessaoFutura: false })) as never,
+  });
+  assert.deepEqual(ordem, ['agendar', 'consultar']);
+  assert.match(String(motivo), /idClient 9\) com tratamento ativo/);
+  // a carga que falha não impede a pergunta
+  const r = await IA.perguntarTratamentoNaFranquia(unidade, '5547999990001', {
+    agendar: () => {
+      throw new Error('fila quebrada');
+    },
+    consultar: (async () => ({ tipo: 'nao_achou' })) as never,
+  });
+  assert.equal(r, null);
 });
