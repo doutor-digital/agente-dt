@@ -72,6 +72,8 @@ const falsoPrisma = {
 };
 for (const [k, v] of Object.entries(falsoPrisma)) Object.defineProperty(prisma, k, { value: v, configurable: true });
 
+const { _esquecerCacheDoGuia } = await import('../lib/guia-sem-antecipado.js');
+const { menuFunilHandler } = await import('./funil.controller.js');
 const { _esquecerLeituraDoFunil, funilQuadroHandler, funilNotaHandler, semArquivo, funilOportunidadesHandler, funilMarketingHandler, funilGestorHandler, funilGestaoHandler, paginaFunilHandler, montarMenuJs } = await import('./funil.controller.js');
 const { corsDoAssistente } = await import('./assistente.controller.js');
 
@@ -222,6 +224,19 @@ test('menu: o servidor diz quem vê Marketing e Gestor (a lista de gestores nunc
   assert.equal(cors!.credentials, false);
   assert.equal(corsDoAssistente('/api/public/funil/gestor', cw, cw), null);
   assert.equal(corsDoAssistente('/api/public/funil/gestao', 'https://outro.exemplo.test', cw), null);
+});
+
+test('menu.js com o banco PRESO: o menu não espera a lista de contas (sai no prazo, com a lista vazia = guia de sempre) — o CRM inteiro depende deste arquivo', async () => {
+  _esquecerCacheDoGuia();
+  Object.defineProperty(prisma, 'unitChatwoot', { value: { findMany: () => new Promise(() => {}) }, configurable: true });
+  const r = resp();
+  const t0 = Date.now();
+  await menuFunilHandler({} as Request, asRes(r));
+  // o relógio do teste é simulado só no Date (mock.timers): o prazo real é de timers, então o que vale é o menu ter saído COM o conteúdo
+  assert.equal(r.tipo, 'application/javascript');
+  assert.match(String(r.corpo), /"semAntecipado":\[\]/);
+  assert.doesNotThrow(() => new Function(String(r.corpo)));
+  assert.ok(Date.now() - t0 < 3000, `o menu esperou ${Date.now() - t0} ms pelo banco preso`);
 });
 
 test('menu.js: leva as contas sem pagamento antecipado para o guia (só ids inteiros) e continua PARSEANDO', () => {
