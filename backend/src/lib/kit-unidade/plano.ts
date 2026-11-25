@@ -23,7 +23,6 @@ import {
 } from './catalogo.js';
 import { descricaoDoExtra, diferencaDaLista } from './fase2.js';
 import { MODELO_DA_ESPERA } from '../chatwoot-regua.js';
-import { MOTIVO_POR_ETIQUETA, motivoNaLista } from '../chatwoot-etiquetas.js';
 import { camposDaSofia, camposDaUnidade, horarioDaAssistente, informacoesDaClinica, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import { configChatwootDoQuestionario, mascararCampo, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
@@ -66,6 +65,8 @@ export interface EstadoAtual {
     atributosContato: string[];
     /** as opções que cada atributo de LISTA tem hoje (chave → opções, na ordem da tela): só para o seco mostrar a diferença das `chatwoot.listas` */
     opcoesDasListas?: { conversa: Record<string, string[]>; contato: Record<string, string[]> };
+    /** o TIPO (nome do enum do Chatwoot: «list», «text»…) de cada atributo que a conta já tem: o seco diz que não dá para trocar as opções de um que não é lista */
+    tiposDosAtributos?: { conversa: Record<string, string>; contato: Record<string, string> };
     caixas: Array<{ id: number; nome: string; robo?: boolean }>;
     times: string[];
     /** e-mail (minúsculo) → agente */
@@ -294,6 +295,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
   const listas = q.chatwoot.listas ?? [];
   if (listas.length) {
     const avisosDasListas: string[] = [];
+    const naoELista: string[] = [];
     const itensDasListas = listas.map((l) => {
       const onde = LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.opcoesDasListas?.contato : cw?.opcoesDasListas?.conversa;
       const hoje = onde?.[l.chave];
@@ -301,9 +303,11 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
         const sem = l.opcoes.filter((o) => !Object.hasOwn(MODELO_DA_ESPERA, o));
         if (sem.length) avisosDasListas.push(`motivo_espera: ${sem.length} motivo(s) SEM modelo da régua (a régua não manda lembrete para eles; só ${Object.keys(MODELO_DA_ESPERA).join(', ')} têm): ${sem.join(', ')}`);
       }
-      if (l.chave === 'motivo_nao_agendamento') {
-        const soltos = Object.values(MOTIVO_POR_ETIQUETA).filter((v) => !l.opcoes.includes(motivoNaLista(v, l.opcoes)));
-        if (soltos.length) avisosDasListas.push(`motivo_nao_agendamento: a lista NÃO tem opção parecida com ${soltos.map((v) => `«${v}»`).join(', ')}: o botão «Perdido: …» correspondente gravaria um valor que a tela não mostra (inclua uma opção com esse nome)`);
+      const tipo = (LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.tiposDosAtributos?.contato : cw?.tiposDosAtributos?.conversa)?.[l.chave];
+      if (tipo && tipo !== 'list') {
+        naoELista.push(l.chave);
+        avisosDasListas.push(`${l.chave}: a conta JÁ tem esse atributo como «${tipo}», não como lista, e o kit não troca o tipo de um atributo que existe: este passo vai FALHAR. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire a chave de chatwoot.listas`);
+        return `${l.chave}: NÃO DÁ — existe como «${tipo}» (não é lista)`;
       }
       if (!cw || !onde) return `${l.chave}: ${l.opcoes.length} opções (lista atual não consultada)`;
       if (!hoje) return `${l.chave}: a conta ainda não tem a lista — criar com ${l.opcoes.length} opções`;
@@ -320,7 +324,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       id: 'listas',
       sistema: 'chatwoot',
       titulo: `Listas com as opções desta clínica (${listas.length}): ${listas.map((l) => l.chave).join(', ')}`,
-      acao: !cw ? 'criar' : igualTudo ? 'nada' : listas.every((l) => !(LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw.opcoesDasListas?.contato : cw.opcoesDasListas?.conversa)?.[l.chave]) ? 'criar' : 'alterar',
+      acao: naoELista.length ? 'bloqueado' : !cw ? 'criar' : igualTudo ? 'nada' : listas.every((l) => !(LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw.opcoesDasListas?.contato : cw.opcoesDasListas?.conversa)?.[l.chave]) ? 'criar' : 'alterar',
       itens: itensDasListas,
       execucao: 'sim',
       avisos: [...(cw ? [] : [NAO_CONSULTADO]), ...avisosDasListas, 'o código conserva os valores que grava por nome (origem «Meta Ads», categorias da agenda, os 4 motivos de espera com modelo); os botões «perdido-*» acham a opção parecida da lista (ver chatwoot-etiquetas)'],

@@ -112,3 +112,10 @@ test('aplicar: porta que LANÇA (síncrono ou rejeitando) ao ler a lista de moti
   assert.equal(await aplicarEtiqueta({ conversa: 8, slug: 's' }, { ...base, opcoesDoMotivo: async () => { throw new Error('rejeita'); } }, new Set()), 'gravou');
   assert.deepEqual(chamadas, ['attrs 7 Sem interesse', 'attrs 8 Sem interesse']);
 });
+
+test('aplicar: sem etiqueta de Perdido na conversa NÃO lê a lista de motivos (nada a gravar, nada a perguntar ao Chatwoot)', async () => {
+  let leu = 0;
+  const p = { conversa: async () => ({ labels: ['quente'], custom_attributes: {} }), gravarAtributos: async () => {}, gravarEtiquetas: async () => {}, opcoesDoMotivo: async () => (leu++, []) };
+  assert.equal(await aplicarEtiqueta({ conversa: 9, slug: 's' }, p, new Set()), 'nada');
+  assert.equal(leu, 0);
+});

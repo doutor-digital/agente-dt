@@ -38,9 +38,9 @@ const EXTRAS = [
   { chave: 'data_solicitacao_cancelamento', nome: 'Data da solicitação de cancelamento', tipo: 'data' },
 ];
 const REFERENCIA_ATRS = [
-  { id: 901, attribute_key: 'motivo_espera', attribute_display_name: 'Motivo da espera', attribute_display_type: 6, attribute_values: ['Exames', 'Vai decidir', 'Viajando', 'Financeiro agora não', 'Outro'], attribute_model: 0, attribute_description: '' },
-  { id: 902, attribute_key: 'categoria_consulta', attribute_display_name: 'Categoria da consulta', attribute_display_type: 6, attribute_values: ['Avaliação', 'Sessão', 'Retorno', 'Retorno com exames', 'Retorno após tratamento'], attribute_model: 0, attribute_description: '' },
-  { id: 903, attribute_key: 'origem', attribute_display_name: 'Origem', attribute_display_type: 6, attribute_values: ['Meta Ads', 'Google', 'Indicação', 'Parceria', 'Orgânico', 'Remarketing'], attribute_model: 1, attribute_description: '' },
+  { id: 901, attribute_key: 'motivo_espera', attribute_display_name: 'Motivo da espera', attribute_display_type: 'list', attribute_values: ['Exames', 'Vai decidir', 'Viajando', 'Financeiro agora não', 'Outro'], attribute_model: 'conversation_attribute', attribute_description: '' },
+  { id: 902, attribute_key: 'categoria_consulta', attribute_display_name: 'Categoria da consulta', attribute_display_type: 'list', attribute_values: ['Avaliação', 'Sessão', 'Retorno', 'Retorno com exames', 'Retorno após tratamento'], attribute_model: 'conversation_attribute', attribute_description: '' },
+  { id: 903, attribute_key: 'origem', attribute_display_name: 'Origem', attribute_display_type: 'list', attribute_values: ['Meta Ads', 'Google', 'Indicação', 'Parceria', 'Orgânico', 'Remarketing'], attribute_model: 'contact_attribute', attribute_description: '' },
 ];
 /** O questionário real de uma unidade que já existe, sem número (`--sem-caixa`), com ou sem os blocos novos. */
 function questionario(comBlocos: boolean) {
@@ -107,7 +107,7 @@ function mundo(q: any) {
     const c = contaId ? falso.contas.get(contaId) : null;
     return {
       banco: { unidade: { id: 'u1', campos: { ...campos } }, configChatwoot: e.config, caixasRegistradas: [...e.caixas], automacoes: Object.fromEntries(e.automacoes.map((a) => [a, a.startsWith('chatwoot-') ? 'seco' : 'ligado'])), sofia: { ...campos }, licoes: [] },
-      chatwoot: c ? { etiquetas: c.labels.map((l: any) => l.title), atributosConversa: c.attrs.filter((a: any) => a.attribute_model === 0).map((a: any) => a.attribute_key), atributosContato: c.attrs.filter((a: any) => a.attribute_model === 1).map((a: any) => a.attribute_key), opcoesDasListas: { conversa: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 0 && a.attribute_display_type === 6).map((a: any) => [a.attribute_key, a.attribute_values])), contato: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 1 && a.attribute_display_type === 6).map((a: any) => [a.attribute_key, a.attribute_values])) }, caixas: c.inboxes.map((i: any) => ({ id: i.id, nome: i.name, robo: !!i.agent_bot })), times: c.teams.map((t: any) => t.name), agentes: Object.fromEntries(c.agents.map((a: any) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])), pastas: {}, mensagensProntas: c.canned.map((p: any) => p.short_code), automacoesDaConta: c.rules.length, webhookDaConta: c.webhooks.length > 0, abas: c.apps.map((a: any) => a.title) }
+      chatwoot: c ? { etiquetas: c.labels.map((l: any) => l.title), atributosConversa: c.attrs.filter((a: any) => a.attribute_model === 'conversation_attribute').map((a: any) => a.attribute_key), atributosContato: c.attrs.filter((a: any) => a.attribute_model === 'contact_attribute').map((a: any) => a.attribute_key), tiposDosAtributos: { conversa: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 'conversation_attribute').map((a: any) => [a.attribute_key, a.attribute_display_type])), contato: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 'contact_attribute').map((a: any) => [a.attribute_key, a.attribute_display_type])) }, opcoesDasListas: { conversa: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 'conversation_attribute' && a.attribute_display_type === 'list').map((a: any) => [a.attribute_key, a.attribute_values])), contato: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 'contact_attribute' && a.attribute_display_type === 'list').map((a: any) => [a.attribute_key, a.attribute_values])) }, caixas: c.inboxes.map((i: any) => ({ id: i.id, nome: i.name, robo: !!i.agent_bot })), times: c.teams.map((t: any) => t.name), agentes: Object.fromEntries(c.agents.map((a: any) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])), pastas: {}, mensagensProntas: c.canned.map((p: any) => p.short_code), automacoesDaConta: c.rules.length, webhookDaConta: c.webhooks.length > 0, abas: c.apps.map((a: any) => a.title) }
         : { etiquetas: [], atributosConversa: [], atributosContato: [], caixas: [], times: [], agentes: {}, pastas: {}, mensagensProntas: [], automacoesDaConta: 0 },
       plataforma: true,
       segredos: Object.fromEntries(readdirSync(dir).map((f) => [f, true])),
@@ -180,15 +180,15 @@ test('2ª rodada só com os extras e as listas: cria os extras (lista-multipla v
   assert.ok(escritas.every((e) => /custom_attribute_definitions/.test(e)), escritas.join('\n'));
   assert.equal(escritas.filter((e) => e.startsWith('POST')).length, 4 + 0, 'só os 4 extras são criados (as 3 listas já existiam)');
   const attr = (k: string) => c.attrs.find((a: any) => a.attribute_key === k);
-  assert.equal(attr('fisioterapeuta').attribute_display_type, 6);
+  assert.equal(attr('fisioterapeuta').attribute_display_type, 'list');
   assert.deepEqual(attr('fisioterapeuta').attribute_values, ['DRA. FULANA', 'DR. BELTRANO']);
-  assert.equal(attr('tratamento_indicado').attribute_display_type, 0, 'lista múltipla não existe no Chatwoot: texto');
+  assert.equal(attr('tratamento_indicado').attribute_display_type, 'text', 'lista múltipla não existe no Chatwoot: texto');
   assert.deepEqual(attr('tratamento_indicado').attribute_values, []);
   assert.match(attr('tratamento_indicado').attribute_description, /Do Kommo — Pode ter mais de um.*Opções: 01 Mês — CERVICAL; 03 Meses — LOMBAR/);
-  assert.equal(attr('data_solicitacao_cancelamento').attribute_display_type, 5);
+  assert.equal(attr('data_solicitacao_cancelamento').attribute_display_type, 'date');
   assert.deepEqual(attr('motivo_espera').attribute_values, ESPERA);
   assert.deepEqual(attr('categoria_consulta').attribute_values, CATEGORIA);
-  assert.deepEqual(c.attrs.find((a: any) => a.attribute_key === 'origem' && a.attribute_model === 1).attribute_values, ORIGEM);
+  assert.deepEqual(c.attrs.find((a: any) => a.attribute_key === 'origem' && a.attribute_model === 'contact_attribute').attribute_values, ORIGEM);
   assert.deepEqual({ agentes: c.agents.length, times: c.teams.length, etiquetas: c.labels.length, regras: c.rules.length, prontas: c.canned.length, abas: c.apps.length, inboxes: c.inboxes.length }, antes, 'o resto da conta ficou como estava');
   assert.ok(!m.escritas.some((e) => ['gravarUnidade', 'gravarSofia', 'registrarCaixa'].includes(e[0])));
   // 3ª rodada: nada novo
@@ -206,13 +206,13 @@ test('lista que a conta ainda não tem é CRIADA com as opções; atributo extra
   await resp(montarPlano(q0, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q0, m);
   const c = conta(m);
   c.attrs = c.attrs.filter((a: any) => a.attribute_key !== 'categoria_consulta');
-  c.attrs.push({ id: 7777, attribute_key: 'fisioterapeuta', attribute_display_name: 'Já existia', attribute_display_type: 0, attribute_values: [], attribute_model: 0, attribute_description: '' });
+  c.attrs.push({ id: 7777, attribute_key: 'fisioterapeuta', attribute_display_name: 'Já existia', attribute_display_type: 'text', attribute_values: [], attribute_model: 'conversation_attribute', attribute_description: '' });
   const q = questionario(true);
   await resp(montarPlano(q, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q, m);
   assert.deepEqual(c.attrs.find((a: any) => a.attribute_key === 'categoria_consulta').attribute_values, CATEGORIA);
   const f = c.attrs.find((a: any) => a.attribute_key === 'fisioterapeuta');
   assert.equal(f.attribute_display_name, 'Já existia', 'o que já existe não é trocado');
-  assert.equal(f.attribute_display_type, 0);
+  assert.equal(f.attribute_display_type, 'text');
 });
 
 test('motivo_nao_fechamento precisa conservar «Solicitado exames» (a régua cobra o documento por esse nome)', () => {
@@ -221,20 +221,37 @@ test('motivo_nao_fechamento precisa conservar «Solicitado exames» (a régua co
   assert.ok(comBloco((o) => (o.chatwoot.listas = [{ chave: 'motivo_nao_fechamento', opcoes: ['Achou caro', 'Solicitado exames'] }])).ok);
 });
 
-test('motivo_nao_agendamento sem opção parecida com os 4 motivos dos botões «Perdido: …»: o seco AVISA (com a lista do Kommo, «Plano de Saúde» e «Não deu continuidade ao atendimento» servem)', async () => {
-  const mk = (opcoes: string[]) => {
-    const o = lerYamlOuJson(TEXTO) as any;
-    o.assistente = { quer: false };
-    for (const c of ['numero_oficial', 'kapso_phone_number_id', 'waba_id']) delete o.whatsapp[c];
-    o.chatwoot.listas = [{ chave: 'motivo_nao_agendamento', opcoes }];
-    const r = lerQuestionario(JSON.stringify(o), { semCaixa: true });
-    assert.ok(r.ok, r.ok ? '' : r.erros.join('; '));
-    return montarPlano(r.q, {}, { molde: MOLDE, soCrm: true, semCaixa: true }).passos.find((p) => p.id === 'listas')!;
-  };
-  const ruim = mk(['Preço', 'Distância', 'Outro']);
-  assert.match(ruim.avisos.join(' '), /NÃO tem opção parecida com «Sem interesse», «Outra cidade», «Plano de saúde», «Não deu continuidade»/);
-  const kommo = mk(['Sem interesse', 'Outra cidade', 'Plano de Saúde', 'Não deu continuidade ao atendimento', 'Não interagiu']);
-  assert.ok(!kommo.avisos.some((a) => /NÃO tem opção parecida/.test(a)), kommo.avisos.join(' | '));
+test('motivo_nao_agendamento sem opção parecida com os 4 motivos dos botões «Perdido: …» é RECUSADO como as outras listas (com a lista do Kommo, «Plano de Saúde» e «Não deu continuidade ao atendimento» servem)', () => {
+  const com = (opcoes: string[]) => comBloco((o) => (o.chatwoot.listas = [{ chave: 'motivo_nao_agendamento', opcoes }]));
+  const ruim = com(['Preço', 'Distância', 'Outro']);
+  assert.ok(!ruim.ok);
+  assert.match((ruim as { erros: string[] }).erros.join(' '), /precisa ter uma opção parecida com «Sem interesse», «Outra cidade», «Plano de saúde», «Não deu continuidade»/);
+  assert.ok(com(['Sem interesse', 'Outra cidade', 'Plano de Saúde', 'Não deu continuidade ao atendimento', 'Não interagiu']).ok);
+  assert.ok(com(['Sem interesse', 'Outra cidade', 'Plano de saúde', 'Não deu continuidade']).ok);
+});
+
+test('o Chatwoot REAL devolve tipo e modelo como NOME («list», «conversation_attribute»): o kit entende nome E número (tipoDoAtributo/ehLista) e o falso fala como o real', async () => {
+  const { tipoDoAtributo, ehLista, passoListas } = await import('./fase2.js');
+  assert.equal(tipoDoAtributo('list'), 'list');
+  assert.equal(tipoDoAtributo(6), 'list');
+  assert.equal(tipoDoAtributo('6'), 'list');
+  assert.equal(tipoDoAtributo('Text'), 'text');
+  assert.equal(tipoDoAtributo(undefined), '');
+  assert.ok(ehLista({ attribute_display_type: 'list' }) && ehLista({ attribute_display_type: 6 }) && !ehLista({ attribute_display_type: 'text' }) && !ehLista({ attribute_display_type: 0 }) && !ehLista(undefined));
+  // o repro do sênior: a resposta no formato real não pode ser tomada como «não é lista»
+  const chamadas: string[] = [];
+  const defReal = { id: 77, attribute_key: 'motivo_espera', attribute_display_type: 'list', attribute_model: 'conversation_attribute', attribute_values: ['Exames', 'Viajando', 'Vai decidir', 'Financeiro agora não'] };
+  const contaReal: any = { conta: 3, get: async () => [defReal], post: async (c: string) => (chamadas.push('POST ' + c), {}), patch: async (c: string) => (chamadas.push('PATCH ' + c), {}) };
+  const q: any = { chatwoot: { listas: [{ chave: 'motivo_espera', opcoes: [...ESPERA] }] } };
+  const notas = await passoListas(q, { referencia: null } as any, { conta: contaReal } as any);
+  assert.deepEqual(chamadas, ['PATCH custom_attribute_definitions/77']);
+  assert.match(notas[0]!, /motivo_espera: 12 opções \(entram 8, saem 0\)/);
+  // o falso devolve nome, aceita nome ou número na entrada e recusa valor inválido (422) como o real
+  const falso = chatwootFalso({ referencia: { attrs: [{ id: 1, attribute_key: 'a', attribute_display_name: 'A', attribute_display_type: 6, attribute_values: [], attribute_model: 1, attribute_description: '' }] } });
+  const lerRef = async () => (await (await falso.fetch('https://crm.exemplo.test/api/v1/accounts/1/custom_attribute_definitions?attribute_model=1', { headers: { api_access_token: falso.tokenDeReferencia } })).json()) as any[];
+  const ref = await lerRef();
+  assert.equal(ref[0].attribute_display_type, 'list');
+  assert.equal(ref[0].attribute_model, 'contact_attribute');
 });
 
 test('lista que a conta tem mas como TEXTO livre: o kit FALHA claro (não diz que aplicou); o plano cria quando nenhuma lista existe e altera quando existe', async () => {
@@ -243,12 +260,21 @@ test('lista que a conta tem mas como TEXTO livre: o kit FALHA claro (não diz qu
   await resp(montarPlano(q0, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q0, m);
   const c = conta(m);
   const lista = c.attrs.find((a: any) => a.attribute_key === 'motivo_espera');
-  lista.attribute_display_type = 0; // virou texto livre na conta
   const q = questionario(true);
-  const { res } = await resp(montarPlano(q, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q, m);
+  const planoVelho = montarPlano(q, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }); // feito quando ainda era lista
+  lista.attribute_display_type = 'text'; // …e virou texto livre na conta depois
+  const { res } = await resp(planoVelho, q, m); // o EXECUTOR confere de novo
   const falhou = res.find((r) => r.id === 'listas')!;
   assert.equal(falhou.situacao, 'falhou');
-  assert.match(falhou.notas.join(' '), /motivo_espera: já existe como atributo de outro tipo \(0\), não como lista/);
+  assert.match(falhou.notas.join(' '), /motivo_espera: já existe como atributo do tipo «text», não como lista.*não troca o tipo.*Mude o tipo na conta/);
+  assert.doesNotMatch(falhou.notas.join(' '), /apague/i);
+  // o SECO já avisa que vai falhar (nunca «criar»), com o motivo, e sem mandar apagar
+  const planoAntes = montarPlano(q, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true });
+  const passoL = planoAntes.passos.find((p) => p.id === 'listas')!;
+  assert.equal(passoL.acao, 'bloqueado');
+  assert.match(passoL.itens.join(' '), /motivo_espera: NÃO DÁ — existe como «text»/);
+  assert.match(passoL.avisos.join(' '), /vai FALHAR/);
+  assert.doesNotMatch(passoL.avisos.join(' '), /apague/i);
   // plano: nenhuma lista existe = criar; alguma existe = alterar
   const vazio = mundo(q);
   assert.equal(montarPlano(q, { ...vazio.estado(), chatwoot: { ...(vazio.estado().chatwoot ?? {}), etiquetas: [], atributosConversa: [], atributosContato: [], caixas: [], times: [], agentes: {}, pastas: {}, mensagensProntas: [], automacoesDaConta: 0, opcoesDasListas: { conversa: {}, contato: {} } } }, { molde: MOLDE, soCrm: true, semCaixa: true }).passos.find((p) => p.id === 'listas')!.acao, 'criar');

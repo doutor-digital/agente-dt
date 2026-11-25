@@ -13,34 +13,12 @@
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { MOTIVO_POR_ETIQUETA, motivoNaLista } from './motivo-do-botao.js';
 
 export const PREFIXO_PERDIDO = 'perdido-';
 export const ETAPA_PERDIDO = 'Perdido';
 
-/** etiqueta do botão → valor do atributo `motivo_nao_agendamento` (tem que existir na lista do atributo) */
-export const MOTIVO_POR_ETIQUETA: Readonly<Record<string, string>> = {
-  'perdido-sem-interesse': 'Sem interesse',
-  'perdido-outra-cidade': 'Outra cidade',
-  'perdido-plano-de-saude': 'Plano de saúde',
-  'perdido-nao-deu-continuidade': 'Não deu continuidade',
-};
-
-/** Outros nomes que a MESMA razão tem em listas que seguem o Kommo da clínica («Plano de Saúde», «Não deu continuidade ao atendimento»). */
-const ALIAS_DO_MOTIVO: Readonly<Record<string, readonly string[]>> = {
-  'Não deu continuidade': ['Não deu continuidade ao atendimento'],
-  'Plano de saúde': ['Plano de Saúde'],
-};
-const semAcentoNemCaixa = (t: string) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
-
-/**
- * O valor que o botão grava, escolhido na lista REAL do atributo da conta: o próprio valor se a lista o tem; senão a opção que só difere em caixa/acento ou o outro nome da mesma razão;
- * senão (lista desconhecida ou sem nada parecido) o valor de sempre. Assim uma conta com a lista do Kommo («Plano de Saúde») não fica com o botão gravando um valor que a tela não mostra.
- */
-export function motivoNaLista(padrao: string, opcoes: readonly string[] | undefined): string {
-  if (!opcoes?.length || opcoes.includes(padrao)) return padrao;
-  const alvos = [padrao, ...(ALIAS_DO_MOTIVO[padrao] ?? [])].map(semAcentoNemCaixa);
-  return opcoes.find((o) => alvos.includes(semAcentoNemCaixa(o))) ?? padrao;
-}
+export { MOTIVO_POR_ETIQUETA, motivoNaLista };
 
 export interface EventoDeEtiqueta {
   conversa: number;
@@ -89,7 +67,7 @@ export interface PortasDaPonte {
   opcoesDoMotivo?(): Promise<string[]>;
 }
 
-/** As opções de `motivo_nao_agendamento` por conta, guardadas 5 min (um clique de «Perdido» não baixa as definições todas de novo). */
+/** As opções de `motivo_nao_agendamento` por conta, guardadas 60 s (um clique de «Perdido» não baixa as definições todas de novo). */
 const opcoesGuardadas = new Map<number, { ate: number; v: string[] }>();
 
 export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
@@ -105,7 +83,8 @@ export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
       const defs = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'conversation_attribute' } })) as unknown;
       const def = (Array.isArray(defs) ? defs : []).find((d: any) => d?.attribute_key === 'motivo_nao_agendamento') as { attribute_values?: unknown } | undefined;
       const v = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((x) => String(x).trim()).filter(Boolean) : [];
-      opcoesGuardadas.set(conta, { ate: Date.now() + 5 * 60_000, v });
+      // 60 s (o servidor e o kit são processos separados: o kit não consegue limpar esta memória, então ela vale pouco)
+      opcoesGuardadas.set(conta, { ate: Date.now() + 60_000, v });
       return v;
     },
     async gravarEtiquetas(id, etiquetas) {
@@ -122,6 +101,8 @@ export async function aplicarEtiqueta(e: EventoDeEtiqueta, p: PortasDaPonte, tra
   trava.add(e.conversa);
   try {
     const conv = await p.conversa(e.conversa);
+    // sem etiqueta de Perdido não há o que gravar: nem lê a lista de motivos
+    if (!(Array.isArray(conv?.labels) ? conv.labels : []).some((l: unknown) => Object.hasOwn(MOTIVO_POR_ETIQUETA, String(l)))) return 'nada';
     // a lista é só para escolher o NOME do motivo: se a leitura falhar, vale o valor de sempre (o botão nunca deixa de gravar por isso)
     let opcoes: string[] | undefined;
     try {

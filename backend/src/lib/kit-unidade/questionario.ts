@@ -11,6 +11,7 @@
 import { z } from 'zod';
 import type { ConfigChatwootUnidade } from '../chatwoot-unidades.js';
 import { lerYamlOuJson } from './yaml-minimo.js';
+import { MOTIVO_POR_ETIQUETA, motivoNaLista } from '../motivo-do-botao.js';
 import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, LISTAS_EDITAVEIS, VALORES_QUE_O_CODIGO_USA } from './catalogo.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'use HH:MM (24 h)');
@@ -216,6 +217,10 @@ const conferirCruzado = (semCaixa: boolean) => (q: z.infer<typeof QuestionarioBa
       if (chavesDeLista.has(l.chave)) aviso(['chatwoot', 'listas', i, 'chave'], `lista repetida: ${l.chave}`);
       chavesDeLista.add(l.chave);
       if (new Set(l.opcoes.map((o) => o.toLowerCase())).size !== l.opcoes.length) aviso(['chatwoot', 'listas', i, 'opcoes'], 'opção repetida');
+      if (l.chave === 'motivo_nao_agendamento') {
+        const soltos = Object.values(MOTIVO_POR_ETIQUETA).filter((v) => !l.opcoes.includes(motivoNaLista(v, l.opcoes)));
+        if (soltos.length) aviso(['chatwoot', 'listas', i, 'opcoes'], `a lista motivo_nao_agendamento precisa ter uma opção parecida com ${soltos.map((v) => `«${v}»`).join(', ')} (os botões «Perdido: …» gravam esse motivo)`);
+      }
       for (const v of VALORES_QUE_O_CODIGO_USA[l.chave] ?? []) if (!l.opcoes.includes(v)) aviso(['chatwoot', 'listas', i, 'opcoes'], `a lista ${l.chave} precisa conservar «${v}» (o código a grava ou a lê por esse nome)`);
     });
     if (SUBDOMINIOS_RESERVADOS.includes(q.chatwoot.subdominio) && !(q.chatwoot.subdominio === 'demo' && q.whatsapp.modo === 'demonstracao')) aviso(['chatwoot', 'subdominio'], `«${q.chatwoot.subdominio}» é um subdomínio reservado do nosso sistema: escolha outro`);

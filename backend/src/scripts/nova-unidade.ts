@@ -31,7 +31,7 @@ import { contaHttp, contaHttpSoLeitura, plataformaHttp } from '../lib/kit-unidad
 import { kapsoHttp } from '../lib/kit-unidade/kapso-http.js';
 import type { PortasExternas } from '../lib/kit-unidade/portas.js';
 import { segredosEmArquivo } from '../lib/kit-unidade/segredos.js';
-import { lerAdminsDD, listaDaResposta, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
+import { ehLista, lerAdminsDD, listaDaResposta, tipoDoAtributo, urlDoWebhook } from '../lib/kit-unidade/fase2.js';
 import { sufixoDoQuestionario } from '../lib/kit-unidade/questionario.js';
 import { conflitoDoSoCrm, montarPlano, textoDoPlano, type EstadoAtual } from '../lib/kit-unidade/plano.js';
 import { lerQuestionario, questionarioMascarado, type Questionario } from '../lib/kit-unidade/questionario.js';
@@ -127,7 +127,8 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         etiquetas: etiquetas.map((e) => String(e.title)),
         atributosConversa: atrC.map((a) => String(a.attribute_key)),
         atributosContato: atrK.map((a) => String(a.attribute_key)),
-        opcoesDasListas: { conversa: Object.fromEntries(atrC.filter((a) => Number(a.attribute_display_type) === 6 && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])), contato: Object.fromEntries(atrK.filter((a) => Number(a.attribute_display_type) === 6 && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])) },
+        tiposDosAtributos: { conversa: Object.fromEntries(atrC.map((a) => [String(a.attribute_key), tipoDoAtributo(a.attribute_display_type)])), contato: Object.fromEntries(atrK.map((a) => [String(a.attribute_key), tipoDoAtributo(a.attribute_display_type)])) },
+        opcoesDasListas: { conversa: Object.fromEntries(atrC.filter((a) => ehLista(a) && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])), contato: Object.fromEntries(atrK.filter((a) => ehLista(a) && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])) },
         caixas: caixas.map((c) => ({ id: Number(c.id), nome: String(c.name), robo: !!c.agent_bot })),
         times: times.map((t) => String(t.name)),
         agentes: Object.fromEntries(agentes.map((a) => [String(a.email).toLowerCase(), { id: Number(a.id), nome: String(a.name) }])),

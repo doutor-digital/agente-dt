@@ -96,7 +96,7 @@ function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: bo
       { id: 2, title: 'perdido-preco', description: 'motivo', color: '#999999', show_on_sidebar: false },
       { id: 3, title: 'etiqueta-so-de-parauapebas', description: '', color: '#000000', show_on_sidebar: false },
     ],
-    attrs: [{ id: 1, attribute_key: 'etapa', attribute_display_name: 'Etapa', attribute_display_type: 6, attribute_values: ['Novo lead', 'Agendado'], attribute_model: 0, attribute_description: 'etapa do funil' }],
+    attrs: [{ id: 1, attribute_key: 'etapa', attribute_display_name: 'Etapa', attribute_display_type: 'list', attribute_values: ['Novo lead', 'Agendado'], attribute_model: 'conversation_attribute', attribute_description: 'etapa do funil' }],
     rules: [
       { id: 1, name: 'parar de receber', description: '', event_name: 'message_created', active: true, conditions: [{ attribute_key: 'content', filter_operator: 'contains', values: ['parar'], query_operator: null }], actions: [{ action_name: 'add_label', action_params: ['sem-follow-up'] }] },
       { id: 2, name: 'distribuir para a Cleia', description: '', event_name: 'conversation_created', active: true, conditions: [{ attribute_key: 'inbox_id', filter_operator: 'equal_to', values: [3], query_operator: null }], actions: [{ action_name: 'assign_agent', action_params: [4] }] },
@@ -168,9 +168,9 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   assert.equal(conta.labels.find((l) => l.title === 'quente')!.color, '#ff0000');
   // atributos: copiados com tipo e lista da referência; os que a referência não tem entram como texto
   const etapa = conta.attrs.find((a) => a.attribute_key === 'etapa')!;
-  assert.deepEqual([etapa.attribute_display_type, etapa.attribute_values], [6, ['Novo lead', 'Agendado']]);
-  assert.equal(conta.attrs.filter((a) => a.attribute_model === 0).length, 24); // os 23 do molde + quem_agendou (o Gestor lê)
-  assert.equal(conta.attrs.filter((a) => a.attribute_model === 1).length, ATRIBUTOS_DE_CONTATO.length);
+  assert.deepEqual([etapa.attribute_display_type, etapa.attribute_values], ['list', ['Novo lead', 'Agendado']]);
+  assert.equal(conta.attrs.filter((a) => a.attribute_model === 'conversation_attribute').length, 24); // os 23 do molde + quem_agendou (o Gestor lê)
+  assert.equal(conta.attrs.filter((a) => a.attribute_model === 'contact_attribute').length, ATRIBUTOS_DE_CONTATO.length);
   // automações nativas: a segura foi copiada; a que aponta para caixa/agente da OUTRA conta NÃO (e o relatório... as notas dizem)
   assert.deepEqual(conta.rules.map((r) => r.name), ['parar de receber']);
   assert.ok(resultados.find((r) => r.id === 'automacoes-conta')!.notas.some((n) => /NÃO copiei.*distribuir para a Cleia/.test(n)));
@@ -346,8 +346,8 @@ function estadoLido(falso: ReturnType<typeof montar>['falso'], b: ReturnType<typ
     },
     chatwoot: {
       etiquetas: c.labels.map((l) => l.title),
-      atributosConversa: c.attrs.filter((a) => a.attribute_model === 0).map((a) => a.attribute_key),
-      atributosContato: c.attrs.filter((a) => a.attribute_model === 1).map((a) => a.attribute_key),
+      atributosConversa: c.attrs.filter((a) => a.attribute_model === 'conversation_attribute').map((a) => a.attribute_key),
+      atributosContato: c.attrs.filter((a) => a.attribute_model === 'contact_attribute').map((a) => a.attribute_key),
       caixas: c.inboxes.map((i) => ({ id: i.id, nome: i.name, robo: i.agent_bot !== null })),
       times: c.teams.map((t) => t.name),
       agentes: Object.fromEntries(c.agents.map((a) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])),

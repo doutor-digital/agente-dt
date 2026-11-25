@@ -221,7 +221,7 @@ export async function passoAtributos(x: PortasExternas, e: EstadoDaExecucao): Pr
       await postar(e, conta, 'custom_attribute_definitions', {
         attribute_key: chave,
         attribute_display_name: m?.attribute_display_name ?? chave,
-        attribute_display_type: m?.attribute_display_type ?? 0,
+        attribute_display_type: m?.attribute_display_type ?? 'text',
         attribute_description: m?.attribute_description ?? '',
         attribute_values: m?.attribute_values ?? [],
         attribute_model: modelo,
@@ -234,8 +234,19 @@ export async function passoAtributos(x: PortasExternas, e: EstadoDaExecucao): Pr
   return notas;
 }
 
-/** Tipo do Chatwoot (`attribute_display_type`) de cada tipo do questionário. `lista-multipla` não existe no Chatwoot: vira texto com as opções na descrição. */
-const TIPO_DO_CHATWOOT: Readonly<Record<string, number>> = { texto: 0, numero: 1, moeda: 2, data: 5, lista: 6, checkbox: 7, 'lista-multipla': 0 };
+/** Tipo do Chatwoot (`attribute_display_type`) de cada tipo do questionário, pelo NOME do enum (é assim que o Chatwoot o devolve). `lista-multipla` não existe no Chatwoot: vira texto com as opções na descrição. */
+const TIPO_DO_CHATWOOT: Readonly<Record<string, string>> = { texto: 'text', numero: 'number', moeda: 'currency', data: 'date', lista: 'list', checkbox: 'checkbox', 'lista-multipla': 'text' };
+
+const NOMES_DOS_TIPOS = ['text', 'number', 'currency', 'percent', 'link', 'date', 'list', 'checkbox'];
+/**
+ * O tipo de um atributo como NOME («list»). O Chatwoot REAL devolve o nome (enum do Rails: `attribute_display_type: "list"`), mas aceita nome ou número na entrada e o kit já viu os dois:
+ * quem compara tipo passa por aqui, nunca por `=== 6`.
+ */
+export function tipoDoAtributo(v: unknown): string {
+  if (typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v))) return NOMES_DOS_TIPOS[Number(v)] ?? String(v);
+  return String(v ?? '').toLowerCase();
+}
+export const ehLista = (a: { attribute_display_type?: unknown } | undefined | null): boolean => tipoDoAtributo(a?.attribute_display_type) === 'list';
 
 /** O que o atributo extra grava como descrição (a lista múltipla leva as opções, já que o Chatwoot não tem esse tipo). */
 export const descricaoDoExtra = (x: { tipo: string; opcoes?: string[]; descricao?: string }): string =>
@@ -252,7 +263,7 @@ export async function passoAtributosExtras(q: Questionario, e: EstadoDaExecucao)
     await postar(e, conta, 'custom_attribute_definitions', {
       attribute_key: x.chave,
       attribute_display_name: x.nome,
-      attribute_display_type: TIPO_DO_CHATWOOT[x.tipo] ?? 0,
+      attribute_display_type: TIPO_DO_CHATWOOT[x.tipo] ?? 'text',
       attribute_description: descricaoDoExtra(x),
       attribute_values: x.tipo === 'lista' ? x.opcoes ?? [] : [],
       attribute_model: 0,
@@ -277,12 +288,12 @@ export async function passoListas(q: Questionario, x: PortasExternas, e: EstadoD
     const def = listaDaResposta(await conta.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave);
     if (!def) {
       const molde = x.referencia ? listaDaResposta(await x.referencia.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave) : undefined;
-      await postar(e, conta, 'custom_attribute_definitions', { attribute_key: l.chave, attribute_display_name: molde?.attribute_display_name ?? l.chave, attribute_display_type: 6, attribute_description: molde?.attribute_description ?? '', attribute_values: l.opcoes, attribute_model: modelo });
+      await postar(e, conta, 'custom_attribute_definitions', { attribute_key: l.chave, attribute_display_name: molde?.attribute_display_name ?? l.chave, attribute_display_type: 'list', attribute_description: molde?.attribute_description ?? '', attribute_values: l.opcoes, attribute_model: modelo });
       notas.push(`${l.chave}: criada com ${l.opcoes.length} opções`);
       continue;
     }
     // a conta tem o atributo, mas NÃO como lista (texto livre, criado à mão): o PATCH das opções não o transforma — falha claro em vez de dizer que aplicou
-    if (Number(def.attribute_display_type) !== 6) throw new ErroDaPorta(`${l.chave}: já existe como atributo de outro tipo (${String(def.attribute_display_type)}), não como lista: apague-o na conta (Configurações → Atributos) e rode de novo`);
+    if (!ehLista(def)) throw new ErroDaPorta(`${l.chave}: já existe como atributo do tipo «${tipoDoAtributo(def.attribute_display_type)}», não como lista, e o kit não troca o tipo de um atributo que existe. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire esta chave de chatwoot.listas`);
     const d = diferencaDaLista((def.attribute_values as unknown[] | undefined)?.map(String), l.opcoes);
     if (d.igual) {
       notas.push(`${l.chave}: já estava igual`);
