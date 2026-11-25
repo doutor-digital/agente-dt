@@ -210,3 +210,19 @@ test('desfazer: devolve o valor de antes SÓ onde ainda está o que a migração
   assert.match(d, /UPDATE custom_filters SET query = .* AND query = /);
   assert.equal(sqlDoDesfazer(['lixo', '{"tipo":"outro"}']), 'BEGIN;\nCOMMIT;\n');
 });
+
+test('NÃO COMPARECEU com a consulta REMARCADA (importada como Agendado + Remarcado) continua AGENDADO; só a falta de verdade vai para NÃO COMPARECEU', () => {
+  assert.equal(decidirConversa(importada(20, 'NÃO COMPARECEU', 'Agendado', { situacao: 'Remarcado' }), MAPA).troca?.etapaDepois, 'AGENDADO');
+  assert.equal(decidirConversa(importada(21, 'NÃO COMPARECEU', 'Agendado', { situacao: 'Não compareceu' }), MAPA).troca?.etapaDepois, 'NÃO COMPARECEU');
+  assert.equal(decidirConversa(importada(22, 'NÃO COMPARECEU', 'Agendado', { situacao: null }), MAPA).troca?.etapaDepois, 'NÃO COMPARECEU');
+});
+
+test('SQL da etiqueta: só se a troca valeu (a conversa já está na etapa nova), em taggings E no cache cached_label_list; o desfazer tira dos dois; a lista só volta se ainda é a da migração', () => {
+  const plano = planoDasConversas([conv({ id: 2, etapa: 'Esperando humano' })], MAPA);
+  const { sql, registro } = sqlDaMigracao({ conta: 3, listasAntes: { etapa: ['Novo lead'], etapa_tratamento: null }, listas: listasDosAtributos(MAPA), trocas: plano.trocas, pastas: [] });
+  assert.match(sql, /INSERT INTO taggings .* custom_attributes->>'etapa' = 'EM QUALIFICAÇÃO'\) AND NOT EXISTS/);
+  assert.match(sql, /UPDATE conversations SET cached_label_list = CASE WHEN coalesce\(cached_label_list, ''\) = '' THEN 'esperando-humano' ELSE cached_label_list \|\| ', ' \|\| 'esperando-humano' END WHERE id = 2 AND account_id = 3 AND custom_attributes->>'etapa' = 'EM QUALIFICAÇÃO' AND NOT \('esperando-humano' = ANY/);
+  const d = sqlDoDesfazer(registro);
+  assert.match(d, /UPDATE conversations SET cached_label_list = array_to_string\(array_remove\(string_to_array\(coalesce\(cached_label_list, ''\), ', '\), 'esperando-humano'\), ', '\) WHERE id = 2 AND account_id = 3/);
+  assert.match(d, /attribute_values = '\["Novo lead"\]'::jsonb WHERE account_id = 3 AND attribute_key = 'etapa' AND attribute_model = 0 AND attribute_values = '\["Leads de entrada"/);
+});

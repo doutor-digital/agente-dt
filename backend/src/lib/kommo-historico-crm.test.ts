@@ -469,3 +469,12 @@ test('SEM mapa a linha é EXATAMENTE a de antes (o mesmo objeto de atributos; es
   assert.ok(!a.etiquetas.includes('esperando-humano'));
   assert.deepEqual(a.atributos, atributosDoCartao(c, AGORA).atributos);
 });
+
+test('COM o mapa: NÃO COMPARECEU com consulta FUTURA fica Agendado + Remarcado (de pé: a régua manda véspera); só a falta de verdade é «NÃO COMPARECEU»', () => {
+  const futura = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: [campo('Data da Consulta', CONSULTA, 'date_time')] }), null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+  assert.equal(futura.atributos.etapa, 'AGENDADO');
+  assert.equal(futura.atributos.situacao_consulta, 'Remarcado');
+  const passada = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: [campo('Data da Consulta', CONSULTA - 10 * 86400, 'date_time')] }), null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+  assert.equal(passada.atributos.etapa, 'NÃO COMPARECEU');
+  assert.equal(passada.atributos.situacao_consulta, 'Não compareceu');
+});

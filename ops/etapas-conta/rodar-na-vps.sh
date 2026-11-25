@@ -8,7 +8,12 @@ LOG="$1"; MODO="$2"; shift 2
 [[ "$LOG" =~ ^/root/kit/logs/[A-Za-z0-9._-]+$ ]] || { echo "log inválido"; exit 2; }
 recusa() { echo "LOG RECUSADO: $1" > "$LOG"; echo "LOG FIM do processo (código 2)" >> "$LOG"; exit 2; }
 [[ "$MODO" =~ ^(conferir|gravar|desfazer)$ ]] || recusa "modo inválido"
-for v in "$@"; do [[ "$v" =~ ^[A-Z_]+=[A-Za-z0-9._,/-]*$ ]] || recusa "variável inválida"; export "$v"; done
+for v in "$@"; do
+  case "$v" in
+    UNIDADE=*|CONTA=*|REGISTRO=*|CONFIRMO=*) [[ "$v" =~ ^[A-Z_]+=[A-Za-z0-9._,/-]*$ ]] || recusa "valor de variável inválido"; export "$v" ;;
+    *) recusa "variável não aceita (só UNIDADE, CONTA, REGISTRO, CONFIRMO)" ;;
+  esac
+done
 UNIDADE="${UNIDADE:-doutor-hernia-timbo}"; CONTA="${CONTA:-3}"
 [[ "$UNIDADE" =~ ^[a-z0-9-]{3,50}$ && "$CONTA" =~ ^[0-9]+$ ]] || recusa "parâmetro inválido"
 [ "$CONTA" -gt 1 ] || recusa "a conta 1 (Parauapebas) é recusada sempre"
@@ -35,8 +40,11 @@ if [ "$MODO" = desfazer ]; then
   echo "LOG DESFAZER linhas de SQL: $(wc -l < "$TMP/desfazer.sql") (o único DELETE é a etiqueta esperando-humano que a migração pôs)" >> "$LOG"
   if [ "$RC" != 0 ]; then fim "$RC"; exit "$RC"; fi
   if [ "${CONFIRMO:-0}" != 1 ]; then echo "LOG só mostrei: nada foi desfeito (rode com --confirmo-apagar)" >> "$LOG"; fim 0; exit 0; fi
+  # o SQL primeiro e o mapa por último: com o mapa ainda gravado o agente lê os dois nomes (tolerante), então nada fica «desconhecido» no meio
   psqlr -v "conta=$CONTA" < "$TMP/desfazer.sql" >> "$LOG" 2>&1 || { echo "LOG ERRO: o SQL do desfazer falhou (nada foi aplicado: é uma transação)" >> "$LOG"; fim 1; exit 1; }
-  "${NODE[@]}" mapa-restaurar "--unidade=$UNIDADE" --gravar < "$TMP/reg.txt" 2>&1 | saida
+  "${NODE[@]}" mapa-restaurar "--unidade=$UNIDADE" --gravar < "$TMP/reg.txt" > "$TMP/mapa.txt" 2>&1; RC=$?
+  saida < "$TMP/mapa.txt"
+  if [ "$RC" != 0 ]; then echo "LOG ERRO: o SQL foi desfeito, mas NÃO restaurei o mapa (código $RC)" >> "$LOG"; fim 1; exit 1; fi
   echo "LOG desfeito" >> "$LOG"; fim 0; exit 0
 fi
 
@@ -52,11 +60,13 @@ if [ "$MODO" = conferir ]; then
   fim 0; exit 0
 fi
 
-# 2) grava: o registro (valor de antes de cada linha) vai para o log ANTES; o SQL é uma transação só; depois o mapa
+# 2) grava. O registro (valor de antes de cada linha) vai para o log ANTES de qualquer escrita. O MAPA entra PRIMEIRO: o agente lê o nome da conta E o nome antigo do molde (leitura
+#    tolerante), então no minuto até ele reler o mapa, e depois, nenhuma etapa fica «desconhecida». Depois o SQL (uma transação só).
 grep '^REG ' "$TMP/plano.txt" >> "$LOG"
-"${NODE[@]}" mapa-gravar "--unidade=$UNIDADE" 2>&1 | saida   # só mostra e registra o valor de antes do mapa
-psqlr -v "conta=$CONTA" < "$TMP/migrar.sql" >> "$LOG" 2>&1 || { echo "LOG ERRO: o SQL falhou (nada foi aplicado: é uma transação). O mapa NÃO foi gravado." >> "$LOG"; fim 1; exit 1; }
-echo "LOG SQL aplicado (listas, conversas, etiquetas e pastas)" >> "$LOG"
-"${NODE[@]}" mapa-gravar "--unidade=$UNIDADE" --gravar 2>&1 | saida
+"${NODE[@]}" mapa-gravar "--unidade=$UNIDADE" --gravar > "$TMP/mapa.txt" 2>&1; RC=$?
+saida < "$TMP/mapa.txt"
+if [ "$RC" != 0 ]; then echo "LOG ERRO: não gravei o mapa em unit_chatwoot.etapas (código $RC). Nada foi alterado no CRM." >> "$LOG"; fim 1; exit 1; fi
 echo "LOG mapa gravado em unit_chatwoot.etapas (o agente relê em até 1 minuto)" >> "$LOG"
+psqlr -v "conta=$CONTA" < "$TMP/migrar.sql" >> "$LOG" 2>&1 || { echo "LOG ERRO: o SQL falhou (nada foi aplicado: é uma transação). O mapa JÁ está gravado e a leitura é tolerante: nada fica desconhecido; rode de novo, ou desfaça o mapa com --desfazer." >> "$LOG"; fim 1; exit 1; }
+echo "LOG SQL aplicado (listas, conversas, etiquetas e pastas)" >> "$LOG"
 fim 0

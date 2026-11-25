@@ -78,12 +78,14 @@ async function main(): Promise<void> {
   if (modo === 'plano') {
     const conta = Number(arg('conta') ?? u.conta);
     if (conta !== u.conta) throw new ErroDeUso('a conta pedida não é a da unidade');
-    const entrada = JSON.parse(await lerStdin()) as { listasAntes: { etapa: string[] | null; etapa_tratamento: string[] | null }; conversas: ConversaParaMigrar[]; pastas: PastaParaMigrar[] };
+    const entrada = JSON.parse(await lerStdin()) as { tagEsperandoHumano?: boolean; listasAntes: { etapa: string[] | null; etapa_tratamento: string[] | null }; conversas: ConversaParaMigrar[]; pastas: PastaParaMigrar[] };
     const conv = planoDasConversas(entrada.conversas, mapa);
+    // a etiqueta que a migração PÕE tem de existir (a Tag é global; sem ela o INSERT seria um no-op silencioso e o resumo mentiria)
+    if (conv.trocas.some((t) => t.poeEtiqueta) && entrada.tagEsperandoHumano !== true) throw new ErroDeUso('a etiqueta esperando-humano não existe (tabela tags): crie-a na conta antes (kit) — nada foi gravado');
     const pastas = planoDasPastas(entrada.pastas, mapa);
     log(`PLANO conversas_lidas=${entrada.conversas.length} conversas_a_trocar=${conv.trocas.length} pastas_lidas=${entrada.pastas.length} pastas_a_trocar=${pastas.length}`);
     for (const [k, n] of Object.entries(conv.contagem).sort()) log(`TROCA ${k} = ${n}`);
-    for (const [k, n] of Object.entries(conv.intactas).sort()) log(`INTACTA ${k} = ${n}`);
+    for (const [k, n] of Object.entries(conv.intactas).sort()) log(`INTACTA ${k} = ${n} (a etapa delas NÃO está na lista nova do atributo: o seletor do Chatwoot não as oferece; decida antes de gravar)`);
     for (const p of pastas) log(`PASTA ${p.id} ${p.nome}`);
     log(`LISTAS etapa=${listasDosAtributos(mapa).etapa.length} valores, etapa_tratamento=${listasDosAtributos(mapa).etapa_tratamento.length} valores (antes: ${entrada.listasAntes.etapa?.length ?? 'não existe'} / ${entrada.listasAntes.etapa_tratamento?.length ?? 'não existe'})`);
     const { sql, registro } = sqlDaMigracao({ conta, listasAntes: entrada.listasAntes, listas: listasDosAtributos(mapa), trocas: conv.trocas, pastas });

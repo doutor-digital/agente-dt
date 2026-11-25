@@ -5,7 +5,7 @@ Troca, na conta 3 do Chatwoot, **a lista dos atributos** `etapa` e `etapa_tratam
 | Quem roda | Comando | O quê |
 |---|---|---|
 | João (PC) | `bash ops/etapas-conta-joao.sh --so-conferir` | lê o banco do CRM e mostra o que trocaria: contagens «de → para», pastas, listas. **Não grava nada.** |
-| João (PC) | `bash ops/etapas-conta-joao.sh` | grava: uma transação no banco do CRM (listas, conversas, etiquetas, pastas) e, só se deu certo, o mapa |
+| João (PC) | `bash ops/etapas-conta-joao.sh` | grava: **primeiro o mapa** (o agente lê o nome antigo e o novo, então nada fica «desconhecido» enquanto ele relê, em até 1 min) e depois **uma transação** no banco do CRM (listas, conversas, etiquetas, pastas) |
 | João (PC) | `... --desfazer=<log> [--confirmo-apagar]` | devolve cada valor ao de antes (só onde ainda está o que a migração pôs); sem `--confirmo-apagar` só mostra |
 
 **Pré-requisitos.** (1) deploy dos PRs de etapas por conta (o script `backend/dist/scripts/etapas-conta.js` precisa existir); (2) a importação da Kommo terminada; (3) rodar `--so-conferir` e conferir os números antes de gravar.
@@ -16,6 +16,8 @@ Troca, na conta 3 do Chatwoot, **a lista dos atributos** `etapa` e `etapa_tratam
 - A conversa que a **equipe já mexeu** (ou que não veio da Kommo) só é **renomeada** (Sofia qualifica → EM QUALIFICAÇÃO, Fechou → GANHO / CONCLUÍDO…), nunca reclassificada.
 - **Esperando humano** não tem etapa na Kommo: vira EM QUALIFICAÇÃO **+ a etiqueta `esperando-humano`** (a Sofia e a demora já leem a etiqueta).
 - **Tratamento:** Entrada → Leads de entrada, Em tratamento → EM TRATAMENTO, Alta → ALTA, Tratamento cancelado → TRATAMENTO CANCELADO.
+- **NÃO COMPARECEU com consulta remarcada** (a importação a deixou Agendado + Remarcado): continua AGENDADO.
+- A etiqueta `esperando-humano` entra em `taggings` **e** no cache `cached_label_list`, só se a troca da etapa valeu e se a Tag existe (senão o plano aborta antes de gravar).
 - **Nunca** é tirada etiqueta (a `conferir-etapa` fica; a equipe tira ao conferir), `updated_at` não muda, e cada UPDATE só vale se o valor de antes ainda é o que o plano viu (quem mexeu no meio fica como está).
 - Sem destino na conta (Frio, Resgate) a conversa **fica intacta** e aparece em `INTACTA` no resumo.
 - Tudo por SQL **sem callbacks**: sem webhook, régua, notificação nem mensagem ao paciente. A régua lê a etapa em **papel**, então renomear não parece «entrou na etapa».
@@ -26,7 +28,7 @@ Todas as pastas da conta que filtram por `etapa`/`etapa_tratamento` passam para 
 
 ## Desfazer
 
-O log da rodada que gravou (`/root/kit/logs/etapas-conta-AAAAMMDD-HHMMSS-gravar.txt`) guarda uma linha `REG` por troca com o **valor de antes**. `--desfazer` restaura listas, etapas e pastas, e tira **só** as etiquetas `esperando-humano` que a migração pôs (único DELETE), e devolve `unit_chatwoot.etapas` ao valor de antes (nulo = molde).
+Use o log da **primeira** rodada que gravou (uma 2ª rodada registra como «antes» o que a 1ª já migrou). O log da rodada que gravou (`/root/kit/logs/etapas-conta-AAAAMMDD-HHMMSS-gravar.txt`) guarda uma linha `REG` por troca com o **valor de antes**. `--desfazer` restaura listas, etapas e pastas, e tira **só** as etiquetas `esperando-humano` que a migração pôs (único DELETE), e devolve `unit_chatwoot.etapas` ao valor de antes (nulo = molde).
 
 ## Depois de gravar
 

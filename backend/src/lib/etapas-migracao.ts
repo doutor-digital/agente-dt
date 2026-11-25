@@ -20,6 +20,8 @@ export interface ConversaParaMigrar {
   etapa: string | null;
   etapa_tratamento: string | null;
   funil: string | null;
+  /** `situacao_consulta` (a NÃO COMPARECEU com consulta futura nasce Agendado + Remarcado: continua Agendado) */
+  situacao?: string | null;
   etiquetas: string[];
   /** o id do cartão na Kommo, se a conversa foi criada pela importação */
   kommo: string | null;
@@ -109,7 +111,10 @@ export function decidirConversa(l: ConversaParaMigrar, mapa: MapaDeEtapas): { tr
     // ainda como a importação deixou: a etapa é a que o cartão tem na Kommo
     const kommo = daNota!.etapa;
     const entrada = ['INCOMING LEADS', 'LEADS DE ENTRADA'].includes(semAcento(kommo));
-    const papel = entrada ? 'Novo lead' : papelDaEtapa(mapa, kommo);
+    let papel = entrada ? 'Novo lead' : papelDaEtapa(mapa, kommo);
+    // NÃO COMPARECEU na Kommo, mas a consulta foi REMARCADA (a importação a deixou Agendado + Remarcado, de pé): continua Agendado
+    const situ = (l.situacao ?? '').trim();
+    if (papel === 'Faltou' && situ !== '' && situ !== 'Não compareceu') papel = 'Agendado';
     const nome = nomeParaGravar(mapa, papel);
     const eraHumano = etapa === 'Esperando humano';
     if (nome && nome !== etapa) {
@@ -255,6 +260,14 @@ export interface EntradaDoSql {
  * se o valor ainda é o que o plano viu (a equipe mexeu no meio: aquela linha fica como está). Sem callbacks: nada de webhook, régua nem notificação; `updated_at` NÃO muda (a ordem da lista
  * de conversas e o «parada há» ficam como estão).
  */
+/** A conversa está na etapa que a troca pôs (a troca valeu): condição para pôr a etiqueta junto. */
+function condicaoDaTroca(t: TrocaDeConversa): string {
+  const partes: string[] = [];
+  if (t.etapaDepois !== null) partes.push(`custom_attributes->>'etapa' = ${aspas(t.etapaDepois)}`);
+  if (t.tratamentoDepois !== null) partes.push(`custom_attributes->>'etapa_tratamento' = ${aspas(t.tratamentoDepois)}`);
+  return partes.length ? partes.join(' AND ') : 'true';
+}
+
 export function sqlDaMigracao(e: EntradaDoSql): { sql: string; registro: string[] } {
   const conta = inteiro(e.conta);
   const sql: string[] = ['BEGIN;'];
@@ -277,9 +290,14 @@ export function sqlDaMigracao(e: EntradaDoSql): { sql: string; registro: string[
     campo('etapa_tratamento', t.tratamentoAntes, t.tratamentoDepois);
     if (t.poeEtiqueta) {
       sql.push(
+        // a etiqueta só entra se a troca da etapa VALEU (a conversa está na etapa nova), e nos DOIS lugares que o Chatwoot lê: `taggings` e o cache `cached_label_list` (formato «a, b»)
         `INSERT INTO taggings (tag_id, taggable_type, taggable_id, context, created_at) SELECT g.id, 'Conversation', ${id}, 'labels', now() FROM tags g WHERE g.name = ${aspas(t.poeEtiqueta)} ` +
-          `AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = ${id} AND c.account_id = ${conta}) ` +
+          `AND EXISTS (SELECT 1 FROM conversations c WHERE c.id = ${id} AND c.account_id = ${conta} AND ${condicaoDaTroca(t)}) ` +
           `AND NOT EXISTS (SELECT 1 FROM taggings x WHERE x.tag_id = g.id AND x.taggable_type = 'Conversation' AND x.taggable_id = ${id} AND x.context = 'labels');`,
+      );
+      sql.push(
+        `UPDATE conversations SET cached_label_list = CASE WHEN coalesce(cached_label_list, '') = '' THEN ${aspas(t.poeEtiqueta)} ELSE cached_label_list || ', ' || ${aspas(t.poeEtiqueta)} END ` +
+          `WHERE id = ${id} AND account_id = ${conta} AND ${condicaoDaTroca(t)} AND NOT (${aspas(t.poeEtiqueta)} = ANY (string_to_array(coalesce(cached_label_list, ''), ', ')));`,
       );
     }
     reg.push(JSON.stringify({ tipo: 'conversa', conta, id, etapaAntes: t.etapaAntes, etapaDepois: t.etapaDepois, tratamentoAntes: t.tratamentoAntes, tratamentoDepois: t.tratamentoDepois, poeEtiqueta: t.poeEtiqueta }));
@@ -306,7 +324,8 @@ export function sqlDoDesfazer(linhas: readonly string[]): string {
       continue;
     }
     if (r.tipo === 'lista') {
-      sql.push(`UPDATE custom_attribute_definitions SET attribute_values = ${json(r.antes)} WHERE account_id = ${inteiro(r.conta)} AND attribute_key = ${aspas(String(r.chave))} AND attribute_model = 0;`);
+      // só se a lista ainda é a que a migração pôs (a administradora pode ter mexido depois)
+      sql.push(`UPDATE custom_attribute_definitions SET attribute_values = ${json(r.antes)} WHERE account_id = ${inteiro(r.conta)} AND attribute_key = ${aspas(String(r.chave))} AND attribute_model = 0 AND attribute_values = ${json(r.depois)};`);
     } else if (r.tipo === 'conversa') {
       const id = inteiro(r.id);
       const conta = inteiro(r.conta);
@@ -317,6 +336,7 @@ export function sqlDoDesfazer(linhas: readonly string[]): string {
       }
       if (r.poeEtiqueta) {
         sql.push(`DELETE FROM taggings WHERE taggable_type = 'Conversation' AND taggable_id = ${id} AND context = 'labels' AND tag_id = (SELECT id FROM tags WHERE name = ${aspas(String(r.poeEtiqueta))});`);
+        sql.push(`UPDATE conversations SET cached_label_list = array_to_string(array_remove(string_to_array(coalesce(cached_label_list, ''), ', '), ${aspas(String(r.poeEtiqueta))}), ', ') WHERE id = ${id} AND account_id = ${conta};`);
       }
     } else if (r.tipo === 'pasta') {
       sql.push(`UPDATE custom_filters SET query = ${json(r.queryAntes)} WHERE id = ${inteiro(r.id)} AND account_id = ${inteiro(r.conta)} AND query = ${json(r.queryDepois)};`);

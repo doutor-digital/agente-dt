@@ -398,6 +398,8 @@ export function atributosDoCartao(c: CartaoDaKommo, agora: Date = new Date(), ma
   if (a.situacao_consulta === 'Não compareceu' && typeof a.data_consulta === 'string' && a.data_consulta > hojeEmBelem(agora) && c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO) {
     a.situacao_consulta = 'Remarcado';
     avisos.push('nao-compareceu-com-consulta-futura');
+    // a conversa fica em Agendado (de pé: a régua manda véspera/dia/preparo), também na conta que tem a etapa «Faltou»: Remarcado é consulta futura, não falta
+    if (t.etapa === 'Faltou') a.etapa = 'Agendado';
   }
   const categoriaKommo = txt(valorDoCampo(c, 'Categoria da consulta'));
   const categoria = t.categoria ?? (categoriaKommo ? daLista(categoriaKommo, LISTAS_DO_CRM.categoria_consulta) : null);
