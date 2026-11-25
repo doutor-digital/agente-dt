@@ -53,6 +53,8 @@ import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, sem
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
+import { dominioContaJs } from '../lib/chatwoot-dominio-conta.js';
+import { dominiosDasClinicas } from '../lib/chatwoot-unidades.js';
 import {
   ATRIBUTO_ETAPA,
   MAX_PAGINAS,
@@ -1834,7 +1836,8 @@ export async function menuFunilHandler(_req: Request, res: Response): Promise<vo
     .type('application/javascript')
     .set('Cache-Control', 'public, max-age=300')
     .set('Cross-Origin-Resource-Policy', 'cross-origin')
-    .send(montarMenuJs(agente, await contasSemAntecipado().catch(() => [])));
+    // o endereço de cada clínica abre a conta DELA: só o mapa subdomínio → conta (em memória, relido do banco a cada minuto: o menu nunca espera o banco)
+    .send(montarMenuJs(agente, await contasSemAntecipado().catch(() => []), dominiosDasClinicas(contaChatwootDoAmbiente()?.conta ?? null)));
 }
 
 /**
@@ -1842,13 +1845,15 @@ export async function menuFunilHandler(_req: Request, res: Response): Promise<vo
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
-export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly number[] = []): string {
+export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly number[] = [], dominios: Readonly<Record<string, number>> = {}): string {
   const origem = JSON.stringify(agente);
   // o guia da etapa («O que fazer agora») é um terceiro bloco independente: se falhar ao executar, o menu e a assistente seguem
   const guia = guiaJs(origem, process.env, contasDoGuiaSemAntecipado);
   // o selo da Sofia (faixa roxa no cartão + barra na conversa) é o quarto bloco independente: só visual, só lê; falhou, o resto segue
   const selo = seloSofiaJs();
-  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}${selo ? `;try{\n${selo}\n}catch(e){}\n` : ''}`;
+  // o endereço da clínica abre a conta dela é o quinto bloco independente: só lê o perfil da sessão e troca de URL; falhou, o resto segue
+  const dominio = dominioContaJs(dominios);
+  return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}${selo ? `;try{\n${selo}\n}catch(e){}\n` : ''}${dominio ? `;try{\n${dominio}\n}catch(e){}\n` : ''}`;
 }
 
 // String.raw: o que está aqui é o JavaScript que o navegador recebe (as barras das expressões regulares ficam como estão).
