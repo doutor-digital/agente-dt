@@ -28,6 +28,13 @@ export const ETIQUETAS_DO_CODIGO: readonly string[] = [
   'conferir-pagamento',
   'curriculo',
   'reclamacao',
+  // etiquetas de FLUXO que a régua e a SDR automática leem (chatwoot-regua: ETIQUETAS_OBSERVADAS; chatwoot-gestor: frio/morno)
+  'boas-vindas',
+  'confirmar-retorno',
+  'reativacao',
+  'retomada',
+  'frio',
+  'morno',
 ];
 
 /** Atributos de CONVERSA que a régua, a agenda e a Sofia leem/escrevem (chave do Chatwoot). */
@@ -55,10 +62,12 @@ export const ATRIBUTOS_DE_CONVERSA: readonly string[] = [
   'compareceu_ultima_sessao',
   'deixou_avaliacao_google',
   'programa',
+  /** quem marcou a consulta (a tela do Gestor agrupa por ela) */
+  'quem_agendou',
 ];
 
-/** Atributos de CONTATO (a Sofia lê `interno` para não responder a equipe). */
-export const ATRIBUTOS_DE_CONTATO: readonly string[] = ['interno'];
+/** Atributos de CONTATO: a Sofia lê `interno` (não responder a equipe); `chatwoot-origem` grava `origem`/`campanha_nome`/`conjunto` e a tela do Gestor lê `campanha_codigo`. */
+export const ATRIBUTOS_DE_CONTATO: readonly string[] = ['interno', 'origem', 'campanha_codigo', 'campanha_nome', 'conjunto'];
 
 /** As pastas (filtros salvos) padrão de cada atendente — as mesmas 10 que Parauapebas tem (12/11/2026). Filtro: etapa/etiqueta da conversa. */
 export const PASTAS_PADRAO: readonly string[] = [
@@ -102,3 +111,24 @@ export const MENSAGENS_PRONTAS: readonly MensagemPronta[] = [
 /** O que o `chatwoot_franquias` (Traefik) precisa para o subdomínio da unidade. */
 export const DOMINIO_DOS_CRMS = 'doutordigitalconsultoria.com';
 export const SERVICO_DO_PROXY = 'chatwoot_franquias';
+
+/**
+ * As listas que o questionário pode TROCAR por conta (`chatwoot.listas`), e onde moram. Só estas: as outras listas (`etapa`, `etapa_tratamento`, `funil`, `situacao_consulta`,
+ * `qualificacao`…) são lidas por nome no código (régua, guia, Hoje, agenda, Sofia) e não se trocam por questionário.
+ */
+export const LISTAS_EDITAVEIS: Readonly<Record<string, 'conversa' | 'contato'>> = {
+  origem: 'contato',
+  motivo_nao_agendamento: 'conversa',
+  motivo_nao_fechamento: 'conversa',
+  motivo_espera: 'conversa',
+  categoria_consulta: 'conversa',
+};
+
+/** Valores que o CÓDIGO escreve ou lê por nome em cada lista editável: a lista nova PRECISA conservá-los (senão a régua ou o rastreio gravam um valor que a lista não mostra). */
+export const VALORES_QUE_O_CODIGO_USA: Readonly<Record<string, readonly string[]>> = {
+  origem: ['Meta Ads'],
+  categoria_consulta: ['Avaliação', 'Sessão', 'Retorno', 'Retorno com exames', 'Retorno após tratamento'],
+  motivo_espera: ['Exames', 'Viajando', 'Vai decidir', 'Financeiro agora não'],
+  // a régua cobra o documento de quem ficou em «Solicitado exames» (chatwoot-regua: pendencia-documento)
+  motivo_nao_fechamento: ['Solicitado exames'],
+};

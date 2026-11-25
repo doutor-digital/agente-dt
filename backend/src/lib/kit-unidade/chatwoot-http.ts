@@ -68,5 +68,6 @@ export function contaHttp(url: string, conta: number, token: string, buscar: Bus
     conta,
     get: (caminho, query) => chamar(ctx, 'GET', caminho, { query }),
     post: (caminho, corpo) => chamar(ctx, 'POST', caminho, { corpo }),
+    patch: (caminho, corpo) => chamar(ctx, 'PATCH', caminho, { corpo }),
   };
 }

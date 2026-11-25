@@ -70,6 +70,15 @@ chatwoot:
       email: sdr@example.com
       funcao: sdr
   usuario_celular_email: celular-parauapebas@example.com   # [SENSÍVEL] opcional: o usuário "📱 Celular da unidade"
+  # OPCIONAL — campos a mais e listas com as opções DESTA clínica (para a conta ficar igual ao Kommo dela; ver README «Campos e listas desta clínica»):
+  # atributos_extras:
+  #   - chave: fisioterapeuta            # minúsculas, dígitos e _
+  #     nome: Fisioterapeuta
+  #     tipo: lista                      # texto | numero | moeda | data | checkbox | lista | lista-multipla (esta vira texto no Chatwoot)
+  #     opcoes: ["DRA. FULANA", "DR. BELTRANO"]
+  # listas:                              # só origem, motivo_nao_agendamento, motivo_nao_fechamento, motivo_espera, categoria_consulta
+  #   - chave: motivo_espera             # precisa conservar Exames, Viajando, Vai decidir, Financeiro agora não
+  #     opcoes: ["Exames", "Viajando", "Vai decidir", "Financeiro agora não", "Outro"]
 
 franquia:
   id_company: 131                           # [SENSÍVEL] no seletor de unidade de app.doutorhernia.com.br

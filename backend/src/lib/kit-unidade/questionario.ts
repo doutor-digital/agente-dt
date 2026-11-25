@@ -11,6 +11,8 @@
 import { z } from 'zod';
 import type { ConfigChatwootUnidade } from '../chatwoot-unidades.js';
 import { lerYamlOuJson } from './yaml-minimo.js';
+import { MOTIVO_POR_ETIQUETA, motivoNaLista } from '../motivo-do-botao.js';
+import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, LISTAS_EDITAVEIS, VALORES_QUE_O_CODIGO_USA } from './catalogo.js';
 
 const hora = z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, 'use HH:MM (24 h)');
 const nomeDeVariavel = z.string().regex(/^[A-Z][A-Z0-9_]{2,60}$/, 'é o NOME da variável de ambiente (MAIÚSCULAS e _), nunca o valor');
@@ -104,6 +106,27 @@ const QuestionarioBase = z
       admins_dd: z.array(email).max(10).optional(),
       /** e-mail do usuário "📱 Celular da unidade" (autor do que a equipe manda pelo aparelho); sem ele a unidade não tem esse usuário */
       usuario_celular_email: email.optional(),
+      /**
+       * Atributos de CONVERSA a mais, só desta conta (ex.: «Fisioterapeuta», «Forma de pagamento» que a Kommo da clínica já tem). Criados se não existem (nunca trocam um que já existe).
+       * `lista-multipla` não existe no Chatwoot: vira texto, com as opções na descrição.
+       */
+      atributos_extras: z
+        .array(
+          obj({
+            chave: z.string().regex(/^[a-z][a-z0-9_]{2,40}$/, 'minúsculas, dígitos e _ (3 a 41 caracteres)'),
+            nome: z.string().min(3).max(60),
+            tipo: z.enum(['texto', 'numero', 'moeda', 'data', 'checkbox', 'lista', 'lista-multipla']),
+            opcoes: z.array(z.string().trim().min(1).max(80)).min(2).max(60).optional(),
+            descricao: z.string().max(200).optional(),
+          }),
+        )
+        .max(30)
+        .optional(),
+      /** Troca as OPÇÕES de uma lista que o kit copia (só as de `LISTAS_EDITAVEIS`), mantendo os valores que o código usa. A conta que já tem a lista é atualizada (diferença mostrada no seco). */
+      listas: z
+        .array(obj({ chave: z.enum(Object.keys(LISTAS_EDITAVEIS) as [string, ...string[]]), opcoes: z.array(z.string().trim().min(1).max(80)).min(2).max(60) }))
+        .max(10)
+        .optional(),
     }),
     franquia: obj({
       /** id_company no seletor de unidade da franquia (app.doutorhernia.com.br) */
@@ -177,6 +200,29 @@ const conferirCruzado = (semCaixa: boolean) => (q: z.infer<typeof QuestionarioBa
       if (suf(q.meta.dataset_id_env, 'META_DATASET_ID_') !== sufixo) aviso(['meta', 'dataset_id_env'], `precisa ser META_DATASET_ID_${sufixo}`);
     }
     if (q.unidade.slug.includes('--')) aviso(['unidade', 'slug'], 'slug com "--"');
+    const extras = q.chatwoot.atributos_extras ?? [];
+    const jaDoKit = new Set<string>([...ATRIBUTOS_DE_CONVERSA, ...ATRIBUTOS_DE_CONTATO, 'sessoes_previstas', 'sessoes_realizadas']);
+    const vistas = new Set<string>();
+    extras.forEach((x, i) => {
+      if (jaDoKit.has(x.chave)) aviso(['chatwoot', 'atributos_extras', i, 'chave'], `«${x.chave}» já é um atributo que o kit copia (não é extra)`);
+      if (vistas.has(x.chave)) aviso(['chatwoot', 'atributos_extras', i, 'chave'], `chave repetida: ${x.chave}`);
+      vistas.add(x.chave);
+      const comLista = x.tipo === 'lista' || x.tipo === 'lista-multipla';
+      if (comLista && !x.opcoes) aviso(['chatwoot', 'atributos_extras', i, 'opcoes'], `o tipo ${x.tipo} precisa das opções`);
+      if (!comLista && x.opcoes) aviso(['chatwoot', 'atributos_extras', i, 'opcoes'], `o tipo ${x.tipo} não tem opções`);
+      if (x.opcoes && new Set(x.opcoes.map((o) => o.toLowerCase())).size !== x.opcoes.length) aviso(['chatwoot', 'atributos_extras', i, 'opcoes'], 'opção repetida');
+    });
+    const chavesDeLista = new Set<string>();
+    (q.chatwoot.listas ?? []).forEach((l, i) => {
+      if (chavesDeLista.has(l.chave)) aviso(['chatwoot', 'listas', i, 'chave'], `lista repetida: ${l.chave}`);
+      chavesDeLista.add(l.chave);
+      if (new Set(l.opcoes.map((o) => o.toLowerCase())).size !== l.opcoes.length) aviso(['chatwoot', 'listas', i, 'opcoes'], 'opção repetida');
+      if (l.chave === 'motivo_nao_agendamento') {
+        const soltos = Object.values(MOTIVO_POR_ETIQUETA).filter((v) => !l.opcoes.includes(motivoNaLista(v, l.opcoes)));
+        if (soltos.length) aviso(['chatwoot', 'listas', i, 'opcoes'], `a lista motivo_nao_agendamento precisa ter uma opção parecida com ${soltos.map((v) => `«${v}»`).join(', ')} (os botões «Perdido: …» gravam esse motivo)`);
+      }
+      for (const v of VALORES_QUE_O_CODIGO_USA[l.chave] ?? []) if (!l.opcoes.includes(v)) aviso(['chatwoot', 'listas', i, 'opcoes'], `a lista ${l.chave} precisa conservar «${v}» (o código a grava ou a lê por esse nome)`);
+    });
     if (SUBDOMINIOS_RESERVADOS.includes(q.chatwoot.subdominio) && !(q.chatwoot.subdominio === 'demo' && q.whatsapp.modo === 'demonstracao')) aviso(['chatwoot', 'subdominio'], `«${q.chatwoot.subdominio}» é um subdomínio reservado do nosso sistema: escolha outro`);
     if (q.whatsapp.modo === 'real') {
       if (!semCaixa) for (const campo of ['numero_oficial', 'kapso_phone_number_id', 'waba_id'] as const) if (!q.whatsapp[campo]) aviso(['whatsapp', campo], 'obrigatório quando a clínica tem número de verdade (modo: real); a demonstração não precisa');

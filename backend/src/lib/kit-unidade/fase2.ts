@@ -8,7 +8,7 @@
  */
 import { chaveDoEvento } from '../chatwoot-ia.js';
 import { comDadosDaUnidade, modelosDaUnidade } from '../chatwoot-modelos.js';
-import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, MENSAGENS_PRONTAS } from './catalogo.js';
+import { ATRIBUTOS_DE_CONTATO, ATRIBUTOS_DE_CONVERSA, ETIQUETAS_DO_CODIGO, LISTAS_EDITAVEIS, MENSAGENS_PRONTAS } from './catalogo.js';
 import { ErroDaPorta, ErroSoLeitura, type ContaPorta, type PortasExternas } from './portas.js';
 import { configChatwootDoQuestionario, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
 
@@ -54,6 +54,11 @@ function precisa<T>(v: T | null | undefined, porque: string): T {
 function postar(e: EstadoDaExecucao, conta: ContaPorta, caminho: string, corpo?: Record<string, unknown>): Promise<unknown> {
   if (e.somenteLeitura) throw new ErroSoLeitura(`POST ${caminho}`);
   return conta.post(caminho, corpo);
+}
+/** PATCH na conta (mesma regra de `postar`: no modo só-leitura lança em vez de escrever). */
+function corrigir(e: EstadoDaExecucao, conta: ContaPorta, caminho: string, corpo: Record<string, unknown>): Promise<unknown> {
+  if (e.somenteLeitura) throw new ErroSoLeitura(`PATCH ${caminho}`);
+  return conta.patch(caminho, corpo);
 }
 const daConta = (e: EstadoDaExecucao): ContaPorta => precisa(e.conta, 'a conta da clínica no Chatwoot ainda não está pronta (passo «conta»)');
 
@@ -216,16 +221,87 @@ export async function passoAtributos(x: PortasExternas, e: EstadoDaExecucao): Pr
       await postar(e, conta, 'custom_attribute_definitions', {
         attribute_key: chave,
         attribute_display_name: m?.attribute_display_name ?? chave,
-        attribute_display_type: m?.attribute_display_type ?? 0,
+        attribute_display_type: m?.attribute_display_type ?? 'text',
         attribute_description: m?.attribute_description ?? '',
         attribute_values: m?.attribute_values ?? [],
-        attribute_model: modelo,
+        attribute_model: modelo === 1 ? 'contact_attribute' : 'conversation_attribute',
       });
       criados++;
     }
     notas.push(criados ? `${criados} atributo(s) de ${rotulo} criado(s)` : `atributos de ${rotulo}: já existiam`);
   }
   if (!x.referencia) notas.push('sem conta de referência: criados como texto simples (a lista de opções da etapa precisa ser conferida)');
+  return notas;
+}
+
+/** Tipo do Chatwoot (`attribute_display_type`) de cada tipo do questionário, pelo NOME do enum (é assim que o Chatwoot o devolve). `lista-multipla` não existe no Chatwoot: vira texto com as opções na descrição. */
+const TIPO_DO_CHATWOOT: Readonly<Record<string, string>> = { texto: 'text', numero: 'number', moeda: 'currency', data: 'date', lista: 'list', checkbox: 'checkbox', 'lista-multipla': 'text' };
+
+const NOMES_DOS_TIPOS = ['text', 'number', 'currency', 'percent', 'link', 'date', 'list', 'checkbox'];
+/**
+ * O tipo de um atributo como NOME («list»). O Chatwoot REAL devolve o nome (enum do Rails: `attribute_display_type: "list"`), mas aceita nome ou número na entrada e o kit já viu os dois:
+ * quem compara tipo passa por aqui, nunca por `=== 6`.
+ */
+export function tipoDoAtributo(v: unknown): string {
+  if (typeof v === 'number' || (typeof v === 'string' && /^\d+$/.test(v))) return NOMES_DOS_TIPOS[Number(v)] ?? String(v);
+  return String(v ?? '').toLowerCase();
+}
+export const ehLista = (a: { attribute_display_type?: unknown } | undefined | null): boolean => tipoDoAtributo(a?.attribute_display_type) === 'list';
+
+/** O que o atributo extra grava como descrição (a lista múltipla leva as opções, já que o Chatwoot não tem esse tipo). */
+export const descricaoDoExtra = (x: { tipo: string; opcoes?: string[]; descricao?: string }): string =>
+  [x.descricao ?? '', x.tipo === 'lista-multipla' && x.opcoes ? `Pode ter mais de um (separe por vírgula). Opções: ${x.opcoes.join('; ')}` : ''].filter(Boolean).join(' — ').slice(0, 1000);
+
+/** Atributos de conversa EXTRAS da conta (`chatwoot.atributos_extras`): cria os que faltam; o que já existe nunca é trocado. */
+export async function passoAtributosExtras(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const extras = q.chatwoot.atributos_extras ?? [];
+  const tem = new Set(listaDaResposta(await conta.get('custom_attribute_definitions', { attribute_model: '0' })).map((a) => String(a.attribute_key)));
+  let criados = 0;
+  for (const x of extras) {
+    if (tem.has(x.chave)) continue;
+    await postar(e, conta, 'custom_attribute_definitions', {
+      attribute_key: x.chave,
+      attribute_display_name: x.nome,
+      attribute_display_type: TIPO_DO_CHATWOOT[x.tipo] ?? 'text',
+      attribute_description: descricaoDoExtra(x),
+      attribute_values: x.tipo === 'lista' ? x.opcoes ?? [] : [],
+      attribute_model: 'conversation_attribute',
+    });
+    criados++;
+  }
+  return [criados ? `${criados} atributo(s) extra(s) criado(s)` : 'atributos extras: já existiam'];
+}
+
+/** O que muda numa lista: as opções novas e as que saem (a ORDEM também conta: é a que a tela mostra). */
+export function diferencaDaLista(hoje: readonly string[] | undefined, novas: readonly string[]): { entram: string[]; saem: string[]; igual: boolean } {
+  const antes = hoje ?? [];
+  return { entram: novas.filter((o) => !antes.includes(o)), saem: antes.filter((o) => !novas.includes(o)), igual: antes.length === novas.length && antes.every((o, i) => o === novas[i]) };
+}
+
+/** Troca as opções das listas de `chatwoot.listas` (cria a lista a partir da referência se a conta ainda não a tem). Só mexe nas opções, nunca no resto da definição. */
+export async function passoListas(q: Questionario, x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
+  const conta = daConta(e);
+  const notas: string[] = [];
+  for (const l of q.chatwoot.listas ?? []) {
+    const modelo = LISTAS_EDITAVEIS[l.chave] === 'contato' ? 1 : 0;
+    const def = listaDaResposta(await conta.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave);
+    if (!def) {
+      const molde = x.referencia ? listaDaResposta(await x.referencia.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave) : undefined;
+      await postar(e, conta, 'custom_attribute_definitions', { attribute_key: l.chave, attribute_display_name: molde?.attribute_display_name ?? l.chave, attribute_display_type: 'list', attribute_description: molde?.attribute_description ?? '', attribute_values: l.opcoes, attribute_model: modelo === 1 ? 'contact_attribute' : 'conversation_attribute' });
+      notas.push(`${l.chave}: criada com ${l.opcoes.length} opções`);
+      continue;
+    }
+    // a conta tem o atributo, mas NÃO como lista (texto livre, criado à mão): o PATCH das opções não o transforma — falha claro em vez de dizer que aplicou
+    if (!ehLista(def)) throw new ErroDaPorta(`${l.chave}: já existe como atributo do tipo «${tipoDoAtributo(def.attribute_display_type) || 'desconhecido'}», não como lista, e o kit não troca o tipo de um atributo que existe. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire esta chave de chatwoot.listas`);
+    const d = diferencaDaLista((def.attribute_values as unknown[] | undefined)?.map(String), l.opcoes);
+    if (d.igual) {
+      notas.push(`${l.chave}: já estava igual`);
+      continue;
+    }
+    await corrigir(e, conta, `custom_attribute_definitions/${def.id}`, { attribute_values: l.opcoes });
+    notas.push(`${l.chave}: ${l.opcoes.length} opções (entram ${d.entram.length}, saem ${d.saem.length})`);
+  }
   return notas;
 }
 

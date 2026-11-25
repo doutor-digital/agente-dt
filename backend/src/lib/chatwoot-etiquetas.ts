@@ -13,17 +13,12 @@
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { MOTIVO_POR_ETIQUETA, motivoNaLista } from './motivo-do-botao.js';
 
 export const PREFIXO_PERDIDO = 'perdido-';
 export const ETAPA_PERDIDO = 'Perdido';
 
-/** etiqueta do botão → valor do atributo `motivo_nao_agendamento` (tem que existir na lista do atributo) */
-export const MOTIVO_POR_ETIQUETA: Readonly<Record<string, string>> = {
-  'perdido-sem-interesse': 'Sem interesse',
-  'perdido-outra-cidade': 'Outra cidade',
-  'perdido-plano-de-saude': 'Plano de saúde',
-  'perdido-nao-deu-continuidade': 'Não deu continuidade',
-};
+export { MOTIVO_POR_ETIQUETA, motivoNaLista };
 
 export interface EventoDeEtiqueta {
   conversa: number;
@@ -37,7 +32,7 @@ export function eventoDeEtiqueta(corpo: any, caixas: Readonly<Record<number, str
   const slug = caixas[Number(corpo?.inbox_id)];
   if (!Number.isInteger(conversa) || conversa <= 0 || !slug) return null;
   const etiquetas: unknown[] = Array.isArray(corpo?.labels) ? corpo.labels : [];
-  if (!etiquetas.some((e) => String(e) in MOTIVO_POR_ETIQUETA)) return null;
+  if (!etiquetas.some((e) => Object.hasOwn(MOTIVO_POR_ETIQUETA, String(e)))) return null;
   return { conversa, slug };
 }
 
@@ -51,15 +46,15 @@ export interface Mudanca {
  * Leitura fresca da conversa → o que gravar, ou null se não há etiqueta de Perdido (já tratada).
  * Duas etiquetas de Perdido juntas: vale a última da lista. Todas as `perdido-*` saem; as outras etiquetas ficam.
  */
-export function mudancaDaConversa(conv: any): Mudanca | null {
+export function mudancaDaConversa(conv: any, opcoesDoMotivo?: readonly string[]): Mudanca | null {
   const etiquetas: string[] = Array.isArray(conv?.labels) ? conv.labels.map(String) : [];
-  const comando = etiquetas.filter((e) => e in MOTIVO_POR_ETIQUETA);
+  const comando = etiquetas.filter((e) => Object.hasOwn(MOTIVO_POR_ETIQUETA, e));
   if (!comando.length) return null;
-  const motivo = MOTIVO_POR_ETIQUETA[comando[comando.length - 1]];
+  const motivo = motivoNaLista(MOTIVO_POR_ETIQUETA[comando[comando.length - 1]]!, opcoesDoMotivo);
   const atuais = conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {};
   return {
     atributos: { ...atuais, etapa: ETAPA_PERDIDO, motivo_nao_agendamento: motivo },
-    etiquetas: etiquetas.filter((e) => !(e in MOTIVO_POR_ETIQUETA)),
+    etiquetas: etiquetas.filter((e) => !(Object.hasOwn(MOTIVO_POR_ETIQUETA, e))),
     motivo,
   };
 }
@@ -68,13 +63,29 @@ export interface PortasDaPonte {
   conversa(id: number): Promise<any>;
   gravarAtributos(id: number, atributos: Record<string, unknown>): Promise<void>;
   gravarEtiquetas(id: number, etiquetas: string[]): Promise<void>;
+  /** as opções de `motivo_nao_agendamento` desta conta (opcional: sem isto vale o valor de sempre) */
+  opcoesDoMotivo?(): Promise<string[]>;
 }
+
+/** As opções de `motivo_nao_agendamento` por conta, guardadas 60 s (um clique de «Perdido» não baixa as definições todas de novo). */
+const opcoesGuardadas = new Map<number, { ate: number; v: string[] }>();
 
 export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
   return {
     conversa: (id) => chamar(ctx, 'GET', `conversations/${id}`),
     async gravarAtributos(id, atributos) {
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: atributos } });
+    },
+    async opcoesDoMotivo() {
+      const conta = ctx.conta?.conta ?? 0;
+      const g = opcoesGuardadas.get(conta);
+      if (g && g.ate > Date.now()) return g.v;
+      const defs = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'conversation_attribute' } })) as unknown;
+      const def = (Array.isArray(defs) ? defs : []).find((d: any) => d?.attribute_key === 'motivo_nao_agendamento') as { attribute_values?: unknown } | undefined;
+      const v = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((x) => String(x).trim()).filter(Boolean) : [];
+      // 60 s (o servidor e o kit são processos separados: o kit não consegue limpar esta memória, então ela vale pouco)
+      opcoesGuardadas.set(conta, { ate: Date.now() + 60_000, v });
+      return v;
     },
     async gravarEtiquetas(id, etiquetas) {
       await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: etiquetas } });
@@ -89,7 +100,17 @@ export async function aplicarEtiqueta(e: EventoDeEtiqueta, p: PortasDaPonte, tra
   if (trava.has(e.conversa)) return 'ocupado';
   trava.add(e.conversa);
   try {
-    const m = mudancaDaConversa(await p.conversa(e.conversa));
+    const conv = await p.conversa(e.conversa);
+    // sem etiqueta de Perdido não há o que gravar: nem lê a lista de motivos
+    if (!(Array.isArray(conv?.labels) ? conv.labels : []).some((l: unknown) => Object.hasOwn(MOTIVO_POR_ETIQUETA, String(l)))) return 'nada';
+    // a lista é só para escolher o NOME do motivo: se a leitura falhar, vale o valor de sempre (o botão nunca deixa de gravar por isso)
+    let opcoes: string[] | undefined;
+    try {
+      opcoes = await p.opcoesDoMotivo?.();
+    } catch {
+      opcoes = undefined;
+    }
+    const m = mudancaDaConversa(conv, opcoes);
     if (!m) return 'nada';
     await p.gravarAtributos(e.conversa, m.atributos);
     await p.gravarEtiquetas(e.conversa, m.etiquetas);

@@ -8,7 +8,23 @@
  */
 
 interface Etiqueta { id: number; title: string; description: string; color: string; show_on_sidebar: boolean }
-interface Atributo { id: number; attribute_key: string; attribute_display_name: string; attribute_display_type: number; attribute_values: string[]; attribute_model: number; attribute_description: string }
+/** Como o Chatwoot REAL devolve (enum do Rails): tipo e modelo vão como NOME («list», «conversation_attribute»), nunca como número. */
+interface Atributo { id: number; attribute_key: string; attribute_display_name: string; attribute_display_type: string; attribute_values: string[]; attribute_model: string; attribute_description: string }
+const TIPOS_DO_CHATWOOT = ['text', 'number', 'currency', 'percent', 'link', 'date', 'list', 'checkbox'];
+const MODELOS_DO_CHATWOOT = ['conversation_attribute', 'contact_attribute'];
+/** O enum do Rails aceita nome OU número na ENTRADA e devolve sempre o nome; valor inválido = null (o real responde 422). */
+const nomeDoEnum = (lista: string[], v: unknown, padrao: string): string | null => {
+  if (v === undefined || v === null || v === '') return padrao;
+  if (typeof v === 'number' || /^\d+$/.test(String(v))) return lista[Number(v)] ?? null;
+  return lista.includes(String(v)) ? String(v) : null;
+};
+/** Atributo como o teste o escreve (número ou nome) → como o real o guarda (nome). */
+export const atributoDoFalso = (a: Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }): Atributo => {
+  const tipo = nomeDoEnum(TIPOS_DO_CHATWOOT, a.attribute_display_type, 'text');
+  const modelo = nomeDoEnum(MODELOS_DO_CHATWOOT, a.attribute_model, 'conversation_attribute');
+  if (!tipo || !modelo) throw new Error(`atributo de teste inválido (${a.attribute_key}): tipo ${String(a.attribute_display_type)} / modelo ${String(a.attribute_model)}`);
+  return { ...a, attribute_display_type: tipo, attribute_model: modelo };
+};
 interface Regra { id: number; name: string; description: string; event_name: string; active: boolean; conditions: unknown[]; actions: unknown[] }
 interface ContaFalsa {
   id: number;
@@ -29,7 +45,7 @@ export interface OpcoesDoFalso {
   tokenDaPlataforma?: string;
   tokenDeReferencia?: string;
   /** sem isto a conta de referência (a 1) nasce vazia */
-  referencia?: Partial<Pick<ContaFalsa, 'labels' | 'attrs' | 'rules'>>;
+  referencia?: Partial<Pick<ContaFalsa, 'labels' | 'rules'>> & { attrs?: Array<Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }> };
   /** liga/desliga a plataforma (conta que o João ainda não criou o Platform App) */
   semPlataforma?: boolean;
   /** quantas vezes o vínculo do usuário à conta falha com 500 (para provar a recuperação) */
@@ -62,7 +78,7 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
   conta(1, 'Parauapebas (referência)', {
     agents: existentes.map((u) => ({ id: u.id, name: u.name, email: u.email, role: 'administrator' })),
     labels: o.referencia?.labels ?? [],
-    attrs: o.referencia?.attrs ?? [],
+    attrs: (o.referencia?.attrs ?? []).map(atributoDoFalso),
     rules: o.referencia?.rules ?? [],
   });
 
@@ -146,12 +162,21 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
       c2.labels.push(novo);
       return resposta(200, novo);
     }
+    if (metodo === 'PATCH' && (m = /^custom_attribute_definitions\/(\d+)$/.exec(rota))) {
+      const a = c2.attrs.find((x) => x.id === Number(m![1]));
+      if (!a) return resposta(404, { error: 'Resource could not be found' });
+      if (Array.isArray(corpo.attribute_values)) a.attribute_values = corpo.attribute_values;
+      if (typeof corpo.attribute_display_name === 'string') a.attribute_display_name = corpo.attribute_display_name;
+      return resposta(200, a);
+    }
     if (rota === 'custom_attribute_definitions') {
-      const modelo = Number(u.searchParams.get('attribute_model') ?? 0);
-      if (metodo === 'GET') return resposta(200, c2.attrs.filter((x) => x.attribute_model === modelo));
-      const mod = corpo.attribute_model === 'contact_attribute' ? 1 : Number(corpo.attribute_model ?? 0);
+      const modelo = nomeDoEnum(MODELOS_DO_CHATWOOT, u.searchParams.get('attribute_model') ?? 0, 'conversation_attribute');
+      if (metodo === 'GET') return modelo ? resposta(200, c2.attrs.filter((x) => x.attribute_model === modelo)) : erro422(`'${String(u.searchParams.get('attribute_model'))}' is not a valid attribute_model`);
+      const mod = nomeDoEnum(MODELOS_DO_CHATWOOT, corpo.attribute_model, 'conversation_attribute');
+      const tipo = nomeDoEnum(TIPOS_DO_CHATWOOT, corpo.attribute_display_type, 'text');
+      if (!mod || !tipo) return erro422(`'${String(!mod ? corpo.attribute_model : corpo.attribute_display_type)}' is not a valid ${!mod ? 'attribute_model' : 'attribute_display_type'}`);
       if (c2.attrs.some((x) => x.attribute_key === corpo.attribute_key && x.attribute_model === mod)) return erro422('Attribute key has already been taken');
-      const novo: Atributo = { id: id(), attribute_key: corpo.attribute_key, attribute_display_name: corpo.attribute_display_name, attribute_display_type: Number(corpo.attribute_display_type ?? 0), attribute_values: corpo.attribute_values ?? [], attribute_model: mod, attribute_description: corpo.attribute_description ?? '' };
+      const novo: Atributo = { id: id(), attribute_key: corpo.attribute_key, attribute_display_name: corpo.attribute_display_name, attribute_display_type: tipo, attribute_values: corpo.attribute_values ?? [], attribute_model: mod, attribute_description: corpo.attribute_description ?? '' };
       c2.attrs.push(novo);
       return resposta(200, novo);
     }

@@ -7,7 +7,7 @@
  */
 import { MAX_REGRAS_DA_UNIDADE } from '../aprendizados-unidade.js';
 import { AUTOMACOES } from '../automacoes.js';
-import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
+import { gerenteDaConta, novoEstado, passoAtendentes, passoAutomacoesDaConta, passoAtributos, passoAtributosExtras, passoListas, passoCaixa, passoConta, passoDashboardApp, passoEtiquetas, passoMensagensProntas, passoModelos, passoRobo, passoTime, passoUsuarioCelular, passoWebhook, type EstadoDaExecucao } from './fase2.js';
 import { ErroSoLeitura, type PortasExternas } from './portas.js';
 import { CAMPOS_SO_NA_CRIACAO, camposDaSofia, camposDaUnidade, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
@@ -85,7 +85,7 @@ export interface OpcoesDeExecucao {
 export type SituacaoDoPasso = 'feito' | 'nada-a-fazer' | 'recusado' | 'esqueleto' | 'manual' | 'bloqueado' | 'falhou';
 
 /** Passos de fora do banco que o executor roda (e que, quando o plano diz «nada», rodam só para LER o que existe e passar os ids adiante). */
-const PASSOS_EXTERNOS = new Set(['conta', 'etiquetas', 'atributos', 'automacoes-conta', 'mensagens-prontas', 'caixa', 'time', 'atendentes', 'usuario-celular', 'webhook', 'dashboard-app', 'robo-sofia', 'modelos']);
+const PASSOS_EXTERNOS = new Set(['conta', 'etiquetas', 'atributos', 'atributos-extras', 'listas', 'automacoes-conta', 'mensagens-prontas', 'caixa', 'time', 'atendentes', 'usuario-celular', 'webhook', 'dashboard-app', 'robo-sofia', 'modelos']);
 
 /** Os passos que dependem do número no Kapso: ficam para depois com `--sem-caixa`. */
 const PASSOS_DA_CAIXA = new Set(['caixa', 'registrar-caixa', 'webhook', 'modelos']);
@@ -297,6 +297,10 @@ async function aplicarPasso(p: Passo, q: Questionario, o: OpcoesDeExecucao, unit
       return passoEtiquetas(x, execucao);
     case 'atributos':
       return passoAtributos(x, execucao);
+    case 'atributos-extras':
+      return passoAtributosExtras(q, execucao);
+    case 'listas':
+      return passoListas(q, x, execucao);
     case 'automacoes-conta':
       return passoAutomacoesDaConta(x, execucao);
     case 'mensagens-prontas':

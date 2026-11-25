@@ -16,10 +16,13 @@ import {
   AUTOMACOES_DA_CONTA,
   DOMINIO_DOS_CRMS,
   ETIQUETAS_DO_CODIGO,
+  LISTAS_EDITAVEIS,
   MENSAGENS_PRONTAS,
   PASTAS_PADRAO,
   SERVICO_DO_PROXY,
 } from './catalogo.js';
+import { descricaoDoExtra, diferencaDaLista } from './fase2.js';
+import { MODELO_DA_ESPERA } from '../chatwoot-regua.js';
 import { camposDaSofia, camposDaUnidade, horarioDaAssistente, informacoesDaClinica, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import { configChatwootDoQuestionario, mascararCampo, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
@@ -60,6 +63,10 @@ export interface EstadoAtual {
     etiquetas: string[];
     atributosConversa: string[];
     atributosContato: string[];
+    /** as opções que cada atributo de LISTA tem hoje (chave → opções, na ordem da tela): só para o seco mostrar a diferença das `chatwoot.listas` */
+    opcoesDasListas?: { conversa: Record<string, string[]>; contato: Record<string, string[]> };
+    /** o TIPO (nome do enum do Chatwoot: «list», «text»…) de cada atributo que a conta já tem: o seco diz que não dá para trocar as opções de um que não é lista */
+    tiposDosAtributos?: { conversa: Record<string, string>; contato: Record<string, string> };
     caixas: Array<{ id: number; nome: string; robo?: boolean }>;
     times: string[];
     /** e-mail (minúsculo) → agente */
@@ -270,6 +277,60 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
     avisos: cw ? [] : [NAO_CONSULTADO],
     depende: ['conta'],
   });
+  // ── atributos EXTRAS e listas trocadas desta conta (blocos opcionais do questionário) ───────────────────────────
+  const extras = q.chatwoot.atributos_extras ?? [];
+  if (extras.length) {
+    const faltam = extras.filter((x) => !cw?.atributosConversa.includes(x.chave));
+    add({
+      id: 'atributos-extras',
+      sistema: 'chatwoot',
+      titulo: `Atributos EXTRAS desta conta (${extras.length}): campos que a clínica já usa no Kommo e o molde não tem`,
+      acao: !cw ? 'criar' : faltam.length ? 'criar' : 'nada',
+      itens: extras.map((x) => `${x.chave} — «${x.nome}» (${x.tipo}${x.opcoes ? `, ${x.opcoes.length} opções` : ''})${x.tipo === 'lista-multipla' ? ' [vira texto: o Chatwoot não tem lista de várias escolhas; as opções ficam na descrição]' : ''} — ${cw ? (cw.atributosConversa.includes(x.chave) ? 'já existe' : 'criar') : 'criar'}`),
+      execucao: 'sim',
+      avisos: [cw ? 'só cria o que falta; atributo que já existe NÃO é trocado (para trocar as opções de uma lista use chatwoot.listas)' : NAO_CONSULTADO, ...extras.filter((x) => descricaoDoExtra(x).length >= 1000).map((x) => `${x.chave}: a descrição passa de 1000 caracteres e será cortada`)],
+      depende: ['conta', 'atributos'],
+    });
+  }
+  const listas = q.chatwoot.listas ?? [];
+  if (listas.length) {
+    const avisosDasListas: string[] = [];
+    const naoELista: string[] = [];
+    const itensDasListas = listas.map((l) => {
+      const onde = LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.opcoesDasListas?.contato : cw?.opcoesDasListas?.conversa;
+      const hoje = onde?.[l.chave];
+      if (l.chave === 'motivo_espera') {
+        const sem = l.opcoes.filter((o) => !Object.hasOwn(MODELO_DA_ESPERA, o));
+        if (sem.length) avisosDasListas.push(`motivo_espera: ${sem.length} motivo(s) SEM modelo da régua (a régua não manda lembrete para eles; só ${Object.keys(MODELO_DA_ESPERA).join(', ')} têm): ${sem.join(', ')}`);
+      }
+      const tipo = (LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.tiposDosAtributos?.contato : cw?.tiposDosAtributos?.conversa)?.[l.chave];
+      if (tipo !== undefined && tipo !== 'list') {
+        naoELista.push(l.chave);
+        avisosDasListas.push(`${l.chave}: a conta JÁ tem esse atributo como «${tipo || 'tipo desconhecido'}», não como lista, e o kit não troca o tipo de um atributo que existe: este passo fica BLOQUEADO e NENHUMA lista dele é aplicada (nem as boas). Mude o tipo na conta (Configurações → Atributos personalizados) ou tire a chave de chatwoot.listas`);
+        return `${l.chave}: NÃO DÁ — existe como «${tipo || 'tipo desconhecido'}» (não é lista)`;
+      }
+      if (!cw || !onde) return `${l.chave}: ${l.opcoes.length} opções (lista atual não consultada)`;
+      if (!hoje) return `${l.chave}: a conta ainda não tem a lista — criar com ${l.opcoes.length} opções`;
+      const d = diferencaDaLista(hoje, l.opcoes);
+      if (d.igual) return `${l.chave}: já está igual (${l.opcoes.length} opções)`;
+      if (d.saem.length) avisosDasListas.push(`${l.chave}: SAEM da lista ${d.saem.length} opção(ões) (${d.saem.join(', ')}); conversa que já grava esse valor continua com ele, mas a tela deixa de mostrá-lo`);
+      return `${l.chave}: ${hoje.length} → ${l.opcoes.length} opções (entram: ${d.entram.join(', ') || '—'}; saem: ${d.saem.join(', ') || '—'}${!d.entram.length && !d.saem.length ? '; só muda a ordem' : ''})`;
+    });
+    const igualTudo = !!cw?.opcoesDasListas && listas.every((l) => {
+      const onde = LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw.opcoesDasListas!.contato : cw.opcoesDasListas!.conversa;
+      return !!onde[l.chave] && diferencaDaLista(onde[l.chave], l.opcoes).igual;
+    });
+    add({
+      id: 'listas',
+      sistema: 'chatwoot',
+      titulo: `Listas com as opções desta clínica (${listas.length}): ${listas.map((l) => l.chave).join(', ')}`,
+      acao: naoELista.length ? 'bloqueado' : !cw ? 'criar' : igualTudo ? 'nada' : listas.every((l) => !(LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw.opcoesDasListas?.contato : cw.opcoesDasListas?.conversa)?.[l.chave]) ? 'criar' : 'alterar',
+      itens: itensDasListas,
+      execucao: 'sim',
+      avisos: [...(cw ? [] : [NAO_CONSULTADO]), ...avisosDasListas, 'o código conserva os valores que grava por nome (origem «Meta Ads», categorias da agenda, os 4 motivos de espera com modelo); os botões «perdido-*» acham a opção parecida da lista (ver chatwoot-etiquetas)'],
+      depende: ['conta', 'atributos'],
+    });
+  }
   add({
     id: 'automacoes-conta',
     sistema: 'chatwoot',

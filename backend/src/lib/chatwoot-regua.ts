@@ -479,7 +479,8 @@ const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
-const MODELO_DA_ESPERA: Record<string, string> = {
+/** motivo da espera → modelo da régua (só estes 4 têm lembrete; os outros motivos da lista não mandam nada) */
+export const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
   Viajando: 'parau_espera_viagem',
   'Vai decidir': 'parau_espera_decisao',
