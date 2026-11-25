@@ -67,7 +67,11 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   // `additional_attributes.meta_conversation_id`. Enquanto estiver RESOLVIDA é SEMPRE arquivo, mesmo com última mensagem depois de 14/11 — a pessoa
   // que escreve de novo abre outra conversa (a caixa não trava em conversa única), então esta não "volta a viver" e não aparece no funil como lead
   // novo. Se alguém a REABRIU (status diferente de resolved), é trabalho da equipe: segue a regra de sempre (atividade depois do corte = viva).
-  if (typeof raw?.additional_attributes?.meta_conversation_id === 'string' && raw.additional_attributes.meta_conversation_id !== '' && raw?.status === 'resolved') return true;
+  // O mesmo vale para o histórico da KOMMO (importação de Timbó, ops/crm-historico-kommo): a marca é `additional_attributes.kommo_lead_id` (o id do cartão).
+  // O corte de 14/11 abaixo é de Parauapebas e a «consulta de pé» tiraria do arquivo o cartão AGENDADO importado — por isso a regra vem antes deles.
+  const ad = raw?.additional_attributes;
+  const importada = (typeof ad?.meta_conversation_id === 'string' && ad.meta_conversation_id !== '') || (ad?.kommo_lead_id !== undefined && ad?.kommo_lead_id !== null && String(ad.kommo_lead_id) !== '');
+  if (importada && raw?.status === 'resolved') return true;
   const t = Number(raw?.last_activity_at) * 1000;
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
   const a = raw?.custom_attributes;

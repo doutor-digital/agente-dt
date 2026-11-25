@@ -5,13 +5,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { KommoLead, KommoPipeline, KommoTalk, KommoTalkMessage } from '../services/kommo.service.js';
 import { exportar, inicioDosFechados, lerConversa, lerSelecao, MAX_PAGINAS, POR_PAGINA, type Ambiente, type PortaKommo } from './kommo-historico-leitura.js';
-import type { LinhaDoCartao } from './kommo-historico-crm.js';
+import { linhaDoCartao, type LinhaDoCartao } from './kommo-historico-crm.js';
 
 const AGORA = new Date('2026-11-25T15:00:00Z');
 const SEG = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 
 const PIPES: KommoPipeline[] = [
-  { id: 1, name: 'COMERCIAL', statuses: [{ id: 10, name: 'EM QUALIFICAÇÃO' }, { id: 11, name: 'AGENDADO' }, { id: 142, name: 'GANHO / CONCLUÍDO' }, { id: 143, name: 'PERDIDO' }] } as KommoPipeline,
+  { id: 1, name: 'COMERCIAL', statuses: [{ id: 9, name: 'Incoming leads', type: 1 }, { id: 10, name: 'EM QUALIFICAÇÃO' }, { id: 11, name: 'AGENDADO' }, { id: 142, name: 'GANHO / CONCLUÍDO' }, { id: 143, name: 'PERDIDO' }] } as KommoPipeline,
   { id: 2, name: 'TRATAMENTO', statuses: [{ id: 20, name: 'EM TRATAMENTO' }, { id: 142, name: 'ALTA' }, { id: 143, name: 'TRATAMENTO CANCELADO' }] } as KommoPipeline,
 ];
 
@@ -23,15 +23,14 @@ interface Chamadas { abertas: number; fechadas: number; talks: number; msgs: num
 
 function kommoDeMentira(leads: KommoLead[], opcoes: { telefones?: Record<number, string | null>; semConversa?: Set<number>; msgsPorLead?: number } = {}) {
   const c: Chamadas = { abertas: 0, fechadas: 0, talks: 0, msgs: 0 };
-  const abertos = leads.filter((l) => l.status_id !== 142 && l.status_id !== 143);
   const paginar = (lista: KommoLead[], page: number) => lista.slice((page - 1) * POR_PAGINA, page * POR_PAGINA);
   const porta: PortaKommo = {
     listPipelines: async () => PIPES,
     listLossReasons: async () => [{ id: 900, name: 'Sem interesse' }],
     listUsers: async () => [{ id: 5, name: 'Camily' }],
-    listLeadsAbertosPagina: async (_e, page = 1) => (c.abertas++, paginar(abertos, page)),
-    listLeadsDasEtapasPorId: async (etapas, desde, page = 1) =>
-      (c.fechadas++, paginar(leads.filter((l) => etapas.some((e) => e.pipelineId === l.pipeline_id && e.statusId === l.status_id) && (l.updated_at ?? 0) >= desde).sort((a, b) => a.id - b.id), page)),
+    // como a Kommo de verdade: a lista geral NÃO traz a etapa «Incoming leads»
+    listLeadsPagina: async (page) => (c.abertas++, paginar([...leads].filter((l) => l.status_id !== 9).sort((x, y) => y.id - x.id), page)),
+    listLeadsAbertosPagina: async (etapas, page = 1) => paginar(leads.filter((l) => etapas.some((e) => e.pipelineId === l.pipeline_id && e.statusId === l.status_id)).sort((x, y) => y.id - x.id), page),
     listLeadsPorIds: async (ids) => leads.filter((l) => ids.includes(l.id)).map((l) => ({ ...l, _embedded: { contacts: [{ id: 1000 + l.id, is_main: true }] } })),
     contatosBasicos: async (ids) => new Map(ids.map((i) => [i, { nome: `Paciente ${i - 1000}`, telefone: opcoes.telefones && (i - 1000) in opcoes.telefones ? opcoes.telefones[i - 1000]! : `4799${String(i).padStart(7, '0')}` }])),
     listTalks: async (id) => {
@@ -100,14 +99,46 @@ test('paginação completa (mais de 250 cartões) e o TETO de páginas lança em
   const { amb, c } = kommoDeMentira(muitos);
   assert.equal((await lerSelecao(amb)).cartoes.length, POR_PAGINA + 40);
   assert.equal(c.abertas, 2);
-  const infinita: Ambiente = { ...amb, porta: { ...amb.porta, listLeadsAbertosPagina: async () => Array.from({ length: POR_PAGINA }, (_, i) => lead(i + 1, 1, 10)) } };
+  const infinita: Ambiente = { ...amb, porta: { ...amb.porta, listLeadsPagina: async () => Array.from({ length: POR_PAGINA }, (_, i) => lead(i + 1, 1, 10)) } };
   await assert.rejects(() => lerSelecao(infinita), /passou de \d+ páginas: leitura incompleta/);
   assert.ok(MAX_PAGINAS >= 40);
 });
 
+test('cartão que MUDA de etapa no meio da leitura não se perde nem se repete (leitura por id, todas as etapas de uma vez)', async () => {
+  const muitos = Array.from({ length: POR_PAGINA + 20 }, (_, i) => lead(i + 1, 1, 10));
+  const { amb } = kommoDeMentira(muitos);
+  let chamada = 0;
+  const mexendo: Ambiente = {
+    ...amb,
+    porta: {
+      ...amb.porta,
+      listLeadsPagina: async (page) => {
+        const r = await amb.porta.listLeadsPagina(page);
+        if (++chamada === 1) {
+          // depois da 1ª página: um cartão da 2ª página vai para PERDIDO (fechado agora) e um da 1ª é editado
+          muitos[5]!.status_id = 143;
+          muitos[5]!.closed_at = SEG('2026-11-24T00:00:00Z');
+          muitos[3]!.updated_at = SEG('2026-11-25T00:00:00Z');
+        }
+        return r;
+      },
+    },
+  };
+  const s = await lerSelecao(mexendo);
+  assert.equal(s.cartoes.length, muitos.length, 'todos aparecem, nenhum duplicado');
+  assert.equal(new Set(s.cartoes.map((c) => c.id)).size, muitos.length);
+});
+
+test('a etapa «Incoming leads» (que a lista geral não devolve) também entra', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 9), lead(2, 1, 10)]);
+  const s = await lerSelecao(amb);
+  assert.deepEqual(s.cartoes.map((c) => c.id).sort(), [1, 2]);
+  assert.equal(s.cartoes.find((c) => c.id === 1)!.etapa, 'Incoming leads');
+});
+
 test('a leitura FALHA: o erro sobe (página vazia quer dizer «acabou», nunca «deu erro»)', async () => {
   const { amb } = kommoDeMentira([lead(1, 1, 10)]);
-  const quebrada: Ambiente = { ...amb, porta: { ...amb.porta, listLeadsAbertosPagina: async () => { throw new Error('kommo fora do ar'); } } };
+  const quebrada: Ambiente = { ...amb, porta: { ...amb.porta, listLeadsPagina: async () => { throw new Error('kommo fora do ar'); } } };
   await assert.rejects(() => lerSelecao(quebrada), /kommo fora do ar/);
 });
 
@@ -118,6 +149,21 @@ test('conversa: as mais recentes primeiro, até 5 conversas; 403/404 (sem conver
     const sem: Ambiente = { ...amb, porta: { ...amb.porta, listTalks: async () => { throw Object.assign(new Error('x'), { status }); } } };
     assert.equal(await lerConversa(sem, 2), null, `http ${status}`);
   }
+});
+
+test('conversa lida em PÁGINAS de 100: as «últimas 50» são as últimas de verdade e o total conta tudo', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10)]);
+  const todas = Array.from({ length: 250 }, (_, i) => ({ id: `x${i}`, type: 'incoming', text: `t${i}`, created_at: 1000 + i, author: { type: 'external' } }) as KommoTalkMessage);
+  const paginas: number[] = [];
+  const longa: Ambiente = { ...amb, porta: { ...amb.porta, listTalkMessages: async (_t, limite = 100, page = 1) => (paginas.push(page), todas.slice((page - 1) * limite, page * limite)) } };
+  const msgs = (await lerConversa(longa, 1))!;
+  assert.equal(msgs.length, 250);
+  assert.deepEqual(paginas, [1, 2, 3]);
+  const linha = linhaDoCartao({ id: 1, nome: 'A', funil: 'COMERCIAL', etapa: 'AGENDADO', statusId: 11, preco: 0, criadoEm: 1, atualizadoEm: 2, fechadoEm: null, responsavel: null, motivoPerda: null, etiquetas: [], campos: [] }, { id: 1, nome: 'A', telefone: '47991234567' }, msgs, AGORA);
+  assert.equal(linha.mensagens_total, 250);
+  assert.equal(linha.mensagens[0]!.id, 'x200');
+  assert.equal(linha.mensagens.at(-1)!.id, 'x249');
+  assert.ok(linha.nota.includes('as 50 últimas de 250 mensagens'));
 });
 
 test('conversa com 2 talks: a 2ª dá 404, mas as mensagens da 1ª, já lidas, ficam', async () => {
@@ -190,6 +236,15 @@ test('exportar SECO: não entrega linha nenhuma, lê só uma amostra das convers
   assert.equal(c.talks, r.amostra, 'só leu as conversas da amostra');
   assert.equal(r.mensagensEstimadas, 400, '4 por cartão × 100 cartões');
   assert.equal(r.linhasGravadas, 0);
+});
+
+test('exportar conta quantas conversas importadas ficariam «vivas» pela regra de arquivo (meta 0) e o relatório traz a conta', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 11), lead(2, 1, 10), lead(3, 2, 20)]);
+  const arquivoCerto = (raw: { labels: string[]; status: string; additional_attributes: Record<string, unknown> }) => raw.labels.includes('historico') && raw.status === 'resolved' && raw.additional_attributes.kommo_lead_id !== undefined;
+  const r = await exportar(amb, { gravar: false, arquivo: arquivoCerto, entregar: () => undefined });
+  assert.equal(r.ficariamVivas, 0);
+  const r2 = await exportar(amb, { gravar: false, arquivo: () => false, entregar: () => undefined });
+  assert.equal(r2.ficariamVivas, 3, 'se a regra de arquivo NÃO pegasse, as 3 apareceriam como vivas');
 });
 
 test('o relatório conta os avisos (etapa sem coluna, perdido sem motivo) sem texto de paciente', async () => {

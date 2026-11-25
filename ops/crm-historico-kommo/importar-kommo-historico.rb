@@ -21,6 +21,7 @@
 #   LIMITE_CARTOES=n     só os n primeiros cartões do arquivo, na ordem de gravação (n > 0; 0 é recusado)
 #   MODO=desfazer        com REGISTRO=arquivo (linhas REG de uma rodada que gravou): desfaz o que ela criou (seco sem GRAVAR=1)
 require 'json'
+require 'digest'
 require 'securerandom'
 require 'set'
 require File.join(ENV['HS_DIR'] || File.dirname(File.expand_path(__FILE__)), 'kommo_historico')
@@ -32,6 +33,8 @@ STDOUT.sync = true
 GRAVAR = ENV['GRAVAR'] == '1'
 ERROS_DE_PARAMETRO = []
 CONTA_ID = (ENV['CONTA'] || '3').to_i
+# a conta 1 é a de Parauapebas (a clínica no ar): este importador é só das contas de unidades novas — recusa SEMPRE, em qualquer modo
+ERROS_DE_PARAMETRO << 'a conta 1 (Parauapebas) é recusada: este importador nunca grava nela' if CONTA_ID <= 1
 CAIXA_ID = ENV['CAIXA'].to_s.empty? ? nil : ENV['CAIXA'].to_i
 ARQUIVO = ENV['ARQUIVO'].to_s
 LIMITE = begin
@@ -75,6 +78,7 @@ def desfazer!
   raise ErroNosso, 'MODO=desfazer exige REGISTRO=arquivo' if arq.empty? || !File.file?(arq)
 
   tudo = Hash.new { |h, k| h[k] = [] }
+  preenchidos = []
   linhas = 0
   File.foreach(arq) do |l|
     next unless l.start_with?('REG ')
@@ -82,31 +86,60 @@ def desfazer!
     j = JSON.parse(l.sub('REG ', ''))
     linhas += 1
     tudo[j['tipo']].concat(j['ids']) if j['ids']
+    preenchidos << j if j['tipo'] == 'atributos'
   end
   raise ErroNosso, 'o registro não tem nenhuma linha REG (arquivo errado ou rodada que não gravou): nada a desfazer' if linhas.zero?
 
-  convs = tudo['conversas'].uniq
-  mensagens_registro = tudo['mensagens'].uniq
-  # a conversa só sai se NINGUÉM a usou depois (resolvida, sem responsável, nenhuma mensagem fora do registro). UMA consulta para todas.
+  # tudo é restrito à CONTA pedida: um registro de outra conta (ou ids reaproveitados) não apaga nada daqui
+  conta_msgs = Message.where(account_id: CONTA_ID)
+  convs = Conversation.where(account_id: CONTA_ID, id: tudo['conversas'].uniq).pluck(:id)
+  mensagens_registro = conta_msgs.where(id: tudo['mensagens'].uniq).pluck(:id)
+  ignoradas = tudo['mensagens'].uniq.size - mensagens_registro.size
+  log "desfazer: #{ignoradas} mensagem(ns) do registro NÃO são desta conta ou já não existem: ignoradas" if ignoradas.positive?
+  # a conversa CRIADA pela rodada só sai se NINGUÉM a usou depois (resolvida, sem responsável, nenhuma mensagem fora do registro). UMA consulta para todas.
   com_mensagem_de_fora = Message.where(conversation_id: convs).where.not(id: mensagens_registro).reorder(nil).distinct.pluck(:conversation_id).to_set
   intocadas = Conversation.where(id: convs).select { |cv| cv.status == 'resolved' && cv.assignee_id.nil? && !com_mensagem_de_fora.include?(cv.id) }.map(&:id)
   mexidas = convs - intocadas
+  # TODAS as mensagens do registro são nossas e saem — também as que uma 2ª rodada acrescentou em conversa que já existia (ou na conversa viva do paciente)
+  fora_das_apagadas = Message.where(id: mensagens_registro).where.not(conversation_id: intocadas).count
   log "desfazer: conversas criadas=#{convs.size} (intocadas=#{intocadas.size}; as #{mexidas.size} que a equipe já usou — mensagem, reabertura ou responsável — ficam) " \
-      "mensagens=#{mensagens_registro.size} contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size}"
+      "mensagens do registro=#{mensagens_registro.size} (#{fora_das_apagadas} em conversa que fica) contatos=#{tudo['contatos'].uniq.size} contact_inboxes=#{tudo['contact_inboxes'].uniq.size} " \
+      "atributos preenchidos em conversa que já existia=#{preenchidos.size}"
   unless GRAVAR
     log 'SECO: nada foi apagado. Rode com GRAVAR=1 (e --confirmo-apagar) para desfazer.'
     return
   end
   ActiveRecord::Base.transaction do
-    msgs = Message.where(conversation_id: intocadas, id: mensagens_registro).delete_all
-    tags = ActsAsTaggableOn::Tagging.where(id: tudo['taggings'].uniq, taggable_type: 'Conversation', taggable_id: intocadas).delete_all
-    cs = Conversation.where(id: intocadas).delete_all
-    cis = tudo['contact_inboxes'].uniq.select { |ci| !Conversation.where(contact_inbox_id: ci).exists? }
+    msgs = Message.where(account_id: CONTA_ID, id: mensagens_registro).delete_all
+    # atributos que a importação PREENCHEU numa conversa que já existia: só saem se o valor ainda é o que ela pôs (se a equipe mudou, é da equipe)
+    desfeitos = 0
+    preenchidos.each do |j|
+      cv = Conversation.find_by(id: j['conversa'])
+      next unless cv && !intocadas.include?(cv.id)
+
+      atual = cv.custom_attributes || {}
+      tirar = (j['chaves'] || {}).select { |k, impressao| atual.key?(k) && Digest::SHA256.hexdigest(atual[k].to_s)[0, 16] == impressao }.keys
+      next if tirar.empty?
+
+      Conversation.where(id: cv.id).update_all(custom_attributes: atual.except(*tirar))
+      desfeitos += tirar.size
+    end
+    # etiquetas que a importação PÓS numa conversa que já existia: saem pelo id do registro, e o cache de etiquetas da conversa é refeito
+    tagging_ids = tudo['taggings'].uniq
+    tagging_ids = ActsAsTaggableOn::Tagging.where(id: tagging_ids, taggable_type: 'Conversation', taggable_id: Conversation.where(account_id: CONTA_ID).select(:id)).pluck(:id)
+    afetadas = ActsAsTaggableOn::Tagging.where(id: tagging_ids).pluck(:taggable_id).uniq - intocadas
+    tags = ActsAsTaggableOn::Tagging.where(id: tagging_ids).delete_all
+    afetadas.each do |cid|
+      nomes = ActsAsTaggableOn::Tagging.joins(:tag).where(taggable_type: 'Conversation', taggable_id: cid, context: 'labels').pluck('tags.name')
+      Conversation.where(id: cid).update_all(cached_label_list: nomes.join(', '))
+    end
+    cs = Conversation.where(account_id: CONTA_ID, id: intocadas).delete_all
+    cis = ContactInbox.where(id: tudo['contact_inboxes'].uniq, inbox_id: Inbox.where(account_id: CONTA_ID).select(:id)).pluck(:id).select { |ci| !Conversation.where(contact_inbox_id: ci).exists? }
     ContactInbox.where(id: cis).delete_all
     # contato que a EQUIPE mexeu (nota, etiqueta, campo, e-mail/identificador) NÃO é apagado: delete_all deixaria as notas órfãs
     cts = []
     editados = 0
-    Contact.where(id: tudo['contatos'].uniq).find_each do |ct|
+    Contact.where(account_id: CONTA_ID, id: tudo['contatos'].uniq).find_each do |ct|
       mexido = Note.where(contact_id: ct.id).exists? || ActsAsTaggableOn::Tagging.where(taggable_type: 'Contact', taggable_id: ct.id).exists? ||
                ct.custom_attributes.present? || ct.email.present? || ct.identifier.present?
       if mexido
@@ -115,8 +148,8 @@ def desfazer!
         cts << ct.id
       end
     end
-    Contact.where(id: cts).delete_all
-    log "desfeito: mensagens=#{msgs} taggings=#{tags} conversas=#{cs} contact_inboxes=#{cis.size} contatos=#{cts.size} contatos_mantidos_por_edicao_da_equipe=#{editados}"
+    Contact.where(account_id: CONTA_ID, id: cts).delete_all
+    log "desfeito: mensagens=#{msgs} taggings=#{tags} atributos=#{desfeitos} conversas=#{cs} contact_inboxes=#{cis.size} contatos=#{cts.size} contatos_mantidos_por_edicao_da_equipe=#{editados}"
   end
 end
 
@@ -129,6 +162,9 @@ def achar_caixa(conta)
 
   caixa = caixas.first
   raise ErroNosso, "a caixa #{caixa.id} não é WhatsApp Cloud (provider #{caixa.channel.provider}): o source_id seria outro" unless caixa.channel.provider == 'whatsapp_cloud'
+  # SEM a trava de conversa única (a de Parauapebas tem), a próxima mensagem do paciente abre uma conversa NOVA e o histórico importado fica parado
+  # ao lado, sem etapa nem atributos na conversa que a equipe vai usar. Ligue `lock_to_single_conversation` na caixa antes.
+  raise ErroNosso, "a caixa #{caixa.id} está com a trava de conversa única DESLIGADA (lock_to_single_conversation): a mensagem do paciente não cairia na conversa importada. Ligue a trava na caixa (como a de Parauapebas) e rode de novo" unless caixa.lock_to_single_conversation
 
   caixa
 end
@@ -146,26 +182,31 @@ def tag_da(nome)
   ActsAsTaggableOn::Tag.find_or_create_by!(name: nome)
 end
 
-# O contato desta pessoa na caixa → { contato_id:, ci_id:, situacao: }
+def conversa_nossa?(cv)
+  cv.additional_attributes.is_a?(Hash) && cv.additional_attributes.key?(K::MARCA_CONVERSA)
+end
+
+# O contato desta pessoa na caixa → { contato_id:, ci_id:, destino: id da conversa em que o histórico ENTRA (ou nil = criar a do cartão), situacao: }
 #  - já há contact_inbox com o telefone (qualquer formato do Brasil: com e sem o 9) → o reaproveita;
-#  - se ELE já tem conversa viva (que não é nossa), o histórico vai por um contact_inbox próprio «HI.<número>» e não rouba a próxima mensagem do paciente;
+#  - se ELE já tem conversa NO CRM que não é nossa (o paciente já escreveu pelo WhatsApp), o histórico entra NESSA conversa — a mais recente, a que recebe a
+#    próxima mensagem —, no mesmo contact_inbox; NUNCA se cria outro contact_inbox (resposta por um «HI.<número>» iria para um destino que a Meta recusa);
 #  - senão o contato pode existir sem caixa (mesmo telefone) → reaproveita o contato e cria o contact_inbox;
 #  - senão nasce contato + contact_inbox, com o source_id no formato do WhatsApp Cloud (só dígitos, com DDI).
 # `cache` (por telefone) faz os cartões do MESMO telefone na rodada caírem no mesmo contato.
 def achar_contato(inbox, linha, cache)
   variantes = K.variantes_do_fone(linha[:telefone])
   canonico = variantes.first
-  return cache[canonico].merge(repetido: true) if cache.key?(canonico) # a situação ORIGINAL do telefone segue valendo (conversa viva continua indo para o «HI.»)
+  return cache[canonico].merge(repetido: true) if cache.key?(canonico)
 
   ci = ContactInbox.where(inbox_id: inbox.id, source_id: variantes).order(:id).first
   if ci
-    viva = Conversation.where(contact_inbox_id: ci.id).where('NOT COALESCE(jsonb_exists(additional_attributes, ?), false)', K::MARCA_CONVERSA).exists?
-    return cache[canonico] = { contato_id: ci.contact_id, ci_id: viva ? nil : ci.id, situacao: viva ? :com_conversa_viva : :reaproveitado }
+    viva = Conversation.where(contact_inbox_id: ci.id).order(:id).to_a.reject { |cv| conversa_nossa?(cv) }.last
+    return cache[canonico] = { contato_id: ci.contact_id, ci_id: ci.id, destino: viva&.id, situacao: viva ? :com_conversa_no_crm : :reaproveitado }
   end
   ct = Contact.where(account_id: inbox.account_id, phone_number: variantes.map { |v| "+#{v}" }).order(:id).first
-  return cache[canonico] = { contato_id: ct.id, ci_id: nil, situacao: :contato_sem_caixa } if ct
+  return cache[canonico] = { contato_id: ct.id, ci_id: nil, destino: nil, situacao: :contato_sem_caixa } if ct
 
-  cache[canonico] = { contato_id: nil, ci_id: nil, situacao: :novo }
+  cache[canonico] = { contato_id: nil, ci_id: nil, destino: nil, situacao: :novo }
 end
 
 def contagem_por_valor(c, prefixo, valor)
@@ -178,7 +219,7 @@ def importar!
 
   inbox = achar_caixa(conta)
   c = Hash.new(0)
-  log "conta #{conta.id}, caixa #{inbox.id} (WhatsApp Cloud); #{GRAVAR ? 'GRAVANDO' : 'CONFERÊNCIA EM SECO'}"
+  log "conta #{conta.id}, caixa #{inbox.id} (WhatsApp Cloud, trava de conversa única ligada); #{GRAVAR ? 'GRAVANDO' : 'CONFERÊNCIA EM SECO'}"
 
   # ── lê e valida o arquivo ──
   cabecalho = nil
@@ -200,14 +241,18 @@ def importar!
     c[:linha_recusada_json] += 1
   end
   raise ErroNosso, 'o arquivo não tem o cabeçalho do exportador (arquivo errado?)' unless cabecalho
+  # o exportador grava a conta do Chatwoot DA UNIDADE (unit_chatwoot.conta_id): arquivo de uma clínica nunca entra na conta de outra
+  raise ErroNosso, "o arquivo é da conta #{cabecalho['conta_id'].inspect} do Chatwoot e a rodada pediu a conta #{conta.id}: recusado (arquivo sem conta_id também é recusado)" unless cabecalho['conta_id'].is_a?(Integer) && cabecalho['conta_id'] == conta.id
 
   linhas = K.ordenar(linhas)
   linhas = linhas.first(LIMITE) if LIMITE.positive?
   log "arquivo da unidade #{cabecalho['unidade'].to_s[0, 60]}: #{c[:cartoes_no_arquivo]} cartões, #{linhas.size} válidos para importar"
 
   # ── o que já existe (idempotência: a chave é o id do cartão) ──
+  # cartão importado = conversa NOSSA com a marca, OU a nota-resumo (`kommo-nota:<cartão>`) em qualquer conversa da caixa (as que entraram na conversa viva do paciente)
   ja = Conversation.where(account_id: conta.id).where('COALESCE(jsonb_exists(additional_attributes, ?), false)', K::MARCA_CONVERSA)
                    .pluck(Arel.sql("(additional_attributes ->> '#{K::MARCA_CONVERSA}')::bigint"), :id).to_h
+  Message.where(inbox_id: inbox.id).where('source_id LIKE ?', 'kommo-nota:%').pluck(:source_id, :conversation_id).each { |sid, cid| ja[sid.split(':').last.to_i] ||= cid }
   definicoes = conta.custom_attribute_definitions.where(attribute_model: 0).to_h { |d| [d.attribute_key, d] }
   etiquetas_da_conta = Label.where(account_id: conta.id).pluck(:title).to_set
   a_criar = K::ETIQUETAS_CRIADAS.reject { |e| etiquetas_da_conta.include?(e) }
@@ -232,9 +277,10 @@ def importar!
             case achado[:situacao]
             when :novo then c[:contatos_novos] += 1
             when :reaproveitado, :contato_sem_caixa then c[:contatos_reaproveitados] += 1
-            when :com_conversa_viva then c[:contatos_com_conversa_viva_no_crm] += 1
+            when :com_conversa_no_crm then c[:contatos_com_conversa_no_crm] += 1
             end
           end
+          c[:cartoes_que_entram_na_conversa_do_paciente] += 1 if achado[:destino]
         end
         contagem_por_valor(c, 'etapa', linha[:atributos]['etapa'])
         contagem_por_valor(c, 'etapa_tratamento', linha[:atributos]['etapa_tratamento'])
@@ -258,6 +304,8 @@ def importar!
     end
   ensure
     c.delete(:erros_seguidos)
+    # as conversas VIVAS (não arquivo) que o histórico deixa: as nossas nascem resolvidas+historico+marca (0 por construção); contam as que a equipe reabriu
+    c[:conversas_importadas_reabertas_pela_equipe] = Conversation.where(id: ja.values.uniq, status: [0, 2, 3]).where('COALESCE(jsonb_exists(additional_attributes, ?), false)', K::MARCA_CONVERSA).count
     log "RESUMO #{c.sort_by { |k, _| k.to_s }.map { |k, v| "#{k}=#{v}" }.join(' ')}"
     $ultimo_resumo = c
   end
@@ -271,8 +319,8 @@ end
 def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas_da_conta, tags, ids, c, cache)
   ultima = K.ultima_atividade(linha)
   criado = Time.at(linha[:criado_em]).utc
-  d = Hash.new(0) # contagens do que SÓ vale depois do commit
   agora = Time.now.utc
+  d = Hash.new(0) # contagens do que SÓ vale depois do commit
 
   # atributos: só o que a conta DEFINE (e dentro da lista de opções), mais as chaves permitidas sem definição
   custom = {}
@@ -297,14 +345,17 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
       c[:etiquetas_inexistentes_na_conta] += 1
     end
   end
+  # as Tags (tabela global do acts_as_taggable) saem ANTES da transação: criada dentro e desfeita por um erro, a Tag sumiria e o cache `tags` apontaria para um id que não existe
+  (nomes | [K::ETIQUETA]).each { |n| tags[n] ||= tag_da(n) }
   canonico = K.variantes_do_fone(linha[:telefone]).first
   contato_id = achado[:contato_id]
   ci_id = achado[:ci_id]
-  situacao = achado[:situacao]
+  alvo = existente || achado[:destino] # conversa em que o histórico entra (nil = criar a do cartão)
+  atributos_preenchidos = nil
 
   ActiveRecord::Base.transaction do
-    # cartão JÁ importado: o contato e a conversa já existem (o paciente pode ter voltado a escrever e a conversa dele já ser «viva»); só se completa a conversa
-    contato_id = Conversation.where(id: existente).pick(:contact_id) if existente
+    # a conversa já existe (cartão já importado, ou a conversa que o paciente já tem no CRM): o contato e o contact_inbox dela são os dela
+    contato_id = Conversation.where(id: alvo).pick(:contact_id) if alvo
     unless contato_id
       contato_id = Contact.insert_all!([{ account_id: conta.id, name: linha[:nome], phone_number: "+#{canonico}",
                                           additional_attributes: { 'origem_historico' => 'kommo', 'kommo_contato_id' => linha[:contato_id] }.compact, custom_attributes: {},
@@ -312,19 +363,18 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
                                        returning: %w[id]).rows.first.first
       ids[:contatos] << contato_id
     end
-    if ci_id.nil? && !existente
-      # contato novo, contato sem caixa, ou contato que já tem conversa viva (então o histórico fica no «HI.<número>», nunca no da conversa viva)
-      fonte = situacao == :com_conversa_viva ? "HI.#{canonico}" : canonico
-      ci_id = ContactInbox.where(inbox_id: inbox.id, source_id: fonte).pick(:id)
+    if ci_id.nil? && !alvo
+      # contato novo, ou contato que existia sem caixa: o contact_inbox nasce com o source_id do WhatsApp Cloud (só dígitos, com DDI)
+      ci_id = ContactInbox.where(inbox_id: inbox.id, source_id: canonico).pick(:id)
       unless ci_id
-        ci_id = ContactInbox.insert_all!([{ inbox_id: inbox.id, contact_id: contato_id, source_id: fonte, hmac_verified: false, pubsub_token: SecureRandom.base58(24),
+        ci_id = ContactInbox.insert_all!([{ inbox_id: inbox.id, contact_id: contato_id, source_id: canonico, hmac_verified: false, pubsub_token: SecureRandom.base58(24),
                                             created_at: criado, updated_at: ultima }], returning: %w[id]).rows.first.first
         ids[:contact_inboxes] << ci_id
       end
     end
 
-    cid = existente
-    novo = existente.nil?
+    cid = alvo
+    novo = alvo.nil?
     if novo
       cid = Conversation.insert_all!([{
         account_id: conta.id, inbox_id: inbox.id, contact_id: contato_id, contact_inbox_id: ci_id, status: 1, assignee_id: nil,
@@ -337,11 +387,29 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
       ids[:taggings].concat(ActsAsTaggableOn::Tagging.insert_all!(tag_ids.map { |t| { tag_id: t, taggable_type: 'Conversation', taggable_id: cid, context: 'labels', created_at: agora } },
                                                                   returning: %w[id]).rows.flatten)
     else
-      # re-rodada: NUNCA sobrescreve o que a equipe mexeu — só preenche atributo que ainda está VAZIO
+      # conversa que JÁ existe: NUNCA se sobrescreve o que a equipe/Chatwoot pôs — só atributo ainda VAZIO é preenchido
+      nossa = Conversation.where(id: cid).pick(:additional_attributes).to_h.key?(K::MARCA_CONVERSA)
+      # na conversa que o paciente JÁ tinha, só o cartão ABERTO (o estado de hoje) preenche atributo: um cartão perdido de meses atrás não pode pôr «Perdido»
+      # numa conversa viva — ele entra só com a nota-resumo e as mensagens
+      custom = {} if !nossa && !linha[:aberto]
       atual = Conversation.where(id: cid).pick(:custom_attributes) || {}
       faltam = custom.reject { |k, _| atual.key?(k) && atual[k].to_s != '' }
-      Conversation.where(id: cid).update_all(['custom_attributes = COALESCE(custom_attributes, ?::jsonb) || ?::jsonb', '{}', faltam.to_json]) if faltam.any?
-      d[:atributos_preenchidos_na_rerodada] += faltam.size
+      if faltam.any?
+        Conversation.where(id: cid).update_all(['custom_attributes = COALESCE(custom_attributes, ?::jsonb) || ?::jsonb', '{}', faltam.to_json])
+        atributos_preenchidos = faltam
+      end
+      d[:atributos_preenchidos_em_conversa_existente] += faltam.size
+      # conversa que não é nossa (a viva do paciente) ganha a etiqueta `historico`: é ela que faz a régua e o CAPI tratarem os valores que acabaram de entrar
+      # como estado INICIAL (nunca disparam por eles). As outras etiquetas do cartão não vão para a conversa viva.
+      unless Conversation.where(id: cid).pick(:additional_attributes).to_h.key?(K::MARCA_CONVERSA)
+        tag = (tags[K::ETIQUETA] ||= tag_da(K::ETIQUETA))
+        unless ActsAsTaggableOn::Tagging.exists?(tag_id: tag.id, taggable_type: 'Conversation', taggable_id: cid, context: 'labels')
+          ids[:taggings] << ActsAsTaggableOn::Tagging.insert_all!([{ tag_id: tag.id, taggable_type: 'Conversation', taggable_id: cid, context: 'labels', created_at: agora }], returning: %w[id]).rows.first.first
+          lista = ActsAsTaggableOn::Tagging.joins(:tag).where(taggable_type: 'Conversation', taggable_id: cid, context: 'labels').pluck('tags.name')
+          Conversation.where(id: cid).update_all(cached_label_list: lista.join(', '))
+          d[:conversas_do_paciente_com_etiqueta_historico] += 1
+        end
+      end
     end
 
     # mensagens: a NOTA-resumo (privada) e a conversa; pula o que já existe pelo source_id
@@ -366,7 +434,8 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
       end
       ids[:mensagens].concat(Message.insert_all!(rows, returning: %w[id]).rows.flatten)
     end
-    if !novo && novas.any?
+    # a última atividade só AVANÇA, e só de conversa nossa e ainda resolvida: a conversa viva do paciente nunca é mexida (mensagem antiga não a «rejuvenesce»)
+    if !novo && novas.any? && Conversation.where(id: cid).pick(:additional_attributes).to_h.key?(K::MARCA_CONVERSA)
       Conversation.where(id: cid, status: 1).update_all(['last_activity_at = GREATEST(last_activity_at, ?), updated_at = GREATEST(updated_at, ?)', ultima, ultima])
     end
     d[:mensagens_gravadas] += novas.count { |m| !m[:privada] }
@@ -374,8 +443,10 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
     d[:conversas_gravadas] += 1 if novo
   end
   d.each { |k, v| c[k] += v }
+  # o que foi preenchido numa conversa que já existia fica no registro (para o desfazer tirar só o que a importação pôs)
+  STDOUT.puts "REG #{{ tipo: 'atributos', conversa: alvo, chaves: atributos_preenchidos.transform_values { |v| Digest::SHA256.hexdigest(v.to_s)[0, 16] } }.to_json}" if atributos_preenchidos && alvo # só a impressão digital do valor: o log não leva dado de paciente
   # só DEPOIS do commit: os próximos cartões do MESMO telefone nesta rodada caem neste contato e neste contact_inbox
-  cache[canonico] = { contato_id: contato_id, ci_id: ci_id, situacao: situacao == :com_conversa_viva ? :com_conversa_viva : :reaproveitado } unless existente
+  cache[canonico] = { contato_id: contato_id, ci_id: ci_id || achado[:ci_id], destino: achado[:destino], situacao: achado[:situacao] } unless existente
 end
 
 # ─── execução ───────────────────────────────────────────────────────────────────────────────────────────────────────

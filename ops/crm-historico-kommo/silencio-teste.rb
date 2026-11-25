@@ -104,6 +104,7 @@ if FASE == 1
   ActiveJob::Base.queue_adapter = :test
   Channel::Whatsapp.skip_callback(:create, :after, :sync_templates, raise: false)
   Channel::Whatsapp.skip_callback(:commit, :after, :setup_webhooks, raise: false)
+  Account.create!(name: 'Parauapebas (conta 1: o importador NUNCA grava nela)')
   conta = Account.create!(name: CONTA_DE_TESTE)
   Account.create!(name: 'Sem caixa')
   agente = User.new(name: 'Agente', email: 'agente@teste.invalid', password: 'Teste1234!x', password_confirmation: 'Teste1234!x')
@@ -157,7 +158,7 @@ if FASE == 1
 
   # ── o arquivo do exportador (cartões de mentira) ──
   linhas = [
-    { 'tipo' => 'cabecalho', 'v' => 1, 'unidade' => 'doutor-hernia-timbo', 'gerado_em' => AGORA.to_i, 'fechados_desde' => T.call(180) },
+    { 'tipo' => 'cabecalho', 'v' => 1, 'unidade' => 'doutor-hernia-timbo', 'conta_id' => conta.id, 'gerado_em' => AGORA.to_i, 'fechados_desde' => T.call(180) },
     # A: aberto, Agendado, paciente novo, conversa com «sair/urgente» (as automações NÃO podem reagir)
     cartao(1001, 'mensagens' => [msg('a1', 20, true, 'oi, quero agendar'), msg('a2', 20, false, 'Claro! Qual a sua queixa?'), msg('a3', 19, true, 'dor forte, é urgente, quero parar de sentir. sair de casa dói'), msg('a4', 3, false, 'Confirmado para sexta')],
                  'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'data_consulta' => '2026-11-27', 'hora_consulta' => '10:30', 'situacao_consulta' => 'Agendado', 'qualificacao' => 'Quente', 'kommo_lead_id' => 1001, 'origem' => 'Meta-Instagram' },
@@ -173,7 +174,7 @@ if FASE == 1
     cartao(1004, 'telefone' => TELEFONES[:fixo], 'etapa_kommo' => 'EM ESPERA', 'atributos' => { 'funil' => 'Comercial', 'retomar_em' => '2026-12-01', 'kommo_lead_id' => 1004 }, 'etiquetas' => %w[historico conferir-etapa]),
     # G: existe no CRM sem o 9, o cartão traz com o 9 (mesmo celular)
     cartao(1005, 'telefone' => '5547991230005', 'mensagens' => [msg('g1', 5, true, 'oi')]),
-    # H: já escreveu pelo WhatsApp (conversa viva): o histórico NÃO pode roubar a próxima mensagem
+    # H: já escreveu pelo WhatsApp (conversa viva): o histórico ENTRA NESSA conversa (nunca cria outro contact_inbox nem outra conversa)
     cartao(1006, 'telefone' => TELEFONES[:viva], 'mensagens' => [msg('h1', 9, true, 'bom dia')]),
     # I: contato existe sem caixa
     cartao(1007, 'telefone' => TELEFONES[:sem_caixa]),
@@ -181,7 +182,7 @@ if FASE == 1
     cartao(1008, 'telefone' => '5547991230007', 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Etapa Inventada', 'foo_bar' => 'x', 'origem' => 'Indicação', 'valor_fechado' => 4500, 'kommo_lead_id' => 1008 }),
     # E: sem telefone (recusado, contado)  F: lixo
     cartao(1009, 'telefone' => nil),
-    # K: SEGUNDO cartão do paciente que já tem conversa viva: também vai pelo HI.<número> (nunca pelo contact_inbox da viva)
+    # K: SEGUNDO cartão do mesmo paciente: também entra na conversa viva (mais uma nota-resumo)
     cartao(1010, 'telefone' => TELEFONES[:viva], 'aberto' => false, 'etapa_kommo' => 'PERDIDO', 'fechado_em' => T.call(90), 'atualizado_em' => T.call(90), 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Perdido', 'kommo_lead_id' => 1010 })
   ].map(&:to_json)
   linhas << '{isto não é json'
@@ -194,7 +195,7 @@ if FASE == 1
   confere('SECO não disparou nada', silencio?, $conta.inspect)
   rs = $ultimo_resumo
   confere('SECO conta: 10 cartões no arquivo (+1 linha que nem é JSON), 1 recusado por falta de telefone, 9 válidos', rs[:cartoes_no_arquivo] == 10 && rs[:linha_recusada_sem_telefone] == 1 && rs[:linha_recusada_json] == 1 && rs[:cartoes_novos] == 9, rs.inspect)
-  confere('SECO conta contatos novos / reaproveitados / com conversa viva', rs[:contatos_novos] == 4 && rs[:contatos_reaproveitados] == 2 && rs[:contatos_com_conversa_viva_no_crm] == 1 && rs[:cartoes_do_mesmo_telefone] == 2, rs.inspect)
+  confere('SECO conta contatos novos / reaproveitados / com conversa viva', rs[:contatos_novos] == 4 && rs[:contatos_reaproveitados] == 2 && rs[:contatos_com_conversa_no_crm] == 1 && rs[:cartoes_do_mesmo_telefone] == 2, rs.inspect)
 
   # ── gravando (a importação de VERDADE, medida) ──
   medir { rodar_importador(GRAVAR: '1', ARQUIVO: ARQ, CONTA: conta.id) }
@@ -205,7 +206,7 @@ if FASE == 1
   hist = Conversation.where(account_id: conta.id).select { |c| c.additional_attributes.key?('kommo_lead_id') }.sort_by(&:id)
   por_lead = hist.index_by { |c| c.additional_attributes['kommo_lead_id'] }
 
-  confere('os 9 cartões válidos viraram conversa (o sem telefone e o JSON ruim não)', hist.size == 9 && por_lead.keys.sort == [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1010], por_lead.keys.sort.inspect)
+  confere('os 7 cartões com conversa PRÓPRIA viraram conversa (os 2 do paciente que já tinha conversa entraram nela; o sem telefone e o JSON ruim não)', hist.size == 7 && por_lead.keys.sort == [1001, 1002, 1003, 1004, 1005, 1007, 1008], por_lead.keys.sort.inspect)
   confere('todas RESOLVIDAS, sem responsável, sem prioridade, sem espera', hist.all? { |c| c.resolved? && c.assignee_id.nil? && c.priority.nil? && c.waiting_since.nil? })
   confere('todas com a marca de origem kommo e a etiqueta historico (a trava da régua e do CAPI)', hist.all? { |c| c.additional_attributes['origem_historico'] == 'kommo' && c.reload.label_list.include?('historico') })
   confere('etiquetas: as da conta entram, a que a conta não tem some; a automação não pôs nada (sair)', por_lead[1001].label_list.sort == %w[anuncio historico quente] && !hist.any? { |c| c.label_list.include?('sair') }, por_lead[1001].label_list.inspect)
@@ -234,11 +235,13 @@ if FASE == 1
   confere('J: valor fora da lista e atributo sem definição descartados; origem e valor_fechado (sem definição, permitidos) ficam', !j.custom_attributes.key?('etapa') && !j.custom_attributes.key?('foo_bar') && j.custom_attributes['origem'] == 'Indicação' && j.custom_attributes['valor_fechado'] == 4500, j.custom_attributes.inspect)
   g = por_lead[1005]
   confere('G: existia SEM o 9; o cartão veio COM o 9 e caiu no MESMO contato e contact_inbox (nenhum contato duplicado)', g.contact.name == 'Existente sem 9' && g.contact_inbox.source_id == '554791230005' && Contact.where(account_id: conta.id).where("phone_number LIKE '+554791230005' OR phone_number LIKE '+5547991230005'").count == 1)
-  h = por_lead[1006]
-  confere('H: paciente que JÁ escreveu: o histórico vai por um contact_inbox próprio HI.<número> (não rouba a próxima mensagem)', h.contact_id == conv_viva.contact_id && h.contact_inbox.source_id == 'HI.5547991230006' && h.contact_inbox_id != conv_viva.contact_inbox_id)
-  k10 = por_lead[1010]
-  confere('K: o 2º cartão do paciente com conversa viva também vai pelo HI.<número> (e é o MESMO contact_inbox do H)', k10.contact_inbox.source_id == 'HI.5547991230006' && k10.contact_inbox_id == h.contact_inbox_id && ContactInbox.where(inbox_id: caixa.id, source_id: 'HI.5547991230006').count == 1)
-  confere('H: a conversa VIVA ficou idêntica', foto_viva(conv_viva) == fotos_antes[:viva], "#{fotos_antes[:viva]} != #{foto_viva(conv_viva)}")
+  confere('H/K: o paciente que JÁ tinha conversa: o histórico dos 2 cartões ENTROU nela — nenhuma conversa nova, nenhum contact_inbox novo, NENHUM HI.<número>',
+          por_lead[1006].nil? && por_lead[1010].nil? && Conversation.where(contact_id: conv_viva.contact_id).count == 1 && ContactInbox.where(contact_id: conv_viva.contact_id).count == 1 && ContactInbox.where('source_id LIKE ?', 'HI.%').none?)
+  conv_viva.reload
+  msgs_viva = conv_viva.messages.order(:created_at, :id).to_a
+  confere('H/K: lá estão a mensagem antiga com a data ORIGINAL, as 2 notas-resumo privadas e a mensagem que o paciente já tinha', msgs_viva.map(&:source_id).sort == %w[kommo-nota:1006 kommo-nota:1010 kommo:1006:h1 wamid.viva] && msgs_viva.find { |m| m.source_id == 'kommo:1006:h1' }.created_at.to_i == T.call(9), msgs_viva.map(&:source_id).inspect)
+  confere('H/K: a conversa do paciente NÃO foi rejuvenescida nem reaberta (última atividade, atualização, status e responsável iguais)', conv_viva.last_activity_at.to_f == fotos_antes[:viva][0] && conv_viva.updated_at.to_f == fotos_antes[:viva][1] && conv_viva.status == fotos_antes[:viva][2] && conv_viva.assignee_id == fotos_antes[:viva][3])
+  confere('H/K: atributos só onde estava vazio e a etiqueta historico (protege a régua/CAPI dos valores que entraram); as outras etiquetas do cartão não vão', conv_viva.custom_attributes['etapa'] == 'Agendado' && conv_viva.custom_attributes['funil'] == 'Comercial' && conv_viva.custom_attributes['etapa'] != 'Perdido' && conv_viva.label_list == ['historico'], conv_viva.custom_attributes.inspect + conv_viva.label_list.inspect)
   i7 = por_lead[1007]
   confere('I: contato existente sem caixa é reaproveitado (nenhum duplicado) e ganha o contact_inbox', i7.contact.name == 'Existe sem caixa' && i7.contact_inbox.source_id == '5547991230004' && Contact.where(account_id: conta.id, phone_number: '+5547991230004').count == 1)
   puts "durante a importação (o que a importação REAL disparou): #{$conta.inspect}"
@@ -308,8 +311,8 @@ if FASE == 3
   # (3) quem já tinha conversa viva continua na SUA conversa viva, não na do histórico
   enviar.call('5547991230006', 'de novo')
   m3 = Message.find_by(content: 'de novo')
-  h = Conversation.where(account_id: conta.id).detect { |x| x.additional_attributes['kommo_lead_id'] == 1006 }
-  confere('PACIENTE QUE JÁ TINHA CONVERSA VIVA: a mensagem cai na viva, não no histórico (HI.)', m3 && m3.conversation_id != h.id && !Conversation.find(m3.conversation_id).additional_attributes.key?('kommo_lead_id'), m3&.conversation_id.inspect)
+  viva = Conversation.where(contact_id: Contact.find_by!(account_id: conta.id, phone_number: '+5547991230006').id).first
+  confere('PACIENTE QUE JÁ TINHA CONVERSA: a mensagem cai na MESMA conversa (a que ganhou o histórico), sem conversa nova', m3 && m3.conversation_id == viva.id && Conversation.where(contact_id: viva.contact_id).count == 1, m3&.conversation_id.inspect)
 end
 
 if FASE == 4
@@ -320,7 +323,7 @@ if FASE == 4
   # a equipe já usou duas coisas: reabriu/respondeu a conversa C (o paciente escreveu na fase 3) e pôs uma NOTA no contato do cartão 1007
   nota_contato = Contact.find_by!(account_id: conta.id, phone_number: '+5547991230004')
   Note.create!(account_id: conta.id, contact: nota_contato, user: User.first, content: 'ligar amanhã')
-  # re-rodada DEPOIS de o paciente ter escrito (a conversa dele agora é «viva» no contact_inbox principal): não pode nascer HI.<número> à toa nem contato duplicado
+  # re-rodada DEPOIS de o paciente ter escrito: nenhum contact_inbox, contato nem mensagem a mais
   contatos_antes = Contact.where(account_id: conta.id).count
   cis_antes = ContactInbox.count
   rodar_importador(GRAVAR: '1', ARQUIVO: ARQ, CONTA: conta.id, MODO: nil, REGISTRO: nil)
@@ -331,7 +334,10 @@ if FASE == 4
   rodar_importador(GRAVAR: '1', MODO: 'desfazer', REGISTRO: registro, CONTA: conta.id, ARQUIVO: nil)
   restantes = Conversation.where(account_id: conta.id).select { |c| c.additional_attributes.key?('kommo_lead_id') }.map { |c| c.additional_attributes['kommo_lead_id'] }.sort
   confere('DESFAZER: só ficaram as conversas que a equipe/o paciente já usaram (C reaberta, G e a que recebeu mensagem do paciente)', restantes == [1003, 1005], restantes.inspect)
-  confere('DESFAZER: as mensagens do histórico saíram e as do paciente ficaram', Message.where('source_id LIKE ?', 'kommo:%').where.not(conversation_id: Conversation.where(account_id: conta.id).pluck(:id)).none? && Message.where(content: ['oi, voltei', 'bom dia, sem o nove', 'de novo']).count == 3)
+  confere('DESFAZER: TODAS as mensagens e notas do histórico saíram (também das conversas que a equipe/o paciente já usaram) e as do paciente ficaram', Message.where("source_id LIKE 'kommo%'").none? && Message.where(content: ['oi, voltei', 'bom dia, sem o nove', 'de novo']).count == 3)
+  viva = Conversation.where(contact_id: Contact.find_by!(account_id: conta.id, phone_number: '+5547991230006').id).first
+  confere('DESFAZER: a conversa do paciente que já existia ficou SÓ com as mensagens dela (a sua e a de «de novo»), sem os atributos que a importação pôs e sem a etiqueta historico',
+          viva.messages.pluck(:content).sort == ['de novo', 'oi, sou eu'] && !viva.custom_attributes.key?('etapa') && !viva.custom_attributes.key?('funil') && viva.label_list.empty? && viva.cached_label_list.to_s.empty?, "#{viva.messages.pluck(:content).inspect} #{viva.custom_attributes.inspect} #{viva.cached_label_list.inspect}")
   confere('DESFAZER: contato que já existia ficou (Existente sem 9, Já escreveu, Existe sem caixa)', %w[Existente\ sem\ 9 Já\ escreveu Existe\ sem\ caixa].all? { |n| Contact.where(account_id: conta.id, name: n).count == 1 })
   confere('DESFAZER: contato com NOTA da equipe fica e a nota não fica órfã', Note.where(contact_id: nota_contato.id).count == 1)
   confere('DESFAZER: contato criado pela importação sem conversa nenhuma saiu (Paciente 1002)', Contact.where(account_id: conta.id, name: 'Paciente 1002').none?)
@@ -341,7 +347,7 @@ end
 if FASE == 5
   contagem = -> { [Contact.count, ContactInbox.count, Conversation.count, Message.count] }
   conta = conta_do_teste
-  vazia = Account.find_by!(name: 'Sem caixa')
+  vazia = Account.find_by!(name: "Sem caixa")
   api = Inbox.create!(account: conta, channel: Channel::Api.create!(account: conta), name: 'api')
   File.write(File.join(TRAB, 'sem-cabecalho.jsonl'), cartao(1).to_json)
   antes = contagem.call
@@ -353,6 +359,23 @@ if FASE == 5
   confere('conta SEM a caixa do WhatsApp: a rodada é RECUSADA e nada é gravado', st == 1 && igual, [st, igual].inspect)
   st, igual = rec.call(CAIXA: api.id)
   confere('caixa que não é WhatsApp (API): recusada', st == 1 && igual, [st, igual].inspect)
+  st, igual = rec.call(CONTA: 1)
+  confere('a conta 1 (Parauapebas) é recusada SEMPRE', st == 1 && igual, [st, igual].inspect)
+  de_outra = File.readlines(ARQ).map { |l| (j = JSON.parse(l) rescue nil) && j['tipo'] == 'cabecalho' ? j.merge('conta_id' => vazia.id).to_json : l.chomp }
+  File.write(File.join(TRAB, 'de-outra-conta.jsonl'), de_outra.join("\n"))
+  st, igual = rec.call(ARQUIVO: File.join(TRAB, 'de-outra-conta.jsonl'))
+  confere('arquivo de OUTRA conta (conta_id do cabeçalho diferente da pedida) é recusado', st == 1 && igual, [st, igual].inspect)
+  sem_conta = File.readlines(ARQ).map { |l| (j = JSON.parse(l) rescue nil) && j['tipo'] == 'cabecalho' ? j.except('conta_id').to_json : l.chomp }
+  File.write(File.join(TRAB, 'sem-conta.jsonl'), sem_conta.join("\n"))
+  st, igual = rec.call(ARQUIVO: File.join(TRAB, 'sem-conta.jsonl'))
+  confere('arquivo SEM conta_id no cabeçalho é recusado', st == 1 && igual, [st, igual].inspect)
+  caixa_wa = Inbox.find_by!(account_id: conta.id, channel_type: 'Channel::Whatsapp')
+  caixa_wa.update_columns(lock_to_single_conversation: false)
+  st, igual = rec.call({})
+  confere('caixa com a TRAVA de conversa única DESLIGADA: a rodada é RECUSADA e nada é gravado (nem em seco)', st == 1 && igual, [st, igual].inspect)
+  st, igual = rec.call(GRAVAR: nil)
+  confere('...também a conferência em seco recusa (não adianta contar para uma caixa que não casaria)', st == 1 && igual, [st, igual].inspect)
+  caixa_wa.update_columns(lock_to_single_conversation: true)
   st, igual = rec.call(LIMITE_CARTOES: 0)
   confere('LIMITE_CARTOES=0 é recusado (não vira «sem limite»)', st == 1 && igual, [st, igual].inspect)
   st, igual = rec.call(ARQUIVO: File.join(TRAB, 'nao-existe.jsonl'))

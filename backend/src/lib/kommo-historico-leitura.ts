@@ -13,8 +13,11 @@ import { atributosDoCartao, linhaDoCartao, type CartaoDaKommo, type ContatoDaKom
 
 export const MESES_DOS_FECHADOS = 6;
 export const POR_PAGINA = 250;
-export const MAX_PAGINAS = 100;
+export const MAX_PAGINAS = 400; // 100 mil cartões na conta: acima disso a leitura LANÇA (nunca importa pela metade)
 export const MAX_TALKS_POR_CARTAO = 5;
+export const MENSAGENS_POR_PAGINA = 100;
+/** 100 páginas de 100 = 10 mil mensagens numa conversa: acima disso a leitura LANÇA (não pode virar «as últimas 50» de uma conversa lida pela metade) */
+export const MAX_PAGINAS_DE_MENSAGENS = 100;
 /** quantas conversas o SECO lê de verdade para medir mensagens e tempo */
 export const AMOSTRA_DO_SECO = 30;
 const STATUS_GANHO = 142;
@@ -24,9 +27,17 @@ export interface PortaKommo {
   listPipelines(): Promise<KommoPipeline[]>;
   listLossReasons(): Promise<Array<{ id: number; name: string }>>;
   listUsers(): Promise<Array<{ id: number; name: string }>>;
+  /**
+   * UMA página (250) de TODOS os cartões da conta, qualquer etapa, ordenados por ID (do mais novo ao mais velho). A ordem por id não muda quando
+   * um cartão troca de etapa ou é editado no meio da leitura (ao contrário de `updated_at` ou de um filtro por etapa): andar por página nunca pula
+   * ninguém — cartão novo só empurra a lista (e a repetição é descartada pelo id).
+   */
+  listLeadsPagina(page: number): Promise<KommoLead[]>;
+  /**
+   * UMA página dos cartões ABERTOS nestas etapas (por id, do mais novo ao mais velho). Só para a etapa «Incoming leads» (type 1), que a lista geral
+   * de cartões NÃO devolve (medido em Timbó: 21 cartões nela, 0 na lista geral).
+   */
   listLeadsAbertosPagina(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, page?: number): Promise<KommoLead[]>;
-  /** cartões destas etapas mexidos desde a data, ordenados por ID (estável: editar um cartão no meio da leitura não muda a posição, ao contrário de `updated_at`) */
-  listLeadsDasEtapasPorId(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, desdeEpochSeg: number, page?: number): Promise<KommoLead[]>;
   listLeadsPorIds(ids: number[], opcoes?: { contatos?: boolean }): Promise<KommoLead[]>;
   contatosBasicos(ids: number[]): Promise<Map<number, { nome: string | null; telefone: string | null }>>;
   listTalks(leadId: number): Promise<KommoTalk[]>;
@@ -56,6 +67,8 @@ export interface Selecao {
   contatos: Map<number, ContatoDaKommo>;
   /** quantos fechados ficaram de fora por serem mais velhos que a janela */
   fechadosForaDaJanela: number;
+  /** quantos cartões a conta inteira tem (lidos para achar os do escopo) */
+  lidosNaConta: number;
 }
 
 function valorDoCampoDaKommo(f: { field_type?: string; values: Array<{ value: unknown }> }): unknown {
@@ -74,6 +87,7 @@ export function cartaoDoLead(l: KommoLead, pipelines: ReadonlyMap<number, KommoP
     funil: funil.name,
     etapa: status.name,
     statusId: l.status_id,
+    statusTipo: status.type,
     preco: Number(l.price) || 0,
     criadoEm: Number(l.created_at) || 0,
     atualizadoEm: Number(l.updated_at) || 0,
@@ -87,12 +101,12 @@ export function cartaoDoLead(l: KommoLead, pipelines: ReadonlyMap<number, KommoP
 
 /** Todas as páginas de uma consulta paginada; LANÇA se passar do teto (ainda vinha página cheia). */
 async function todasAsPaginas(ler: (page: number) => Promise<KommoLead[]>, pausa: Ambiente['pausa'], rotulo: string): Promise<KommoLead[]> {
-  const todos: KommoLead[] = [];
+  const todos = new Map<number, KommoLead>(); // a repetição na fronteira das páginas (cartão novo empurrou a lista) é descartada pelo id
   for (let p = 1; ; p++) {
     if (p > MAX_PAGINAS) throw new Error(`${rotulo} passou de ${MAX_PAGINAS} páginas: leitura incompleta`);
     const lote = await ler(p);
-    todos.push(...lote);
-    if (lote.length < POR_PAGINA) return todos;
+    for (const l of lote) todos.set(l.id, l);
+    if (lote.length < POR_PAGINA) return [...todos.values()];
     await pausa(250);
   }
 }
@@ -104,21 +118,22 @@ export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
   const motivos = new Map((await porta.listLossReasons()).map((m) => [m.id, m.name]));
   const usuarios = new Map((await porta.listUsers()).map((u) => [u.id, u.name]));
 
-  const abertas = pipelines.flatMap((p) => p.statuses.filter((s) => s.id !== STATUS_GANHO && s.id !== STATUS_PERDIDO).map((s) => ({ pipelineId: p.id, statusId: s.id })));
-  const fechadas = pipelines.flatMap((p) => [STATUS_GANHO, STATUS_PERDIDO].filter((id) => p.statuses.some((s) => s.id === id)).map((statusId) => ({ pipelineId: p.id, statusId })));
-
-  const leads = new Map<number, KommoLead>();
-  for (const l of await todasAsPaginas((p) => porta.listLeadsAbertosPagina(abertas, p), pausa, 'cartões abertos')) leads.set(l.id, l);
+  // TODOS os cartões da conta por id (estável) e o escopo B aplicado AQUI: aberto (qualquer etapa) OU ganho/perdido fechado dentro da janela.
+  // (Ler «os abertos» e «os fechados» em duas consultas deixaria passar o cartão que muda de uma para a outra no meio da leitura.)
   const desde = inicioDosFechados(amb.agora());
   let fora = 0;
-  // fechados: o filtro de data vai para a Kommo (`updated_at` ≥ início da janela é sempre um superconjunto de `closed_at` ≥ início: quem fechou na
-  // janela foi mexido depois), a ordem é por ID (estável) e o que vale é QUANDO fechou (`closed_at`), conferido aqui
-  if (fechadas.length) {
-    for (const l of await todasAsPaginas((p) => porta.listLeadsDasEtapasPorId(fechadas, desde, p), pausa, 'cartões fechados')) {
-      if ((Number(l.closed_at) || 0) >= desde) leads.set(l.id, l);
-      else fora++;
-    }
+  const leads = new Map<number, KommoLead>();
+  const daConta = await todasAsPaginas((p) => porta.listLeadsPagina(p), pausa, 'cartões da conta');
+  for (const l of daConta) {
+    const fechado = l.status_id === STATUS_GANHO || l.status_id === STATUS_PERDIDO;
+    if (!fechado) leads.set(l.id, l);
+    else if ((Number(l.closed_at) || 0) >= desde) leads.set(l.id, l);
+    else fora++;
   }
+
+  // a etapa «Incoming leads» não vem na lista geral: lê à parte, também por id (um cartão aceito no meio da leitura aparece na outra lista: o id junta os dois)
+  const entrada = pipelines.flatMap((p) => p.statuses.filter((st) => st.type === 1 || /^incoming leads$/i.test(st.name)).map((st) => ({ pipelineId: p.id, statusId: st.id })));
+  if (entrada.length) for (const l of await todasAsPaginas((p) => porta.listLeadsAbertosPagina(entrada, p), pausa, 'cartões da entrada')) leads.set(l.id, l);
 
   const ordenados = [...leads.values()].sort((a, b) => (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0) || b.id - a.id);
 
@@ -146,7 +161,7 @@ export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
     const b = cid ? basicos.get(cid) : undefined;
     if (cid) contatos.set(l.id, { id: cid, nome: b?.nome ?? null, telefone: b?.telefone ?? null });
   }
-  return { cartoes, contatos, fechadosForaDaJanela: fora };
+  return { cartoes, contatos, fechadosForaDaJanela: fora, lidosNaConta: daConta.length };
 }
 
 /** O erro da Kommo que quer dizer «esta conta/cartão/conversa não tem o que entregar» (sem escopo de chats, ou sem conversa). */
@@ -184,7 +199,14 @@ export async function lerConversa(amb: Ambiente, leadId: number): Promise<Mensag
   for (const t of maisRecentes) {
     await pausa(250);
     try {
-      todas.push(...(await comTentativas(amb, () => porta.listTalkMessages(Number(t.talk_id), 100))));
+      // TODAS as páginas (100 por vez) até uma vir incompleta: só assim as «últimas 50» são as últimas de verdade e o total da nota bate
+      for (let pagina = 1; ; pagina++) {
+        if (pagina > MAX_PAGINAS_DE_MENSAGENS) throw new Error(`conversa passou de ${MAX_PAGINAS_DE_MENSAGENS} páginas de mensagens: leitura incompleta`);
+        const lote = await comTentativas(amb, () => porta.listTalkMessages(Number(t.talk_id), MENSAGENS_POR_PAGINA, pagina));
+        todas.push(...lote);
+        if (lote.length < MENSAGENS_POR_PAGINA) break;
+        await pausa(250);
+      }
       leu = true;
     } catch (e) {
       if (!semConversaNaKommo(e)) throw e;
@@ -203,6 +225,7 @@ export interface Relatorio {
   abertos: number;
   fechados: number;
   fechadosForaDaJanela: number;
+  lidosNaConta: number;
   porEtapa: Record<string, number>;
   semTelefone: number;
   telefoneInvalido: number;
@@ -222,27 +245,41 @@ export interface Relatorio {
   duracaoEstimadaMin: number;
   avisos: Record<string, number>;
   linhasGravadas: number;
+  /** conversas que, depois de importadas, a régua/CAPI/telas NÃO tratariam como arquivo (tem de ser 0) */
+  ficariamVivas: number;
 }
 
 const vazioRelatorio = (): Relatorio => ({
-  cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
-  semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0,
+  cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, lidosNaConta: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
+  semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0, ficariamVivas: 0,
 });
 
 /**
  * Lê tudo e entrega as linhas (GRAVAR) ou só conta (SECO). No seco as conversas são lidas só numa amostra espalhada (`AMOSTRA_DO_SECO`),
  * o bastante para medir mensagens por cartão e segundos por cartão, e a estimativa vira número para o João decidir.
  */
-export async function exportar(amb: Ambiente, opcoes: { gravar: boolean; limite?: number; entregar: (l: LinhaDoCartao) => void }): Promise<Relatorio> {
+export async function exportar(
+  amb: Ambiente,
+  opcoes: {
+    gravar: boolean;
+    limite?: number;
+    entregar: (l: LinhaDoCartao) => void;
+    /** a MESMA regra de arquivo das telas e da régua (`ehArquivo`): conta quantas conversas importadas ficariam «vivas» (meta 0) */
+    arquivo?: (conversa: { labels: string[]; status: string; last_activity_at: number; additional_attributes: Record<string, unknown>; custom_attributes: Record<string, unknown> }) => boolean;
+  },
+): Promise<Relatorio> {
   const r = vazioRelatorio();
   const sel = await lerSelecao(amb);
   r.cartoes = sel.cartoes.length;
   r.fechadosForaDaJanela = sel.fechadosForaDaJanela;
+  r.lidosNaConta = sel.lidosNaConta;
   const fones = new Map<string, number>();
   for (const c of sel.cartoes) {
     if (c.statusId === STATUS_GANHO || c.statusId === STATUS_PERDIDO) r.fechados++;
     else r.abertos++;
-    for (const a of atributosDoCartao(c).avisos) r.avisos[a] = (r.avisos[a] ?? 0) + 1; // os avisos valem para TODOS os cartões, não só os da amostra
+    const m = atributosDoCartao(c);
+    for (const a of m.avisos) r.avisos[a] = (r.avisos[a] ?? 0) + 1; // os avisos valem para TODOS os cartões, não só os da amostra
+    if (opcoes.arquivo && foneParaWhatsApp(sel.contatos.get(c.id)?.telefone) && !opcoes.arquivo({ labels: m.etiquetas, status: 'resolved', last_activity_at: Math.max(c.atualizadoEm, c.criadoEm), additional_attributes: { kommo_lead_id: c.id }, custom_attributes: m.atributos })) r.ficariamVivas++;
     const k = `${c.funil} › ${c.etapa}`;
     r.porEtapa[k] = (r.porEtapa[k] ?? 0) + 1;
     const ct = sel.contatos.get(c.id);

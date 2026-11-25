@@ -88,9 +88,10 @@ function bancoFalso() {
   return { banco, escritas, e };
 }
 
-function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number } = {}) {
+function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number; caixasDaReferencia?: Array<{ id: number; name: string; channel_type: string; lock_to_single_conversation: boolean; provider?: string }> } = {}) {
   const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma, falharVinculo: opcoes.falharVinculo, existentes: [{ id: 5, name: 'Suzanne', email: 'suzanne.mychelly1@gmail.com' }, { id: 6, name: 'João', email: 'joao@doutordigital.test' }] });
   falso.semear({
+    inboxes: (opcoes.caixasDaReferencia ?? []).map(({ provider, ...i }) => ({ ...i, channel: provider ? { provider } : {}, agent_bot: null, membros: [] })),
     labels: [
       { id: 1, title: 'quente', description: 'lead quente', color: '#ff0000', show_on_sidebar: true },
       { id: 2, title: 'perdido-preco', description: 'motivo', color: '#999999', show_on_sidebar: false },
@@ -286,6 +287,26 @@ test('o cofre não sobrescreve um segredo que já existe com outro valor', async
   await assert.rejects(segredos.guardar('CHATWOOT_API_TOKEN_X', 'dois'), /não sobrescrevo/);
   assert.equal(await segredos.ler('CHATWOOT_API_TOKEN_X'), 'um');
   await assert.rejects(segredos.guardar('nome inválido', 'x'), /inválido/);
+});
+
+test('a caixa de WhatsApp nasce com a MESMA trava de conversa única da caixa de referência (ligada, como a de Parauapebas) — e, sem referência de WhatsApp, ligada', async () => {
+  const q = ler('questionario.exemplo.yaml');
+  const real = { ...q, unidade: { ...q.unidade, slug: 'clinica-trava', nome: 'Clínica Trava' }, chatwoot: { ...q.chatwoot, subdominio: 'travateste' }, whatsapp: { ...q.whatsapp, prefixo_modelos: 'trava_' }, meta: { ...q.meta, token_env: 'META_ADS_TOKEN_TRAVA', conta_env: 'META_ADS_CONTA_TRAVA', dataset_id_env: 'META_DATASET_ID_TRAVA' } } as typeof DEMO;
+  for (const [ref, esperado] of [
+    [[{ id: 3, name: 'WhatsApp oficial', channel_type: 'Channel::Whatsapp', lock_to_single_conversation: true }], true],
+    [[{ id: 3, name: 'WhatsApp oficial', channel_type: 'Channel::Whatsapp', lock_to_single_conversation: false }], false],
+    [[{ id: 2, name: 'WhatsApp Lite', channel_type: 'Channel::Whatsapp', provider: 'default', lock_to_single_conversation: false }, { id: 3, name: 'WhatsApp oficial', channel_type: 'Channel::Whatsapp', provider: 'whatsapp_cloud', lock_to_single_conversation: true }], true],
+    [[{ id: 2, name: 'WhatsApp Lite', channel_type: 'Channel::Whatsapp', provider: 'default', lock_to_single_conversation: true }, { id: 3, name: 'WhatsApp oficial', channel_type: 'Channel::Whatsapp', provider: 'whatsapp_cloud', lock_to_single_conversation: false }], false],
+    [[{ id: 7, name: 'Instagram', channel_type: 'Channel::Instagram', lock_to_single_conversation: false }], true],
+    [[], true],
+  ] as const) {
+    const { falso, segredos, externas } = montar({ caixasDaReferencia: [...ref] });
+    await segredos.guardar('KAPSO_API_KEY', 'kapso-chave-secreta');
+    const b = bancoFalso();
+    await rodar(real, b, externas);
+    const conta = falso.contas.get(b.e.config!.contaId!)!;
+    assert.equal(conta.inboxes[0]!.lock_to_single_conversation, esperado, JSON.stringify(ref));
+  }
 });
 
 test('CLÍNICA DE VERDADE (modo real): a caixa é WhatsApp Cloud com a chave do Kapso, os 33 modelos vão ao Kapso UMA vez e a 2ª rodada não manda nada', async () => {

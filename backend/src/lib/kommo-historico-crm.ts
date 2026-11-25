@@ -70,6 +70,8 @@ export interface CartaoDaKommo {
   funil: string;
   etapa: string;
   statusId: number;
+  /** tipo da etapa na Kommo: 1 = «Incoming leads» (entrada), qualquer que seja o nome */
+  statusTipo?: number;
   preco: number;
   criadoEm: number;
   atualizadoEm: number;
@@ -162,6 +164,11 @@ export const horaDoCrm = (epochSeg: number): string => {
   const d = emBelem(epochSeg);
   return `${doisD(d.getUTCHours())}:${doisD(d.getUTCMinutes())}`;
 };
+/**
+ * Campo de DATA (sem hora: «Retomar em», «Data de alta»…): a Kommo guarda a meia-noite do dia (aqui 03:00 UTC = 00:00 em UTC−3, e outras contas podem
+ * guardar 00:00 UTC). O dia é o dia UTC do valor — sem o −3 h dos campos COM hora, que jogaria o 00:00 UTC para a véspera.
+ */
+export const dataSoDoCrm = (epochSeg: number): string => new Date(epochSeg * 1000).toISOString().slice(0, 10);
 const dataBr = (epochSeg: number): string => {
   const [a, m, d] = dataDoCrm(epochSeg).split('-');
   return `${d}/${m}/${a}`;
@@ -186,7 +193,9 @@ const ehSim = (v: unknown): boolean => semAcento(txt(v)) === 'SIM' || v === true
 
 /** Valor em reais: aceita número ou texto; sem valor/zero = null. */
 function dinheiro(v: unknown): number | null {
-  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(',', '.'));
+  // «1.500,00» (pt-BR): com vírgula, o ponto é milhar; sem vírgula, «1500.50» é o formato da Kommo
+  const t = String(v ?? '').trim();
+  const n = typeof v === 'number' ? v : Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 const reais = (n: number): string => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
@@ -254,6 +263,7 @@ export function traduzirEtapa(c: CartaoDaKommo): Traducao {
   if (funil === 'COMERCIAL') {
     if (c.statusId === STATUS_GANHO) return { ...base, funil: 'Comercial', etapa: 'Fechou' };
     if (c.statusId === STATUS_PERDIDO) return { ...base, funil: 'Comercial', etapa: 'Perdido' };
+    if (c.statusTipo === 1) return { ...base, funil: 'Comercial', etapa: 'Novo lead' }; // a etapa de entrada, com o nome que tiver
     switch (etapa) {
       case 'INCOMING LEADS':
         return { ...base, funil: 'Comercial', etapa: 'Novo lead' };
@@ -280,7 +290,7 @@ export function traduzirEtapa(c: CartaoDaKommo): Traducao {
   if (funil === 'TRATAMENTO') {
     if (c.statusId === STATUS_GANHO) return { ...base, funil: 'Tratamento', etapaTratamento: 'Alta', etiquetas: ['alta'] };
     if (c.statusId === STATUS_PERDIDO) return { ...base, funil: 'Tratamento', etapaTratamento: 'Tratamento cancelado' };
-    if (etapa === 'INCOMING LEADS') return { ...base, funil: 'Tratamento', etapaTratamento: 'Entrada' };
+    if (etapa === 'INCOMING LEADS' || c.statusTipo === 1) return { ...base, funil: 'Tratamento', etapaTratamento: 'Entrada' };
     if (etapa === 'EM TRATAMENTO') return { ...base, funil: 'Tratamento', etapaTratamento: 'Em tratamento' };
     return { ...base, funil: 'Tratamento', etiquetas: [ETIQUETA_CONFERIR_ETAPA], aviso: 'etapa-desconhecida' };
   }
@@ -293,6 +303,13 @@ export interface Montagem {
   atributos: Record<string, string | number | boolean>;
   etiquetas: string[];
   avisos: string[];
+}
+
+/** O dia de um campo de data: sem hora (`date`) = o dia UTC do valor; com hora (`date_time`) = o dia em Belém. */
+function diaDoCampo(c: CartaoDaKommo, nome: string, epoch: number): string {
+  const alvo = nomeLimpo(nome);
+  const tipo = c.campos.find((f) => nomeLimpo(f.nome) === alvo && !vazio(f.valor))?.tipo;
+  return tipo === 'date' ? dataSoDoCrm(epoch) : dataDoCrm(epoch);
 }
 
 export function atributosDoCartao(c: CartaoDaKommo): Montagem {
@@ -335,7 +352,7 @@ export function atributosDoCartao(c: CartaoDaKommo): Montagem {
 
   // espera
   const retomar = epochDe(valorDoCampo(c, 'Retomar em'));
-  if (retomar) a.retomar_em = dataDoCrm(retomar);
+  if (retomar) a.retomar_em = diaDoCampo(c, 'Retomar em', retomar);
   const espera = txt(valorDoCampo(c, 'Motivo da espera'));
   if (espera) {
     const m = motivoDeEspera(espera);
@@ -370,9 +387,9 @@ export function atributosDoCartao(c: CartaoDaKommo): Montagem {
     a.hora_sessao = horaDoCrm(sessao);
   }
   const alta = epochDe(valorDoCampo(c, 'Data de alta'));
-  if (alta) a.data_alta = dataDoCrm(alta);
+  if (alta) a.data_alta = diaDoCampo(c, 'Data de alta', alta);
   const retorno = epochDe(valorDoCampo(c, 'Data de retorno com exames'));
-  if (retorno) a.data_retorno = dataDoCrm(retorno);
+  if (retorno) a.data_retorno = diaDoCampo(c, 'Data de retorno com exames', retorno);
   const compareceu = txt(valorDoCampo(c, 'Compareceu à última sessão marcada'));
   if (compareceu) a.compareceu_ultima_sessao = ehSim(compareceu) ? 'Sim' : 'Não';
   const google = valorDoCampo(c, 'Deixou avaliação (Google)');
@@ -432,7 +449,10 @@ const CAMPOS_DA_NOTA: ReadonlyArray<readonly [string, string]> = [
 function formatar(f: { tipo: string; valor: unknown }): string {
   if (f.tipo === 'date' || f.tipo === 'date_time') {
     const e = epochDe(f.valor);
-    return e ? (f.tipo === 'date_time' ? `${dataBr(e)} ${horaDoCrm(e)}` : dataBr(e)) : txt(f.valor);
+    if (!e) return txt(f.valor);
+    if (f.tipo === 'date_time') return `${dataBr(e)} ${horaDoCrm(e)}`;
+    const [a, m, d] = dataSoDoCrm(e).split('-');
+    return `${d}/${m}/${a}`;
   }
   if (f.tipo === 'monetary') {
     const n = dinheiro(f.valor);
@@ -501,7 +521,8 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
     const corpo = String(m.text ?? '').replace(/\u0000/g, '').trim();
     const texto = cortar([corpo, anexo].filter(Boolean).join('\n'), 20_000);
     if (!texto) continue;
-    todas.push({ id, em: m.created_at, entrada: m.author?.type === 'external', texto });
+    // o MESMO critério do normalizador do repositório (`classificarAutor`, kommo-talks-normalizar.ts): `type: incoming` OU autor externo = paciente
+    todas.push({ id, em: m.created_at, entrada: m.type === 'incoming' || (m.author?.type ?? '').toLowerCase() === 'external', texto });
   }
   return { mensagens: todas.slice(-teto), total: todas.length };
 }

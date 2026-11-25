@@ -12,6 +12,7 @@
 import { closeSync, openSync, writeSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
+import { ehArquivo } from '../lib/chatwoot-regua.js';
 import { exportar, inicioDosFechados, type Ambiente, type PortaKommo } from '../lib/kommo-historico-leitura.js';
 
 const arg = (nome: string): string | undefined => process.argv.find((a) => a.startsWith(`--${nome}=`))?.slice(nome.length + 3);
@@ -34,14 +35,19 @@ async function main(): Promise<void> {
   const amb: Ambiente = { porta: kommo as unknown as PortaKommo, pausa: (ms) => new Promise((r) => setTimeout(r, ms)), agora: () => new Date(), log };
 
   log(`${SECO ? 'CONFERÊNCIA EM SECO (nada é escrito)' : 'EXPORTANDO'} — unidade ${slug}${limite ? `, limite ${limite} cartões` : ''}; fechados desde ${new Date(inicioDosFechados(new Date()) * 1000).toISOString().slice(0, 10)}`);
+  // a conta do Chatwoot desta unidade (unit_chatwoot): vai no cabeçalho e o importador RECUSA gravar em outra (nunca a 1, a de Parauapebas)
+  const cfg = await prisma.unitChatwoot.findUnique({ where: { unitId: unit.id } });
+  const contaId = cfg?.contaId ?? null;
+  if (!contaId || contaId <= 1) throw new ErroDeUso('a unidade não tem conta própria do Chatwoot em unit_chatwoot (conta_id vazio ou 1): não exporto');
   const fd = saida ? openSync(saida, 'w', 0o600) : null;
   try {
-    if (fd !== null) writeSync(fd, `${JSON.stringify({ tipo: 'cabecalho', v: 1, unidade: slug, gerado_em: Math.floor(Date.now() / 1000), fechados_desde: inicioDosFechados(new Date()) })}\n`);
-    const r = await exportar(amb, { gravar: !SECO, ...(limite ? { limite } : {}), entregar: (l) => { if (fd !== null) writeSync(fd, `${JSON.stringify(l)}\n`); } });
-    log(`RESUMO cartões=${r.cartoes} abertos=${r.abertos} fechados_6m=${r.fechados} fechados_fora_da_janela=${r.fechadosForaDaJanela}`);
+    if (fd !== null) writeSync(fd, `${JSON.stringify({ tipo: 'cabecalho', v: 1, unidade: slug, conta_id: contaId, gerado_em: Math.floor(Date.now() / 1000), fechados_desde: inicioDosFechados(new Date()) })}\n`);
+    const r = await exportar(amb, { gravar: !SECO, arquivo: ehArquivo, ...(limite ? { limite } : {}), entregar: (l) => { if (fd !== null) writeSync(fd, `${JSON.stringify(l)}\n`); } });
+    log(`RESUMO cartões=${r.cartoes} abertos=${r.abertos} fechados_6m=${r.fechados} fechados_fora_da_janela=${r.fechadosForaDaJanela} cartoes_lidos_na_conta=${r.lidosNaConta}`);
     for (const [etapa, n] of Object.entries(r.porEtapa).sort()) log(`ETAPA ${etapa} = ${n}`);
     log(`TELEFONE sem=${r.semTelefone} invalido=${r.telefoneInvalido} sem_contato=${r.semContato} distintos=${r.telefonesDistintos} repetidos_em_mais_de_um_cartao=${r.telefonesRepetidos}`);
     log(`CONVERSA ${SECO ? `amostra=${r.amostra}` : `lidas=${r.amostra}`} sem_conversa=${r.semConversa} falhas_de_leitura=${r.falhasDeLeitura} com_mensagem=${r.cartoesComMensagem} mensagens=${r.mensagens}${SECO ? ` estimativa_total=${r.mensagensEstimadas}` : ''} segundos_por_cartao=${r.segundosPorCartao}`);
+    log(`VIVAS_DEPOIS_DE_IMPORTAR = ${r.ficariamVivas} (conversas que a régua/CAPI/telas NÃO tratariam como arquivo; meta 0)`);
     if (SECO) log(`DURACAO estimada da exportação = ${r.duracaoEstimadaMin} min`);
     for (const [a, n] of Object.entries(r.avisos).sort()) log(`AVISO ${a} = ${n}`);
     if (!SECO) log(`ARQUIVO linhas=${r.linhasGravadas}`);

@@ -9,10 +9,14 @@
 set -uo pipefail
 LOG="$1"; MODO="$2"; shift 2
 [[ "$LOG" =~ ^/root/kit/logs/[A-Za-z0-9._-]+$ ]] || { echo "log inválido"; exit 2; }
-[[ "$MODO" =~ ^(conferir|gravar|desfazer)$ ]] || { echo "modo inválido"; exit 2; }
-for v in "$@"; do [[ "$v" =~ ^[A-Z_]+=[A-Za-z0-9._,/-]*$ ]] || { echo "variável inválida"; exit 2; }; export "$v"; done
+# daqui para baixo, TODA recusa vai para o log (o chamador joga a saída padrão fora): sem isso a pessoa só veria «terminou sem escrever o fim»
+recusa() { echo "LOG RECUSADO: $1" > "$LOG"; echo "LOG FIM do processo (código 2)" >> "$LOG"; exit 2; }
+[[ "$MODO" =~ ^(conferir|gravar|desfazer)$ ]] || recusa "modo inválido"
+for v in "$@"; do [[ "$v" =~ ^[A-Z_]+=[A-Za-z0-9._,/-]*$ ]] || recusa "variável inválida"; export "$v"; done
+[ "$MODO" = gravar ] && [ "${COMPLETO:-0}" = 1 ] && recusa "COMPLETO só vale com o modo conferir (sozinho gravaria)"
 UNIDADE="${UNIDADE:-doutor-hernia-timbo}"; CONTA="${CONTA:-3}"
-[[ "$UNIDADE" =~ ^[a-z0-9-]{3,50}$ && "$CONTA" =~ ^[0-9]+$ && "${CAIXA:-0}" =~ ^[0-9]+$ && "${LIMITE:-1}" =~ ^[1-9][0-9]*$ ]] || { echo "parâmetro inválido"; exit 2; }
+[[ "$UNIDADE" =~ ^[a-z0-9-]{3,50}$ && "$CONTA" =~ ^[0-9]+$ && "${CAIXA:-0}" =~ ^[0-9]+$ && "${LIMITE:-1}" =~ ^[1-9][0-9]*$ ]] || recusa "parâmetro inválido"
+[ "$CONTA" -gt 1 ] || recusa "a conta 1 (Parauapebas) é recusada sempre"
 DIR=/root/kit/crm-historico-kommo
 exec 9>/var/lock/crm-historico-kommo.lock
 fim() { echo "LOG FIM do processo (código ${1:-0})" >> "$LOG"; }

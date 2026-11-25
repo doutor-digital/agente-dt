@@ -277,6 +277,34 @@ test('conversa que a Kommo não entregou (null) NÃO vira «nenhuma mensagem»: 
   assert.ok(vazia.nota.includes('nenhuma mensagem na Kommo'));
 });
 
+test('direção da mensagem: type=incoming OU autor externo = paciente (o critério do normalizador do repositório); o resto é a clínica', () => {
+  const m = (id: string, type: string | undefined, autor: string | undefined) => ({ id, type, text: id, created_at: Number(id.slice(1)), author: autor ? { type: autor } : null });
+  const r = mensagensParaCrm([m('m1', 'incoming', undefined), m('m2', 'outgoing', 'external'), m('m3', undefined, 'external'), m('m4', 'outgoing', 'internal'), m('m5', 'outgoing', 'bot'), m('m6', 'incoming', 'internal')]);
+  assert.deepEqual(r.mensagens.map((x) => [x.id, x.entrada]), [['m1', true], ['m2', true], ['m3', true], ['m4', false], ['m5', false], ['m6', true]]);
+});
+
+test('campo de DATA sem hora: o dia UTC do valor (03:00 UTC e 00:00 UTC dão o MESMO dia); campo COM hora: o dia em Belém', () => {
+  const tres = Math.floor(Date.parse('2026-12-01T03:00:00Z') / 1000); // 00:00 em UTC−3
+  const zero = Math.floor(Date.parse('2026-12-01T00:00:00Z') / 1000); // 00:00 UTC: o −3 h jogaria para a véspera
+  for (const v of [tres, zero]) {
+    const m = atributosDoCartao(cartao({ campos: [campo('◷ Retomar em', v, 'date'), campo('◷ Data de alta', v, 'date'), campo('◷ Data de retorno com exames', v, 'date')] }));
+    assert.equal(m.atributos.retomar_em, '2026-12-01', String(v));
+    assert.equal(m.atributos.data_alta, '2026-12-01');
+    assert.equal(m.atributos.data_retorno, '2026-12-01');
+  }
+  const comHora = atributosDoCartao(cartao({ campos: [campo('◷ Data da Consulta', zero, 'date_time')] }));
+  assert.equal(comHora.atributos.data_consulta, '2026-11-30', 'com hora, 00:00 UTC é 21:00 de Belém do dia anterior');
+});
+
+test('etapa de ENTRADA reconhecida pelo TIPO (1), com qualquer nome; valor em reais no formato pt-BR', () => {
+  assert.equal(traduzirEtapa(cartao({ etapa: 'Leads de entrada', statusTipo: 1 })).etapa, 'Novo lead');
+  assert.equal(traduzirEtapa(cartao({ funil: 'TRATAMENTO', etapa: 'Entrada nova', statusTipo: 1 })).etapaTratamento, 'Entrada');
+  for (const [bruto, esperado] of [['1.500,00', 1500], ['1500.50', 1500.5], ['250', 250], ['1.234.567,89', 1234567.89], ['R$ ?', undefined]] as const) {
+    const m = atributosDoCartao(cartao({ etapa: 'GANHO / CONCLUÍDO', statusId: 142, fechadoEm: 1_790_050_000, campos: [campo('Valor do tratamento', bruto, 'monetary')] }));
+    assert.equal(m.atributos.valor_fechado, esperado, bruto);
+  }
+});
+
 test('a linha é JSON puro (vai para o arquivo) e não traz URL nem token', () => {
   const l = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [{ id: 'm', created_at: 1, text: 'oi', author: { type: 'external' }, attachment: { type: 'voice' } }], AGORA);
   const j = JSON.stringify(l);

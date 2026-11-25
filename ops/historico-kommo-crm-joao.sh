@@ -48,6 +48,18 @@ for a in "$@"; do
   esac
 done
 
+# combinações inválidas são RECUSADAS (uma opção que «não se aplica» não pode virar outra coisa em silêncio: --completo sozinho gravaria)
+if [ -n "$ACOMPANHAR" ]; then
+  [ "$SECO$COMPLETO$CONFIRMO" = 000 ] && [ -z "$LIMITE$CAIXA$DESFAZER" ] || { echo "RECUSO: --acompanhar não combina com outras opções (só olha um log que já existe)"; exit 2; }
+fi
+[ "$COMPLETO" = 1 ] && [ "$SECO" != 1 ] && { echo "RECUSO: --completo só vale junto de --so-conferir (sozinho GRAVARIA o lote inteiro). Para gravar, rode sem --completo."; exit 2; }
+[ "$CONFIRMO" = 1 ] && [ -z "$DESFAZER" ] && { echo "RECUSO: --confirmo-apagar só vale junto de --desfazer=<log>."; exit 2; }
+if [ -n "$DESFAZER" ]; then
+  [ "$SECO" = 1 ] && { echo "RECUSO: --desfazer já é só-mostrar sem --confirmo-apagar; não combina com --so-conferir."; exit 2; }
+  [ "$COMPLETO" = 1 ] && { echo "RECUSO: --desfazer não combina com --completo."; exit 2; }
+  [ -n "$LIMITE" ] && { echo "RECUSO: --desfazer desfaz a rodada INTEIRA do log; não combina com --limite."; exit 2; }
+fi
+
 SSH=(ssh -i "$CHAVE" -o ConnectTimeout=15 -o ServerAliveInterval=20 "$VPS")
 
 acompanhar() { # $1 = nome do log na VPS
@@ -68,9 +80,23 @@ acompanhar() { # $1 = nome do log na VPS
     sleep 10
   done
   echo "REGISTRO (ids, para desfazer) no log da VPS: /root/kit/logs/$1"
+  # o código de saída do script é o do processo na VPS (0 = deu certo): quem encadeia comandos não pode achar que sucesso foi falha, nem o contrário
+  [ "$mortos" -ge 3 ] && return 3
+  local cod
+  cod="$(grep -oE 'LOG FIM do processo \(código [0-9]+\)' "$tmp" | tail -1 | grep -oE '[0-9]+' || true)"
+  return "${cod:-0}"
 }
 
-if [ -n "$ACOMPANHAR" ]; then acompanhar "$ACOMPANHAR"; exit 0; fi
+if [ -n "$ACOMPANHAR" ]; then acompanhar "$ACOMPANHAR"; exit $?; fi
+
+# o exportador faz ~1.300 chamadas à Kommo em ~25 min, no MESMO token do atendimento ao vivo (a Sofia e a equipe): rode FORA do expediente
+if [ -z "$DESFAZER" ]; then
+  H="$(date +%H)"
+  if [ "$H" -ge 7 ] && [ "$H" -lt 19 ]; then
+    echo "ATENÇÃO: são ${H}h. O exportador usa o mesmo token da Kommo do atendimento ao vivo (cerca de 1.300 chamadas em ~25 min): prefira rodar à NOITE ou de madrugada."
+    if [ -t 0 ]; then read -r -p "Continuar mesmo assim? [s/N] " R; [[ "$R" =~ ^[sS]$ ]] || { echo "ok, não rodei."; exit 0; }; fi
+  fi
+fi
 
 # 1) leva o código para a VPS
 tar czf - -C "$PASTA" kommo_historico.rb importar-kommo-historico.rb rodar-na-vps.sh \
@@ -96,3 +122,4 @@ fi
 "${SSH[@]}" "setsid nohup /root/kit/crm-historico-kommo/rodar-na-vps.sh /root/kit/logs/$LOGNOME $MODO $VARS > /dev/null 2>&1 < /dev/null &"
 sleep 3
 acompanhar "$LOGNOME"
+exit $?

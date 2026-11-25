@@ -644,6 +644,19 @@ test('ehArquivo: histórico importado do Instagram/Messenger (meta_conversation_
   assert.equal(ehArquivo({ labels: ['historico'], status: 'open', last_activity_at: antes, additional_attributes: meta }), true, 'reaberta mas parada antes do corte: a regra antiga continua dizendo arquivo');
 });
 
+test('ehArquivo: histórico importado da KOMMO (kommo_lead_id) RESOLVIDO é SEMPRE arquivo — mesmo com atividade recente e consulta de pé; reaberto não', () => {
+  const depois = Math.floor(Date.parse('2026-11-25T12:00:00Z') / 1000);
+  const kommo = { kommo_lead_id: 123456 };
+  const agendado = { data_consulta: '2099-01-10', situacao_consulta: 'Agendado', etapa: 'Agendado' };
+  assert.equal(ehArquivo({ labels: ['historico'], status: 'resolved', last_activity_at: depois, additional_attributes: kommo, custom_attributes: agendado }), true, 'consulta de pé e atividade recente: continua arquivo');
+  assert.equal(ehArquivo({ labels: ['historico'], status: 'resolved', last_activity_at: depois, additional_attributes: { kommo_lead_id: '123' } }), true, 'id como texto também');
+  assert.equal(arquivoComEtapa({ labels: ['historico'], status: 'resolved', last_activity_at: depois, additional_attributes: kommo, custom_attributes: { etapa: 'Agendado' } }), true);
+  for (const status of ['open', 'pending', 'snoozed']) assert.equal(ehArquivo({ labels: ['historico'], status, last_activity_at: depois, additional_attributes: kommo, custom_attributes: agendado }), false, `reaberta (${status}): viva`);
+  assert.equal(ehArquivo({ labels: ['outra'], status: 'resolved', last_activity_at: depois, additional_attributes: kommo }), false, 'sem a etiqueta volta a ser conversa normal');
+  assert.equal(ehArquivo({ labels: ['historico'], status: 'resolved', last_activity_at: depois, additional_attributes: { kommo_lead_id: '' } }), false);
+  assert.equal(ehArquivo({ labels: ['historico'], status: 'resolved', last_activity_at: depois, additional_attributes: { kommo_lead_id: null } }), false);
+});
+
 // ── arquivo com consulta de pé é paciente vivo ──
 
 test('ehArquivo: historico parado com consulta de hoje em diante OU dos últimos 35 dias (situação viva) não é arquivo; Desmarcado, vazio e consulta mais velha são', () => {
