@@ -281,6 +281,7 @@ test('papéis novos nas regras: a agenda move para «Faltou» SÓ na conta que t
   const marcada = { data_consulta: '2026-12-02', hora_consulta: '09:00', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação' } as const;
   assert.equal(etapaDaConsulta({ etapa: 'Faltou' }, marcada, hoje).etapa, 'Agendado');
   assert.equal(etapaDaConsulta({ etapa: 'Em espera' }, marcada, hoje).etapa, 'Agendado');
-  for (const p of ['Faltou', 'Conferir na franquia', 'Retorno pós-tratamento']) assert.ok(ETAPAS_PROTEGIDAS.has(p), p);
+  assert.equal(etapaDaConsulta({ etapa: 'Conferir na franquia' }, marcada, hoje).etapa, 'Agendado');
+  for (const p of ['Agendado', 'Em espera', 'Faltou', 'Conferir na franquia', 'Retorno pós-tratamento']) assert.ok(ETAPAS_PROTEGIDAS.has(p), p);
   assert.deepEqual(eventosAlcancados({ etapa: 'Faltou' }), ['AddToCart'], 'quem faltou já tinha agendado');
 });

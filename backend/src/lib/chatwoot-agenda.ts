@@ -77,7 +77,7 @@ export function desejadoDe(s: SpineSchedule): Desejado | null {
 }
 
 /** Etapas em que a conversa ainda não é «paciente marcado»: com consulta de pé na agenda, a etapa passa a Agendado/Confirmado (como a sincronização franquia → Kommo move para AGENDADO). */
-const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate', 'Em espera', 'Faltou']);
+const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate', 'Em espera', 'Conferir na franquia', 'Faltou']);
 /** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
 const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
 /** Só estas duas (igual a `agendamentoQueVale`): Remarcado é horário que NÃO vale mais, a data nova pode estar fora da janela lida. */
