@@ -38,11 +38,11 @@ const DOMINIO_CONTA_JS = String.raw`(function(){
   function destino(){
     var p = String(location.pathname || ''), m = p.match(/^(.*?\/accounts\/)(\d+)(\/.*)?$/);
     var base = m ? m[1] : '/app/accounts/', resto = m && m[3] ? m[3] : '/dashboard', busca = String(location.search || '');
-    if (/\/\d/.test(resto)) { resto = '/dashboard'; busca = ''; }
+    if (/\/\d+(\/|$)/.test(resto)) { resto = '/dashboard'; busca = ''; }
     return base + X + resto + busca + String(location.hash || '');
   }
 
-  var perfil = null, pedindoPerfil = null;
+  var perfil = null, pedindoPerfil = null, semAcesso = false;
   // as contas DA PESSOA (id → nome), do perfil da própria sessão; sem sessão, sem rede ou resposta estranha = null (nada acontece)
   function contasDaPessoa(){
     if (perfil) return Promise.resolve(perfil);
@@ -99,9 +99,11 @@ const DOMINIO_CONTA_JS = String.raw`(function(){
     if (Y === X) { var e1 = est || {}; e1.conta = X; gravar(e1); sumirFaixa(); return; }
     // Y ≠ X
     var antes = est && est.conta !== undefined ? est.conta : undefined; // undefined = 1º carregamento da aba; null = estava fora de conta
-    var ehChegada = chegada && (antes === undefined || antes === null);
+    // chegada = o 1º carregamento da aba, OU a 1ª conta vista depois de estar fora de qualquer conta (login: o Chatwoot navega sem recarregar para a última conta usada)
+    var ehChegada = (chegada && antes === undefined) || antes === null;
     var jaRedirecionou = est && est.redirecionouEm && (Date.now() - est.redirecionouEm) < JANELA_MS;
     contasDaPessoa().then(function(nomes){
+      if (nomes && !(X in nomes)) semAcesso = true; // não tem a conta da clínica (uma conta só, ou outra): nada mais a fazer nesta aba
       if (!nomes || !(X in nomes) || contaDaUrl() !== Y) return; // sem perfil, sem a conta X, ou já mudou de conta enquanto a resposta vinha: nada
       var e = lerEstado() || {};
       if (ehChegada && !jaRedirecionou) { e.conta = X; e.redirecionouEm = Date.now(); gravar(e); location.replace(destino()); return; }
@@ -112,7 +114,7 @@ const DOMINIO_CONTA_JS = String.raw`(function(){
   avaliar(true);
   // a troca de conta pelo seletor é navegação SEM recarregar: acompanha o endereço (history + popstate) e, de reserva, confere a cada 1,5 s (só compara texto)
   var ultimo = String(location.pathname);
-  function mudou(){ var p = String(location.pathname); if (p === ultimo) return; ultimo = p; avaliar(false); }
+  function mudou(){ if (semAcesso) return; var p = String(location.pathname); if (p === ultimo) return; ultimo = p; avaliar(false); }
   ['pushState', 'replaceState'].forEach(function(k){ var o = history[k]; if (typeof o !== 'function') return; history[k] = function(){ var r = o.apply(this, arguments); setTimeout(mudou, 0); return r; }; });
   window.addEventListener('popstate', mudou);
   setInterval(mudou, 1500);

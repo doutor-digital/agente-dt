@@ -307,6 +307,7 @@ export function aplicarDominios(linhas: ReadonlyArray<{ subdominio?: string | nu
  */
 export function dominiosDasClinicas(contaDoAmbiente: number | null): Record<string, number> {
   const contas = new Map<string, Set<number>>();
+  // `comAmbiente`: só a configuração VÁLIDA usa «conta nula = a do ambiente» (é a regra da semente de Parauapebas); linha crua sem conta própria fica de fora
   const pôr = (sub: string | null | undefined, conta: number | null | undefined, comAmbiente: boolean): void => {
     if (!subdominioValido(sub)) return;
     const c = conta ?? (comAmbiente ? contaDoAmbiente : null);
@@ -314,14 +315,10 @@ export function dominiosDasClinicas(contaDoAmbiente: number | null): Record<stri
     contas.set(sub, (contas.get(sub) ?? new Set<number>()).add(c));
   };
   for (const c of dominiosDasLinhas) pôr(c.subdominio, c.contaId, false);
+  for (const c of configs.values()) pôr(c.subdominio, c.contaId, true);
   const m: Record<string, number> = {};
+  // o mesmo subdomínio com contas diferentes (linhas ou configurações) é ambíguo: fica de fora, nunca decide pela ordem
   for (const [sub, set] of contas) if (set.size === 1) m[sub] = [...set][0]!;
-  // a configuração válida manda sobre a linha crua (e é a única com «conta nula = a do ambiente»)
-  for (const c of configs.values()) {
-    if (!subdominioValido(c.subdominio)) continue;
-    const conta = c.contaId ?? contaDoAmbiente;
-    if (typeof conta === 'number' && Number.isInteger(conta) && conta > 0) m[c.subdominio] = conta;
-  }
   return m;
 }
 

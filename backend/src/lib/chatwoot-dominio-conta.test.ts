@@ -200,6 +200,38 @@ test('chegada de uma aba que estava FORA de qualquer conta (login, perfil): a pr
   assert.deepEqual(b.trocas, ['replace /app/accounts/3/dashboard']);
 });
 
+test('LOGIN: aba fora de conta e o Chatwoot navega (sem recarregar) para outra conta → conta como CHEGADA e redireciona', async () => {
+  const a = montar({ host: 'drtimbo.doutordigitalconsultoria.com', caminho: '/app/login', contas: TODAS });
+  await a.soltar();
+  assert.equal(a.estado().conta, null);
+  a.hist.pushState(null, '', '/app/accounts/1/dashboard');
+  a.relogio();
+  await a.soltar();
+  assert.deepEqual(a.trocas, ['replace /app/accounts/3/dashboard'], 'a última conta usada não prende a pessoa fora da clínica');
+  assert.equal(a.faixa(), null);
+});
+
+test('quem NÃO tem a conta da clínica: depois da 1ª resposta do perfil o bloco para de vigiar (sem pedir o perfil a cada rota)', async () => {
+  const a = montar({ host: 'drtimbo.doutordigitalconsultoria.com', caminho: '/app/accounts/1/dashboard', contas: [{ id: 1, name: 'P' }] });
+  await a.soltar();
+  a.hist.pushState(null, '', '/app/accounts/1/contacts');
+  a.relogio();
+  a.hist.pushState(null, '', '/app/accounts/1/reports');
+  a.relogio();
+  await a.soltar();
+  assert.equal(a.pedidos(), 1, 'um pedido só');
+  assert.deepEqual(a.trocas, []);
+});
+
+test('rota com número de recurso: só segmento numérico INTEIRO vira painel (reports/overview e settings ficam)', async () => {
+  const a = montar({ host: 'drtimbo.doutordigitalconsultoria.com', caminho: '/app/accounts/1/reports/overview', busca: '?since=1', contas: TODAS });
+  await a.soltar();
+  assert.deepEqual(a.trocas, ['replace /app/accounts/3/reports/overview?since=1']);
+  const b = montar({ host: 'drtimbo.doutordigitalconsultoria.com', caminho: '/app/accounts/1/settings/inboxes/12', contas: TODAS });
+  await b.soltar();
+  assert.deepEqual(b.trocas, ['replace /app/accounts/3/dashboard'], 'o 12 é caixa da conta 1');
+});
+
 test('fechar a faixa a dispensa para aquela conta, mesmo recarregando', async () => {
   const a = montar({ host: 'drtimbo.doutordigitalconsultoria.com', caminho: '/app/accounts/1/dashboard', contas: TODAS, estado: { conta: 1 } });
   await a.soltar();
@@ -231,8 +263,14 @@ test('o mapa do SERVIDOR: Parauapebas = conta do ambiente; Timbó (conta 3, SEM 
     { subdominio: 'repetido', contaId: 6 },
     { subdominio: 'Invalido', contaId: 7 },
   ]);
+  assert.ok(!('repetido' in U.dominiosDasClinicas(1)), 'ambíguo');
   try {
     assert.deepEqual(U.dominiosDasClinicas(1), { drherniaparauapebas: 1, drtimbo: 3, demo: 2 });
+    // duas CONFIGURAÇÕES válidas com o mesmo subdomínio e contas diferentes: nenhuma ganha pela ordem
+    const base = { prefixoModelos: 'x_', usuarioCelularId: null, gerenteId: null, metaAgendamentosDia: null, kapsoPhoneNumberId: null, wabaId: null, envSufixo: 'X', dadosModelos: { nome: 'n', cidade: 'c', endereco: 'e', mapa: 'https://m.example/x' } };
+    U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS, { ...base, slug: 'doutor-hernia-aa', contaId: 5, subdominio: 'igual', caixas: [{ id: 91, tipo: 'cloud' }] } as never, { ...base, slug: 'doutor-hernia-bb', contaId: 7, subdominio: 'igual', prefixoModelos: 'y_', caixas: [{ id: 92, tipo: 'cloud' }] } as never]);
+    assert.ok(!('igual' in U.dominiosDasClinicas(1)), 'duas configurações, mesmo subdomínio, contas diferentes: ambíguo');
+    U.aplicarConfigs([U.SEMENTE_PARAUAPEBAS]);
     assert.deepEqual(U.dominiosDasClinicas(null), { drtimbo: 3, demo: 2 }, 'sem conta do ambiente, Parauapebas não entra');
   } finally {
     U.aplicarDominios([]);
