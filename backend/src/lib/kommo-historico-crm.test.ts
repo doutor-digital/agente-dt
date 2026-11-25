@@ -329,14 +329,14 @@ test('AGENDADO com data de consulta e «Situação da consulta» em branco: a si
 const BELEM_AMANHA = Math.floor(Date.parse('2026-11-26T13:00:00Z') / 1000); // 26/11 10:00 em Belém
 const camposDaConsulta = (epoch: number, situacao?: string) => [campo('◷ Data da Consulta', epoch, 'date_time'), ...(situacao ? [campo('✓ Situação da consulta', situacao, 'select')] : [])];
 
-test('NÃO COMPARECEU com consulta de HOJE em diante nasce «Remarcado» (de pé); com consulta passada continua «Não compareceu»; fechado não muda', () => {
+test('NÃO COMPARECEU com consulta DEPOIS DE HOJE nasce «Remarcado» (de pé); com consulta passada continua «Não compareceu»; fechado não muda', () => {
   const futuro = atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(BELEM_AMANHA) }), AGORA);
   assert.equal(futuro.atributos.etapa, 'Agendado');
   assert.equal(futuro.atributos.situacao_consulta, 'Remarcado');
   assert.ok(futuro.avisos.includes('nao-compareceu-com-consulta-futura'));
   assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Não compareceu') }), AGORA).atributos.situacao_consulta, 'Remarcado', 'a situação do campo também');
-  const hoje = Math.floor(Date.parse('2026-11-25T20:00:00Z') / 1000); // 25/11 17:00 Belém: hoje
-  assert.equal(atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(hoje) }), AGORA).atributos.situacao_consulta, 'Remarcado', 'consulta de hoje conta');
+  const hoje = Math.floor(Date.parse('2026-11-25T20:00:00Z') / 1000); // 25/11 17:00 Belém: HOJE
+  assert.equal(atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(hoje) }), AGORA).atributos.situacao_consulta, 'Não compareceu', 'consulta de HOJE: quem faltou hoje faltou (não vira Remarcado)');
   const ontem = Math.floor(Date.parse('2026-11-24T13:00:00Z') / 1000);
   assert.equal(atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(ontem) }), AGORA).atributos.situacao_consulta, 'Não compareceu', 'faltou de verdade: a régua manda o «você faltou»');
   assert.equal(atributosDoCartao(cartao({ etapa: 'PERDIDO', statusId: 143, fechadoEm: 1_790_000_000, campos: camposDaConsulta(BELEM_AMANHA, 'Não compareceu') }), AGORA).atributos.situacao_consulta, 'Não compareceu', 'cartão fechado fica como está');

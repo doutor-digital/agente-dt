@@ -364,9 +364,9 @@ export function atributosDoCartao(c: CartaoDaKommo, agora: Date = new Date()): M
   // cartão na etapa AGENDADO (ou Confirmado) com data de consulta e o campo «Situação» em branco: a situação é a da etapa — sem ela a régua não manda véspera/dia
   // (SITUACOES_DE_PE) e a conversa importada nasceria como arquivo, sem lembrete
   else if (consulta && (t.etapa === 'Agendado' || t.etapa === 'Confirmado') && t.funil === 'Comercial') a.situacao_consulta = t.etapa;
-  // NÃO COMPARECEU com consulta de HOJE EM DIANTE (a Kommo move o cartão para a etapa e remarca a data): o paciente vai à consulta nova — a situação nasce «Remarcado»
+  // NÃO COMPARECEU com consulta DEPOIS DE HOJE (a Kommo move o cartão para a etapa e remarca a data): o paciente vai à consulta nova — a situação nasce «Remarcado»
   // (de pé: a régua manda véspera/dia/preparo). Com «Não compareceu» a régua mandaria o «você faltou» (falta-48h) 2 dias DEPOIS de uma consulta que ainda não houve.
-  if (a.situacao_consulta === 'Não compareceu' && typeof a.data_consulta === 'string' && a.data_consulta >= hojeEmBelem(agora) && c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO) {
+  if (a.situacao_consulta === 'Não compareceu' && typeof a.data_consulta === 'string' && a.data_consulta > hojeEmBelem(agora) && c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO) {
     a.situacao_consulta = 'Remarcado';
     avisos.push('nao-compareceu-com-consulta-futura');
   }
