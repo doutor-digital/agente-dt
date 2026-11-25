@@ -353,6 +353,26 @@ export async function passoMensagensProntas(q: Questionario, e: EstadoDaExecucao
 
 // ── 3. caixa, time, atendentes ───────────────────────────────────────────────────────────────────────
 
+/**
+ * A trava de conversa única da caixa de WhatsApp CLOUD de REFERÊNCIA (a de Parauapebas tem `lock_to_single_conversation` ligado). A caixa nova nasce com o
+ * MESMO valor: sem a trava, a próxima mensagem do paciente abre uma conversa nova, e o histórico importado (Kommo) e a etapa dele ficam para trás.
+ * Só a caixa Cloud da referência decide (a do Lite/Evolution tem outra regra). Sem referência, sem caixa Cloud nela, ou com a leitura da referência
+ * falhando (a trava é «enfeite» do molde: não pode parar a criação da caixa), vale LIGADA (o padrão do molde) — e o `aviso` diz por quê.
+ */
+export async function travaDaReferencia(x: PortasExternas): Promise<{ trava: boolean; aviso: string | null }> {
+  if (!x.referencia) return { trava: true, aviso: 'sem conta de referência: trava ligada (padrão)' };
+  try {
+    const candidatas = listaDaResposta(await x.referencia.get('inboxes')).filter((i) => String(i.channel_type) === 'Channel::Whatsapp');
+    for (const c of candidatas) {
+      const det = (await x.referencia.get(`inboxes/${c.id}`)) as { provider?: unknown; lock_to_single_conversation?: unknown } | null;
+      if (String(det?.provider) === 'whatsapp_cloud' && typeof det?.lock_to_single_conversation === 'boolean') return { trava: det.lock_to_single_conversation, aviso: null };
+    }
+    return { trava: true, aviso: 'a referência não tem caixa de WhatsApp Cloud: trava ligada (padrão)' };
+  } catch {
+    return { trava: true, aviso: 'não consegui ler a caixa da referência: trava ligada (padrão)' };
+  }
+}
+
 export async function passoCaixa(q: Questionario, x: PortasExternas, e: EstadoDaExecucao): Promise<string[]> {
   const conta = daConta(e);
   const nome = q.chatwoot.caixa_nome;
@@ -367,12 +387,14 @@ export async function passoCaixa(q: Questionario, x: PortasExternas, e: EstadoDa
     return [`caixa ${nova.id} criada como canal API (demonstração: não há número de WhatsApp nem Kapso)`];
   }
   const chave = precisa(await x.segredos.ler('KAPSO_API_KEY'), 'falta KAPSO_API_KEY (a chave do Kapso) no cofre/ambiente: a caixa de WhatsApp Cloud usa o Kapso');
+  const { trava, aviso } = await travaDaReferencia(x);
   const nova = (await postar(e, conta, 'inboxes', {
     name: nome,
+    lock_to_single_conversation: trava,
     channel: { type: 'whatsapp', phone_number: q.whatsapp.numero_oficial, provider: 'whatsapp_cloud', provider_config: { api_key: chave, phone_number_id: q.whatsapp.kapso_phone_number_id, business_account_id: q.whatsapp.waba_id } },
   })) as { id?: number };
   e.caixaId = Number(nova.id);
-  return [`caixa ${nova.id} criada (WhatsApp Cloud pelo Kapso; chave não impressa)`];
+  return [`caixa ${nova.id} criada (WhatsApp Cloud pelo Kapso; chave não impressa; trava de conversa única ${trava ? 'LIGADA' : 'desligada'}${aviso ? ` — ${aviso}` : ', como a caixa de referência'})`];
 }
 
 export async function passoTime(q: Questionario, e: EstadoDaExecucao): Promise<string[]> {
