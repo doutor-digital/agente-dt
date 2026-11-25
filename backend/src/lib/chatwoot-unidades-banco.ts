@@ -5,7 +5,7 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { aplicarConfigs, aplicarDominios, configDaLinha, problemasDaConfig, mesclarComSemente, type LinhaDoBanco } from './chatwoot-unidades.js';
+import { aplicarConfigs, aplicarDominios, configDaLinha, linhasInertasSemConflito, mesclarComSemente, type LinhaDoBanco } from './chatwoot-unidades.js';
 
 const avisados = new Set<string>();
 let carregando: Promise<void> | null = null;
@@ -28,9 +28,9 @@ export async function recarregarConfigChatwoot(): Promise<void> {
         logger.warn({ slug }, `chatwoot-unidades: ${msg}`);
       });
       aplicarConfigs(lista);
-      // o ENDEREÇO da linha inerte (sem caixa): entra nas origens aceitas; não torna a config válida
-      // só entra a linha que é válida OU cujo ÚNICO problema é não ter caixa ainda (linha rejeitada por outro motivo — conta ou subdomínio errados — não vira origem confiável)
-      aplicarDominios(linhas.filter((l) => problemasDaConfig(configDaLinha(l)).every((m) => m === 'sem nenhuma caixa')));
+      // o ENDEREÇO da linha inerte (sem caixa) entra nas origens aceitas; não torna a config válida. Só as inertes SEM conflito: a linha que o próprio sistema
+      // descartou acima (prefixo ou caixa repetidos, ou inválida por outro motivo) NÃO vira origem confiável
+      aplicarDominios(linhasInertasSemConflito(linhas, lista));
       ultimoErro = null;
     } catch (err) {
       // uma vez por erro diferente (banco fora do ar ou tabela ainda não migrada não pode virar uma linha de log por minuto)

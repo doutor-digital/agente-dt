@@ -64,3 +64,29 @@ test('o leitor do banco (recarregarConfigChatwoot) registra o endereço da linha
     p.unitChatwoot = antes;
   }
 });
+
+test('linha em CONFLITO (a mesma que o sistema descarta com «configuração ignorada») NÃO vira origem: prefixo de outra unidade ou caixa repetida (sonda do sênior)', async () => {
+  const { recarregarConfigChatwoot } = await import('./chatwoot-unidades-banco.js');
+  const { prisma } = await import('./prisma.js');
+  const p = prisma as unknown as { unitChatwoot: unknown };
+  const antes = p.unitChatwoot;
+  const caixa = [{ caixaId: 9901, tipo: 'cloud', instanciaEvolution: null }];
+  // VÁLIDA sozinha, mas reusa o prefixo de Parauapebas → descartada por conflito
+  const prefixoRepetido = { ...linhaTimbo, unitId: 'u-x', contaId: 7, subdominio: 'drconflito', prefixoModelos: U.SEMENTE_PARAUAPEBAS.prefixoModelos, envSufixo: 'CONFLITO', unit: { slug: 'doutor-hernia-conflito' }, caixas: caixa };
+  // INERTE (sem caixa) mas com o prefixo de Parauapebas → também conflita
+  const inertaComPrefixoRepetido = { ...linhaTimbo, unitId: 'u-y', subdominio: 'drinerteconflito', prefixoModelos: U.SEMENTE_PARAUAPEBAS.prefixoModelos, envSufixo: 'INERTE', unit: { slug: 'doutor-hernia-inerte' } };
+  // caixa repetida de Parauapebas (id 3)
+  const caixaRepetida = { ...linhaTimbo, unitId: 'u-z', contaId: 8, subdominio: 'drcaixarepetida', prefixoModelos: 'zeta_', envSufixo: 'ZETA', unit: { slug: 'doutor-hernia-zeta' }, caixas: [{ caixaId: 3, tipo: 'cloud', instanciaEvolution: null }] };
+  try {
+    p.unitChatwoot = { findMany: async () => [prefixoRepetido, inertaComPrefixoRepetido, caixaRepetida, linhaTimbo] };
+    await recarregarConfigChatwoot();
+    assert.equal(U.configDaUnidade('doutor-hernia-conflito'), undefined, 'descartada');
+    const o = U.origensDasClinicas().join(' ');
+    assert.ok(!o.includes('drconflito'), 'a linha descartada por prefixo repetido não vira origem');
+    assert.ok(!o.includes('drinerteconflito'), 'a inerte com prefixo de outra unidade também não');
+    assert.ok(!o.includes('drcaixarepetida'), 'nem a de caixa repetida');
+    assert.ok(o.includes('drtimbo'), 'a inerte sem conflito (Timbó) continua entrando');
+  } finally {
+    p.unitChatwoot = antes;
+  }
+});
