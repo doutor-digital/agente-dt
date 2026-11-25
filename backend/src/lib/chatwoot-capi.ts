@@ -371,6 +371,8 @@ const REGRA_PARTIDA = 'capi-partida';
 const idDaPartida = (caixa: number) => -caixa;
 const REGRA_CLIQUE = 'capi-clique';
 const chaveDe = (regra: string, chave: string) => `${regra}|${chave}`;
+/** a 1ª vez que o CAPI viu uma conversa importada da Kommo (ver `cicloDoCapi`) */
+const REGRA_VISTA_DA_KOMMO = 'capi-vista-kommo';
 
 /** O clique guardado na linha `capi-clique`; texto vazio ou estragado = sem clique (nunca derruba o ciclo). */
 function cliqueGuardado(texto: string): CliqueDoAnuncio | null {
@@ -429,20 +431,36 @@ export async function cicloDoCapi(deps: DepsDoCapi, caixa: number, slug: string,
     armazem.registrar({ caixa, conversationId, regra, chave, modo: modoDaLinha, texto, criadoEm: agora });
 
   for (const c of conversas) {
-    const eventos = eventosAlcancados(c.attrs);
-    if (!eventos.length) continue;
     const minhas = porConversa.get(c.id) ?? new Map<string, LinhaCapi>();
     porConversa.set(c.id, minhas);
+    // Conversa que veio da KOMMO: o CAPI só a enxerga quando ela deixa de ser arquivo (o paciente voltou, a equipe mexeu, ou nasceu viva por consulta de pé), e o que ela
+    // já mostra NESSA 1ª vista é o estado que veio do cartão importado — conversão antiga, que nunca vai (na Meta não há como desfazer). Marca a 1ª vista (mesmo sem evento
+    // nenhum ainda): só o que a conversa alcançar DEPOIS dela conta. Todo evento alcançado na 1ª vista nasce «inicial».
+    let primeiraVistaDaKommo = false;
+    if (c.daKommo && !minhas.has(chaveDe(REGRA_VISTA_DA_KOMMO, 'v1'))) {
+      try {
+        const marca: LinhaCapi = { conversationId: c.id, regra: REGRA_VISTA_DA_KOMMO, chave: 'v1', modo: 'inicial', texto: '', criadoEm: agora };
+        if (await armazem.registrar({ caixa, ...marca })) {
+          minhas.set(chaveDe(marca.regra, marca.chave), marca);
+          primeiraVistaDaKommo = true;
+        }
+      } catch {
+        resumo.falhas++;
+        continue; // sem a marca não decide nada nesta conversa (tenta no próximo ciclo)
+      }
+    }
+    const eventos = eventosAlcancados(c.attrs);
+    if (!eventos.length) continue;
     try {
       let clique: CliqueDoAnuncio | null | undefined; // undefined = ainda não lido neste ciclo
       for (const evento of eventos) {
         if (minhas.has(chaveDe(`capi:${evento}`, 'v1'))) continue; // já resolvido (enviado, sem clique, expirado…)
 
-        // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado. A etiqueta `historico` faz o que já estava lá ser «inicial» — menos na conversa da Kommo
-        // em que alguém já mexeu (`kommoAcordada`): o que aparece DEPOIS (a equipe marca Agendado) é conversão nova e vale, como em qualquer conversa
+        // 1) a ENTRADA: a 1ª vez que o worker viu a conversa neste estado. A etiqueta `historico` faz o que já estava lá ser «inicial»; na conversa da Kommo quem decide
+        // é a 1ª vista (`primeiraVistaDaKommo`): o que já estava é «inicial», o que aparece DEPOIS (a equipe marca Agendado) é conversão nova e vale
         let visto = minhas.get(chaveDe(`capi-visto:${evento}`, 'v1'));
         if (!visto) {
-          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || (c.etiquetas.includes('historico') && !c.kommoAcordada) ? 'inicial' : 'novo', texto: '', criadoEm: agora };
+          const linha: LinhaCapi = { conversationId: c.id, regra: `capi-visto:${evento}`, chave: 'v1', modo: primeiraVez || primeiraVistaDaKommo || (c.etiquetas.includes('historico') && !c.daKommo) ? 'inicial' : 'novo', texto: '', criadoEm: agora };
           if (!(await armazem.registrar({ caixa, ...linha }))) continue; // outra cópia do servidor acabou de ver
           minhas.set(chaveDe(linha.regra, linha.chave), linha);
           visto = linha;

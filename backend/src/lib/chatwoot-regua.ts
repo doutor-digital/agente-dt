@@ -181,8 +181,8 @@ export interface ConversaRegua {
   ultima: MensagemResumo | null;
   /** telefone do contato (`+55…`), para conferir cartão ativo no Kommo antes de falar com o paciente */
   telefone?: string;
-  /** conversa criada pela importação da Kommo em que alguém já mexeu depois (o paciente voltou, a equipe respondeu ou reabriu): a etiqueta `historico` já não vale como «estado antigo» */
-  kommoAcordada?: boolean;
+  /** conversa criada pela importação da Kommo (`kommo_lead_id` + `kommo_importado_em`): o CAPI marca a 1ª vez que a vê, para o estado que veio da Kommo ser «inicial» */
+  daKommo?: boolean;
 }
 
 /** A 1ª vez que o worker viu a conversa com este valor neste campo. */
@@ -933,6 +933,6 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,
     telefone: str(sender.phone_number),
-    ...(importadaDaKommo(raw) && !intactaDesdeAImportacao(raw) ? { kommoAcordada: true } : {}),
+    ...(importadaDaKommo(raw) ? { daKommo: true } : {}),
   };
 }
