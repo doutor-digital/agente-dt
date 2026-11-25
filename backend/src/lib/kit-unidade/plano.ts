@@ -304,10 +304,10 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
         if (sem.length) avisosDasListas.push(`motivo_espera: ${sem.length} motivo(s) SEM modelo da régua (a régua não manda lembrete para eles; só ${Object.keys(MODELO_DA_ESPERA).join(', ')} têm): ${sem.join(', ')}`);
       }
       const tipo = (LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.tiposDosAtributos?.contato : cw?.tiposDosAtributos?.conversa)?.[l.chave];
-      if (tipo && tipo !== 'list') {
+      if (tipo !== undefined && tipo !== 'list') {
         naoELista.push(l.chave);
-        avisosDasListas.push(`${l.chave}: a conta JÁ tem esse atributo como «${tipo}», não como lista, e o kit não troca o tipo de um atributo que existe: este passo vai FALHAR. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire a chave de chatwoot.listas`);
-        return `${l.chave}: NÃO DÁ — existe como «${tipo}» (não é lista)`;
+        avisosDasListas.push(`${l.chave}: a conta JÁ tem esse atributo como «${tipo || 'tipo desconhecido'}», não como lista, e o kit não troca o tipo de um atributo que existe: este passo fica BLOQUEADO e NENHUMA lista dele é aplicada (nem as boas). Mude o tipo na conta (Configurações → Atributos personalizados) ou tire a chave de chatwoot.listas`);
+        return `${l.chave}: NÃO DÁ — existe como «${tipo || 'tipo desconhecido'}» (não é lista)`;
       }
       if (!cw || !onde) return `${l.chave}: ${l.opcoes.length} opções (lista atual não consultada)`;
       if (!hoje) return `${l.chave}: a conta ainda não tem a lista — criar com ${l.opcoes.length} opções`;

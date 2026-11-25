@@ -19,7 +19,12 @@ const nomeDoEnum = (lista: string[], v: unknown, padrao: string): string | null 
   return lista.includes(String(v)) ? String(v) : null;
 };
 /** Atributo como o teste o escreve (número ou nome) → como o real o guarda (nome). */
-export const atributoDoFalso = (a: Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }): Atributo => ({ ...a, attribute_display_type: nomeDoEnum(TIPOS_DO_CHATWOOT, a.attribute_display_type, 'text')!, attribute_model: nomeDoEnum(MODELOS_DO_CHATWOOT, a.attribute_model, 'conversation_attribute')! });
+export const atributoDoFalso = (a: Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }): Atributo => {
+  const tipo = nomeDoEnum(TIPOS_DO_CHATWOOT, a.attribute_display_type, 'text');
+  const modelo = nomeDoEnum(MODELOS_DO_CHATWOOT, a.attribute_model, 'conversation_attribute');
+  if (!tipo || !modelo) throw new Error(`atributo de teste inválido (${a.attribute_key}): tipo ${String(a.attribute_display_type)} / modelo ${String(a.attribute_model)}`);
+  return { ...a, attribute_display_type: tipo, attribute_model: modelo };
+};
 interface Regra { id: number; name: string; description: string; event_name: string; active: boolean; conditions: unknown[]; actions: unknown[] }
 interface ContaFalsa {
   id: number;
@@ -166,7 +171,7 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
     }
     if (rota === 'custom_attribute_definitions') {
       const modelo = nomeDoEnum(MODELOS_DO_CHATWOOT, u.searchParams.get('attribute_model') ?? 0, 'conversation_attribute');
-      if (metodo === 'GET') return resposta(200, c2.attrs.filter((x) => x.attribute_model === modelo));
+      if (metodo === 'GET') return modelo ? resposta(200, c2.attrs.filter((x) => x.attribute_model === modelo)) : erro422(`'${String(u.searchParams.get('attribute_model'))}' is not a valid attribute_model`);
       const mod = nomeDoEnum(MODELOS_DO_CHATWOOT, corpo.attribute_model, 'conversation_attribute');
       const tipo = nomeDoEnum(TIPOS_DO_CHATWOOT, corpo.attribute_display_type, 'text');
       if (!mod || !tipo) return erro422(`'${String(!mod ? corpo.attribute_model : corpo.attribute_display_type)}' is not a valid ${!mod ? 'attribute_model' : 'attribute_display_type'}`);

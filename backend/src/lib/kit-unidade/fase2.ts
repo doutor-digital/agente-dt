@@ -224,7 +224,7 @@ export async function passoAtributos(x: PortasExternas, e: EstadoDaExecucao): Pr
         attribute_display_type: m?.attribute_display_type ?? 'text',
         attribute_description: m?.attribute_description ?? '',
         attribute_values: m?.attribute_values ?? [],
-        attribute_model: modelo,
+        attribute_model: modelo === 1 ? 'contact_attribute' : 'conversation_attribute',
       });
       criados++;
     }
@@ -266,7 +266,7 @@ export async function passoAtributosExtras(q: Questionario, e: EstadoDaExecucao)
       attribute_display_type: TIPO_DO_CHATWOOT[x.tipo] ?? 'text',
       attribute_description: descricaoDoExtra(x),
       attribute_values: x.tipo === 'lista' ? x.opcoes ?? [] : [],
-      attribute_model: 0,
+      attribute_model: 'conversation_attribute',
     });
     criados++;
   }
@@ -288,12 +288,12 @@ export async function passoListas(q: Questionario, x: PortasExternas, e: EstadoD
     const def = listaDaResposta(await conta.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave);
     if (!def) {
       const molde = x.referencia ? listaDaResposta(await x.referencia.get('custom_attribute_definitions', { attribute_model: String(modelo) })).find((a) => String(a.attribute_key) === l.chave) : undefined;
-      await postar(e, conta, 'custom_attribute_definitions', { attribute_key: l.chave, attribute_display_name: molde?.attribute_display_name ?? l.chave, attribute_display_type: 'list', attribute_description: molde?.attribute_description ?? '', attribute_values: l.opcoes, attribute_model: modelo });
+      await postar(e, conta, 'custom_attribute_definitions', { attribute_key: l.chave, attribute_display_name: molde?.attribute_display_name ?? l.chave, attribute_display_type: 'list', attribute_description: molde?.attribute_description ?? '', attribute_values: l.opcoes, attribute_model: modelo === 1 ? 'contact_attribute' : 'conversation_attribute' });
       notas.push(`${l.chave}: criada com ${l.opcoes.length} opções`);
       continue;
     }
     // a conta tem o atributo, mas NÃO como lista (texto livre, criado à mão): o PATCH das opções não o transforma — falha claro em vez de dizer que aplicou
-    if (!ehLista(def)) throw new ErroDaPorta(`${l.chave}: já existe como atributo do tipo «${tipoDoAtributo(def.attribute_display_type)}», não como lista, e o kit não troca o tipo de um atributo que existe. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire esta chave de chatwoot.listas`);
+    if (!ehLista(def)) throw new ErroDaPorta(`${l.chave}: já existe como atributo do tipo «${tipoDoAtributo(def.attribute_display_type) || 'desconhecido'}», não como lista, e o kit não troca o tipo de um atributo que existe. Mude o tipo na conta (Configurações → Atributos personalizados) ou tire esta chave de chatwoot.listas`);
     const d = diferencaDaLista((def.attribute_values as unknown[] | undefined)?.map(String), l.opcoes);
     if (d.igual) {
       notas.push(`${l.chave}: já estava igual`);

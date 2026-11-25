@@ -32,7 +32,7 @@ export function eventoDeEtiqueta(corpo: any, caixas: Readonly<Record<number, str
   const slug = caixas[Number(corpo?.inbox_id)];
   if (!Number.isInteger(conversa) || conversa <= 0 || !slug) return null;
   const etiquetas: unknown[] = Array.isArray(corpo?.labels) ? corpo.labels : [];
-  if (!etiquetas.some((e) => String(e) in MOTIVO_POR_ETIQUETA)) return null;
+  if (!etiquetas.some((e) => Object.hasOwn(MOTIVO_POR_ETIQUETA, String(e)))) return null;
   return { conversa, slug };
 }
 
@@ -48,13 +48,13 @@ export interface Mudanca {
  */
 export function mudancaDaConversa(conv: any, opcoesDoMotivo?: readonly string[]): Mudanca | null {
   const etiquetas: string[] = Array.isArray(conv?.labels) ? conv.labels.map(String) : [];
-  const comando = etiquetas.filter((e) => e in MOTIVO_POR_ETIQUETA);
+  const comando = etiquetas.filter((e) => Object.hasOwn(MOTIVO_POR_ETIQUETA, e));
   if (!comando.length) return null;
   const motivo = motivoNaLista(MOTIVO_POR_ETIQUETA[comando[comando.length - 1]]!, opcoesDoMotivo);
   const atuais = conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {};
   return {
     atributos: { ...atuais, etapa: ETAPA_PERDIDO, motivo_nao_agendamento: motivo },
-    etiquetas: etiquetas.filter((e) => !(e in MOTIVO_POR_ETIQUETA)),
+    etiquetas: etiquetas.filter((e) => !(Object.hasOwn(MOTIVO_POR_ETIQUETA, e))),
     motivo,
   };
 }

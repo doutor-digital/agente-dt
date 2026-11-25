@@ -273,7 +273,7 @@ test('lista que a conta tem mas como TEXTO livre: o kit FALHA claro (não diz qu
   const passoL = planoAntes.passos.find((p) => p.id === 'listas')!;
   assert.equal(passoL.acao, 'bloqueado');
   assert.match(passoL.itens.join(' '), /motivo_espera: NÃO DÁ — existe como «text»/);
-  assert.match(passoL.avisos.join(' '), /vai FALHAR/);
+  assert.match(passoL.avisos.join(' '), /BLOQUEADO e NENHUMA lista dele é aplicada/);
   assert.doesNotMatch(passoL.avisos.join(' '), /apague/i);
   // plano: nenhuma lista existe = criar; alguma existe = alterar
   const vazio = mundo(q);
