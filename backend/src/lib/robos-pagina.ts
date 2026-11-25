@@ -275,7 +275,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
     }
     var post = el('div', 'post'); post.style.left = '920px'; post.style.top = '40px';
     post.appendChild(el('b', null, 'Proteções de todo robô'));
-    post.appendChild(document.createTextNode('Só manda das 8h às 20h, de segunda a sábado. Nunca manda a mesma mensagem duas vezes ao mesmo paciente. Se o paciente tem cartão ativo no CRM antigo, deixa só uma nota. Só usa modelos aprovados pela Meta. Estas proteções não mudam por robô.'));
+    post.appendChild(document.createTextNode('Só manda das 8h às 20h, de segunda a sábado. Nunca manda a mesma mensagem duas vezes ao mesmo paciente. Se o paciente tem cartão ativo no CRM antigo, deixa só uma nota (menos na clínica que já saiu do CRM antigo). Só usa modelos aprovados pela Meta. Estas proteções não mudam por robô.'));
     mundo.appendChild(post);
     if (!r.ligado) mundo.appendChild(el('div', 'alerta', 'Robô desligado: não envia e não deixa nota.'));
     mundo.appendChild(el('div', 'dica', PODE ? 'Clique num bloco para ver ou configurar.' : 'Você pode ver os blocos; só quem administra o CRM configura.'));
@@ -375,7 +375,7 @@ svg.fios text{font:600 11px var(--f-ui);fill:var(--ink-2)}
         if (r.modelosDaTela.some(function(m){ return m.personalizado; })) voltar = function(){ return r.modelosDaTela.filter(function(m){ return m.personalizado; }).map(function(m){ return { modelo: { padrao: m.padrao, novo: m.padrao } }; }); };
       }
     } else {
-      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo no CRM antigo, nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no CRM antigo».'));
+      a.appendChild(el('p', null, 'Quando uma condição não bate, ou o paciente tem cartão ativo no CRM antigo (menos na clínica que já saiu dele), nada vai para o paciente. Fica uma nota privada na conversa dizendo por quê, por exemplo: «Não enviado: o paciente tem cartão ativo no CRM antigo».'));
       b.appendChild(el('p', null, 'Assim a equipe sempre sabe por que um paciente não recebeu.'));
     }
     corpo.appendChild(a); corpo.appendChild(b); nd.appendChild(corpo);

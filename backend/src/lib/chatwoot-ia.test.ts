@@ -248,6 +248,39 @@ test('LIGADO: se o paciente escreveu de novo enquanto a Sofia pensava, a respost
   assert.equal(b.publicas.length, 0);
 });
 
+test('unidade que SAIU da Kommo: paciente EM TRATAMENTO na franquia cala a Sofia (uma nota só); fora de tratamento ela segue; unidade não cortada nem pergunta à franquia', async () => {
+  const antes = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+  process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = 'doutor-hernia-timbo';
+  try {
+    for (const estado of ['seco', 'ligado'] as const) {
+      const perguntas: string[] = [];
+      const a = portas({ estado, unidade: { slug: 'doutor-hernia-timbo' } });
+      const p: PortasDaIa = { ...a.p, tratamentoNaFranquia: async (_u, tel) => (perguntas.push(tel), 'paciente da franquia (idClient 42) com tratamento ativo') };
+      const mem = novaMemoriaDaIa();
+      assert.equal(await rodarSofia(M, p, mem), 'calada');
+      assert.equal(await rodarSofia(M, p, mem), 'calada');
+      assert.equal(a.sofias.length, 0);
+      assert.equal(a.publicas.length, 0);
+      assert.equal(a.notas.length, 1);
+      assert.match(a.notas[0]!.texto, /Sofia NÃO responde aqui: paciente da franquia \(idClient 42\) com tratamento ativo/);
+      assert.equal(perguntas.length, 2);
+    }
+    // franquia diz que não está em tratamento (ou não respondeu): a Sofia roda
+    const b = portas({ estado: 'seco', unidade: { slug: 'doutor-hernia-timbo' } });
+    assert.equal(await rodarSofia(M, { ...b.p, tratamentoNaFranquia: async () => null }, novaMemoriaDaIa()), 'nota');
+    assert.equal(b.sofias.length, 1);
+    // unidade NÃO cortada: a franquia não é perguntada aqui (quem segura é o cartão do Kommo, como antes)
+    let perguntou = 0;
+    const c = portas({ estado: 'seco' });
+    assert.equal(await rodarSofia(M, { ...c.p, tratamentoNaFranquia: async () => (perguntou++, 'paciente da franquia (idClient 1) com tratamento ativo') }, novaMemoriaDaIa()), 'nota');
+    assert.equal(perguntou, 0);
+    assert.equal(c.sofias.length, 1);
+  } finally {
+    if (antes === undefined) delete process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+    else process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = antes;
+  }
+});
+
 test('cartão ATIVO no Kommo: a Sofia não responde (nem roda), só deixa UMA nota por cartão; nunca mensagem pública', async () => {
   for (const estado of ['seco', 'ligado'] as const) {
     const a = portas({ estado, cartao: { leadId: 28123456 } });
