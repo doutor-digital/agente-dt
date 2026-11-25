@@ -679,6 +679,21 @@ export function chatDaCaixa(ctx: ContextoChatwoot, caixa: number): Chat | null {
   return c ? chatDoChatwoot(c) : null; // null = caixa de nenhuma unidade configurada ou unidade sem conta válida: RECUSA, não chama o Chatwoot
 }
 
+/**
+ * O que a régua precisa saber da unidade (nome, Pix, valor antecipado, textos e prefixo dos modelos DESTA unidade). Uma função só: o ciclo da régua e o
+ * preenchimento do modelo mandado à mão pela atendente usam a MESMA montagem, para nunca divergirem.
+ */
+export function dadosDaUnidadeDaRegua(unit: Parameters<typeof precosDaConsulta>[0] & { name: string; pixKey: string | null }, slug: string): DadosDaUnidade {
+  return {
+    nome: unit.name,
+    pixKey: unit.pixKey,
+    valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
+    // textos e prefixo dos modelos DESTA unidade (configuração por unidade); Parauapebas: idênticos aos de sempre
+    textos: textosDoSlug(slug),
+    prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
+  };
+}
+
 async function varrer(ctx: ContextoChatwoot): Promise<void> {
   if (rodando) return;
   rodando = true;
@@ -698,14 +713,7 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           logger.warn({ slug }, `${ID_REGUA}: unidade não encontrada`);
           continue;
         }
-        const unidade: DadosDaUnidade = {
-          nome: unit.name,
-          pixKey: unit.pixKey,
-          valorAntecipado: precosDaConsulta(unit)?.antecipado ?? null,
-          // textos e prefixo dos modelos DESTA unidade (configuração por unidade); Parauapebas: idênticos aos de sempre
-          textos: textosDoSlug(slug),
-          prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
-        };
+        const unidade = dadosDaUnidadeDaRegua(unit, slug);
         const kommo = kommoDaRegua(unit);
         const chat = chatDaCaixa(ctx, Number(caixaTxt));
         if (!chat) {

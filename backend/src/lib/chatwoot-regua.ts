@@ -464,10 +464,53 @@ export function paraParametro(v: string): string {
 export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
   const bruto = (u.textos ?? TEXTOS_PARAU)[modelo];
   if (bruto === undefined) return { texto: null, variaveis: null, faltando: [`texto do modelo ${modelo}`] };
+  const { valorDoCampo, faltando } = valoresDosCampos(c, u, momentoDoEnvio);
+  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
+  const variaveis = camposDoModelo(modelo, u.textos).map((nome) => paraParametro(valorDoCampo(nome)));
+  // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
+  if (!faltando.length && variaveis.some((v) => !v)) faltando.push('um valor do template ficou vazio');
+  return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
+}
+
+/**
+ * A próxima data marcada da conversa, no texto da régua («14/08 às 15:00»): a consulta; sem ela, a próxima sessão; sem ela, o retorno. DATA QUE JÁ PASSOU não vale (a atendente
+ * não pode mandar «Data e horário: 20/11» no dia 25): passada a consulta, vale a próxima data futura; nada futuro = null.
+ * Os mesmos atributos (data_consulta/hora_consulta, proxima_sessao/hora_sessao, data_retorno) e o mesmo formato que a régua usa nos modelos.
+ */
+export function proximaDataDaConversa(c: ConversaRegua, agora: Date = new Date()): string | null {
   const a = c.attrs;
-  const consulta = momento(a.data_consulta, a.hora_consulta);
-  const sessao = momento(a.proxima_sessao, a.hora_sessao);
-  const retorno = momento(a.data_retorno, null);
+  const m = [momento(a.data_consulta, a.hora_consulta), momento(a.proxima_sessao, a.hora_sessao), momento(a.data_retorno, null)].find((x) => x && naoPassou(x, agora)) ?? null;
+  return m ? textoDoMomento(m) : null;
+}
+
+/** O momento ainda não passou (visto de Belém): com hora, o instante exato; só com a data, vale até o fim do dia. */
+function naoPassou(m: Momento, agora: Date): boolean {
+  return instante(m, 23).getTime() >= agora.getTime();
+}
+
+/**
+ * A MESMA regra de «qual dado da conversa/unidade vale em cada campo {{…}}» da régua, separada para quem quer os valores campo a campo
+ * (o preenchimento do modelo mandado à mão pela atendente): cada campo volta com o valor já limpo para parâmetro, ou `null` quando o dado não existe
+ * (nunca inventa). A régua só envia quando TODOS existem (`renderizar`); a atendente recebe os que existem e completa o resto.
+ */
+export function variaveisDoModeloCampoACampo(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento, agora: Date = new Date()): Array<{ campo: string; valor: string | null }> {
+  // só aqui (o preenchimento à mão) a data que JÁ PASSOU é descartada; a régua (`renderizar`) segue idêntica
+  const { valorDoCampo, faltando } = valoresDosCampos(c, u, momentoDoEnvio, agora);
+  return camposDoModelo(modelo, u.textos).map((campo) => {
+    const antes = faltando.length;
+    const v = paraParametro(valorDoCampo(campo));
+    return { campo, valor: faltando.length > antes || !v ? null : v };
+  });
+}
+
+/** O valor de cada campo {{…}} da régua para esta conversa e esta unidade; o que não existe entra em `faltando` e vale vazio. */
+function valoresDosCampos(c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento, apartirDe?: Date): { valorDoCampo: (nome: string) => string; faltando: string[] } {
+  const a = c.attrs;
+  // `apartirDe` (só o preenchimento à mão passa): data que JÁ PASSOU não vale. Sem ele, a régua decide como sempre (cada envio já nasce de uma data futura).
+  const futuro = (m: Momento | null): Momento | null => (apartirDe && m && !naoPassou(m, apartirDe) ? null : m);
+  const consulta = futuro(momento(a.data_consulta, a.hora_consulta));
+  const sessao = futuro(momento(a.proxima_sessao, a.hora_sessao));
+  const retorno = futuro(momento(a.data_retorno, null));
   const vencimento = lerData(a.vencimento);
   const valorParcela = valorEmReais(a.valor_parcela);
   const faltando: string[] = [];
@@ -479,8 +522,11 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
     switch (nome) {
       case 'contact.name':
         return primeiroNome(c.nome) ?? falta('nome do contato');
-      case 'lead.cf.2450736':
-        return (momentoDoEnvio ?? consulta) ? textoDoMomento((momentoDoEnvio ?? consulta)!) : falta('data da consulta (data_consulta)');
+      case 'lead.cf.2450736': {
+        // passada a consulta, o preenchimento à mão usa a próxima data futura (a sessão, depois o retorno); a régua não (`apartirDe` indefinido)
+        const dataDaConsulta = momentoDoEnvio ?? consulta ?? (apartirDe ? (sessao ?? retorno) : null);
+        return dataDaConsulta ? textoDoMomento(dataDaConsulta) : falta('data da consulta (data_consulta)');
+      }
       case 'lead.cf.2450928': {
         // próxima sessão; os modelos de retorno (SDR e cancelamento) usam o mesmo campo: sem sessão, vale o retorno e depois a consulta
         const m = momentoDoEnvio ?? sessao ?? retorno ?? consulta;
@@ -505,11 +551,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
         return falta(`campo {{${nome}}} sem correspondente no Chatwoot`);
     }
   };
-  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
-  const variaveis = camposDoModelo(modelo, u.textos).map((nome) => paraParametro(valorDoCampo(nome)));
-  // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
-  if (!faltando.length && variaveis.some((v) => !v)) falta('um valor do template ficou vazio');
-  return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
+  return { valorDoCampo, faltando };
 }
 
 // ── as regras ──────────────────────────────────────────────────────────────────────────────────────

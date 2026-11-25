@@ -23,6 +23,10 @@ import type { SessaoChatwoot } from '../lib/funil-chatwoot.js';
 import { conversaLidaDoChatwoot, type ConversaLida } from '../lib/chatwoot-porta.js';
 import { etapasDoContexto } from '../lib/chatwoot-etapas.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
+import { dadosDaUnidadeDaRegua } from '../lib/chatwoot-regua-worker.js';
+import { preencherModelo, type Preenchimento } from '../lib/modelo-preenchido.js';
+import { modeloPreenchidoLigado } from '../lib/chatwoot-modelo-preenchido-ui.js';
+import { unidadesDaConta } from '../lib/chatwoot-unidades.js';
 import { diaEmBelem } from '../lib/chatwoot-hoje.js';
 import { gradeDoDia, hojeLocal } from '../agent/agenda-tools.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
@@ -394,12 +398,14 @@ export function paginaAssistenteHandler(_req: Request, res: Response): void {
  *  - GET  /api/public/funil/gestao         — o menu mostra «Marketing» e «Gestor»?
  *  - GET  /api/public/assistente/respostas — quais balões da conversa são da Sofia (👍/👎 no balão, 13/11)
  *  - POST /api/public/assistente/avaliar   — o 👍/👎 do balão
+ *  - POST /api/public/assistente/modelo-preenchido — os parâmetros sugeridos do modelo do WhatsApp mandado à mão
  */
 const ROTAS_DO_BOTAO: Readonly<Record<string, readonly string[]>> = {
   '/api/public/assistente/estado': ['GET'],
   '/api/public/funil/gestao': ['GET'],
   '/api/public/assistente/respostas': ['GET'],
   '/api/public/assistente/avaliar': ['POST'],
+  '/api/public/assistente/modelo-preenchido': ['POST'],
 };
 
 /**
@@ -554,4 +560,54 @@ export async function assistenteRespostasHandler(req: Request, res: Response): P
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: não consegui ler as respostas da Sofia');
     res.status(502).json({ error: 'não consegui ler agora' });
   }
+}
+
+/**
+ * Os parâmetros sugeridos de um MODELO do WhatsApp que a atendente vai mandar à mão (o seletor de modelos do Chatwoot). Só LÊ: nada é enviado nem gravado. Com o login da PRÓPRIA pessoa
+ * (a conversa é lida com ele: só alcança o que já vê). A unidade vem da caixa da conversa (`CAIXAS_REGUA`) ou, na conta de uma clínica sem caixa mapeada (Timbó, conta 3), da
+ * única unidade da conta; nunca do pedido. A regra dos valores está em `lib/modelo-preenchido.ts` (modelo do CRM = a mesma da régua; modelo de fora = lido pelo texto).
+ * Sem dado ou sem unidade: resposta vazia (`valores: {}`), nunca erro para a tela.
+ */
+export async function assistenteModeloPreenchidoHandler(req: Request, res: Response): Promise<void> {
+  const a = await sessaoDaAtendente(req, res);
+  if (!a) return;
+  const vazio: Preenchimento = { origem: 'nenhuma', valores: {} };
+  if (!modeloPreenchidoLigado()) {
+    res.set('Cache-Control', 'no-store').json(vazio);
+    return;
+  }
+  const corpo = (req.body ?? {}) as { conversa?: unknown; modelo?: unknown; corpo?: unknown };
+  const conversa = Number(corpo.conversa);
+  if (!Number.isInteger(conversa) || conversa <= 0 || typeof corpo.modelo !== 'string' || corpo.modelo.length > 200) {
+    res.status(400).json({ error: 'pedido inválido' });
+    return;
+  }
+  try {
+    const { lida, caixa } = await leituraComLogin(a.c, a.sessao).conversa(conversa);
+    const r = await preenchimentoDaConversa({ modelo: corpo.modelo, corpo: typeof corpo.corpo === 'string' ? corpo.corpo : undefined, lida, caixa, conta: a.c.conta?.conta, atendente: a.nome }, { unidade: (slug) => prisma.unit.findUnique({ where: { slug } }) });
+    res.set('Cache-Control', 'no-store').json(r);
+    return;
+  } catch (e) {
+    const status = (e as { status?: number })?.status;
+    if (status === 401 || status === 403 || status === 404) {
+      res.status(404).json({ error: 'não consegui abrir esta conversa' });
+      return;
+    }
+    logger.warn({ err: String(e), conversa }, 'assistente: modelo preenchido falhou');
+    res.status(502).json({ error: 'não consegui ler agora' });
+  }
+}
+
+/** A unidade da conversa (a da caixa; na conta de clínica sem caixa mapeada, a única da conta) + a regra dos valores. Separado do handler para testar sem Chatwoot nem banco. */
+export async function preenchimentoDaConversa(
+  p: { modelo: string; corpo?: string; lida: ConversaLida; caixa: number | null; conta: number | undefined; /** o nome de quem está logada: «Aqui é {{atendente}}» dos modelos da SDR */ atendente?: string | null; agora?: Date },
+  deps: { unidade: (slug: string) => Promise<(Parameters<typeof dadosDaUnidadeDaRegua>[0]) | null> },
+): Promise<Preenchimento> {
+  // a unidade é a da CAIXA; sem caixa mapeada, só vale quando a conta tem UMA unidade (com duas, qualquer escolha seria palpite)
+  const daConta = p.conta !== undefined ? unidadesDaConta(p.conta) : [];
+  const slug = (p.caixa ? CAIXAS_REGUA[p.caixa] : undefined) ?? (daConta.length === 1 ? daConta[0] : undefined);
+  const unit = slug ? await deps.unidade(slug) : null;
+  if (!slug || !unit) return { origem: 'nenhuma', valores: {} };
+  const c = { id: p.lida.id, nome: p.lida.nome, etiquetas: p.lida.etiquetas, attrs: p.lida.attrs, criadaEm: new Date(0), atendente: p.atendente?.trim() || null, ultima: null };
+  return preencherModelo({ modelo: p.modelo, corpo: p.corpo }, c, dadosDaUnidadeDaRegua(unit, slug), p.agora);
 }

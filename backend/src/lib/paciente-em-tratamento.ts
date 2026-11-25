@@ -20,7 +20,7 @@
  *
  * Número INTERNO (`NUMEROS_INTERNOS`) também cala: hoje a lista só barra o cadastro na franquia.
  */
-import { SpineService, type SpineClientDetail } from '../services/spine.service.js';
+import { SpineService, SPINE_STATUS, type SpineClientDetail } from '../services/spine.service.js';
 import { resumoDaAgenda } from './widget-agenda.js';
 import { chaveDoTelefone, consultarIndice, type Entrada } from './franquia-indice-telefones.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
@@ -38,13 +38,28 @@ export const TIMEOUT_FRANQUIA_MS = 3000;
 const TRATAMENTO_ATIVO = new Set([44, 45]);
 /** Decisão de 14/09: sem sessão futura, só é "em tratamento agora" quem fez sessão nos últimos 30 dias; o resto "parou no meio". */
 export const DIAS_SEM_SESSAO = 30;
+/** Janela da «avaliação recente» (corte de Timbó, 25/11): quem avaliou (ATENDIDO) há até 60 dias e escreve está na negociação, não é lead novo. */
+export const DIAS_AVALIACAO_RECENTE = 60;
+/** Avaliação que já passou e ainda está «de pé» (a recepção dá baixa dias depois): só conta por 7 dias — um lead que faltou e ninguém deu
+ *  baixa não pode calar a Sofia por 2 meses. Falta e desmarcado nunca contam. */
+export const DIAS_AVALIACAO_SEM_BAIXA = 7;
+const AVALIACAO_SEM_BAIXA: ReadonlySet<number> = new Set([SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO, SPINE_STATUS.REMARCADO]);
 
 export function calarPacienteEstado(slug: string, raw: string | undefined = process.env.CALAR_PACIENTE_EM_TRATAMENTO_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_CALAR_PACIENTE, raw);
 }
 
 export type SinalDaFranquia =
-  | { tipo: 'paciente'; idClient: number; tratamentoAtivo: boolean; sessaoFutura: boolean }
+  | {
+      tipo: 'paciente';
+      idClient: number;
+      tratamentoAtivo: boolean;
+      sessaoFutura: boolean;
+      /** avaliação/retorno ATENDIDO nos últimos `DIAS_AVALIACAO_RECENTE` dias, ou passado e ainda sem baixa nos últimos `DIAS_AVALIACAO_SEM_BAIXA`
+       *  (falta e desmarcado não contam; olha TODAS as consultas passadas, não só a última). Só a unidade que
+       *  saiu da Kommo usa (kommo-cortado.ts): lá não há o cartão em COMPARECEU/NEGOCIAÇÃO que segurava a Sofia. */
+      avaliacaoRecente?: boolean;
+    }
   /** o telefone só existe como LEAD na franquia */
   | { tipo: 'lead' }
   | { tipo: 'nao_achou' }
@@ -105,7 +120,17 @@ export function sinalDaFicha(idClient: number, ficha: Pick<SpineClientDetail, 's
   const recente = Number.isFinite(ultima) && agora.getTime() - ultima <= DIAS_SEM_SESSAO * 86_400_000;
   const tratamentoAtivo = recente && ficha.treatments.some((t) => t.idStatus !== null && TRATAMENTO_ATIVO.has(t.idStatus));
   const sessaoFutura = !!agenda.proximaSessao;
-  return { tipo: 'paciente', idClient, tratamentoAtivo, sessaoFutura };
+  // TODAS as avaliações/retornos passados (não só a última): avaliou há 20 dias e faltou ao retorno há 3 continua sendo quem avaliou
+  const dia = 86_400_000;
+  const avaliacaoRecente = agenda.consultas.some((c) => {
+    const quando = c.quando ? Date.parse(c.quando) : NaN;
+    if (c.futura || !Number.isFinite(quando) || c.idStatus === null) return false;
+    const idade = agora.getTime() - quando;
+    if (idade < 0) return false;
+    if (c.idStatus === SPINE_STATUS.ATENDIDO) return idade <= DIAS_AVALIACAO_RECENTE * dia;
+    return AVALIACAO_SEM_BAIXA.has(c.idStatus) && idade <= DIAS_AVALIACAO_SEM_BAIXA * dia;
+  });
+  return { tipo: 'paciente', idClient, tratamentoAtivo, sessaoFutura, avaliacaoRecente };
 }
 
 /** Puro: o que o índice diz do telefone. Paciente vence lead; sem entrada com id utilizável não se afirma nada. */
