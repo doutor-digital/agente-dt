@@ -728,13 +728,15 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
         }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }),
       );
     }
-    // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
-    const faltou = naConsulta && !ehSessao && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
+    // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta. «Faltou» (NÃO COMPARECEU, só em conta com etapas próprias) é a etapa em que a agenda
+    // deixa quem faltou: conta aqui (e só aqui: véspera/dia/preparo seguem pelas etapas de consulta de pé)
+    const naFalta = naConsulta || etapa === 'Faltou';
+    const faltou = naFalta && !ehSessao && situ === 'Não compareceu' ? novo('situacao_consulta', 'Não compareceu') : null;
     // o texto diz "a consulta de hoje": só vale se a falta foi marcada no dia da consulta
     if (faltou && consulta && consulta.data.iso === diaEmBelem(faltou.desde)) {
       saida.push({ regra: 'falta-mesmo-dia', modelo: 'parau_consulta_falta_mesmo_dia', chave: `faltou@${consulta.chave}`, kind: 'depois', alvo: faltou.desde });
     }
-    if (naConsulta && !ehSessao && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
+    if (naFalta && !ehSessao && situ === 'Não compareceu' && consulta && !semFollowUp && !consultaAnteriorAVista(consulta)) {
       saida.push({ regra: 'falta-48h', modelo: 'parau_consulta_falta_48h', chave: consulta.chave, kind: 'depois', alvo: new Date(instante(consulta, HORA_PADRAO_DEPOIS).getTime() + tempo('falta-48h')) });
     }
     // depois do atendimento (no Kommo os de 4 e 30 dias estão "antes" da consulta — defeito; aqui DEPOIS)

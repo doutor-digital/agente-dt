@@ -105,7 +105,7 @@ export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoj
 
 /**
  * A falta: quem estava Agendado/Confirmado e a agenda diz «Não compareceu» vai para «Faltou» — SÓ na conta que tem essa etapa (Timbó: NÃO COMPARECEU; Parauapebas
- * não tem e nada muda). Tratamento, Perdido/Frio e as demais etapas não são tocados. A régua segue pela `situacao_consulta`, como sempre.
+ * não tem e nada muda). Tratamento, Perdido/Frio e as demais etapas não são tocados. A régua conta «Faltou» como etapa da falta (`falta-mesmo-dia`, `falta-48h`: `naFalta` em `chatwoot-regua.ts`), então quem faltou continua recebendo a mensagem.
  */
 export function etapaDaFalta(atual: Record<string, unknown>, d: Desejado, mapa?: MapaDeEtapas | null): string | undefined {
   if (d.situacao_consulta !== 'Não compareceu' || nomeParaGravar(mapa, 'Faltou') === null) return undefined;

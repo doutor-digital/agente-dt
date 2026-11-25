@@ -340,3 +340,34 @@ test('papéis novos nas regras: a agenda move para «Faltou» SÓ na conta que t
   for (const p of ['Agendado', 'Em espera', 'Faltou', 'Conferir na franquia', 'Retorno pós-tratamento']) assert.ok(ETAPAS_PROTEGIDAS.has(p), p);
   assert.deepEqual(eventosAlcancados({ etapa: 'Faltou' }), ['AddToCart'], 'quem faltou já tinha agendado');
 });
+
+test('a mensagem de falta SAI em Timbó como em Parauapebas: a agenda grava «Não compareceu» + NÃO COMPARECEU e a régua ainda manda falta-mesmo-dia e falta-48h', async () => {
+  const { atualizarVistos, candidatos } = await import('./chatwoot-regua.js');
+  const { mudancas } = await import('./chatwoot-agenda.js');
+  const { atributosParaGravar } = await import('./chatwoot-etapas.js');
+  const hoje = '2026-11-25';
+  const t0 = new Date('2026-11-24T12:00:00Z');
+  const t1 = new Date('2026-11-25T16:00:00Z');
+  const partida = { primeiraVez: false, desde: new Date('2026-01-01T00:00:00Z') };
+  const d = { data_consulta: hoje, hora_consulta: '09:00', situacao_consulta: 'Não compareceu', categoria_consulta: 'Avaliação' } as const;
+  const regras: Record<string, string[]> = {};
+  for (const [quem, m, nomeAgendado] of [['parau', null, 'Agendado'], ['timbo', TIMBO(), 'AGENDADO']] as const) {
+    const antes = { etapa: nomeAgendado, data_consulta: hoje, hora_consulta: '09:00', situacao_consulta: 'Agendado', categoria_consulta: 'Avaliação', funil: 'Comercial' };
+    const raw = (attrs: Record<string, unknown>) => ({ ...bruta('', attrs), id: 7 });
+    const c0 = conversaDoChatwoot(raw(antes), m)!;
+    const v0 = atualizarVistos(c0, new Map(), t0, partida).vistos;
+    const gravado = { ...antes, ...atributosParaGravar(m, mudancas(c0.attrs, d, hoje, m)) };
+    if (quem === 'timbo') assert.equal(gravado.etapa, 'NÃO COMPARECEU', 'a agenda move para a etapa');
+    const c1 = conversaDoChatwoot(raw(gravado), m)!;
+    const r = atualizarVistos(c1, v0, t1, partida);
+    regras[quem] = candidatos(c1, r.vistos).map((k) => k.regra).sort();
+  }
+  assert.deepEqual(regras.parau, ['falta-48h', 'falta-mesmo-dia']);
+  assert.deepEqual(regras.timbo, regras.parau);
+});
+
+test('disparo sem agenda: «Conferir na franquia» não é livre (enquanto a equipe confere, não se manda nada)', () => {
+  assert.equal(situacaoPeloCrm({ etapa: 'CONFERIR NA FRANQUIA' }, TIMBO()), 'indisponivel');
+  assert.equal(situacaoPeloCrm({ etapa: 'RETORNO PÓS-TRATAMENTO' }, TIMBO()), 'ja-cliente');
+  assert.equal(situacaoPeloCrm({ etapa: 'EM ESPERA' }, TIMBO()), 'livre');
+});

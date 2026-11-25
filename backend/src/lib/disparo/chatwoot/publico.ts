@@ -237,6 +237,8 @@ export function situacaoPeloCrm(atributos: Record<string, unknown>, mapa?: MapaD
   if (['Agendado', 'Confirmado'].includes(etapa)) return 'consulta-futura';
   if (['Entrada', 'Em tratamento'].includes(tratamento) || (s(attrs.funil) === 'Tratamento' && !['Alta', 'Tratamento cancelado'].includes(tratamento))) return 'tratamento-aberto';
   if (['Compareceu', 'Pós-consulta', 'Fechou', 'Retorno pós-tratamento'].includes(etapa)) return 'ja-cliente';
+  // «Conferir na franquia» (só em conta com etapas próprias): a equipe está conferindo se é paciente — enquanto confere, não se manda nada (o lado seguro: fica de fora)
+  if (etapa === 'Conferir na franquia') return 'indisponivel';
   return 'livre';
 }
 
