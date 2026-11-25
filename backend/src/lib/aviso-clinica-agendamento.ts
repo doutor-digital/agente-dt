@@ -27,7 +27,9 @@
  *
  * Um aviso por evento: cada aviso reivindica uma linha-marca no banco ANTES de sair (id fixo = primeira escrita vence,
  * vale entre processos e reinícios). O «não fechou» ainda respeita 1 por lead a cada 24 h. Envio recusado (a Evolution
- * respondeu erro ou nem conectou) libera a marca para tentar de novo; «incerto» (conectou e não respondeu) não repete.
+ * respondeu erro ou nem conectou) deixa a marca `pendente`: o vigia tenta de novo (o «não fechou» na própria varredura, o
+ * «marcou» em `reenviarMarcouPendentes`, até 12 h); «incerto» (conectou e não respondeu) não repete. O «marcou» de madrugada
+ * (21h–7h na unidade) também fica `pendente` e sai depois das 7h.
  *
  * Nada aqui lança nem espera o agendamento: falha no WhatsApp vira log e o turno segue.
  *
@@ -41,8 +43,20 @@ import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { enviarPelaEvolutionComResultado, type ResultadoDoEnvio } from './alerta-whatsapp.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { diaDaSemana } from './feriados.js';
+import { fusoDaUnidade, partesNoFuso } from './fuso.js';
+import { ehLeadDoChatwoot } from './chatwoot-lead.js';
 
 export const ID_DA_AUTOMACAO = 'aviso-clinica-agendamento';
+
+/**
+ * O «marcou» não toca o celular da recepção de madrugada: entre 21h e 7h (hora da unidade) fica guardado e sai na varredura do
+ * vigia depois das 7h. (O «não fechou» já espera as 8h pela decisão do filtro do vigia.)
+ */
+const SILENCIO_INICIO_MIN = 21 * 60;
+const SILENCIO_FIM_MIN = 7 * 60;
+/** Um «marcou» que não saiu (recusado, ou guardado da madrugada) deixa de ser reenviado depois disto: aviso velho não ajuda. */
+const IDADE_MAXIMA_PENDENTE_H = 12;
+const PREFIXO_MARCOU = 'aviso-clinica:marcou:';
 
 /** O «não fechou» sai no máximo uma vez por lead nesta janela. */
 export const JANELA_NAO_FECHOU_MS = 24 * 60 * 60_000;
@@ -50,7 +64,14 @@ export const JANELA_NAO_FECHOU_MS = 24 * 60 * 60_000;
 /** Tamanho máximo do trecho da fala do paciente. */
 const TRECHO_MAX = 80;
 
-type UnidadeDoAviso = Pick<Unit, 'id' | 'slug' | 'kommoSubdomain'>;
+type UnidadeDoAviso = Pick<Unit, 'id' | 'slug' | 'kommoSubdomain' | 'businessHoursTimezone' | 'spineTimezone'>;
+
+/** Entre 21h e 7h na hora da unidade? */
+export function emMadrugadaDoAviso(unit: Pick<Unit, 'businessHoursTimezone' | 'spineTimezone'>, agora: Date = new Date()): boolean {
+  const p = partesNoFuso(agora, fusoDaUnidade(unit));
+  const min = p.hora * 60 + p.min;
+  return min >= SILENCIO_INICIO_MIN || min < SILENCIO_FIM_MIN;
+}
 
 export function estadoDoAvisoClinica(slug: string, raw: string | undefined = process.env.AVISO_CLINICA_AGENDAMENTO_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_DA_AUTOMACAO, raw);
@@ -78,40 +99,64 @@ export function destinoDoAvisoClinica(slug: string, raw: string | undefined = pr
 
 const SEM_NOME = 'paciente (sem nome)';
 
+/** Título que vem antes do nome («Dr. Fulano», «Sra Maria»): o primeiro nome é o que vem depois. */
+const TITULOS = new Set(['dr', 'dra', 'sr', 'sra', 'srta', 'doutor', 'doutora', 'prof', 'profa', 'professor', 'professora']);
+
 /**
- * «MARIA CONCEIÇÃO DA SILVA» → «Maria». Nome que não é de gente («Lead 123», telefone, só símbolos) → null.
+ * «MARIA CONCEIÇÃO DA SILVA» → «Maria»; «Dr. Fulano» → «Fulano». Nome que não é de gente («Lead 123», telefone, só símbolos) → null.
  */
 export function primeiroNome(nome: string | null | undefined): string | null {
   const t = (nome ?? '').trim();
   if (!t || /\d/.test(t) || /^lead\b/i.test(t)) return null;
-  const primeiro = t.split(/\s+/)[0].replace(/[^\p{L}'-]/gu, '');
-  if (primeiro.length < 2) return null;
-  return primeiro[0].toLocaleUpperCase('pt-BR') + primeiro.slice(1).toLocaleLowerCase('pt-BR');
+  const palavras = t.split(/\s+/).map((p) => p.replace(/[^\p{L}'-]/gu, ''));
+  // a primeira palavra que não é título nem inicial solta («J. Silva» → Silva)
+  const primeiro = palavras.find((p) => (p.match(/\p{L}/gu) ?? []).length >= 2 && !TITULOS.has(p.toLocaleLowerCase('pt-BR')));
+  if (!primeiro) return null;
+  return primeiro
+    .toLocaleLowerCase('pt-BR')
+    .split('-')
+    .map((x) => (x ? x[0].toLocaleUpperCase('pt-BR') + x.slice(1) : x))
+    .join('-');
+}
+
+/**
+ * Número com separadores (CPF 123.456.789-10, conta 351,855,134,29, fone (11) 98765-4321, +55 11 …): vírgula, ponto, hífen, barra,
+ * parêntese e espaço ENTRE dígitos fazem parte do mesmo número. Se ele somar 4 dígitos ou mais, sai inteiro.
+ */
+function tirarNumeros(t: string): string {
+  return t.replace(/[+(]?\d(?:[\d\s().,\-/]*\d)?/g, (m) => (m.replace(/\D/g, '').length >= 4 ? ' ' : m));
 }
 
 /**
  * Um trecho curto da fala do paciente, sem o que não pode sair no grupo: link, e-mail e qualquer número com 4 dígitos ou
- * mais (CPF, telefone, data de nascimento, protocolo). Vazio quando sobra quase nada (figurinha, áudio sem texto).
+ * mais (CPF, conta, telefone, data de nascimento, protocolo). Vazio quando sobra quase nada (figurinha, áudio sem texto).
+ *
+ * A ORDEM importa: a formatação do WhatsApp (*negrito*, _itálico_, ~riscado~, `código`) sai ANTES de procurar números, senão
+ * «012*.*602*.*411» ou «123_456_789_10» escapam em pedaços e se juntam depois. O filtro roda de novo no fim, depois do corte.
  */
 export function trechoSeguro(fala: string | null | undefined, max = TRECHO_MAX): string {
-  let t = (fala ?? '')
-    .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
-    .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, ' ')
-    // número com separadores (CPF 123.456.789-10, fone (11) 98765-4321, +55 11 …): se somar 4 dígitos ou mais, sai inteiro
-    .replace(/[+(]?\d[\d\s().\-/]{2,}\d/g, (m) => (m.replace(/\D/g, '').length >= 4 ? ' ' : m))
-    // marcas de formatação do WhatsApp (*negrito*, _itálico_, ~riscado~, `código`) quebrariam o texto do aviso
-    .replace(/[*_~`]/g, '')
+  let t = tirarNumeros(
+    (fala ?? '')
+      .replace(/[*_~`]/g, '')
+      .replace(/https?:\/\/\S+|www\.\S+/gi, ' ')
+      .replace(/[\w.+-]+@[\w-]+(\.[\w-]+)+/g, ' '),
+  )
     .replace(/\s+/g, ' ')
     .trim()
     .replace(/"/g, "'");
   if ((t.match(/\p{L}/gu) ?? []).length < 3) return '';
   if (t.length > max) t = `${t.slice(0, max - 1).replace(/\s+\S*$/, '').trimEnd()}…`;
-  return t;
+  return tirarNumeros(t).replace(/\s+/g, ' ').trim();
 }
 
-function linkDoCartao(unit: Pick<Unit, 'kommoSubdomain'>, leadId: number | undefined): string | null {
+/**
+ * O link do cartão do Kommo. Conversa do Chatwoot usa um id sintético (2 bilhões + o número da conversa): não existe cartão
+ * no Kommo para ele, então não há link.
+ */
+export function linkDoCartao(unit: Pick<Unit, 'kommoSubdomain'>, leadId: number | undefined): string | null {
   const sub = unit.kommoSubdomain?.trim();
-  return sub && leadId ? `https://${sub}.kommo.com/leads/detail/${leadId}` : null;
+  if (!sub || !leadId || ehLeadDoChatwoot(leadId)) return null;
+  return `https://${sub}.kommo.com/leads/detail/${leadId}`;
 }
 
 export interface DadosDoMarcou {
@@ -126,7 +171,11 @@ export interface DadosDoMarcou {
   link: string | null;
 }
 
-/** «✅ A Sofia marcou *Maria* para sexta-feira, 28/11 às 12:30 (avaliação). Cartão: <link>» */
+/**
+ * «✅ A Sofia marcou *Maria* para sábado, 28/11 às 12:30 (avaliação). Cartão: <link>»
+ * O dia da semana sai da DATA CIVIL da agenda (a data que a franquia e a Sofia usam, já na hora da unidade), calculada em UTC
+ * puro: não depende do fuso nem do relógio do servidor.
+ */
 export function textoMarcou(d: DadosDoMarcou): string {
   const [, m, dia] = d.data.split('-');
   const semana = diaDaSemana(d.data);
@@ -155,22 +204,43 @@ export function textoNaoFechou(d: DadosDoNaoFechou): string {
 
 // ── Marca de «já avisei» (uma por evento) ─────────────────────────────────────────────────────────────────────────
 
+/**
+ * Onde o aviso está:
+ *  - `enviando`: alguém ganhou o direito de mandar e está mandando;
+ *  - `pendente`: precisa sair e ainda não saiu (guardado da madrugada, ou a Evolution recusou) — o vigia reenvia;
+ *  - `enviado` / `incerto`: saiu / pode ter saído (nunca repete).
+ */
+export type EstadoDaMarca = 'enviando' | 'pendente' | 'enviado' | 'incerto';
+
+export interface MarcaPendente {
+  id: string;
+  unitId: string;
+  leadId: string;
+  payload: Record<string, unknown>;
+}
+
 export interface Marcador {
   /** 'novo' = esta chamada ganhou o direito de avisar; 'repetido' = já avisaram; 'erro' = o banco falhou (quem chama decide). */
-  reivindicar(id: string, a: { unitId: string; leadId: string; titulo: string; payload: Record<string, unknown> }): Promise<'novo' | 'repetido' | 'erro'>;
-  /** Houve aviso com este prefixo de id para o lead nas últimas 24 h? */
-  houveRecente(unitId: string, leadId: string, prefixoDoId: string, desde: Date): Promise<boolean>;
-  /** O envio foi recusado: a marca deixa de valer e o aviso pode ser tentado de novo. */
-  soltar(id: string): Promise<void>;
+  reivindicar(
+    id: string,
+    a: { unitId: string; leadId: string; titulo: string; payload: Record<string, unknown>; estado: 'enviando' | 'pendente' },
+  ): Promise<'novo' | 'repetido' | 'erro'>;
+  /** Uma marca `pendente` passa a `enviando` — só UM chamador ganha (true). */
+  pegar(id: string): Promise<boolean>;
+  /** Houve aviso (que saiu ou está saindo, não os pendentes) com este prefixo de id para o lead dentro da janela? */
+  houveRecente(unitId: string, leadId: string, prefixoDoId: string, janelaMs: number): Promise<boolean>;
+  concluir(id: string, estado: 'enviado' | 'incerto' | 'pendente'): Promise<void>;
+  /** Marcas `pendente` com este prefixo de id, nascidas há menos de `idadeMaxMs`. */
+  pendentes(prefixoDoId: string, idadeMaxMs: number): Promise<MarcaPendente[]>;
 }
 
 const codigoDoErro = (err: unknown): string | undefined => (err as { code?: string } | null)?.code;
 
 /**
  * A marca é um rastro `manual` (como as do vigia de agendamento perdido) com id FIXO por evento: o banco recusa o segundo
- * (P2002), então dois processos ou dois reinícios nunca avisam o mesmo evento duas vezes. Nasce SUCCESS (RUNNING
- * apareceria como «turno preso»). Os títulos não citam a tool de agendar nem a de horários: as consultas do vigia
- * procuram esses nomes nos rastros.
+ * (P2002), então dois processos ou dois reinícios nunca avisam o mesmo evento duas vezes. O ESTADO do aviso mora no payload
+ * do passo, e o rastro é SEMPRE `SUCCESS`: RUNNING apareceria como «turno preso» e FAILED seria contado como falha da IA nos
+ * painéis. Os títulos não citam a tool de agendar nem a de horários: as consultas do vigia procuram esses nomes nos rastros.
  */
 export const marcadorNoBanco: Marcador = {
   async reivindicar(id, a) {
@@ -184,7 +254,7 @@ export const marcadorNoBanco: Marcador = {
           input: { origem: ID_DA_AUTOMACAO },
           channel: 'manual',
           status: 'SUCCESS',
-          steps: { create: { sequence: 0, kind: 'KOMMO_ACTION', title: a.titulo, payload: a.payload as object } },
+          steps: { create: { sequence: 0, kind: 'KOMMO_ACTION', title: a.titulo, payload: { ...a.payload, estado: a.estado } as object } },
         },
       });
       return 'novo';
@@ -193,26 +263,49 @@ export const marcadorNoBanco: Marcador = {
         logger.warn({ err: String(err), id }, 'aviso-clinica-agendamento: não consegui gravar a marca do aviso');
         return 'erro';
       }
-      // Já existe. Se foi um envio recusado, o primeiro a reabrir ganha a nova tentativa.
+      // Já existe. Se estava pendente (recusado antes), o primeiro a pegar ganha a nova tentativa; guardar de novo é repetido.
+      if (a.estado === 'pendente') return 'repetido';
       try {
-        const r = await prisma.executionTrace.updateMany({ where: { id, status: 'FAILED' }, data: { status: 'SUCCESS', errorMessage: null } });
-        return r.count > 0 ? 'novo' : 'repetido';
+        return (await marcadorNoBanco.pegar(id)) ? 'novo' : 'repetido';
       } catch (err2) {
         logger.warn({ err: String(err2), id }, 'aviso-clinica-agendamento: não consegui reabrir a marca');
         return 'erro';
       }
     }
   },
-  async houveRecente(unitId, leadId, prefixoDoId, desde) {
-    const n = await prisma.executionTrace.count({
-      where: { unitId, leadId, id: { startsWith: prefixoDoId }, status: 'SUCCESS', createdAt: { gt: desde } },
-    });
+  async pegar(id) {
+    const n = await prisma.$executeRaw`
+      UPDATE execution_steps SET payload = jsonb_set(payload, '{estado}', '"enviando"')
+       WHERE trace_id = ${id} AND payload->>'estado' = 'pendente'`;
     return n > 0;
   },
-  async soltar(id) {
-    await prisma.executionTrace
-      .updateMany({ where: { id }, data: { status: 'FAILED', errorMessage: 'envio recusado pela Evolution — pode tentar de novo' } })
-      .catch((err) => logger.warn({ err: String(err), id }, 'aviso-clinica-agendamento: não consegui soltar a marca'));
+  async houveRecente(unitId, leadId, prefixoDoId, janelaMs) {
+    const linhas = await prisma.$queryRaw<Array<{ n: bigint | number }>>`
+      SELECT count(*) AS n
+        FROM execution_steps s
+        JOIN execution_traces t ON t.id = s.trace_id
+       WHERE t.unit_id = ${unitId} AND t.lead_id = ${leadId}
+         AND starts_with(t.id, ${prefixoDoId})
+         AND s.payload->>'estado' <> 'pendente'
+         AND t.created_at > now() - (${String(Math.round(janelaMs / 1000))} || ' seconds')::interval`;
+    return Number(linhas[0]?.n ?? 0) > 0;
+  },
+  async concluir(id, estado) {
+    await prisma
+      .$executeRaw`UPDATE execution_steps SET payload = jsonb_set(payload, '{estado}', to_jsonb(${estado}::text)) WHERE trace_id = ${id}`
+      .catch((err: unknown) => logger.warn({ err: String(err), id, estado }, 'aviso-clinica-agendamento: não consegui anotar o desfecho na marca'));
+  },
+  async pendentes(prefixoDoId, idadeMaxMs) {
+    const linhas = await prisma.$queryRaw<Array<{ id: string; unitId: string; leadId: string; payload: Record<string, unknown> | null }>>`
+      SELECT t.id AS "id", t.unit_id AS "unitId", t.lead_id AS "leadId", s.payload AS "payload"
+        FROM execution_steps s
+        JOIN execution_traces t ON t.id = s.trace_id
+       WHERE starts_with(t.id, ${prefixoDoId})
+         AND s.payload->>'estado' = 'pendente'
+         AND t.created_at > now() - (${String(Math.round(idadeMaxMs / 1000))} || ' seconds')::interval
+       ORDER BY t.created_at
+       LIMIT 50`;
+    return linhas.filter((l) => l.unitId).map((l) => ({ id: l.id, unitId: l.unitId, leadId: l.leadId, payload: l.payload ?? {} }));
   },
 };
 
@@ -227,7 +320,18 @@ export interface DepsDoAviso {
   agora?: () => Date;
 }
 
-export type Desfecho = 'enviado' | 'incerto' | 'recusado' | 'simulado' | 'desligado' | 'sem_destino' | 'sem_config' | 'repetido' | 'recente' | 'falhou';
+export type Desfecho =
+  | 'enviado'
+  | 'incerto'
+  | 'recusado'
+  | 'simulado'
+  | 'desligado'
+  | 'sem_destino'
+  | 'sem_config'
+  | 'repetido'
+  | 'recente'
+  | 'segurado'
+  | 'falhou';
 
 /** Avisa no log UMA vez por unidade e motivo: o vigia volta ao mesmo lead a cada 15 min e o log vai para o painel de erros. */
 const jaDisseNoLog = new Set<string>();
@@ -245,6 +349,33 @@ function configDaEvolution(env: Partial<NodeJS.ProcessEnv>): { url: string; head
   return url && header && valor ? { url, header, valor } : null;
 }
 
+type Cfg = { url: string; header: string; valor: string };
+
+/**
+ * Manda e anota o desfecho na marca: saiu → `enviado`; a Evolution recusou (não saiu) → `pendente` (o vigia tenta de novo);
+ * sem resposta (pode ter saído) → `incerto`, que nunca repete.
+ */
+async function enviarEAnotar(
+  a: { unit: Pick<Unit, 'slug'>; evento: string; leadId: number | undefined; idDaMarca: string; texto: string; destino: string; cfg: Cfg; anotar: boolean },
+  deps: DepsDoAviso,
+  marcador: Marcador,
+): Promise<'enviado' | 'recusado' | 'incerto'> {
+  const resultado = await (deps.enviar ?? enviarPelaEvolutionComResultado)({ ...a.cfg, numero: a.destino, texto: a.texto });
+  if (resultado === 'ok') {
+    logger.info({ unit: a.unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: aviso enviado');
+    if (a.anotar) await marcador.concluir(a.idDaMarca, 'enviado');
+    return 'enviado';
+  }
+  if (resultado === 'recusado') {
+    if (a.anotar) await marcador.concluir(a.idDaMarca, 'pendente');
+    logger.warn({ unit: a.unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: a Evolution recusou o aviso — fica pendente para a próxima varredura');
+    return 'recusado';
+  }
+  if (a.anotar) await marcador.concluir(a.idDaMarca, 'incerto');
+  logger.warn({ unit: a.unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: envio sem resposta — pode ter saído, não repito');
+  return 'incerto';
+}
+
 async function entregar(
   unit: UnidadeDoAviso,
   a: {
@@ -257,6 +388,8 @@ async function entregar(
     payload: Record<string, unknown>;
     /** só o «não fechou»: prefixo dos ids de aviso deste lead, para a regra de 1 a cada 24 h */
     prefixoDoLead?: string;
+    /** só o «marcou»: de madrugada (21h–7h na unidade) o aviso fica guardado e sai pela varredura do vigia depois das 7h */
+    segurarNaMadrugada?: boolean;
   },
   deps: DepsDoAviso,
 ): Promise<Desfecho> {
@@ -287,32 +420,92 @@ async function entregar(
   }
 
   const marcador = deps.marcador ?? marcadorNoBanco;
+  const agora = deps.agora?.() ?? new Date();
   if (a.prefixoDoLead) {
-    const desde = new Date((deps.agora?.() ?? new Date()).getTime() - JANELA_NAO_FECHOU_MS);
-    if (await marcador.houveRecente(unit.id, a.leadDaMarca, a.prefixoDoLead, desde).catch(() => false)) return 'recente';
+    if (await marcador.houveRecente(unit.id, a.leadDaMarca, a.prefixoDoLead, JANELA_NAO_FECHOU_MS).catch(() => false)) return 'recente';
   }
-  // Falha do banco: avisar mesmo assim (repetir é pouco; deixar a recepção no escuro é o que o pedido quer evitar).
-  const marca = await marcador.reivindicar(a.idDaMarca, { unitId: unit.id, leadId: a.leadDaMarca, titulo: a.titulo, payload: a.payload });
+  const segurar = Boolean(a.segurarNaMadrugada) && emMadrugadaDoAviso(unit, agora);
+  const marca = await marcador.reivindicar(a.idDaMarca, {
+    unitId: unit.id,
+    leadId: a.leadDaMarca,
+    titulo: a.titulo,
+    // O texto fica na marca: é ele que o vigia reenvia se o aviso ficou guardado ou foi recusado.
+    payload: { ...a.payload, texto: a.texto },
+    estado: segurar ? 'pendente' : 'enviando',
+  });
   if (marca === 'repetido') return 'repetido';
+  if (segurar) {
+    if (marca === 'erro') return 'falhou'; // sem a marca não há onde guardar: melhor calar de madrugada do que tocar o celular
+    logger.info({ unit: unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: madrugada na unidade — aviso guardado para depois das 7h');
+    return 'segurado';
+  }
+  // Falha do banco da marca: avisar mesmo assim (repetir é pouco; deixar a recepção no escuro é o que o pedido quer evitar).
+  return enviarEAnotar(
+    { unit, evento: a.evento, leadId: a.leadId, idDaMarca: a.idDaMarca, texto: a.texto, destino, cfg, anotar: marca === 'novo' },
+    deps,
+    marcador,
+  );
+}
 
-  const resultado = await (deps.enviar ?? enviarPelaEvolutionComResultado)({ ...cfg, numero: destino, texto: a.texto });
-  if (resultado === 'ok') {
-    logger.info({ unit: unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: aviso enviado');
-    return 'enviado';
+/**
+ * Reenvia os «marcou» que não saíram (guardados da madrugada, ou recusados pela Evolution). Chamado a cada varredura do vigia.
+ * Só reenvia com a chave LIGADA, fora da madrugada da unidade e para marcas de até 12 h; cada marca sai uma vez (quem ganha o
+ * `pegar` envia). Nunca lança. Devolve quantos enviou.
+ */
+export async function reenviarMarcouPendentes(
+  deps: DepsDoAviso & { unidade?: (unitId: string) => Promise<UnidadeDoAviso | null> } = {},
+): Promise<number> {
+  try {
+    const env = deps.env ?? process.env;
+    const marcador = deps.marcador ?? marcadorNoBanco;
+    const carregar =
+      deps.unidade ??
+      ((id: string) =>
+        prisma.unit.findUnique({
+          where: { id },
+          select: { id: true, slug: true, kommoSubdomain: true, businessHoursTimezone: true, spineTimezone: true, isActive: true },
+        }));
+    const lista = await marcador.pendentes(PREFIXO_MARCOU, IDADE_MAXIMA_PENDENTE_H * 3600_000);
+    let enviados = 0;
+    // No máximo 10 por varredura (cada envio pode levar até 15 s e a varredura do vigia espera por esta função).
+    for (const p of lista.slice(0, 10)) {
+      let pegou = false;
+      try {
+        const unit = await carregar(p.unitId);
+        if (!unit || (unit as { isActive?: boolean }).isActive === false) continue;
+        const estado = deps.estado ?? estadoDoAvisoClinica(unit.slug, env.AVISO_CLINICA_AGENDAMENTO_SLUGS);
+        if (estado !== 'ligado') continue; // desligado ou seco: não manda; a marca fica
+        if (emMadrugadaDoAviso(unit, deps.agora?.() ?? new Date())) continue;
+        const destino = destinoDoAvisoClinica(unit.slug, env.AVISO_CLINICA_AGENDAMENTO_DESTINOS);
+        const cfg = configDaEvolution(env);
+        const texto = typeof p.payload.texto === 'string' ? p.payload.texto : '';
+        if (!destino || !cfg || !texto) continue;
+        if (!(await marcador.pegar(p.id))) continue;
+        pegou = true;
+        const leadId = Number(p.leadId);
+        const r = await enviarEAnotar(
+          { unit, evento: 'marcou', leadId: Number.isFinite(leadId) ? leadId : undefined, idDaMarca: p.id, texto, destino, cfg, anotar: true },
+          deps,
+          marcador,
+        );
+        if (r === 'enviado') enviados++;
+      } catch (err) {
+        // Um pendente com problema não trava os outros; a marca que já tinha sido pega volta a pendente (nada saiu).
+        logger.warn({ err: String(err), id: p.id }, 'aviso-clinica-agendamento: falha ao reenviar um «marcou» pendente');
+        if (pegou) await marcador.concluir(p.id, 'pendente').catch(() => undefined);
+      }
+    }
+    return enviados;
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'aviso-clinica-agendamento: falha ao reenviar os «marcou» pendentes');
+    return 0;
   }
-  if (resultado === 'recusado') {
-    if (marca === 'novo') await marcador.soltar(a.idDaMarca);
-    logger.warn({ unit: unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: a Evolution recusou o aviso');
-    return 'recusado';
-  }
-  logger.warn({ unit: unit.slug, evento: a.evento, leadId: a.leadId }, 'aviso-clinica-agendamento: envio sem resposta — pode ter saído, não repito');
-  return 'incerto';
 }
 
 /** Id da marca: o evento inteiro (unidade, cartão ou cadastro, dia e hora). Remarcar para OUTRO horário é evento novo. */
 export const idDaMarcaMarcou = (unitId: string, quem: string, data: string, hora: string, idSchedule?: number | null): string =>
   // O idSchedule (o número da consulta na franquia) separa «marcou, desmarcou e marcou o mesmo horário de novo»: são duas consultas, dois avisos.
-  `aviso-clinica:marcou:${unitId}:${quem}:${data}T${hora}${idSchedule ? `:${idSchedule}` : ''}`;
+  `${PREFIXO_MARCOU}${unitId}:${quem}:${data}T${hora}${idSchedule ? `:${idSchedule}` : ''}`;
 
 /**
  * Chave de privacidade: `AVISO_CLINICA_AGENDAMENTO_SEM_TRECHO=1` tira do «não fechou» a última fala do paciente (o aviso fica só com
@@ -329,16 +522,22 @@ export function avisoSemTrecho(env: Partial<NodeJS.ProcessEnv> = process.env): b
  * o Kommo a cada varredura de 15 min, nem fica esquecido se alguém acertar a configuração.
  */
 export function silencioDepoisDe(d: Desfecho, janelaMs: number): number | null {
-  if (d === 'enviado' || d === 'incerto' || d === 'repetido' || d === 'recente') return janelaMs;
+  if (d === 'enviado' || d === 'incerto' || d === 'repetido') return janelaMs;
   if (d === 'desligado') return null;
+  // «recente» = outro aviso deste lead ainda dentro das 24 h: olha de novo em 1 h, porque ESTA oferta pode valer assim que as 24 h fecharem.
+  // «simulado» = seco: 3 h bastam (a tela só precisa do último «mandaria»).
+  if (d === 'simulado') return 3 * 60 * 60_000;
   return 60 * 60_000;
 }
+
 /** Id da marca do «não fechou»: uma por oferta (a hora da oferta entra no id). */
 export const prefixoNaoFechou = (unitId: string, leadId: string | number): string => `aviso-clinica:nao-fechou:${unitId}:${leadId}:`;
 
 /**
  * A Sofia acabou de gravar a consulta na franquia. Nunca lança.
  * `tipo`: «avaliação» (categoria 1, a consulta inicial) ou «consulta».
+ * Nome: o da franquia; se ela não devolveu um nome de gente, o do cartão do Kommo (`nomeDoCartao`, só consultado nesse caso).
+ * De madrugada (21h–7h na unidade) o aviso fica guardado e sai pelo vigia depois das 7h.
  */
 export async function avisarClinicaMarcou(
   a: {
@@ -346,6 +545,7 @@ export async function avisarClinicaMarcou(
     leadId?: number;
     idClient: number;
     nome: string | null | undefined;
+    nomeDoCartao?: () => Promise<string | null | undefined>;
     data: string;
     hora: string;
     idCategory?: number;
@@ -356,8 +556,10 @@ export async function avisarClinicaMarcou(
   deps: DepsDoAviso = {},
 ): Promise<Desfecho> {
   try {
+    let nome = a.nome;
+    if (!primeiroNome(nome) && a.nomeDoCartao) nome = await a.nomeDoCartao().catch(() => null);
     const texto = textoMarcou({
-      nome: a.nome,
+      nome,
       data: a.data,
       hora: a.hora,
       tipo: (a.idCategory ?? 1) === 1 ? 'avaliação' : 'consulta',
@@ -375,6 +577,7 @@ export async function avisarClinicaMarcou(
         leadDaMarca: quem,
         titulo: `AVISO CLÍNICA · ${a.remarcando ? 'remarcou' : 'marcou'} — ${a.data} ${a.hora}`,
         payload: { leadId: a.leadId ?? null, data: a.data, hora: a.hora },
+        segurarNaMadrugada: true,
       },
       deps,
     );

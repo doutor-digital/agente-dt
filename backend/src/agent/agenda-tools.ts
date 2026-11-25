@@ -1832,6 +1832,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           leadId: args.leadId,
           idClient: args.idClient,
           nome: paciente?.name,
+          // a franquia não devolveu um nome de gente: tenta o do cartão do Kommo antes de «paciente (sem nome)»
+          nomeDoCartao: kommo && args.leadId ? () => kommo.getLead(args.leadId!).then((l) => l?.name ?? null) : undefined,
           data: args.data,
           hora: args.hora,
           idCategory: args.idCategory,

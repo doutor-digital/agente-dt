@@ -7,7 +7,7 @@ import { fusoDaUnidade } from './fuso.js';
 import { enviarTelegramSofia } from './telegram.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { avisoClinicaAtivo, avisarClinicaNaoFechou, avisoSemTrecho, silencioDepoisDe } from './aviso-clinica-agendamento.js';
+import { avisoClinicaAtivo, avisarClinicaNaoFechou, avisoSemTrecho, reenviarMarcouPendentes, silencioDepoisDe } from './aviso-clinica-agendamento.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -336,6 +336,9 @@ async function varrer(): Promise<void> {
     const agora = Date.now();
     for (const [chave, ate] of comConsulta) if (ate <= agora) comConsulta.delete(chave);
     for (const [chave, ate] of comAvisoDaClinica) if (ate <= agora) comAvisoDaClinica.delete(chave);
+
+    // «A Sofia marcou» que ficou guardado da madrugada ou que a Evolution recusou (chave aviso-clinica-agendamento). Nunca lança.
+    await reenviarMarcouPendentes();
 
     const lista = await candidatos();
     if (lista.length === 0) return;
