@@ -662,16 +662,20 @@ test('token: env primeiro; sem env, o token de anúncios da unidade no banco', (
   assert.equal(configDaUnidade('doutor-hernia-parauapebas', {}, null).token, null);
 });
 
-/** Conversa importada da Kommo como o importador a grava: etiqueta historico + kommo_lead_id + kommo_importado_em */
+/**
+ * Conversa importada da Kommo como o importador a grava: etiqueta historico + kommo_lead_id + kommo_importado_em + `kommo_capi_inicial` (os eventos que o ESTADO IMPORTADO
+ * já alcança, calculados pelo exportador com `eventosAlcancados`). `importado` = os atributos NO MOMENTO da importação; `attrs` = os de agora.
+ */
 const IMP_KOMMO = unix('2026-11-10T12:00:00Z');
-const daKommo = (id: number, aberto: boolean, attrs: Record<string, unknown>, extra: Record<string, unknown>) => ({
+const daKommo = (id: number, aberto: boolean, importado: Record<string, unknown>, extra: Record<string, unknown>, attrs: Record<string, unknown> = importado) => ({
   ...bruta(id, attrs),
   labels: ['historico'],
-  additional_attributes: { kommo_lead_id: id, kommo_importado_em: IMP_KOMMO, kommo_aberto: aberto },
+  additional_attributes: { kommo_lead_id: id, kommo_importado_em: IMP_KOMMO, kommo_aberto: aberto, kommo_capi_inicial: eventosAlcancados(importado) },
   ...extra,
 });
 const ARQUIVADA = { status: 'resolved', last_activity_at: IMP_KOMMO - 86_400 };
 const ACORDADA = { status: 'open', last_activity_at: unix('2026-11-16T15:05:00Z') };
+const idsEnviados = (t: { enviados: Array<{ evento: Record<string, any> }> }) => t.enviados.map((e) => e.evento.event_id);
 
 test('histórico da Kommo ARQUIVADO que ACORDA (o paciente volta por anúncio) NÃO manda o estado antigo à Meta — só o que a equipe marcar DEPOIS', async () => {
   const casos = {
@@ -679,35 +683,72 @@ test('histórico da Kommo ARQUIVADO que ACORDA (o paciente volta por anúncio) N
     31: { aberto: true, attrs: { funil: 'Comercial', etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2026-10-20' } }, // InitiateCheckout
     32: { aberto: true, attrs: { funil: 'Comercial', etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-10-27' } }, // AddToCart de consulta passada
   } as const;
-  const como = (extra: Record<string, unknown>, mudou: Record<number, Record<string, unknown>> = {}) => [bruta(1, {}), ...Object.entries(casos).map(([id, c]) => daKommo(Number(id), c.aberto, { ...c.attrs, ...(mudou[Number(id)] ?? {}) }, extra))];
+  const como = (extra: Record<string, unknown>, mudou: Record<number, Record<string, unknown>> = {}) => [bruta(1, {}), ...Object.entries(casos).map(([id, c]) => daKommo(Number(id), c.aberto, c.attrs, extra, { ...c.attrs, ...(mudou[Number(id)] ?? {}) }))];
   const t = montar({ conversas: como(ARQUIVADA), cliques: { 30: CLIQUE, 31: CLIQUE, 32: CLIQUE } });
   await t.ciclo('seco', T0);
   await t.ciclo('ligado', min(10));
   assert.equal(t.enviados.length, 0, 'arquivo: o CAPI nem olha');
-  // o paciente volta clicando num anúncio: acorda. A equipe NÃO mexeu em nada
-  t.estado.conversas = como(ACORDADA);
+  t.estado.conversas = como(ACORDADA); // o paciente volta clicando num anúncio; a equipe NÃO mexeu em nada
   await t.ciclo('ligado', min(20));
   await t.ciclo('ligado', min(30));
   await t.ciclo('ligado', min(40));
-  assert.deepEqual(t.enviados.map((e) => e.evento.event_id), [], 'Purchase, InitiateCheckout e AddToCart que vieram do cartão da Kommo são «inicial» e NUNCA vão');
-  // a equipe, DEPOIS, marca a 31 como Agendado: isto sim é conversão nova
-  t.estado.conversas = como(ACORDADA, { 31: { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-12-02' } });
+  assert.deepEqual(idsEnviados(t), [], 'Purchase, InitiateCheckout e AddToCart que vieram do cartão da Kommo são «inicial» e NUNCA vão');
+  t.estado.conversas = como(ACORDADA, { 31: { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-12-02' } }); // a equipe marca Agendado DEPOIS
   await t.ciclo('ligado', min(50));
-  assert.deepEqual(t.enviados.map((e) => e.evento.event_id), ['chatwoot-31-AddToCart']);
+  assert.deepEqual(idsEnviados(t), ['chatwoot-31-AddToCart']);
+});
+
+test('histórico da Kommo: a equipe mexe ANTES do 1º ciclo do CAPI — a conversão real vai; o estado importado não', async () => {
+  const importado = { funil: 'Comercial', etapa: 'Fechou', fechou_tratamento: true }; // GANHO de meses atrás: Purchase é «inicial»
+  const agora = { funil: 'Comercial', etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-12-02', fechou_tratamento: true }; // e a equipe já marcou Agendado
+  const t = montar({ conversas: [bruta(1, {})], cliques: { 50: CLIQUE } });
+  await t.ciclo('seco', T0);
+  t.estado.conversas = [bruta(1, {}), daKommo(50, false, importado, ACORDADA, agora)];
+  await t.ciclo('ligado', min(10));
+  assert.deepEqual(idsEnviados(t), ['chatwoot-50-AddToCart'], 'só o AddToCart novo; o Purchase do cartão importado fica de fora');
+});
+
+test('histórico da Kommo: corrida entre duas cópias do servidor e falha no meio do ciclo NÃO deixam passar o estado importado (decisão sem marca, sem ciclo, sem cópia)', async () => {
+  const importado = { funil: 'Comercial', etapa: 'Compareceu', situacao_consulta: 'Atendido', fechou_tratamento: true }; // InitiateCheckout + Purchase
+  // corrida: dois ciclos ao mesmo tempo (a cópia que perde a gravação do «visto» segue para o próximo ciclo)
+  const t = montar({ conversas: [bruta(1, {})], cliques: { 41: CLIQUE } });
+  await t.ciclo('seco', T0);
+  t.estado.conversas = [bruta(1, {}), daKommo(41, true, importado, ACORDADA)];
+  await Promise.all([t.ciclo('ligado', min(10)), t.ciclo('ligado', min(10))]);
+  await t.ciclo('ligado', min(20));
+  assert.deepEqual(idsEnviados(t), [], 'corrida: 0 enviados');
+  // falha no meio: o banco cai na gravação do 1º «visto»; o ciclo seguinte decide igual
+  const t2 = montar({ conversas: [bruta(1, {})], cliques: { 41: CLIQUE } });
+  await t2.ciclo('seco', T0);
+  t2.estado.conversas = [bruta(1, {}), daKommo(41, true, importado, ACORDADA)];
+  const orig = t2.deps.armazem.registrar.bind(t2.deps.armazem);
+  let falhou = false;
+  t2.deps.armazem.registrar = async (l: any) => { if (String(l.regra).startsWith('capi-visto:') && !falhou) { falhou = true; throw new Error('banco caiu'); } return orig(l); };
+  const r1 = await t2.ciclo('ligado', min(10));
+  await t2.ciclo('ligado', min(20));
+  assert.ok(r1.falhas >= 1);
+  assert.deepEqual(idsEnviados(t2), [], 'falha no meio: 0 enviados');
 });
 
 test('histórico da Kommo que NASCE VIVO (AGENDADO com consulta futura): o AddToCart do cartão importado não vai; o que a equipe fizer depois, sim', async () => {
+  const importado = { funil: 'Comercial', etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2099-01-10' };
   const t = montar({ conversas: [bruta(1, {})], cliques: { 40: CLIQUE } });
   await t.ciclo('seco', T0);
-  const viva = (attrs: Record<string, unknown>) => daKommo(40, true, attrs, ARQUIVADA); // nasce resolvida, intacta e VIVA por consulta de pé
-  t.estado.conversas = [bruta(1, {}), viva({ funil: 'Comercial', etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2099-01-10' })];
+  t.estado.conversas = [bruta(1, {}), daKommo(40, true, importado, ARQUIVADA)]; // nasce resolvida, intacta e VIVA por consulta de pé
   await t.ciclo('ligado', min(10));
   await t.ciclo('ligado', min(20));
   assert.equal(t.enviados.length, 0, 'AddToCart só porque foi importada assim: não');
-  // a equipe responde e marca Compareceu (a conversa já tinha sido vista)
-  t.estado.conversas = [bruta(1, {}), daKommo(40, true, { funil: 'Comercial', etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2099-01-10' }, ACORDADA)];
+  t.estado.conversas = [bruta(1, {}), daKommo(40, true, importado, ACORDADA, { funil: 'Comercial', etapa: 'Compareceu', situacao_consulta: 'Atendido', data_consulta: '2099-01-10' })];
   await t.ciclo('ligado', min(30));
-  assert.deepEqual(t.enviados.map((e) => e.evento.event_id), ['chatwoot-40-InitiateCheckout'], 'o que a conversa alcança DEPOIS conta');
-  // a marca da 1ª vista é gravada uma vez só
-  assert.equal(t.linhas.filter((l) => l.regra === 'capi-vista-kommo').length, 1);
+  assert.deepEqual(idsEnviados(t), ['chatwoot-40-InitiateCheckout'], 'o que a conversa alcança DEPOIS conta');
+});
+
+test('conversa NÃO importada da Kommo segue igual: a etiqueta historico (Parauapebas) deixa o que já estava como «inicial»; paciente novo manda normalmente', async () => {
+  const t = montar({ conversas: [bruta(1, {})], cliques: { 60: CLIQUE, 61: CLIQUE } });
+  await t.ciclo('seco', T0);
+  t.estado.conversas = [bruta(1, {}), { ...bruta(60, { etapa: 'Agendado' }), labels: ['historico'] }, bruta(61, {})];
+  await t.ciclo('ligado', min(10));
+  t.estado.conversas = [bruta(1, {}), { ...bruta(60, { etapa: 'Agendado' }), labels: ['historico'] }, bruta(61, { etapa: 'Agendado' })];
+  await t.ciclo('ligado', min(20));
+  assert.deepEqual(idsEnviados(t), ['chatwoot-61-AddToCart']);
 });

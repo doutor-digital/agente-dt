@@ -266,9 +266,9 @@ def importar!
   linhas = linhas.first(LIMITE) if LIMITE.positive?
   log "arquivo da unidade #{cabecalho['unidade'].to_s[0, 60]}: #{c[:cartoes_no_arquivo]} cartões, #{linhas.size} válidos para importar"
 
-  # conversa importada por versão ANTIGA do importador (sem `kommo_importado_em`) seria lida como «não é nossa» pelo backend: recusa até alguém decidir o que fazer com ela
-  antigas = Conversation.where(account_id: conta.id).where('COALESCE(jsonb_exists(additional_attributes, ?), false) AND NOT COALESCE(jsonb_exists(additional_attributes, ?), false)', K::MARCA_CONVERSA, K::MARCA_IMPORTADO_EM).count
-  raise ErroNosso, "a conta #{conta.id} tem #{antigas} conversa(s) com kommo_lead_id e SEM kommo_importado_em (importadas por uma versão antiga): recusado" if antigas.positive?
+  # conversa importada por versão ANTIGA do importador (sem `kommo_importado_em` ou sem `kommo_capi_inicial`) seria lida pelo backend como «não é nossa» ou mandaria à Meta o estado antigo: recusa até alguém decidir o que fazer com ela
+  antigas = Conversation.where(account_id: conta.id).where('COALESCE(jsonb_exists(additional_attributes, ?), false) AND NOT (COALESCE(jsonb_exists(additional_attributes, ?), false) AND COALESCE(jsonb_exists(additional_attributes, ?), false))', K::MARCA_CONVERSA, K::MARCA_IMPORTADO_EM, K::MARCA_CAPI_INICIAL).count
+  raise ErroNosso, "a conta #{conta.id} tem #{antigas} conversa(s) com kommo_lead_id e SEM kommo_importado_em ou SEM kommo_capi_inicial (importadas por uma versão antiga): recusado" if antigas.positive?
 
   # ── o que já existe (idempotência: a chave é o id do cartão) ──
   # cartão importado = conversa NOSSA com a marca, OU a nota-resumo (`kommo-nota:<cartão>`) em qualquer conversa da caixa (as que entraram na conversa viva do paciente)
@@ -405,7 +405,7 @@ def gravar_cartao!(conta, inbox, linha, achado, alvo, definicoes, etiquetas_da_c
       viva = linha[:consulta_de_pe] == true
       cid = Conversation.insert_all!([{
         account_id: conta.id, inbox_id: inbox.id, contact_id: contato_id, contact_inbox_id: ci_id, status: 1, assignee_id: nil,
-        additional_attributes: { K::MARCA_CONVERSA => linha[:lead_id], K::MARCA_ORIGEM => 'kommo', K::MARCA_IMPORTADO_EM => importado_em, K::MARCA_ORDEM => K.ordem_do_cartao(linha), K::MARCA_ABERTO => linha[:aberto] },
+        additional_attributes: { K::MARCA_CONVERSA => linha[:lead_id], K::MARCA_ORIGEM => 'kommo', K::MARCA_IMPORTADO_EM => importado_em, K::MARCA_ORDEM => K.ordem_do_cartao(linha), K::MARCA_ABERTO => linha[:aberto], K::MARCA_CAPI_INICIAL => linha[:capi_inicial] },
         custom_attributes: custom,
         cached_label_list: nomes.join(', '), created_at: criado, updated_at: ultima, last_activity_at: viva ? Time.at(importado_em).utc : ultima, status_changed_at: ultima,
         agent_last_seen_at: ultima, assignee_last_seen_at: ultima, waiting_since: nil

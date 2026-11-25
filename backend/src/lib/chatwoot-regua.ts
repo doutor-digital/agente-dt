@@ -58,6 +58,8 @@ export const KOMMO_LEAD_ID = 'kommo_lead_id';
 export const KOMMO_IMPORTADO_EM = 'kommo_importado_em';
 /** `true` = o cartão estava ABERTO na Kommo quando foi importado (Ganho/Perdido/Alta = `false`). */
 export const KOMMO_ABERTO = 'kommo_aberto';
+/** Os eventos do CAPI (AddToCart, InitiateCheckout, Purchase) que o estado importado já alcançava: o importador os grava; o CAPI nunca os manda. */
+export const KOMMO_CAPI_INICIAL = 'kommo_capi_inicial';
 
 /** A conversa foi criada pela importação da Kommo e leva o instante da gravação (sem ele não dá para saber se alguém mexeu depois). */
 export function importadaDaKommo(raw: any): boolean {
@@ -181,8 +183,12 @@ export interface ConversaRegua {
   ultima: MensagemResumo | null;
   /** telefone do contato (`+55…`), para conferir cartão ativo no Kommo antes de falar com o paciente */
   telefone?: string;
-  /** conversa criada pela importação da Kommo (`kommo_lead_id` + `kommo_importado_em`): o CAPI marca a 1ª vez que a vê, para o estado que veio da Kommo ser «inicial» */
-  daKommo?: boolean;
+  /**
+   * Conversa criada pela importação da Kommo: os eventos do CAPI que o estado VINDO DA KOMMO já alcança (gravados pelo importador no momento de importar:
+   * `additional_attributes.kommo_capi_inicial`). O CAPI os trata como «inicial» para sempre — determinístico, sem depender de marca, de ciclo nem de cópia do servidor.
+   * Ausente = conversa que não é da Kommo (ou importada sem a lista): vale a regra de sempre (etiqueta `historico`).
+   */
+  kommoCapiInicial?: string[];
 }
 
 /** A 1ª vez que o worker viu a conversa com este valor neste campo. */
@@ -933,6 +939,6 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,
     telefone: str(sender.phone_number),
-    ...(importadaDaKommo(raw) ? { daKommo: true } : {}),
+    ...(importadaDaKommo(raw) && Array.isArray(raw.additional_attributes[KOMMO_CAPI_INICIAL]) ? { kommoCapiInicial: raw.additional_attributes[KOMMO_CAPI_INICIAL].map(String) } : {}),
   };
 }

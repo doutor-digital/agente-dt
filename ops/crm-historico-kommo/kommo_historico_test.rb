@@ -10,7 +10,7 @@ class KommoHistoricoTest < Minitest::Test
   def linha(extra = {})
     { 'tipo' => 'cartao', 'v' => 1, 'lead_id' => 777, 'contato_id' => 55, 'nome' => 'Maria', 'telefone' => '5547991234567', 'funil_kommo' => 'COMERCIAL', 'etapa_kommo' => 'AGENDADO',
       'aberto' => true, 'criado_em' => 1_790_000_000, 'atualizado_em' => 1_790_100_000, 'fechado_em' => nil, 'atributos' => { 'etapa' => 'Agendado', 'kommo_lead_id' => 777 },
-      'etiquetas' => ['historico'], 'nota' => 'nota', 'mensagens' => [{ 'id' => 'a', 'em' => 1_790_000_100, 'entrada' => true, 'texto' => 'oi' }] }.merge(extra)
+      'etiquetas' => ['historico'], 'capi_inicial' => [], 'nota' => 'nota', 'mensagens' => [{ 'id' => 'a', 'em' => 1_790_000_100, 'entrada' => true, 'texto' => 'oi' }] }.merge(extra)
   end
 
   def test_variantes_do_celular_brasileiro_com_e_sem_o_9
@@ -80,6 +80,15 @@ class KommoHistoricoTest < Minitest::Test
     b, = K.validar(linha('lead_id' => 2, 'aberto' => false, 'atualizado_em' => 900))
     c, = K.validar(linha('lead_id' => 3, 'aberto' => true, 'atualizado_em' => 100))
     assert_equal [2, 3, 1], K.ordenar([a, b, c]).map { |x| x[:lead_id] }
+  end
+
+  def test_capi_inicial_e_obrigatorio_e_so_aceita_eventos_do_capi
+    l, motivo = K.validar(linha('capi_inicial' => %w[AddToCart Purchase AddToCart]))
+    assert_nil motivo
+    assert_equal %w[AddToCart Purchase], l[:capi_inicial]
+    assert_equal :sem_capi_inicial, K.validar(linha.reject { |k, _| k == 'capi_inicial' })[1], 'sem a lista a conversa nasceria sem proteção contra compra falsa na Meta'
+    assert_equal :sem_capi_inicial, K.validar(linha('capi_inicial' => ['Lead']))[1]
+    assert_equal :sem_capi_inicial, K.validar(linha('capi_inicial' => 'Purchase'))[1]
   end
 
   def test_ordem_do_cartao_consulta_de_pe_na_frente_depois_aberto_e_o_mais_recente

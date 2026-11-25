@@ -85,7 +85,7 @@ end
 def cartao(lead, extra = {})
   { 'tipo' => 'cartao', 'v' => 1, 'lead_id' => lead, 'contato_id' => lead + 5000, 'nome' => "Paciente #{lead}", 'telefone' => '5547991230001', 'funil_kommo' => 'COMERCIAL', 'etapa_kommo' => 'AGENDADO',
     'aberto' => true, 'criado_em' => T.call(40), 'atualizado_em' => T.call(3), 'fechado_em' => nil, 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'kommo_lead_id' => lead },
-    'etiquetas' => ['historico'], 'nota' => "📥 Histórico da Kommo — cartão ##{lead}\nResponsável: Camily", 'mensagens' => [] }.merge(extra)
+    'etiquetas' => ['historico'], 'capi_inicial' => [], 'nota' => "📥 Histórico da Kommo — cartão ##{lead}\nResponsável: Camily", 'mensagens' => [] }.merge(extra)
 end
 
 def msg(id, dias, entrada, texto)
@@ -171,7 +171,7 @@ if FASE == 1
     # A: aberto, Agendado, paciente novo, conversa com «sair/urgente» (as automações NÃO podem reagir)
     cartao(1001, 'mensagens' => [msg('a1', 20, true, 'oi, quero agendar'), msg('a2', 20, false, 'Claro! Qual a sua queixa?'), msg('a3', 19, true, 'dor forte, é urgente, quero parar de sentir. sair de casa dói'), msg('a4', 3, false, 'Confirmado para sexta')],
                  'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'data_consulta' => '2026-11-27', 'hora_consulta' => '10:30', 'situacao_consulta' => 'Agendado', 'qualificacao' => 'Quente', 'kommo_lead_id' => 1001, 'origem' => 'Meta-Instagram' },
-                 'etiquetas' => %w[historico quente anuncio etiqueta-que-a-conta-nao-tem], 'consulta_de_pe' => true),
+                 'etiquetas' => %w[historico quente anuncio etiqueta-que-a-conta-nao-tem], 'consulta_de_pe' => true, 'capi_inicial' => %w[AddToCart]),
     # B: perdido há 2 meses, paciente novo
     cartao(1002, 'telefone' => TELEFONES[:novo_b], 'aberto' => false, 'etapa_kommo' => 'PERDIDO', 'fechado_em' => T.call(60), 'atualizado_em' => T.call(60),
                  'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Perdido', 'motivo_nao_agendamento' => 'Sem interesse', 'kommo_lead_id' => 1002 }, 'etiquetas' => %w[historico perdido-sem-interesse],
@@ -232,6 +232,7 @@ if FASE == 1
   confere('A: a NOTA-resumo é privada, abre a conversa (antes da 1ª mensagem) e tem o texto do exportador', nota && nota.message_type == 'outgoing' && nota.content.include?('Histórico da Kommo') && nota.created_at < ms.first.created_at)
   confere('A: atributos do CRM (etapa, funil, consulta, qualificação) e origem; a marca do cartão fica na conversa e não nos atributos', a.custom_attributes.slice('funil', 'etapa', 'data_consulta', 'hora_consulta', 'situacao_consulta', 'qualificacao', 'origem') == { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'data_consulta' => '2026-11-27', 'hora_consulta' => '10:30', 'situacao_consulta' => 'Agendado', 'qualificacao' => 'Quente', 'origem' => 'Meta-Instagram' } && !a.custom_attributes.key?('kommo_lead_id'), a.custom_attributes.inspect)
   confere('A (consulta de pé): conversa criada na data do cartão e com a última atividade = a HORA DA IMPORTAÇÃO (vai ao TOPO da lista do quadro/Hoje); a posição e o «aberto» ficam marcados', a.created_at.to_i == T.call(40) && a.last_activity_at.to_i == a.additional_attributes['kommo_importado_em'] && a.additional_attributes['kommo_aberto'] == true && a.additional_attributes['kommo_ordem'][0] == 1, a.additional_attributes.inspect)
+  confere('A: o importador gravou na conversa os eventos do CAPI que o estado importado já alcança (kommo_capi_inicial) — o CAPI os trata como «inicial» para sempre; B (sem evento) leva a lista vazia', a.additional_attributes['kommo_capi_inicial'] == %w[AddToCart] && por_lead[1002].additional_attributes['kommo_capi_inicial'] == [], a.additional_attributes.inspect)
   confere('B (perdido, arquivo): conversa com a última atividade = a data REAL do cartão (não sobe na lista) e kommo_aberto = false', por_lead[1002].last_activity_at.to_i == T.call(60) && por_lead[1002].additional_attributes['kommo_aberto'] == false && por_lead[1002].additional_attributes['kommo_ordem'][0] == 0, por_lead[1002].additional_attributes.inspect)
   confere('A: o contato é novo, com o telefone em formato E.164 e o source_id só dígitos (o do WhatsApp Cloud)', a.contact.phone_number == '+5547991230001' && a.contact_inbox.source_id == '5547991230001' && ['Paciente 1001', 'Paciente 1003'].include?(a.contact.name))
   c = por_lead[1003]
@@ -329,7 +330,7 @@ if FASE == 2
   confere('DESTINO ESTÁVEL (P9): rodar de novo (em outra ordem de arquivo) não muda nada', Conversation.where(contact_inbox_id: ci9.id).count == 2 && $ultimo_resumo[:cartoes_novos].zero?, $ultimo_resumo.inspect)
   # ── CONSULTA DE PÉ NA FRENTE: o paciente com um AGENDADO e um cartão aberto MAIS NOVO responde «confirmo» na conversa do AGENDADO ──
   novo_aberto = ->(lead, fone, dias) { cartao(lead, 'telefone' => fone, 'atualizado_em' => T.call(dias), 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Sofia qualifica', 'kommo_lead_id' => lead }, 'mensagens' => [msg("n#{lead}", dias, true, 'oi')]) }
-  com_consulta = ->(lead, fone, dias) { cartao(lead, 'telefone' => fone, 'atualizado_em' => T.call(dias), 'consulta_de_pe' => true, 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'situacao_consulta' => 'Agendado', 'kommo_lead_id' => lead }, 'mensagens' => [msg("c#{lead}", dias, true, 'confirmo')]) }
+  com_consulta = ->(lead, fone, dias) { cartao(lead, 'telefone' => fone, 'atualizado_em' => T.call(dias), 'consulta_de_pe' => true, 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'situacao_consulta' => 'Agendado', 'kommo_lead_id' => lead }, 'capi_inicial' => %w[AddToCart], 'mensagens' => [msg("c#{lead}", dias, true, 'confirmo')]) }
   # P10 (rodadas): o cartão novo e sem consulta chega no piloto; o AGENDADO (mais velho, com consulta de pé) só na 2ª rodada — e vira a conversa de MAIOR id
   rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p10-rodada1.jsonl', conta, [novo_aberto.call(2007, TELEFONES[:rodadas_p10], 1)]), CONTA: conta.id)
   rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p10-rodada2.jsonl', conta, [com_consulta.call(2006, TELEFONES[:rodadas_p10], 10), novo_aberto.call(2007, TELEFONES[:rodadas_p10], 1)]), CONTA: conta.id)
@@ -348,6 +349,10 @@ if FASE == 2
   st = rodar_importador(GRAVAR: nil, ARQUIVO: ARQ, CONTA: conta.id)
   confere('conversa com kommo_lead_id e SEM kommo_importado_em: a rodada é RECUSADA (versão antiga do importador)', st == 1, st.inspect)
   ve.update_columns(additional_attributes: ve.additional_attributes.merge('kommo_importado_em' => ve.created_at.to_i + 86_400 * 30))
+  ve.reload.update_columns(additional_attributes: ve.additional_attributes.except('kommo_capi_inicial'))
+  st = rodar_importador(GRAVAR: nil, ARQUIVO: ARQ, CONTA: conta.id)
+  confere('conversa SEM kommo_capi_inicial (versão antiga): a rodada também é RECUSADA', st == 1, st.inspect)
+  ve.reload.update_columns(additional_attributes: ve.additional_attributes.merge('kommo_capi_inicial' => []))
 
 end
 
@@ -481,6 +486,9 @@ if FASE == 5
   confere('arquivo inexistente: recusado', st == 1 && igual, [st, igual].inspect)
   st, igual = rec.call(ARQUIVO: File.join(TRAB, 'sem-cabecalho.jsonl'))
   confere('arquivo sem o cabeçalho do exportador: recusado', st == 1 && igual, [st, igual].inspect)
+  File.write(File.join(TRAB, 'sem-capi.jsonl'), File.readlines(ARQ).map { |l| (j = JSON.parse(l) rescue nil) && j['tipo'] == 'cartao' ? j.except('capi_inicial').to_json : l.chomp }.join("\n"))
+  st, igual = rec.call(ARQUIVO: File.join(TRAB, 'sem-capi.jsonl'))
+  confere('linha SEM capi_inicial (arquivo de um exportador antigo): TODAS recusadas, nada gravado', st == 0 && igual && $ultimo_resumo[:linha_recusada_sem_capi_inicial].to_i >= 9, $ultimo_resumo.inspect)
   st, igual = rec.call(LIMITE_CARTOES: 1, GRAVAR: nil)
   confere('LIMITE_CARTOES=1 em seco funciona e conta 1 cartão', st == 0 && igual && $ultimo_resumo[:cartoes_ja_importados].to_i + $ultimo_resumo[:cartoes_novos].to_i == 1, $ultimo_resumo.inspect)
 end

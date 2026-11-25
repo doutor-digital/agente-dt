@@ -48,6 +48,8 @@ export interface PortaKommo {
 
 export interface Ambiente {
   porta: PortaKommo;
+  /** `eventosAlcancados` do CAPI (ver `linhaDoCartao`) */
+  eventosCapi: (atributos: Record<string, unknown>) => readonly string[];
   pausa: (ms: number) => Promise<void>;
   agora: () => Date;
   /** só dado agregado: sem nome, telefone nem texto */
@@ -391,7 +393,7 @@ export async function exportar(
     }
     segundos += (Date.now() - t0) / 1000;
     lidos.add(c.id);
-    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, agora);
+    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, agora, amb.eventosCapi);
     r.mensagens += linha.mensagens.length;
     if (linha.mensagens.length) r.cartoesComMensagem++;
     if (opcoes.gravar) {

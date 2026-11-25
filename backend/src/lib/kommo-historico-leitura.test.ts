@@ -7,6 +7,13 @@ import type { KommoLead, KommoPipeline, KommoTalk, KommoTalkMessage } from '../s
 import { exportar, inicioDosFechados, lerConversa, lerSelecao, MAX_PAGINAS, POR_PAGINA, type Ambiente, type PortaKommo } from './kommo-historico-leitura.js';
 import { linhaDoCartao, type LinhaDoCartao } from './kommo-historico-crm.js';
 
+process.env.KOMMO_SUBDOMAIN ??= 'teste';
+process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
+process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
+process.env.DATABASE_URL ??= 'postgresql://x:y@127.0.0.1:1/z';
+process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
+const { eventosAlcancados } = await import('./chatwoot-capi.js');
+
 const AGORA = new Date('2026-11-25T15:00:00Z');
 const SEG = (iso: string) => Math.floor(Date.parse(iso) / 1000);
 
@@ -43,7 +50,7 @@ function kommoDeMentira(leads: KommoLead[], opcoes: { telefones?: Record<number,
       return Array.from({ length: opcoes.msgsPorLead ?? 3 }, (_, i) => ({ id: `${talkId}-${i}`, type: 'x', text: `m${i}`, created_at: 100 + i, author: { type: i % 2 ? 'internal' : 'external' } }) as KommoTalkMessage);
     },
   };
-  const amb: Ambiente = { porta, pausa: async () => undefined, agora: () => AGORA, log: () => undefined };
+  const amb: Ambiente = { porta, eventosCapi: eventosAlcancados, pausa: async () => undefined, agora: () => AGORA, log: () => undefined };
   return { amb, c };
 }
 
@@ -159,7 +166,7 @@ test('conversa lida em PÁGINAS de 100: as «últimas 50» são as últimas de v
   const msgs = (await lerConversa(longa, 1))!;
   assert.equal(msgs.length, 250);
   assert.deepEqual(paginas, [1, 2, 3]);
-  const linha = linhaDoCartao({ id: 1, nome: 'A', funil: 'COMERCIAL', etapa: 'AGENDADO', statusId: 11, preco: 0, criadoEm: 1, atualizadoEm: 2, fechadoEm: null, responsavel: null, motivoPerda: null, etiquetas: [], campos: [] }, { id: 1, nome: 'A', telefone: '47991234567' }, msgs, AGORA);
+  const linha = linhaDoCartao({ id: 1, nome: 'A', funil: 'COMERCIAL', etapa: 'AGENDADO', statusId: 11, preco: 0, criadoEm: 1, atualizadoEm: 2, fechadoEm: null, responsavel: null, motivoPerda: null, etiquetas: [], campos: [] }, { id: 1, nome: 'A', telefone: '47991234567' }, msgs, AGORA, eventosAlcancados);
   assert.equal(linha.mensagens_total, 250);
   assert.equal(linha.mensagens[0]!.id, 'x200');
   assert.equal(linha.mensagens.at(-1)!.id, 'x249');

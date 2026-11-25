@@ -21,6 +21,14 @@ import {
 } from './kommo-historico-crm.js';
 import { atualizarVistos, conversaDoChatwoot, decidirRegua, ehArquivo, type DadosDaUnidade } from './chatwoot-regua.js';
 
+// a MESMA função do CAPI (a decisão de `capi_inicial`); o módulo do CAPI lê a configuração do servidor ao carregar
+process.env.KOMMO_SUBDOMAIN ??= 'teste';
+process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
+process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
+process.env.DATABASE_URL ??= 'postgresql://x:y@127.0.0.1:1/z';
+process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
+const { eventosAlcancados } = await import('./chatwoot-capi.js');
+
 const AGORA = new Date('2026-11-25T15:00:00Z');
 /** 2026-11-27 10:30 em Belém (UTC−3) */
 const CONSULTA = Math.floor(Date.parse('2026-11-27T13:30:00Z') / 1000);
@@ -246,7 +254,7 @@ test('mensagens: ordem por hora, paciente = external, anexo vira rótulo, vazia 
 
 // ── a linha inteira ──
 test('linha do cartão: contato, telefone, marcas, aberto/fechado e sem_telefone', () => {
-  const l = linhaDoCartao(cartao(), { id: 55, nome: 'Maria da Silva', telefone: '(47) 99123-4567' }, [], AGORA);
+  const l = linhaDoCartao(cartao(), { id: 55, nome: 'Maria da Silva', telefone: '(47) 99123-4567' }, [], AGORA, eventosAlcancados);
   assert.equal(l.tipo, 'cartao');
   assert.equal(l.lead_id, 777);
   assert.equal(l.nome, 'Maria da Silva');
@@ -254,12 +262,12 @@ test('linha do cartão: contato, telefone, marcas, aberto/fechado e sem_telefone
   assert.equal(l.sem_telefone, null);
   assert.equal(l.aberto, true);
   assert.equal(l.atributos.kommo_lead_id, 777);
-  const semFone = linhaDoCartao(cartao({ etapa: 'PERDIDO', statusId: 143 }), { id: 55, nome: null, telefone: '12' }, [], AGORA);
+  const semFone = linhaDoCartao(cartao({ etapa: 'PERDIDO', statusId: 143 }), { id: 55, nome: null, telefone: '12' }, [], AGORA, eventosAlcancados);
   assert.equal(semFone.telefone, null);
   assert.equal(semFone.sem_telefone, 'invalido');
   assert.equal(semFone.aberto, false);
   assert.equal(semFone.nome, 'Lead 777', 'sem nome no contato: o do cartão');
-  const semContato = linhaDoCartao(cartao(), null, [], AGORA);
+  const semContato = linhaDoCartao(cartao(), null, [], AGORA, eventosAlcancados);
   assert.equal(semContato.sem_telefone, 'ausente');
 });
 
@@ -268,16 +276,16 @@ test('corte por ponto de código: emoji não vira meio-emoji e surrogate solitá
   assert.equal(cortar(t, 10), `${'a'.repeat(9)}📥`);
   assert.equal(cortar(t, 9), 'a'.repeat(9));
   assert.equal(cortar('ok\uD83D', 10), 'ok\uFFFD');
-  const l = linhaDoCartao(cartao({ campos: [campo('Queixa', `${'q'.repeat(3300)}📥📥📥`, 'textarea')] }), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA);
+  const l = linhaDoCartao(cartao({ campos: [campo('Queixa', `${'q'.repeat(3300)}📥📥📥`, 'textarea')] }), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA, eventosAlcancados);
   assert.doesNotThrow(() => JSON.parse(JSON.stringify(l)));
   assert.ok(l.nota.isWellFormed(), 'a nota não tem surrogate solitário');
 });
 
 test('conversa que a Kommo não entregou (null) NÃO vira «nenhuma mensagem»: a nota diz a verdade', () => {
-  const nao = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, null, AGORA);
+  const nao = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, null, AGORA, eventosAlcancados);
   assert.ok(nao.nota.includes('a Kommo não entregou a conversa'));
   assert.ok(!nao.nota.includes('nenhuma mensagem'));
-  const vazia = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA);
+  const vazia = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA, eventosAlcancados);
   assert.ok(vazia.nota.includes('nenhuma mensagem na Kommo'));
 });
 
@@ -310,7 +318,7 @@ test('etapa de ENTRADA reconhecida pelo TIPO (1), com qualquer nome; valor em re
 });
 
 test('a linha é JSON puro (vai para o arquivo) e não traz URL nem token', () => {
-  const l = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [{ id: 'm', created_at: 1, text: 'oi', author: { type: 'external' }, attachment: { type: 'voice' } }], AGORA);
+  const l = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [{ id: 'm', created_at: 1, text: 'oi', author: { type: 'external' }, attachment: { type: 'voice' } }], AGORA, eventosAlcancados);
   const j = JSON.stringify(l);
   assert.deepEqual(JSON.parse(j), l);
   assert.ok(!/https?:\/\//.test(j));
@@ -346,7 +354,7 @@ test('consultaDePe: só cartão ABERTO, consulta de hoje em diante e situação 
   const m = (c: CartaoDaKommo) => atributosDoCartao(c, AGORA);
   const aberto = cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') });
   assert.equal(consultaDePe(aberto, m(aberto), AGORA), true);
-  assert.equal(linhaDoCartao(aberto, { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA).consulta_de_pe, true);
+  assert.equal(linhaDoCartao(aberto, { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA, eventosAlcancados).consulta_de_pe, true);
   const passada = cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(Math.floor(Date.parse('2026-11-20T13:00:00Z') / 1000), 'Agendado') });
   assert.equal(consultaDePe(passada, m(passada), AGORA), false, 'consulta de 5 dias atrás: arquivo');
   const fechado = cartao({ etapa: 'GANHO / CONCLUÍDO', statusId: 142, fechadoEm: 1_790_000_000, campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') });
@@ -381,7 +389,7 @@ function varrerRegua(raw: any, de: string, ate: string): string[] {
 }
 
 test('integração: NÃO COMPARECEU com consulta FUTURA recebe a véspera e o lembrete do dia — e NUNCA o «você faltou» (falta-48h)', () => {
-  const linha = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(Math.floor(Date.parse('2026-11-27T13:00:00Z') / 1000)) }), { id: 1, nome: 'Maria', telefone: '47991234567' }, [], AGORA);
+  const linha = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(Math.floor(Date.parse('2026-11-27T13:00:00Z') / 1000)) }), { id: 1, nome: 'Maria', telefone: '47991234567' }, [], AGORA, eventosAlcancados);
   const importadoEm = Math.floor(AGORA.getTime() / 1000);
   const raw = { id: 5, created_at: importadoEm - 86_400, labels: ['historico'], status: 'resolved', last_activity_at: importadoEm, additional_attributes: { kommo_lead_id: 777, kommo_importado_em: importadoEm, kommo_aberto: linha.aberto }, custom_attributes: linha.atributos, meta: { sender: { name: 'Maria', phone_number: '+5547991234567', identifier: '5547991234567' } }, last_non_activity_message: null };
   assert.equal(linha.consulta_de_pe, true);
@@ -392,4 +400,11 @@ test('integração: NÃO COMPARECEU com consulta FUTURA recebe a véspera e o le
   const antiga = { ...raw, custom_attributes: { ...linha.atributos, situacao_consulta: 'Não compareceu' } };
   const saiuAntes = varrerRegua(antiga, '2026-11-25T15:00:00Z', '2026-12-05T15:00:00Z');
   assert.ok(!saiuAntes.includes('consulta-vespera'), `com «Não compareceu» a régua NÃO manda véspera (saiu: ${saiuAntes.join(', ')})`);
+});
+
+test('capi_inicial: os eventos do CAPI que o estado importado já alcança (a mesma função do CAPI); estado que não alcança nada = lista vazia', () => {
+  const eventos = (c: CartaoDaKommo) => linhaDoCartao(c, { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA, eventosAlcancados).capi_inicial;
+  assert.deepEqual(eventos(cartao({ etapa: 'GANHO / CONCLUÍDO', statusId: 142, fechadoEm: 1_790_000_000, campos: [campo('Fechou tratamento', 'Sim', 'checkbox')] })).sort(), eventosAlcancados({ etapa: 'Fechou', fechou_tratamento: true }).sort());
+  assert.deepEqual(eventos(cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') })), ['AddToCart']);
+  assert.deepEqual(eventos(cartao({ etapa: 'EM QUALIFICAÇÃO' })), []);
 });

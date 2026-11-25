@@ -13,6 +13,7 @@ import { closeSync, openSync, writeSync } from 'node:fs';
 import { prisma } from '../lib/prisma.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { ehArquivo } from '../lib/chatwoot-regua.js';
+import { eventosAlcancados } from '../lib/chatwoot-capi.js';
 import { exportar, inicioDosFechados, type Ambiente, type PortaKommo } from '../lib/kommo-historico-leitura.js';
 
 const arg = (nome: string): string | undefined => process.argv.find((a) => a.startsWith(`--${nome}=`))?.slice(nome.length + 3);
@@ -32,7 +33,7 @@ async function main(): Promise<void> {
   const unit = await prisma.unit.findUnique({ where: { slug } });
   if (!unit?.kommoSubdomain || !unit.kommoAccessToken) throw new ErroDeUso('unidade ou credencial da Kommo ausente');
   const kommo = createKommoClientSemFreio(unit);
-  const amb: Ambiente = { porta: kommo as unknown as PortaKommo, pausa: (ms) => new Promise((r) => setTimeout(r, ms)), agora: () => new Date(), log };
+  const amb: Ambiente = { porta: kommo as unknown as PortaKommo, eventosCapi: eventosAlcancados, pausa: (ms) => new Promise((r) => setTimeout(r, ms)), agora: () => new Date(), log };
 
   log(`${SECO ? 'CONFERÊNCIA EM SECO (nada é escrito)' : 'EXPORTANDO'} — unidade ${slug}${limite ? `, limite ${limite} cartões` : ''}; fechados desde ${new Date(inicioDosFechados(new Date()) * 1000).toISOString().slice(0, 10)}`);
   // a conta do Chatwoot desta unidade (unit_chatwoot): vai no cabeçalho e o importador RECUSA gravar em outra (nunca a 1, a de Parauapebas)

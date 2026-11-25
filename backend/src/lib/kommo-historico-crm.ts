@@ -133,6 +133,11 @@ export interface LinhaDoCartao {
    * paciente recebe os lembretes do CRM), vai para o TOPO da lista (última atividade = a hora da importação) e é o DESTINO da próxima mensagem do paciente.
    */
   consulta_de_pe: boolean;
+  /**
+   * Os eventos do CAPI (Meta) que o estado VINDO DA KOMMO já alcança (a MESMA função `eventosAlcancados` que o CAPI usa sobre a conversa). O importador os grava na conversa
+   * (`kommo_capi_inicial`) e o CAPI nunca os manda: Purchase de um GANHO de meses atrás não vira compra nova só porque o paciente voltou. O que a conversa alcançar DEPOIS vai.
+   */
+  capi_inicial: string[];
 }
 
 // ── telefone ─────────────────────────────────────────────────────────────────────────────────────────
@@ -568,7 +573,11 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
 // ── o cartão inteiro ─────────────────────────────────────────────────────────────────────────────────
 
 /** `msgs` null = a Kommo não entregou a conversa (a nota diz isso, em vez de «nenhuma mensagem»). */
-export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date): LinhaDoCartao {
+/**
+ * `eventosCapi` = `eventosAlcancados` do CAPI (injetada: este módulo não depende do worker do CAPI nem da configuração do servidor): a MESMA função que o CAPI usa decide
+ * `capi_inicial`, sem uma cópia da regra aqui.
+ */
+export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date, eventosCapi: (atributos: Record<string, unknown>) => readonly string[]): LinhaDoCartao {
   const m = atributosDoCartao(c, agora);
   const { mensagens, total } = mensagensParaCrm(msgs ?? []);
   const telefone = foneParaWhatsApp(contato?.telefone);
@@ -594,5 +603,6 @@ export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, 
     mensagens_total: total,
     avisos: m.avisos,
     consulta_de_pe: consultaDePe(c, m, agora),
+    capi_inicial: [...eventosCapi(m.atributos)],
   };
 }

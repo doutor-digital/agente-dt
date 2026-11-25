@@ -18,6 +18,9 @@ module KommoHistorico
   MARCA_ORDEM = 'kommo_ordem'
   # `true` = o cartão estava ABERTO na Kommo (Ganho/Perdido/Alta = `false`): só o aberto com consulta de hoje em diante nasce vivo (`ehArquivo`, backend)
   MARCA_ABERTO = 'kommo_aberto'
+  # os eventos do CAPI (Meta) que o estado VINDO DA KOMMO já alcança (calculados pelo exportador com a função do próprio CAPI): o CAPI os trata como «inicial» para sempre
+  MARCA_CAPI_INICIAL = 'kommo_capi_inicial'
+  EVENTOS_CAPI = %w[AddToCart InitiateCheckout Purchase].freeze
   # o trecho que a nota-resumo traz quando a Kommo não entregou a conversa (a mesma frase do backend, kommo-historico-crm.ts): se a rodada seguinte consegue ler, a nota é reescrita
   NOTA_SEM_CONVERSA = 'a Kommo não entregou a conversa deste cartão'
   # chaves que a conversa recebe mesmo sem atributo definido na conta (o código do CRM já as lê; a tela só mostra quando o kit as criar)
@@ -54,6 +57,8 @@ module KommoHistorico
     fone = h['telefone'].to_s
     return [nil, :sem_telefone] unless fone.match?(/\A\d{11,15}\z/)
     return [nil, :datas] unless [h['criado_em'], h['atualizado_em']].all? { |x| x.is_a?(Integer) && x.positive? }
+    # sem a lista de eventos do CAPI a conversa não poderia nascer protegida (compra falsa na Meta não tem desfazer): a linha é recusada
+    return [nil, :sem_capi_inicial] unless h['capi_inicial'].is_a?(Array) && h['capi_inicial'].all? { |e| EVENTOS_CAPI.include?(e) }
 
     atributos = h['atributos'].is_a?(Hash) ? h['atributos'].select { |k, v| k.to_s.match?(/\A[a-z_]{1,60}\z/) && [String, Integer, Float, TrueClass, FalseClass].any? { |c| v.is_a?(c) } } : {}
     etiquetas = Array(h['etiquetas']).select { |e| e.is_a?(String) && e.match?(/\A[a-z0-9-]{1,60}\z/) }.uniq
@@ -72,7 +77,7 @@ module KommoHistorico
       criado_em: h['criado_em'], atualizado_em: h['atualizado_em'], fechado_em: h['fechado_em'].is_a?(Integer) ? h['fechado_em'] : nil,
       atributos: atributos, etiquetas: etiquetas, nota: limpar(h['nota'], LIMITE_NOTA), mensagens: mensagens,
       # cartão ABERTO com consulta de hoje em diante e situação de pé (decidido pelo exportador): nasce VIVO, vai ao topo da lista e é o destino do «confirmo»
-      consulta_de_pe: h['consulta_de_pe'] == true
+      consulta_de_pe: h['consulta_de_pe'] == true, capi_inicial: h['capi_inicial'].uniq
     }
     [linha, nil]
   end
