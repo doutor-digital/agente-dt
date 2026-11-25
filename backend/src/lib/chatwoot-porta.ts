@@ -30,7 +30,7 @@ export interface PortaDoChatwoot {
   /** Nota PRIVADA. */
   nota(id: number, texto: string): Promise<void>;
   /** Mensagem PÚBLICA: chega ao paciente. Devolve o usuário do Chatwoot que a enviou (o da integração) e o id da mensagem, se a resposta disser. */
-  publica(id: number, texto: string): Promise<{ usuario: number | null; mensagem?: number | null }>;
+  publica(id: number, texto: string, marca?: Record<string, unknown>): Promise<{ usuario: number | null; mensagem?: number | null }>;
   /** Os valores válidos de um atributo de lista (definição viva do Chatwoot); [] = não é lista ou não deu para ler. */
   valoresDoAtributo(chave: string): Promise<string[]>;
   /** As etiquetas que existem na conta. */
@@ -88,8 +88,9 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
     async nota(id, t) {
       await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: true } });
     },
-    async publica(id, t) {
-      const r = (await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false } })) as {
+    async publica(id, t, marca) {
+      // `marca` vai em content_attributes (o CRM lê para rotular o balão: «✨ Sofia (IA)» mesmo quando sai pelo usuário conector)
+      const r = (await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: false, ...(marca ? { content_attributes: marca } : {}) } })) as {
         id?: unknown;
         sender?: { id?: unknown };
       } | null;
