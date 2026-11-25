@@ -36,6 +36,8 @@ export const PAPEIS_COMERCIAIS = [
   'Retorno pós-tratamento',
 ] as const;
 export type PapelComercial = (typeof PAPEIS_COMERCIAIS)[number];
+/** Os que o molde nunca teve (só existem em conta com mapa). */
+export const PAPEIS_NOVOS: readonly PapelComercial[] = PAPEIS_COMERCIAIS.slice(11);
 
 /** Papéis do funil de TRATAMENTO (atributo `etapa_tratamento`). */
 export const PAPEIS_DO_TRATAMENTO = ['Entrada', 'Em tratamento', 'Alta', 'Tratamento cancelado'] as const;
@@ -232,7 +234,8 @@ export function conversaCrua<T>(mapa: MapaDeEtapas | null | undefined, raw: T): 
  * Um valor que não é papel conhecido (texto livre, nome que o usuário escolheu na tela) passa como veio.
  */
 export function nomeParaGravar(mapa: MapaDeEtapas | null | undefined, papel: string): string | null {
-  if (ehMolde(mapa)) return papel;
+  // o molde (Parauapebas) nunca teve os papéis novos: gravar «Faltou» lá seria uma etapa que a lista do atributo não tem
+  if (ehMolde(mapa)) return (PAPEIS_NOVOS as readonly string[]).includes(papel) ? null : papel;
   const m = mapa as MapaDeEtapas;
   if (!(PAPEIS_COMERCIAIS as readonly string[]).includes(papel)) return papel;
   const direto = m.comercial.find((e) => e.papel === papel);
@@ -253,7 +256,14 @@ export function nomeDoTratamentoParaGravar(mapa: MapaDeEtapas | null | undefined
  * `objetoInteiro`: quem manda TODOS os atributos de uma vez (o Chatwoot substitui o objeto): o papel que a conta não tem fica como veio, nunca some.
  */
 export function atributosParaGravar<T extends Record<string, unknown>>(mapa: MapaDeEtapas | null | undefined, parcial: T, objetoInteiro = false): T {
-  if (ehMolde(mapa)) return parcial;
+  if (ehMolde(mapa)) {
+    // sem mapa nada é traduzido; só o papel que o molde nunca teve sai da gravação (a etapa que a conversa já tem fica). Sem ele, o MESMO objeto
+    const v = parcial.etapa;
+    if (typeof v !== 'string' || !(PAPEIS_NOVOS as readonly string[]).includes(v)) return parcial;
+    if (objetoInteiro) return parcial;
+    const { etapa: _fora, ...resto } = parcial;
+    return resto as unknown as T;
+  }
   let saida: Record<string, unknown> | null = null;
   const trocar = (campo: 'etapa' | 'etapa_tratamento', f: (m: MapaDeEtapas | null | undefined, p: string) => string | null): void => {
     const v = parcial[campo];
@@ -295,4 +305,48 @@ export function papeisDoTratamentoDaLista(mapa: MapaDeEtapas | null | undefined,
 export function papeisDaLista(mapa: MapaDeEtapas | null | undefined, valores: readonly string[]): string[] {
   if (ehMolde(mapa)) return [...valores];
   return [...new Set(valores.map((v) => papelDaEtapa(mapa, v)))];
+}
+
+// ── o navegador (menu.js) ────────────────────────────────────────────────────────────────────────
+
+/**
+ * O JavaScript que põe `window.__ddEtapas` no navegador: o mapa das contas com etapas próprias (nada de segredo, nada de paciente), para o guia «O que fazer agora», o cartão enxuto e a
+ * janela de resolver falarem por PAPEL e mostrarem o nome da conta. Sem conta mapeada: devolve '' (o menu fica como era). Cada bloco usa `window.__ddEtapas` se existir e, se não, o nome como está.
+ * Sem crase nem «${»: vai dentro do menu.js.
+ */
+export function etapasNoNavegadorJs(): string {
+  const T: Record<string, { c: Record<string, string>; t: Record<string, string>; p: Record<string, string | null>; tem: Record<string, 1> }> = {};
+  for (const conta of contasComEtapasProprias()) {
+    const m = etapasDaConta(conta);
+    const c: Record<string, string> = {};
+    for (const e of m.comercial) {
+      const k = semAcento(e.nome);
+      const atual = c[k];
+      if (!atual || (PRIORIDADE_NA_LEITURA as readonly string[]).indexOf(e.papel) >= 0 && (PRIORIDADE_NA_LEITURA as readonly string[]).indexOf(e.papel) < (PRIORIDADE_NA_LEITURA as readonly string[]).indexOf(atual)) c[k] = e.papel;
+    }
+    const t: Record<string, string> = {};
+    for (const e of m.tratamento) if (!t[semAcento(e.nome)]) t[semAcento(e.nome)] = e.papel;
+    const p: Record<string, string | null> = {};
+    for (const papel of PAPEIS_COMERCIAIS) p[papel] = nomeParaGravar(m, papel);
+    for (const papel of PAPEIS_DO_TRATAMENTO) p[papel] = nomeDoTratamentoParaGravar(m, papel);
+    const tem: Record<string, 1> = {};
+    // «tem etapa PRÓPRIA»: o papel que a leitura devolve para o nome dele (o alias «Confirmado», que divide o nome com «Agendado», não tem)
+    for (const e of m.comercial) if (c[semAcento(e.nome)] === e.papel) tem[e.papel] = 1;
+    for (const e of m.tratamento) tem[e.papel] = 1;
+    T[String(conta)] = { c, t, p, tem };
+  }
+  if (!Object.keys(T).length) return '';
+  const dados = JSON.stringify(T).replace(/</g, '\\u003c');
+  return (
+    '(function(){ var T = ' + dados + ';\n' +
+    "  function sa(s){ return String(s == null ? '' : s).normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').toLowerCase().replace(/\\s+/g, ' ').trim(); }\n" +
+    "  function de(conta){ return T[String(conta)] || null; }\n" +
+    '  window.__ddEtapas = {\n' +
+    '    mapa: function(conta){ return !!de(conta); },\n' +
+    "    papel: function(conta, nome){ var m = de(conta), n = String(nome == null ? '' : nome).trim(); return m && m.c[sa(n)] ? m.c[sa(n)] : n; },\n" +
+    "    papelT: function(conta, nome){ var m = de(conta), n = String(nome == null ? '' : nome).trim(); return m && m.t[sa(n)] ? m.t[sa(n)] : n; },\n" +
+    '    nome: function(conta, papel){ var m = de(conta); return m && m.p[papel] ? m.p[papel] : papel; },\n' +
+    '    tem: function(conta, papel){ var m = de(conta); return !m || !!m.tem[papel]; }\n' +
+    '  };\n})();'
+  );
 }

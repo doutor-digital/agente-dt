@@ -10,7 +10,11 @@ process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 
+process.env.DATABASE_URL ??= 'postgresql://t:t@localhost:5432/t';
+process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-ok';
 const G = await import('./chatwoot-guia-etapas.js');
+const { aplicarEtapasDasContas, etapasNoNavegadorJs } = await import('./chatwoot-etapas.js');
+const { ETAPAS_DE_TIMBO_NA_COLUNA } = await import('./chatwoot-etapas-timbo.js');
 const AGENTE = 'https://agente.exemplo.test';
 
 test('o mapa cobre TODAS as etapas do atributo (e só elas), cada uma com passos e uma aula válida', () => {
@@ -176,7 +180,7 @@ class No {
 
 let ultimoImpedido = false;
 
-function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boolean; contasSemAntecipado?: number[]; conta?: number } = {}) {
+function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boolean; contasSemAntecipado?: number[]; conta?: number; etapasDaConta?: boolean; conversa?: () => Record<string, unknown> } = {}) {
   const intervalos: Array<() => void> = [];
   const pedidos: Array<{ url: string; metodo: string }> = [];
   const body = new No('body');
@@ -226,8 +230,9 @@ function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boole
   const loc = { pathname: `/app/accounts/${opcoes.conta ?? 1}/conversations/5` };
   const fetchFalso = async (url: string, o: any = {}) => {
     pedidos.push({ url: String(url), metodo: String(o?.method ?? 'GET').toUpperCase() });
-    return { ok: true, json: async () => ({ custom_attributes: { etapa: opcoes.etapa ? opcoes.etapa() : 'Agendado' } }) };
+    return { ok: true, json: async () => (opcoes.conversa ? opcoes.conversa() : { custom_attributes: { etapa: opcoes.etapa ? opcoes.etapa() : 'Agendado' } }) };
   };
+  if (opcoes.etapasDaConta) new Function('window', etapasNoNavegadorJs())(janela); // o servidor põe window.__ddEtapas no menu.js antes do guia
   const js = G.guiaJs(JSON.stringify(AGENTE), {} as NodeJS.ProcessEnv, opcoes.contasSemAntecipado ?? []);
   new Function('window', 'document', 'location', 'fetch', 'setInterval', 'setTimeout', js)(janela, doc, loc, fetchFalso, (f: () => void) => intervalos.push(f), (f: () => void) => f());
   // o botão do painel está dentro do embrulho de verdade: o script sobe por closest('.text-sm') até o embrulho
@@ -505,4 +510,41 @@ test('o conteúdo do guia leva só ids de conta inteiros e positivos, e os passo
   for (const e of Object.keys(G.PASSOS_SEM_ANTECIPADO)) assert.ok(G.ETAPAS_DO_CRM.includes(e as never), e);
   assert.doesNotMatch(G.PASSOS_SEM_ANTECIPADO.Agendado!.join(' '), /pagou-antecipado|Marque/);
   assert.equal(new Function(`return ${JSON.stringify(c)}`)().semAntecipado.length, 2);
+});
+
+test('CONTA COM ETAPAS PRÓPRIAS (Timbó): o guia acha a etapa pelo PAPEL e mostra o nome da conta; esperando-humano e Confirmado, que a conta não tem, viram dica; as 4 etapas novas têm guia', async () => {
+  aplicarEtapasDasContas([{ contaId: 3, etapas: ETAPAS_DE_TIMBO_NA_COLUNA }]);
+  try {
+    const guia = async (conversa: Record<string, unknown>) => {
+      const t = montar({ conta: 3, etapasDaConta: true, conversa: () => conversa });
+      await t.tick();
+      return t.texto();
+    };
+    const q = await guia({ custom_attributes: { etapa: 'EM QUALIFICAÇÃO' } });
+    assert.match(q, /EM QUALIFICAÇÃO/);
+    assert.match(q, /A Sofia está conversando/);
+    assert.doesNotMatch(q, /guia geral/);
+    const a = await guia({ custom_attributes: { etapa: 'AGENDADO', situacao_consulta: 'Agendado' } });
+    assert.match(a, /AGENDADO/);
+    assert.match(a, /Confira Data, Hora/);
+    const conf = await guia({ custom_attributes: { etapa: 'AGENDADO', situacao_consulta: 'Confirmado' } });
+    assert.match(conf, /AGENDADO · confirmado/);
+    assert.match(conf, /Situação da consulta: Confirmado/);
+    const h = await guia({ custom_attributes: { etapa: 'EM QUALIFICAÇÃO' }, labels: ['esperando-humano'] });
+    assert.match(h, /EM QUALIFICAÇÃO · esperando humano/);
+    assert.match(h, /É sua agora/);
+    const f = await guia({ custom_attributes: { etapa: 'NÃO COMPARECEU' } });
+    assert.match(f, /NÃO COMPARECEU/);
+    assert.match(f, /ofereça remarcar/);
+    assert.match(await guia({ custom_attributes: { etapa: 'EM ESPERA' } }), /Retomar em/);
+    assert.match(await guia({ custom_attributes: { etapa: 'CONFERIR NA FRANQUIA' } }), /já é paciente/);
+    assert.match(await guia({ custom_attributes: { etapa: 'RETORNO PÓS-TRATAMENTO' } }), /volta depois do tratamento/);
+    assert.match(await guia({ custom_attributes: { etapa: 'GANHO / CONCLUÍDO' } }), /GANHO \/ CONCLUÍDO/);
+    // Parauapebas (conta sem mapa) com o mapa de Timbó no navegador: o guia é o de sempre, sem dica nenhuma
+    const p = montar({ conta: 1, etapasDaConta: true, conversa: () => ({ custom_attributes: { etapa: 'Agendado', situacao_consulta: 'Confirmado' }, labels: ['esperando-humano'] }) });
+    await p.tick();
+    assert.doesNotMatch(p.texto(), /confirmado|esperando humano/);
+  } finally {
+    aplicarEtapasDasContas([]);
+  }
 });

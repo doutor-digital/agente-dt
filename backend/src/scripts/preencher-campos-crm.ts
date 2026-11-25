@@ -22,14 +22,18 @@ import { leadsDoTelefone } from '../lib/chatwoot-campos-retroativos-kommo.js';
 import { chamar, contextoDaCaixa, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { desfazerCampos, lerArgumentos, rodarCampos, type PortasDosCampos } from '../lib/chatwoot-campos-retroativos-run.js';
 import type { FatoDeQualificacao } from '../lib/chatwoot-campos-retroativos.js';
+import { ehMolde, etapasDoContexto } from '../lib/chatwoot-etapas.js';
 
 /** o mesmo teto do worker da régua (25 por página) */
 const MAX_PAGINAS = 200;
 
-async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos> {
+async function portasReais(caixa: number, slug: string, gravando: boolean): Promise<PortasDosCampos> {
   const base = contextoDoAmbiente();
   const ctx = base ? contextoDaCaixa(base, caixa) : null;
   if (!ctx?.conta) throw new Error(`o Chatwoot não está configurado para a caixa ${caixa} neste servidor`);
+  // este preenchimento decide e confere pelos NOMES do molde (a porta traduz a gravação, mas o plano e a conferência comparam em nome do molde): conta com etapas próprias (igual à Kommo)
+  // usa o importador. Só GRAVAR é recusado: o `--desfazer` de um lote anterior continua valendo (devolve o valor de antes, sem decidir nada pela etapa)
+  if (gravando && !ehMolde(etapasDoContexto(ctx))) throw new Error('esta conta tem etapas próprias (unit_chatwoot.etapas): o preenchimento retroativo não grava aqui — recuso para não gravar etapa com o nome errado');
   const chat = portaDoChatwoot(ctx);
   const chatRegua = chatDoChatwoot(ctx);
   const paginar = chatRegua.pagina;
@@ -160,7 +164,7 @@ async function main() {
   await recarregarAutomacoes();
   const slug = CAIXAS_REGUA[o.caixa];
   if (!slug) throw new Error(`a caixa ${o.caixa} não é de nenhuma unidade configurada`);
-  const portas = await portasReais(o.caixa, slug);
+  const portas = await portasReais(o.caixa, slug, !o.desfazer && !o.soConferir);
   const log = (l: string) => console.log(l);
   if (o.desfazer) {
     const linhas: string[] = [];

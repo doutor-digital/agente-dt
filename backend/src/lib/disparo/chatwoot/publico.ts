@@ -236,7 +236,7 @@ export function situacaoPeloCrm(atributos: Record<string, unknown>, mapa?: MapaD
   const tratamento = s(attrs.etapa_tratamento);
   if (['Agendado', 'Confirmado'].includes(etapa)) return 'consulta-futura';
   if (['Entrada', 'Em tratamento'].includes(tratamento) || (s(attrs.funil) === 'Tratamento' && !['Alta', 'Tratamento cancelado'].includes(tratamento))) return 'tratamento-aberto';
-  if (['Compareceu', 'Pós-consulta', 'Fechou'].includes(etapa)) return 'ja-cliente';
+  if (['Compareceu', 'Pós-consulta', 'Fechou', 'Retorno pós-tratamento'].includes(etapa)) return 'ja-cliente';
   return 'livre';
 }
 
