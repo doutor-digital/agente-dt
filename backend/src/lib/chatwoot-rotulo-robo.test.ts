@@ -25,7 +25,7 @@ class El {
   appendChild(n: El) { this.filhos.push(n); return n; }
 }
 
-interface Msg { id: number; message_type: number; private?: boolean; sender?: { id?: number; type?: string; name?: string; available_name?: string } | null; sender_type?: string; additional_attributes?: unknown; content?: string }
+interface Msg { id: number; message_type: number; private?: boolean; sender?: { id?: number; type?: string; name?: string; available_name?: string } | null; sender_type?: string; additional_attributes?: unknown; content_attributes?: unknown; content?: string }
 
 function montar(o: { conversa?: number; caminho?: string; mensagens?: Msg[] | null; env?: NodeJS.ProcessEnv; semStore?: boolean; presentes?: number[]; usarDataId?: boolean }) {
   const conversa = o.conversa ?? 77;
@@ -165,6 +165,21 @@ test('GENTE: quem respondeu aparece pelo NOME do remetente (available_name antes
   v.obs[0]!.f(); v.rodar();
   assert.equal(v.marca(1), 'sofia');
   assert.equal(marcaNome(v, 1), undefined);
+});
+
+test('ECO DO CELULAR (conferido no CRM real): saída SEM remetente com content_attributes.external_echo = «📱 Celular da unidade»; sem o echo continua sem rótulo; nota privada nunca', () => {
+  const t = montar({
+    mensagens: [
+      { id: 40, message_type: 1, sender: null, content_attributes: { external_echo: true }, content: 'resposta pelo aparelho' },
+      { id: 41, message_type: 1, content_attributes: { external_echo: true }, content: 'sem o campo sender' },
+      { id: 42, message_type: 1, sender: null, content_attributes: {}, content: 'sem echo' },
+      { id: 43, message_type: 1, private: true, sender: null, content_attributes: { external_echo: true }, content: 'privada' },
+      { id: 44, message_type: 0, sender: null, content_attributes: { external_echo: true }, content: 'entrada' },
+    ],
+  });
+  t.rodar();
+  assert.deepEqual([40, 41, 42, 43, 44].map(t.marca), ['gente', 'gente', undefined, undefined, undefined]);
+  assert.equal(marcaNome(t, 40), '📱 Celular da unidade');
 });
 
 test('só põe um ATRIBUTO no contêiner existente (nenhum nó novo dentro do que o Vue controla); acha pelo id «message<id>» e pelo data-message-id', () => {

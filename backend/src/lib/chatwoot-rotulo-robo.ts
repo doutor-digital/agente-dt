@@ -9,6 +9,7 @@
  *  - «👤 <nome>»: uma PESSOA respondeu (a SDR, a gerente, a secretária): o nome que vem no remetente (`sender.available_name` / `sender.name`). Só o NOME: o Chatwoot não diz de
  *    forma confiável se a pessoa é SDR ou gerente (o papel dele é só «administrador»/«agente»), e papel não se inventa. O eco do celular da unidade (usuário «📱 Celular da
  *    unidade») aparece com esse nome («📱 Celular da unidade»), sem o 👤.
+ *  - o eco do celular da unidade (resposta dada pelo aparelho, `content_attributes.external_echo`, que o Chatwoot entrega SEM remetente): «📱 Celular da unidade» (conferido no CRM real, 25/11).
  *  Nota privada, mensagem do paciente e atividade NUNCA levam rótulo.
  *
  * Como detecta: pelo ESTADO (store) do próprio Chatwoot — as mensagens da conversa aberta (`getSelectedChat.messages`: tipo, privada, quem enviou, `template_params`) —
@@ -93,6 +94,8 @@ const ROTULO_JS = String.raw`(function(){
     var conector = CONECTORES.indexOf(Number(s.id)) >= 0 || [s.available_name, s.name].some(function(x){ return /^\s*(🤖|conector)/i.test(String(x || '')); });
     if (conector && (quem === 'user' || quem === '')) return { t: 'robo' };
     if (quem === 'user') { var n = nomeDe(s); return n ? { t: 'gente', nome: /^[A-Za-zÀ-ÿ0-9]/.test(n) ? '👤 ' + n : n } : null; } // uma PESSOA (nem quando manda um modelo pelo botão); o eco do celular já traz o 📱 no nome
+    // o eco do celular da unidade (WhatsApp Business: a equipe respondeu pelo aparelho): o Chatwoot 4.19 o entrega SEM remetente e com content_attributes.external_echo — é uma pessoa da equipe, sem nome
+    var ca = m.content_attributes; if (!m.sender && ca && typeof ca === 'object' && ca.external_echo) return { t: 'gente', nome: '📱 Celular da unidade' };
     var tp = atributos(m).template_params; // modelo aprovado do WhatsApp sem ninguém por trás (régua, tarefa, disparo)
     if (tp && typeof tp === 'object') return { t: 'robo' };
     return null;
