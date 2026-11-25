@@ -109,7 +109,7 @@ test('as fixas leem o estado do MESMO ambiente que o código lê; sem interrupto
   assert.equal((await estado({ CHATWOOT_SOFIA_COMO_BOT: '1', CHATWOOT_SOFIA_BOT_TOKEN: 'token-do-robo-123456', CHATWOOT_SOFIA_ATENDENDO: '0' }))['fixa-sofia-atendendo'], 'desligado', '«0» desliga o «Sofia atendendo»');
   assert.equal((await estado({ CHATWOOT_SOFIA_COMO_BOT: '1' }))['fixa-sofia-atendendo'], 'desligado', 'COMO_BOT=1 sem token do robô: o código não age, o painel não pode dizer ligado');
   // e as variáveis citadas existem de verdade no código que as lê
-  const codigo = ['chatwoot-assistente-ui.ts', 'chatwoot-guia-etapas.ts', 'chatwoot-origem.ts', 'chatwoot-anuncio.ts', 'chatwoot-sofia-bot.ts', 'chatwoot-sofia-atendendo.ts', 'chatwoot-selo-sofia.ts', 'chatwoot-rotulo-robo.ts', 'chatwoot-cartao-enxuto.ts'].map((f) => fonte(`./${f}`)).join('\n');
+  const codigo = ['chatwoot-assistente-ui.ts', 'chatwoot-guia-etapas.ts', 'chatwoot-origem.ts', 'chatwoot-anuncio.ts', 'chatwoot-sofia-bot.ts', 'chatwoot-sofia-atendendo.ts', 'chatwoot-selo-sofia.ts', 'chatwoot-rotulo-robo.ts', 'chatwoot-cartao-enxuto.ts', 'chatwoot-modelo-preenchido-ui.ts'].map((f) => fonte(`./${f}`)).join('\n');
   for (const f of A.FIXAS.filter((x) => x.variavel)) assert.ok(codigo.includes(f.variavel!), `${f.variavel} não está mais no código`);
 });
 

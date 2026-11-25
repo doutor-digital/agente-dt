@@ -463,6 +463,40 @@ export function paraParametro(v: string): string {
 export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { texto: string | null; variaveis: string[] | null; faltando: string[] } {
   const bruto = (u.textos ?? TEXTOS_PARAU)[modelo];
   if (bruto === undefined) return { texto: null, variaveis: null, faltando: [`texto do modelo ${modelo}`] };
+  const { valorDoCampo, faltando } = valoresDosCampos(c, u, momentoDoEnvio);
+  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
+  const variaveis = camposDoModelo(modelo, u.textos).map((nome) => paraParametro(valorDoCampo(nome)));
+  // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
+  if (!faltando.length && variaveis.some((v) => !v)) faltando.push('um valor do template ficou vazio');
+  return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
+}
+
+/**
+ * A próxima data marcada da conversa, no texto da régua («14/08 às 15:00»): a consulta; sem ela, a próxima sessão; sem ela, o retorno. null = nada marcado.
+ * Os mesmos atributos (data_consulta/hora_consulta, proxima_sessao/hora_sessao, data_retorno) e o mesmo formato que a régua usa nos modelos.
+ */
+export function proximaDataDaConversa(c: ConversaRegua): string | null {
+  const a = c.attrs;
+  const m = momento(a.data_consulta, a.hora_consulta) ?? momento(a.proxima_sessao, a.hora_sessao) ?? momento(a.data_retorno, null);
+  return m ? textoDoMomento(m) : null;
+}
+
+/**
+ * A MESMA regra de «qual dado da conversa/unidade vale em cada campo {{…}}» da régua, separada para quem quer os valores campo a campo
+ * (o preenchimento do modelo mandado à mão pela atendente): cada campo volta com o valor já limpo para parâmetro, ou `null` quando o dado não existe
+ * (nunca inventa). A régua só envia quando TODOS existem (`renderizar`); a atendente recebe os que existem e completa o resto.
+ */
+export function variaveisDoModeloCampoACampo(modelo: string, c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): Array<{ campo: string; valor: string | null }> {
+  const { valorDoCampo, faltando } = valoresDosCampos(c, u, momentoDoEnvio);
+  return camposDoModelo(modelo, u.textos).map((campo) => {
+    const antes = faltando.length;
+    const v = paraParametro(valorDoCampo(campo));
+    return { campo, valor: faltando.length > antes || !v ? null : v };
+  });
+}
+
+/** O valor de cada campo {{…}} da régua para esta conversa e esta unidade; o que não existe entra em `faltando` e vale vazio. */
+function valoresDosCampos(c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: Momento): { valorDoCampo: (nome: string) => string; faltando: string[] } {
   const a = c.attrs;
   const consulta = momento(a.data_consulta, a.hora_consulta);
   const sessao = momento(a.proxima_sessao, a.hora_sessao);
@@ -504,11 +538,7 @@ export function renderizar(modelo: string, c: ConversaRegua, u: DadosDaUnidade, 
         return falta(`campo {{${nome}}} sem correspondente no Chatwoot`);
     }
   };
-  const texto = bruto.replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_todo, nome: string) => valorDoCampo(nome));
-  const variaveis = camposDoModelo(modelo, u.textos).map((nome) => paraParametro(valorDoCampo(nome)));
-  // o Chatwoot descarta parâmetro vazio e a Meta recusa o template com a conta errada: vazio é o mesmo que faltar
-  if (!faltando.length && variaveis.some((v) => !v)) falta('um valor do template ficou vazio');
-  return faltando.length ? { texto: null, variaveis: null, faltando } : { texto, variaveis, faltando: [] };
+  return { valorDoCampo, faltando };
 }
 
 // ── as regras ──────────────────────────────────────────────────────────────────────────────────────
