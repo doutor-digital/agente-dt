@@ -39,6 +39,7 @@ import { ehMensagemDeEspera } from './crm-demora/marca.js';
 import { atendimentoLigado, comecarAtendimento, conferirAtendimento, encerrarAtendimento, eventoDeAtendimento, portaDoAtendimento } from './chatwoot-sofia-atendendo.js';
 import { rodarTesteDaSofia } from '../controllers/playground.controller.js';
 import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
+import { confereCartaoNoKommo } from './kommo-cortado.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
@@ -274,7 +275,8 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     },
     conversa: (id) => chat.conversa(id),
     async cartaoNoKommo(unit, telefone) {
-      if (!unit.kommoSubdomain || !unit.kommoAccessToken) return null;
+      // unidade que saiu da Kommo (kommo-cortado.ts): os cartões abertos lá não seguram mais a Sofia do CRM
+      if (!confereCartaoNoKommo(unit)) return null;
       return cartaoNoKommoDaUnidade(unit)(telefone);
     },
     sofia: (unit, falas, pedido) => rodarSofiaDoChatwoot({ unit, falas, ...pedido, chat }, { rodarTeste: rodarTesteDaSofia }),

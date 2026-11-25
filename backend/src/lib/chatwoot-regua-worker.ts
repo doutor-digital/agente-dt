@@ -58,6 +58,7 @@ import {
 import { configDaUnidade, nomeDoModeloNaMeta } from './chatwoot-unidades.js';
 import { textosDoSlug } from './chatwoot-modelos.js';
 import { modoDaDemora, numeroDaGerenteNoBanco } from './crm-demora/gerente.js';
+import { confereCartaoNoKommo } from './kommo-cortado.js';
 
 const SWEEP_MS = Number(process.env.CHATWOOT_REGUA_SWEEP_MS) || 10 * 60_000;
 const PRIMEIRA_VARREDURA_MS = 150_000;
@@ -690,7 +691,8 @@ async function varrer(ctx: ContextoChatwoot): Promise<void> {
           textos: textosDoSlug(slug),
           prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
         };
-        const kommo = unit.kommoSubdomain && unit.kommoAccessToken ? cartaoNoKommoDaUnidade(unit) : undefined;
+        // unidade que saiu da Kommo (kommo-cortado.ts): a régua não confere mais cartão aberto lá
+        const kommo = confereCartaoNoKommo(unit) ? cartaoNoKommoDaUnidade(unit) : undefined;
         const chat = chatDaCaixa(ctx, Number(caixaTxt));
         if (!chat) {
           logger.warn({ slug, caixa: caixaTxt }, `${ID_REGUA}: a caixa ${caixaTxt} não tem conta do Chatwoot válida (unidade desconhecida ou token ausente) — pulo, sem chamar o Chatwoot`);
