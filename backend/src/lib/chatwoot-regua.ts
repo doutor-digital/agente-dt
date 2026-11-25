@@ -56,6 +56,8 @@ export const DIAS_DA_CONSULTA_VIVA = 35;
 /** Os atributos que a importação da Kommo (ops/crm-historico-kommo) põe na conversa que CRIA: o id do cartão e o instante (epoch, segundos) da gravação. */
 export const KOMMO_LEAD_ID = 'kommo_lead_id';
 export const KOMMO_IMPORTADO_EM = 'kommo_importado_em';
+/** `true` = o cartão estava ABERTO na Kommo quando foi importado (Ganho/Perdido/Alta = `false`). */
+export const KOMMO_ABERTO = 'kommo_aberto';
 
 /** A conversa foi criada pela importação da Kommo e leva o instante da gravação (sem ele não dá para saber se alguém mexeu depois). */
 export function importadaDaKommo(raw: any): boolean {
@@ -77,13 +79,13 @@ function intactaDesdeAImportacao(raw: any): boolean {
   return !(Number.isFinite(t) && t > importadaEm);
 }
 
-/** Consulta de pé: a de hoje em diante (Belém) ou de até 35 dias atrás, com situação Agendado/Confirmado/Remarcado/Atendido/Não compareceu. */
-function consultaDePe(raw: any, agora: Date): boolean {
+/** Consulta de pé: a de hoje em diante (Belém) ou de até `diasAtras` dias atrás, com situação Agendado/Confirmado/Remarcado/Atendido/Não compareceu. */
+function consultaDePe(raw: any, agora: Date, diasAtras: number = DIAS_DA_CONSULTA_VIVA): boolean {
   const a = raw?.custom_attributes;
   const dia = lerData(a?.data_consulta);
   const hoje = lerData(diaEmBelem(agora));
   if (!dia || !hoje) return false;
-  return dia.iso >= somarDias(hoje, -DIAS_DA_CONSULTA_VIVA).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta));
+  return dia.iso >= somarDias(hoje, -diasAtras).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta));
 }
 
 /**
@@ -105,9 +107,9 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   // Histórico da KOMMO (importação de Timbó, ops/crm-historico-kommo): a caixa do WhatsApp TRAVA em conversa única, então a próxima mensagem do paciente
   // cai nesta mesma conversa. É arquivo SÓ enquanto ninguém mexeu depois da importação; mexeu (paciente voltou, equipe respondeu, alguém reabriu), é uma
   // conversa como qualquer outra — régua, agenda, CAPI, telas e o aviso de demora a enxergam. O corte de 14/11 abaixo é de Parauapebas (as datas importadas
-  // de Timbó são recentes e o tirariam do arquivo todas de uma vez): aqui vale o instante da importação. A consulta de pé (cartão AGENDADO, NÃO COMPARECEU
-  // com consulta de hoje em diante) mantém a conversa VIVA desde o nascimento: o paciente recebe os lembretes do CRM.
-  if (importadaDaKommo(raw)) return intactaDesdeAImportacao(raw) && !consultaDePe(raw, agora);
+  // de Timbó são recentes e o tirariam do arquivo todas de uma vez): aqui vale o instante da importação. A consulta de pé (cartão ABERTO — AGENDADO, NÃO COMPARECEU remarcado… — com
+  // consulta de HOJE em diante; a dos últimos 35 dias e as etapas Perdido/Fechou/Alta nascem arquivo e acordam quando o paciente fala) mantém a conversa VIVA desde o nascimento: o paciente recebe os lembretes do CRM.
+  if (importadaDaKommo(raw)) return intactaDesdeAImportacao(raw) && !(raw.additional_attributes[KOMMO_ABERTO] === true && consultaDePe(raw, agora, 0));
   const t = Number(raw?.last_activity_at) * 1000;
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
   return !consultaDePe(raw, agora);

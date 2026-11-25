@@ -9,7 +9,7 @@
  * (leitura pela metade nunca vira «importado»). Conversa que a Kommo não entrega (conta sem escopo de chats) vira «sem conversa», contada.
  */
 import type { KommoLead, KommoPipeline, KommoTalk, KommoTalkMessage } from '../services/kommo.service.js';
-import { atributosDoCartao, linhaDoCartao, type CartaoDaKommo, type ContatoDaKommo, type LinhaDoCartao, type MensagemDaKommo, foneParaWhatsApp } from './kommo-historico-crm.js';
+import { atributosDoCartao, compararOrdem, consultaDePe, linhaDoCartao, ordemDoCartao, type CartaoDaKommo, type ContatoDaKommo, type LinhaDoCartao, type MensagemDaKommo, foneParaWhatsApp } from './kommo-historico-crm.js';
 
 export const MESES_DOS_FECHADOS = 6;
 export const POR_PAGINA = 250;
@@ -20,6 +20,8 @@ export const MENSAGENS_POR_PAGINA = 100;
 export const MAX_PAGINAS_DE_MENSAGENS = 100;
 /** quantas conversas o SECO lê de verdade para medir mensagens e tempo */
 export const AMOSTRA_DO_SECO = 30;
+/** o quadro e o «Hoje» leem 8 páginas de 25 conversas (`MAX_PAGINAS` de funil-chatwoot): só as 200 mais recentes por última atividade aparecem */
+export const LINHAS_DO_QUADRO = 200;
 const STATUS_GANHO = 142;
 const STATUS_PERDIDO = 143;
 
@@ -131,8 +133,9 @@ export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
   // motivo de perda e responsável só enfeitam a nota: a conta sem escopo para listá-los (403) não pode derrubar a exportação de ~25 min
   const opcional = async <T>(nome: string, ler: () => Promise<T[]>): Promise<T[]> => {
     try {
-      return await ler();
+      return await comTentativas(amb, ler); // 429/5xx: repete (espera crescente) e, se persistir, SOBE o erro — só o 403/404 («sem escopo») é engolido
     } catch (e) {
+      if (!semConversaNaKommo(e)) throw e;
       amb.log(`AVISO ${nome} indisponível (http ${String((e as { status?: number })?.status ?? '?')}): a nota segue sem esse dado`);
       return [];
     }
@@ -274,13 +277,19 @@ export interface Relatorio {
   avisos: Record<string, number>;
   linhasGravadas: number;
   /** conversas que, depois de importadas, a régua/CAPI/telas NÃO tratariam como arquivo (tem de ser 0) */
+  /** telefones com um cartão de consulta de pé em que a conversa de DESTINO (a de maior id, que recebe o «confirmo») NÃO é a dele: tem de ser 0 */
+  consultaDePeForaDoDestino: number;
+  /** telefones com MAIS DE UM cartão de consulta de pé (só um vira o destino: o outro precisa de olhar humano) */
+  telefonesComVariasConsultasDePe: number;
+  /** conversas que nascem vivas e ficariam fora das `LINHAS_DO_QUADRO` mais recentes da lista (o quadro e o Hoje só leem essas): tem de ser 0 */
+  vivasForaDoTopo: number;
   /** conversas que já NASCERIAM vivas (a regra de arquivo, `ehArquivo`, diz que não é arquivo): as de consulta de pé (AGENDADO etc.), que recebem os lembretes do CRM */
   nascemVivas: number;
 }
 
 const vazioRelatorio = (): Relatorio => ({
   cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, lidosNaConta: 0, recuperadosNaPaginacao: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
-  semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0, nascemVivas: 0,
+  semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0, nascemVivas: 0, consultaDePeForaDoDestino: 0, telefonesComVariasConsultasDePe: 0, vivasForaDoTopo: 0,
 });
 
 /**
@@ -304,26 +313,51 @@ export async function exportar(
   r.lidosNaConta = sel.lidosNaConta;
   r.recuperadosNaPaginacao = sel.recuperadosNaPaginacao;
   const fones = new Map<string, number>();
+  const agora = amb.agora();
+  const agoraSeg = Math.floor(agora.getTime() / 1000);
+  /** por telefone: a posição de cada cartão (a que decide o destino) e se é de consulta de pé */
+  const porFone = new Map<string, Array<{ ordem: number[]; pe: boolean }>>();
+  /** a lista como o Chatwoot a ordena (última atividade): as vivas nascem com a hora da importação, o arquivo com a data do cartão */
+  const lista: Array<{ em: number; viva: boolean }> = [];
   for (const c of sel.cartoes) {
     if (c.statusId === STATUS_GANHO || c.statusId === STATUS_PERDIDO) r.fechados++;
     else r.abertos++;
-    const m = atributosDoCartao(c);
+    const m = atributosDoCartao(c, agora);
     for (const a of m.avisos) r.avisos[a] = (r.avisos[a] ?? 0) + 1; // os avisos valem para TODOS os cartões, não só os da amostra
-    if (opcoes.arquivo && foneParaWhatsApp(sel.contatos.get(c.id)?.telefone)) {
-      const agora = amb.agora();
-      const ultima = Math.min(Math.max(c.atualizadoEm, c.criadoEm), Math.floor(agora.getTime() / 1000));
-      if (!opcoes.arquivo({ labels: m.etiquetas, status: 'resolved', last_activity_at: ultima, additional_attributes: { kommo_lead_id: c.id, kommo_importado_em: Math.floor(agora.getTime() / 1000) }, custom_attributes: m.atributos }, agora)) r.nascemVivas++;
+    const foneDoCartao = foneParaWhatsApp(sel.contatos.get(c.id)?.telefone);
+    if (foneDoCartao) {
+      const aberto = c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO;
+      const pe = consultaDePe(c, m, agora);
+      const grupo = porFone.get(foneDoCartao) ?? [];
+      grupo.push({ ordem: ordemDoCartao({ consultaDePe: pe, aberto, atualizadoEm: c.atualizadoEm, id: c.id }), pe });
+      porFone.set(foneDoCartao, grupo);
+      if (opcoes.arquivo) {
+        const ultima = Math.min(Math.max(c.atualizadoEm, c.criadoEm), agoraSeg);
+        const viva = !opcoes.arquivo({ labels: m.etiquetas, status: 'resolved', last_activity_at: ultima, additional_attributes: { kommo_lead_id: c.id, kommo_importado_em: agoraSeg, kommo_aberto: aberto }, custom_attributes: m.atributos }, agora);
+        if (viva) r.nascemVivas++;
+        lista.push({ em: viva ? agoraSeg : ultima, viva });
+      }
     }
     const k = `${c.funil} › ${c.etapa}`;
     r.porEtapa[k] = (r.porEtapa[k] ?? 0) + 1;
     const ct = sel.contatos.get(c.id);
     if (!ct) r.semContato++;
-    const fone = foneParaWhatsApp(ct?.telefone);
+    const fone = foneDoCartao;
     if (!fone) {
       if (ct?.telefone) r.telefoneInvalido++;
       else r.semTelefone++;
     } else fones.set(fone, (fones.get(fone) ?? 0) + 1);
   }
+  // destino: a maior posição do telefone é a conversa de maior id. Se o telefone tem consulta de pé e o destino NÃO é de consulta de pé, o «confirmo» cairia na conversa errada
+  for (const grupo of porFone.values()) {
+    const destino = grupo.reduce((x, y) => (compararOrdem(x.ordem, y.ordem) >= 0 ? x : y));
+    const pes = grupo.filter((g) => g.pe).length;
+    if (pes > 0 && !destino.pe) r.consultaDePeForaDoDestino++;
+    if (pes > 1) r.telefonesComVariasConsultasDePe++;
+  }
+  // as vivas têm de caber nas LINHAS_DO_QUADRO primeiras da lista (as vivas vão ao topo; empate, a viva primeiro)
+  lista.sort((x, y) => y.em - x.em || Number(y.viva) - Number(x.viva));
+  r.vivasForaDoTopo = lista.reduce((n, x, i) => n + (x.viva && i >= LINHAS_DO_QUADRO ? 1 : 0), 0);
   r.telefonesDistintos = fones.size;
   r.telefonesRepetidos = [...fones.values()].filter((n) => n > 1).length;
 
@@ -349,7 +383,7 @@ export async function exportar(
     }
     segundos += (Date.now() - t0) / 1000;
     lidos.add(c.id);
-    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, amb.agora());
+    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, agora);
     r.mensagens += linha.mensagens.length;
     if (linha.mensagens.length) r.cartoesComMensagem++;
     if (opcoes.gravar) {

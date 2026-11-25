@@ -97,7 +97,7 @@ def conta_do_teste
   Account.find_by!(name: CONTA_DE_TESTE)
 end
 
-TELEFONES = { novo_a: '5547991230001', novo_b: '5547991230002', fixo: '554733330003', sem_caixa: '5547991230004', vazio_sem9: '554791230005', viva: '5547991230006', rodadas_p8: '5547991230008', rodadas_p9: '5547991230009' }.freeze
+TELEFONES = { rodadas_p10: '5547991230010', rodadas_p11: '5547991230011', novo_a: '5547991230001', novo_b: '5547991230002', fixo: '554733330003', sem_caixa: '5547991230004', vazio_sem9: '554791230005', viva: '5547991230006', rodadas_p8: '5547991230008', rodadas_p9: '5547991230009' }.freeze
 NOTA_SEM_CONVERSA = 'Conversa: a Kommo não entregou a conversa deste cartão (sem permissão de chats ou sem conversa).'
 
 # o arquivo de uma rodada: cabeçalho + os cartões dados
@@ -171,7 +171,7 @@ if FASE == 1
     # A: aberto, Agendado, paciente novo, conversa com «sair/urgente» (as automações NÃO podem reagir)
     cartao(1001, 'mensagens' => [msg('a1', 20, true, 'oi, quero agendar'), msg('a2', 20, false, 'Claro! Qual a sua queixa?'), msg('a3', 19, true, 'dor forte, é urgente, quero parar de sentir. sair de casa dói'), msg('a4', 3, false, 'Confirmado para sexta')],
                  'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'data_consulta' => '2026-11-27', 'hora_consulta' => '10:30', 'situacao_consulta' => 'Agendado', 'qualificacao' => 'Quente', 'kommo_lead_id' => 1001, 'origem' => 'Meta-Instagram' },
-                 'etiquetas' => %w[historico quente anuncio etiqueta-que-a-conta-nao-tem]),
+                 'etiquetas' => %w[historico quente anuncio etiqueta-que-a-conta-nao-tem], 'consulta_de_pe' => true),
     # B: perdido há 2 meses, paciente novo
     cartao(1002, 'telefone' => TELEFONES[:novo_b], 'aberto' => false, 'etapa_kommo' => 'PERDIDO', 'fechado_em' => T.call(60), 'atualizado_em' => T.call(60),
                  'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Perdido', 'motivo_nao_agendamento' => 'Sem interesse', 'kommo_lead_id' => 1002 }, 'etiquetas' => %w[historico perdido-sem-interesse],
@@ -231,10 +231,11 @@ if FASE == 1
   nota = a.messages.find_by(private: true)
   confere('A: a NOTA-resumo é privada, abre a conversa (antes da 1ª mensagem) e tem o texto do exportador', nota && nota.message_type == 'outgoing' && nota.content.include?('Histórico da Kommo') && nota.created_at < ms.first.created_at)
   confere('A: atributos do CRM (etapa, funil, consulta, qualificação) e origem; a marca do cartão fica na conversa e não nos atributos', a.custom_attributes.slice('funil', 'etapa', 'data_consulta', 'hora_consulta', 'situacao_consulta', 'qualificacao', 'origem') == { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'data_consulta' => '2026-11-27', 'hora_consulta' => '10:30', 'situacao_consulta' => 'Agendado', 'qualificacao' => 'Quente', 'origem' => 'Meta-Instagram' } && !a.custom_attributes.key?('kommo_lead_id'), a.custom_attributes.inspect)
-  confere('A: conversa criada na data do cartão e com a última atividade = a da última mudança (não a de hoje)', a.created_at.to_i == T.call(40) && a.last_activity_at.to_i == T.call(3))
-  confere('A: o contato é novo, com o telefone em formato E.164 e o source_id só dígitos (o do WhatsApp Cloud)', a.contact.phone_number == '+5547991230001' && a.contact_inbox.source_id == '5547991230001' && a.contact.name == 'Paciente 1001')
+  confere('A (consulta de pé): conversa criada na data do cartão e com a última atividade = a HORA DA IMPORTAÇÃO (vai ao TOPO da lista do quadro/Hoje); a posição e o «aberto» ficam marcados', a.created_at.to_i == T.call(40) && a.last_activity_at.to_i == a.additional_attributes['kommo_importado_em'] && a.additional_attributes['kommo_aberto'] == true && a.additional_attributes['kommo_ordem'][0] == 1, a.additional_attributes.inspect)
+  confere('B (perdido, arquivo): conversa com a última atividade = a data REAL do cartão (não sobe na lista) e kommo_aberto = false', por_lead[1002].last_activity_at.to_i == T.call(60) && por_lead[1002].additional_attributes['kommo_aberto'] == false && por_lead[1002].additional_attributes['kommo_ordem'][0] == 0, por_lead[1002].additional_attributes.inspect)
+  confere('A: o contato é novo, com o telefone em formato E.164 e o source_id só dígitos (o do WhatsApp Cloud)', a.contact.phone_number == '+5547991230001' && a.contact_inbox.source_id == '5547991230001' && ['Paciente 1001', 'Paciente 1003'].include?(a.contact.name))
   c = por_lead[1003]
-  confere('A e C: o MESMO telefone é UM contato com duas conversas; a de tratamento (a mais viva) tem o MAIOR id', a.contact_id == c.contact_id && a.contact_inbox_id == c.contact_inbox_id && c.id > a.id)
+  confere('A e C: o MESMO telefone é UM contato com duas conversas; a do AGENDADO com consulta de pé (A) tem o MAIOR id, mesmo sendo a do cartão mais velho (C é o tratamento, atualizado depois)', a.contact_id == c.contact_id && a.contact_inbox_id == c.contact_inbox_id && a.id > c.id)
   confere('C: Tratamento tem etapa_tratamento e NÃO tem etapa comercial', c.custom_attributes['etapa_tratamento'] == 'Em tratamento' && !c.custom_attributes.key?('etapa'))
   b = por_lead[1002]
   confere('B: perdido há 2 meses entra Perdido com motivo e etiqueta perdido-*', b.custom_attributes['etapa'] == 'Perdido' && b.custom_attributes['motivo_nao_agendamento'] == 'Sem interesse' && b.label_list.include?('perdido-sem-interesse'))
@@ -299,7 +300,7 @@ if FASE == 2
   confere('a nota «a Kommo não entregou» é REESCRITA quando a Kommo passa a entregar (e continua UMA nota privada)', nota7.reload.content.include?('2 mensagens estão abaixo') && !nota7.content.include?('não entregou') && nota7.private && Message.where(source_id: 'kommo-nota:1007').count == 1, nota7.content)
   a.reload
   confere('rodada seguinte NUNCA escreve atributo em conversa que já existe: o que a EQUIPE mexeu fica (etapa Compareceu) e o campo vazio também fica vazio (retomar_em)', a.custom_attributes['etapa'] == 'Compareceu' && !a.custom_attributes.key?('retomar_em'), a.custom_attributes.inspect)
-  confere('a mensagem nova entrou UMA vez, no fim, e a última atividade avançou (sem passar da hora da importação)', a.messages.where(private: false).order(:created_at, :id).last.source_id == 'kommo:1001:a5' && a.messages.where(source_id: 'kommo:1001:a5').count == 1 && a.last_activity_at.to_i == T.call(1) && a.last_activity_at.to_i <= a.additional_attributes['kommo_importado_em'])
+  confere('a mensagem nova entrou UMA vez, no fim, e a última atividade NÃO recuou nem passou da hora da importação (a conversa de consulta de pé já estava no topo)', a.messages.where(private: false).order(:created_at, :id).last.source_id == 'kommo:1001:a5' && a.messages.where(source_id: 'kommo:1001:a5').count == 1 && a.last_activity_at.to_i == a.additional_attributes['kommo_importado_em'])
   # terceira rodada: nada
   medir { rodar_importador(GRAVAR: '1', ARQUIVO: ARQ, CONTA: conta.id) }
   confere('3ª rodada: nada novo, nada gravado', contagem.call == d && $ultimo_resumo[:mensagens_gravadas].zero? && $ultimo_resumo[:notas_reescritas].zero? && silencio?, $ultimo_resumo.inspect)
@@ -326,6 +327,28 @@ if FASE == 2
   confere('DESTINO ESTÁVEL (P9): piloto com o mais velho, lote com o mais novo — duas conversas e a de MAIOR id é a do cartão aberto', convs9.map { |c| c.additional_attributes['kommo_lead_id'] } == [2003, 2004], convs9.map { |c| c.additional_attributes['kommo_lead_id'] }.inspect)
   rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p9-rodada3.jsonl', conta, [c2004, c2003]), CONTA: conta.id)
   confere('DESTINO ESTÁVEL (P9): rodar de novo (em outra ordem de arquivo) não muda nada', Conversation.where(contact_inbox_id: ci9.id).count == 2 && $ultimo_resumo[:cartoes_novos].zero?, $ultimo_resumo.inspect)
+  # ── CONSULTA DE PÉ NA FRENTE: o paciente com um AGENDADO e um cartão aberto MAIS NOVO responde «confirmo» na conversa do AGENDADO ──
+  novo_aberto = ->(lead, fone, dias) { cartao(lead, 'telefone' => fone, 'atualizado_em' => T.call(dias), 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Sofia qualifica', 'kommo_lead_id' => lead }, 'mensagens' => [msg("n#{lead}", dias, true, 'oi')]) }
+  com_consulta = ->(lead, fone, dias) { cartao(lead, 'telefone' => fone, 'atualizado_em' => T.call(dias), 'consulta_de_pe' => true, 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Agendado', 'situacao_consulta' => 'Agendado', 'kommo_lead_id' => lead }, 'mensagens' => [msg("c#{lead}", dias, true, 'confirmo')]) }
+  # P10 (rodadas): o cartão novo e sem consulta chega no piloto; o AGENDADO (mais velho, com consulta de pé) só na 2ª rodada — e vira a conversa de MAIOR id
+  rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p10-rodada1.jsonl', conta, [novo_aberto.call(2007, TELEFONES[:rodadas_p10], 1)]), CONTA: conta.id)
+  rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p10-rodada2.jsonl', conta, [com_consulta.call(2006, TELEFONES[:rodadas_p10], 10), novo_aberto.call(2007, TELEFONES[:rodadas_p10], 1)]), CONTA: conta.id)
+  ci10 = ContactInbox.find_by!(source_id: TELEFONES[:rodadas_p10])
+  confere('DESTINO COM CONSULTA DE PÉ (P10, em rodadas): o AGENDADO mais velho, que chegou depois, é a conversa de MAIOR id', Conversation.where(contact_inbox_id: ci10.id).order(:id).map { |c| c.additional_attributes['kommo_lead_id'] } == [2007, 2006])
+  # P11 (mesma rodada): o arquivo traz o aberto novo e o AGENDADO; a ordem de gravação põe o AGENDADO por último
+  rodar_importador(GRAVAR: '1', ARQUIVO: arquivo_da_rodada('p11.jsonl', conta, [novo_aberto.call(2009, TELEFONES[:rodadas_p11], 1), com_consulta.call(2008, TELEFONES[:rodadas_p11], 10)]), CONTA: conta.id)
+  ci11 = ContactInbox.find_by!(source_id: TELEFONES[:rodadas_p11])
+  confere('DESTINO COM CONSULTA DE PÉ (P11, mesma rodada): idem', Conversation.where(contact_inbox_id: ci11.id).order(:id).map { |c| c.additional_attributes['kommo_lead_id'] } == [2009, 2008])
+  viva10 = Conversation.where(contact_inbox_id: [ci10.id, ci11.id]).select { |c| [2006, 2008].include?(c.additional_attributes['kommo_lead_id']) }
+  confere('as conversas de consulta de pé nascem no TOPO (última atividade = a importação) e as outras ficam com a data do cartão', viva10.all? { |c| c.last_activity_at.to_i == c.additional_attributes['kommo_importado_em'] } && Conversation.where(contact_inbox_id: [ci10.id, ci11.id]).where.not(id: viva10.map(&:id)).all? { |c| c.last_activity_at.to_i == T.call(1) })
+  # conversa importada por versão ANTIGA (sem kommo_importado_em): a rodada é RECUSADA
+  ve = Conversation.where(account_id: conta.id).detect { |c| c.additional_attributes['kommo_lead_id'] == 1002 }
+  ve.update_columns(additional_attributes: ve.additional_attributes.except('kommo_importado_em'))
+  limpar_constantes
+  st = rodar_importador(GRAVAR: nil, ARQUIVO: ARQ, CONTA: conta.id)
+  confere('conversa com kommo_lead_id e SEM kommo_importado_em: a rodada é RECUSADA (versão antiga do importador)', st == 1, st.inspect)
+  ve.update_columns(additional_attributes: ve.additional_attributes.merge('kommo_importado_em' => ve.created_at.to_i + 86_400 * 30))
+
 end
 
 if FASE == 3
@@ -341,12 +364,12 @@ if FASE == 3
   end
   contatos_antes = Contact.where(account_id: conta.id).count
   convs_antes = Conversation.where(account_id: conta.id).count
-  # (1) o paciente A/C (celular COM o 9) — duas conversas importadas; a de maior id é a do tratamento
+  # (1) o paciente A/C (celular COM o 9) — duas conversas importadas; a de maior id é a do AGENDADO com consulta de pé (1001)
   enviar.call('5547991230001', 'oi, voltei')
   m = Message.find_by(content: 'oi, voltei')
-  c = Conversation.where(account_id: conta.id).detect { |x| x.additional_attributes['kommo_lead_id'] == 1003 }
-  confere('PACIENTE ESCREVE: caiu no contato importado e na conversa viva do tratamento (a de maior id), sem contato nem conversa nova', m && m.conversation_id == c.id && Contact.where(account_id: conta.id).count == contatos_antes && Conversation.where(account_id: conta.id).count == convs_antes, m&.conversation_id.inspect)
-  confere('PACIENTE ESCREVE: a conversa importada REABRIU e carrega a etapa e as etiquetas importadas', c.reload.open? && c.custom_attributes['etapa_tratamento'] == 'Em tratamento' && c.label_list.include?('historico'))
+  c = Conversation.where(account_id: conta.id).detect { |x| x.additional_attributes['kommo_lead_id'] == 1001 }
+  confere('PACIENTE ESCREVE: caiu no contato importado e na conversa do AGENDADO com consulta de pé (a de maior id), sem contato nem conversa nova', m && m.conversation_id == c.id && Contact.where(account_id: conta.id).count == contatos_antes && Conversation.where(account_id: conta.id).count == convs_antes, m&.conversation_id.inspect)
+  confere('PACIENTE ESCREVE: a conversa importada REABRIU e carrega a etapa e as etiquetas importadas', c.reload.open? && c.custom_attributes['etapa'].to_s != '' && c.label_list.include?('historico'))
   confere('PACIENTE ESCREVE: a última atividade passou do instante da importação — para o backend (`ehArquivo`) a conversa deixou de ser arquivo: régua, agenda, demora e telas a enxergam', c.last_activity_at.to_i > c.additional_attributes['kommo_importado_em'], "#{c.last_activity_at.to_i} vs #{c.additional_attributes['kommo_importado_em']}")
   # (2) o WhatsApp manda o wa_id SEM o 9 (acontece no Brasil): o Chatwoot casa as duas formas
   enviar.call('554791230005', 'bom dia, sem o nove')
@@ -361,6 +384,11 @@ if FASE == 3
   # (4) destino estável: P8 (o cartão aberto chegou antes do mais velho) e P9 (o mais novo veio depois) — o paciente cai SEMPRE na conversa do cartão que vale mais, nunca num Perdido
   enviar.call(TELEFONES[:rodadas_p8], 'oi, é o P8')
   enviar.call(TELEFONES[:rodadas_p9], 'oi, é o P9')
+  enviar.call(TELEFONES[:rodadas_p10], 'confirmo, é o P10')
+  enviar.call(TELEFONES[:rodadas_p11], 'confirmo, é o P11')
+  m10 = Message.find_by(content: 'confirmo, é o P10')
+  m11 = Message.find_by(content: 'confirmo, é o P11')
+  confere('DESTINO COM CONSULTA DE PÉ: o «confirmo» de P10 e de P11 cai na conversa do AGENDADO (2006 e 2008), não na do cartão aberto mais novo', m10&.conversation&.additional_attributes.to_h['kommo_lead_id'] == 2006 && m11&.conversation&.additional_attributes.to_h['kommo_lead_id'] == 2008, [m10&.conversation&.additional_attributes.to_h['kommo_lead_id'], m11&.conversation&.additional_attributes.to_h['kommo_lead_id']].inspect)
   m8 = Message.find_by(content: 'oi, é o P8')
   m9 = Message.find_by(content: 'oi, é o P9')
   cv8 = m8&.conversation
@@ -404,7 +432,7 @@ if FASE == 4
   confere('DESFAZER em seco não apagou nada', contagem.call == antes && st == 0)
   rodar_importador(GRAVAR: '1', MODO: 'desfazer', REGISTRO: registro, CONTA: conta.id, ARQUIVO: nil)
   restantes = Conversation.where(account_id: conta.id).select { |c| c.additional_attributes.key?('kommo_lead_id') }.map { |c| c.additional_attributes['kommo_lead_id'] }.sort
-  confere('DESFAZER: só ficaram as conversas que a equipe/o paciente já usaram (C reaberta, G, e as de P8 e P9 em que o paciente escreveu)', restantes == [1003, 1005, 2002, 2004], restantes.inspect)
+  confere('DESFAZER: só ficaram as conversas que a equipe/o paciente já usaram (A reaberta, G, e as de P8, P9, P10 e P11 em que o paciente escreveu)', restantes == [1001, 1005, 2002, 2004, 2006, 2008], restantes.inspect)
   confere('DESFAZER: TODAS as mensagens e notas do histórico saíram (também das conversas que a equipe/o paciente já usaram) e as do paciente ficaram', Message.where("source_id LIKE 'kommo%'").none? && Message.where(content: ['oi, voltei', 'bom dia, sem o nove', 'de novo']).count == 3)
   viva = Conversation.where(contact_id: Contact.find_by!(account_id: conta.id, phone_number: '+5547991230006').id).first
   confere('DESFAZER: a conversa do paciente que já existia ficou SÓ com as mensagens dela (a sua e a de «de novo») e o atributo que era dela (a importação nunca pôs nada)',
@@ -412,7 +440,7 @@ if FASE == 4
   confere('DESFAZER: contato que já existia ficou (Existente sem 9, Já escreveu, Existe sem caixa)', %w[Existente\ sem\ 9 Já\ escreveu Existe\ sem\ caixa].all? { |n| Contact.where(account_id: conta.id, name: n).count == 1 })
   confere('DESFAZER: contato com NOTA da equipe fica e a nota não fica órfã', Note.where(contact_id: nota_contato.id).count == 1)
   confere('DESFAZER: contato criado pela importação sem conversa nenhuma saiu (Paciente 1002)', Contact.where(account_id: conta.id, name: 'Paciente 1002').none?)
-  confere('DESFAZER: contato criado e ainda com conversa fica (Paciente 1001/1003)', Contact.where(account_id: conta.id, name: 'Paciente 1001').count == 1)
+  confere('DESFAZER: contato criado e ainda com conversa fica (Paciente 1001/1003)', Contact.where(account_id: conta.id, name: ['Paciente 1001', 'Paciente 1003']).count == 1)
 end
 
 if FASE == 5

@@ -5,6 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   atributosDoCartao,
+  compararOrdem,
+  consultaDePe,
   cortar,
   foneParaWhatsApp,
   linhaDoCartao,
@@ -12,10 +14,12 @@ import {
   motivoDeNaoAgendamento,
   nomeLimpo,
   notaDoCartao,
+  ordemDoCartao,
   traduzirEtapa,
   TETO_DE_MENSAGENS,
   type CartaoDaKommo,
 } from './kommo-historico-crm.js';
+import { atualizarVistos, conversaDoChatwoot, decidirRegua, ehArquivo, type DadosDaUnidade } from './chatwoot-regua.js';
 
 const AGORA = new Date('2026-11-25T15:00:00Z');
 /** 2026-11-27 10:30 em Belém (UTC−3) */
@@ -318,4 +322,74 @@ test('AGENDADO com data de consulta e «Situação da consulta» em branco: a si
   assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO', campos: [dia, campo('✓ Situação da consulta', 'Confirmado', 'select')] })).atributos.situacao_consulta, 'Confirmado');
   assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO' })).atributos.situacao_consulta, undefined, 'sem data de consulta não inventa situação');
   assert.equal(atributosDoCartao(cartao({ etapa: 'EM QUALIFICAÇÃO', campos: [dia] })).atributos.situacao_consulta, undefined, 'só nas etapas Agendado/Confirmado');
+});
+
+// ── a situação e o destino da consulta de pé (rodada 4) ──
+
+const BELEM_AMANHA = Math.floor(Date.parse('2026-11-26T13:00:00Z') / 1000); // 26/11 10:00 em Belém
+const camposDaConsulta = (epoch: number, situacao?: string) => [campo('◷ Data da Consulta', epoch, 'date_time'), ...(situacao ? [campo('✓ Situação da consulta', situacao, 'select')] : [])];
+
+test('NÃO COMPARECEU com consulta de HOJE em diante nasce «Remarcado» (de pé); com consulta passada continua «Não compareceu»; fechado não muda', () => {
+  const futuro = atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(BELEM_AMANHA) }), AGORA);
+  assert.equal(futuro.atributos.etapa, 'Agendado');
+  assert.equal(futuro.atributos.situacao_consulta, 'Remarcado');
+  assert.ok(futuro.avisos.includes('nao-compareceu-com-consulta-futura'));
+  assert.equal(atributosDoCartao(cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Não compareceu') }), AGORA).atributos.situacao_consulta, 'Remarcado', 'a situação do campo também');
+  const hoje = Math.floor(Date.parse('2026-11-25T20:00:00Z') / 1000); // 25/11 17:00 Belém: hoje
+  assert.equal(atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(hoje) }), AGORA).atributos.situacao_consulta, 'Remarcado', 'consulta de hoje conta');
+  const ontem = Math.floor(Date.parse('2026-11-24T13:00:00Z') / 1000);
+  assert.equal(atributosDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(ontem) }), AGORA).atributos.situacao_consulta, 'Não compareceu', 'faltou de verdade: a régua manda o «você faltou»');
+  assert.equal(atributosDoCartao(cartao({ etapa: 'PERDIDO', statusId: 143, fechadoEm: 1_790_000_000, campos: camposDaConsulta(BELEM_AMANHA, 'Não compareceu') }), AGORA).atributos.situacao_consulta, 'Não compareceu', 'cartão fechado fica como está');
+});
+
+test('consultaDePe: só cartão ABERTO, consulta de hoje em diante e situação de pé; a linha leva o sinal', () => {
+  const m = (c: CartaoDaKommo) => atributosDoCartao(c, AGORA);
+  const aberto = cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') });
+  assert.equal(consultaDePe(aberto, m(aberto), AGORA), true);
+  assert.equal(linhaDoCartao(aberto, { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA).consulta_de_pe, true);
+  const passada = cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(Math.floor(Date.parse('2026-11-20T13:00:00Z') / 1000), 'Agendado') });
+  assert.equal(consultaDePe(passada, m(passada), AGORA), false, 'consulta de 5 dias atrás: arquivo');
+  const fechado = cartao({ etapa: 'GANHO / CONCLUÍDO', statusId: 142, fechadoEm: 1_790_000_000, campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') });
+  assert.equal(consultaDePe(fechado, m(fechado), AGORA), false, 'Fechou/Alta: arquivo');
+  const semData = cartao({ etapa: 'AGENDADO' });
+  assert.equal(consultaDePe(semData, m(semData), AGORA), false);
+});
+
+test('destino: a consulta de pé vem NA FRENTE do aberto mais novo (o «confirmo» cai na conversa certa)', () => {
+  const pe = ordemDoCartao({ consultaDePe: true, aberto: true, atualizadoEm: 100, id: 1 });
+  const novoAberto = ordemDoCartao({ consultaDePe: false, aberto: true, atualizadoEm: 900, id: 2 });
+  const fechadoNovo = ordemDoCartao({ consultaDePe: false, aberto: false, atualizadoEm: 999, id: 3 });
+  assert.equal(compararOrdem(pe, novoAberto), 1);
+  assert.equal(compararOrdem(novoAberto, fechadoNovo), 1);
+  assert.equal(compararOrdem(pe, pe), 0);
+});
+
+const UNIDADE: DadosDaUnidade = { nome: 'Doutor Hérnia Timbó', pixKey: 'pix@x', valorAntecipado: 250 };
+/** o que a régua mandaria, hora a hora, a uma conversa importada: o mesmo ciclo do worker (arquivo não é lido; a 1ª vista com `historico` é «inicial») */
+function varrerRegua(raw: any, de: string, ate: string): string[] {
+  let vistos: any = new Map();
+  const saiu: string[] = [];
+  for (let t = Date.parse(de); t <= Date.parse(ate); t += 3600_000) {
+    const quando = new Date(t);
+    if (ehArquivo(raw, quando)) continue;
+    const c = { ...conversaDoChatwoot(raw)!, criadaEm: new Date(de) };
+    const k = atualizarVistos(c, vistos, quando, { primeiraVez: false, desde: new Date('2026-11-01T00:00:00Z') });
+    vistos = k.vistos;
+    for (const d of decidirRegua(c, { vistos: k.vistos, feitos: new Set() }, quando, UNIDADE).disparos) if (!saiu.includes(d.regra)) saiu.push(d.regra);
+  }
+  return saiu;
+}
+
+test('integração: NÃO COMPARECEU com consulta FUTURA recebe a véspera e o lembrete do dia — e NUNCA o «você faltou» (falta-48h)', () => {
+  const linha = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: camposDaConsulta(Math.floor(Date.parse('2026-11-27T13:00:00Z') / 1000)) }), { id: 1, nome: 'Maria', telefone: '47991234567' }, [], AGORA);
+  const importadoEm = Math.floor(AGORA.getTime() / 1000);
+  const raw = { id: 5, created_at: importadoEm - 86_400, labels: ['historico'], status: 'resolved', last_activity_at: importadoEm, additional_attributes: { kommo_lead_id: 777, kommo_importado_em: importadoEm, kommo_aberto: linha.aberto }, custom_attributes: linha.atributos, meta: { sender: { name: 'Maria', phone_number: '+5547991234567', identifier: '5547991234567' } }, last_non_activity_message: null };
+  assert.equal(linha.consulta_de_pe, true);
+  const saiu = varrerRegua(raw, '2026-11-25T15:00:00Z', '2026-12-05T15:00:00Z');
+  assert.ok(saiu.includes('consulta-vespera') && saiu.includes('consulta-dia'), `véspera e dia (saiu: ${saiu.join(', ')})`);
+  assert.ok(!saiu.includes('falta-48h') && !saiu.includes('falta-mesmo-dia'), `«você faltou» não sai (saiu: ${saiu.join(', ')})`);
+  // contraprova: a MESMA conversa com a situação «Não compareceu» (o que o importador gravava) ficaria sem véspera (e o «você faltou» chegaria se a conversa seguisse viva depois da consulta)
+  const antiga = { ...raw, custom_attributes: { ...linha.atributos, situacao_consulta: 'Não compareceu' } };
+  const saiuAntes = varrerRegua(antiga, '2026-11-25T15:00:00Z', '2026-12-05T15:00:00Z');
+  assert.ok(!saiuAntes.includes('consulta-vespera'), `com «Não compareceu» a régua NÃO manda véspera (saiu: ${saiuAntes.join(', ')})`);
 });

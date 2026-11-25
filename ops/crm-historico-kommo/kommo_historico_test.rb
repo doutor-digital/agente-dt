@@ -82,16 +82,21 @@ class KommoHistoricoTest < Minitest::Test
     assert_equal [2, 3, 1], K.ordenar([a, b, c]).map { |x| x[:lead_id] }
   end
 
-  def test_ordem_do_cartao_aberto_vale_mais_que_fechado_e_depois_o_mais_recente
+  def test_ordem_do_cartao_consulta_de_pe_na_frente_depois_aberto_e_o_mais_recente
     aberto_velho, = K.validar(linha('lead_id' => 1, 'aberto' => true, 'atualizado_em' => 100))
     fechado_novo, = K.validar(linha('lead_id' => 2, 'aberto' => false, 'atualizado_em' => 900))
     aberto_novo, = K.validar(linha('lead_id' => 3, 'aberto' => true, 'atualizado_em' => 500))
-    assert_equal [1, 100, 1], K.ordem_do_cartao(aberto_velho)
+    com_consulta, = K.validar(linha('lead_id' => 4, 'aberto' => true, 'atualizado_em' => 50, 'consulta_de_pe' => true))
+    assert_equal [0, 1, 100, 1], K.ordem_do_cartao(aberto_velho)
     assert_equal 1, (K.ordem_do_cartao(aberto_velho) <=> K.ordem_do_cartao(fechado_novo)), 'aberto vale mais que fechado, mesmo mais velho'
     assert_equal 1, (K.ordem_do_cartao(aberto_novo) <=> K.ordem_do_cartao(aberto_velho))
-    assert_equal(-1, (K.ordem_do_cartao(fechado_novo) <=> [1, 0, 0]))
+    assert_equal 1, (K.ordem_do_cartao(com_consulta) <=> K.ordem_do_cartao(aberto_novo)), 'a consulta de pé vem na frente do aberto mais NOVO: é nela que o «confirmo» cai'
+    assert_equal true, com_consulta[:consulta_de_pe]
+    assert_equal false, aberto_novo[:consulta_de_pe]
     # a ordem de gravação e a de destino são a MESMA: o último gravado é o que vale mais
-    assert_equal K.ordenar([aberto_novo, fechado_novo, aberto_velho]).last[:lead_id], [aberto_velho, fechado_novo, aberto_novo].max_by { |l| K.ordem_do_cartao(l) }[:lead_id]
+    todos = [aberto_novo, fechado_novo, aberto_velho, com_consulta]
+    assert_equal K.ordenar(todos).last[:lead_id], todos.max_by { |l| K.ordem_do_cartao(l) }[:lead_id]
+    assert_equal 4, K.ordenar(todos).last[:lead_id]
   end
 
   def test_nota_sem_conversa_e_a_mesma_frase_do_backend

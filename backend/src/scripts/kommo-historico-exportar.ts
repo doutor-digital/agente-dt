@@ -47,6 +47,8 @@ async function main(): Promise<void> {
     for (const [etapa, n] of Object.entries(r.porEtapa).sort()) log(`ETAPA ${etapa} = ${n}`);
     log(`TELEFONE sem=${r.semTelefone} invalido=${r.telefoneInvalido} sem_contato=${r.semContato} distintos=${r.telefonesDistintos} repetidos_em_mais_de_um_cartao=${r.telefonesRepetidos}`);
     log(`CONVERSA ${SECO ? `amostra=${r.amostra}` : `lidas=${r.amostra}`} sem_conversa=${r.semConversa} falhas_de_leitura=${r.falhasDeLeitura} com_mensagem=${r.cartoesComMensagem} mensagens=${r.mensagens}${SECO ? ` estimativa_total=${r.mensagensEstimadas}` : ''} segundos_por_cartao=${r.segundosPorCartao}`);
+    log(`CONSULTA_DE_PE_FORA_DO_DESTINO = ${r.consultaDePeForaDoDestino} (telefones com consulta de pé em que a próxima mensagem do paciente cairia em OUTRO cartão; meta 0) · telefones_com_varias_consultas_de_pe=${r.telefonesComVariasConsultasDePe}`);
+    log(`VIVAS_FORA_DAS_200_MAIS_RECENTES = ${r.vivasForaDoTopo} (conversas que nascem vivas e o quadro/Hoje não mostrariam; meta 0; só conta as importadas, não as que já existem na caixa)`);
     log(`NASCEM_VIVAS = ${r.nascemVivas} (ESTIMATIVA MÁXIMA: cartões com consulta de pé, cuja conversa já nasce VIVA e recebe os lembretes do CRM — só se a conta definir os atributos de consulta; as demais nascem arquivo até o paciente voltar)`);
     if (SECO) log(`DURACAO estimada da exportação = ${r.duracaoEstimadaMin} min`);
     for (const [a, n] of Object.entries(r.avisos).sort()) log(`AVISO ${a} = ${n}`);

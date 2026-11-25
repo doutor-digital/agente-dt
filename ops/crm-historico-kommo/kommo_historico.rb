@@ -16,6 +16,8 @@ module KommoHistorico
   MARCA_IMPORTADO_EM = 'kommo_importado_em'
   # a posição do cartão na conversa [aberto?1:0, atualizado_em, lead_id]: decide, em qualquer rodada, se um cartão novo vira a conversa de destino ou entra na que já existe
   MARCA_ORDEM = 'kommo_ordem'
+  # `true` = o cartão estava ABERTO na Kommo (Ganho/Perdido/Alta = `false`): só o aberto com consulta de hoje em diante nasce vivo (`ehArquivo`, backend)
+  MARCA_ABERTO = 'kommo_aberto'
   # o trecho que a nota-resumo traz quando a Kommo não entregou a conversa (a mesma frase do backend, kommo-historico-crm.ts): se a rodada seguinte consegue ler, a nota é reescrita
   NOTA_SEM_CONVERSA = 'a Kommo não entregou a conversa deste cartão'
   # chaves que a conversa recebe mesmo sem atributo definido na conta (o código do CRM já as lê; a tela só mostra quando o kit as criar)
@@ -68,7 +70,9 @@ module KommoHistorico
       nome: limpar(h['nome'], 255).then { |n| n.empty? ? "Cartão #{h['lead_id']}" : n }, telefone: fone,
       funil_kommo: limpar(h['funil_kommo'], 80), etapa_kommo: limpar(h['etapa_kommo'], 80), aberto: h['aberto'] == true,
       criado_em: h['criado_em'], atualizado_em: h['atualizado_em'], fechado_em: h['fechado_em'].is_a?(Integer) ? h['fechado_em'] : nil,
-      atributos: atributos, etiquetas: etiquetas, nota: limpar(h['nota'], LIMITE_NOTA), mensagens: mensagens
+      atributos: atributos, etiquetas: etiquetas, nota: limpar(h['nota'], LIMITE_NOTA), mensagens: mensagens,
+      # cartão ABERTO com consulta de hoje em diante e situação de pé (decidido pelo exportador): nasce VIVO, vai ao topo da lista e é o destino do «confirmo»
+      consulta_de_pe: h['consulta_de_pe'] == true
     }
     [linha, nil]
   end
@@ -93,12 +97,13 @@ module KommoHistorico
     "kommo-nota:#{linha[:lead_id]}"
   end
 
-  # A posição do cartão: aberto vale mais que fechado; dentro do grupo, o atualizado mais recentemente; empate, o id da Kommo.
+  # A posição do cartão: CONSULTA DE PÉ primeiro (é nela que o paciente responde «confirmo»), depois aberto > fechado, depois o atualizado mais recentemente, depois o id da Kommo.
+  # A MESMA ordem do backend (`ordemDoCartao`, kommo-historico-crm.ts).
   def ordem_do_cartao(linha)
-    [linha[:aberto] ? 1 : 0, linha[:atualizado_em].to_i, linha[:lead_id].to_i]
+    [linha[:consulta_de_pe] ? 1 : 0, linha[:aberto] ? 1 : 0, linha[:atualizado_em].to_i, linha[:lead_id].to_i]
   end
 
-  # Ordem de gravação: da menor posição para a maior (fechados primeiro, depois abertos; do mais velho para o mais novo) — o cartão mais vivo recebe o
+  # Ordem de gravação: da menor posição para a maior (fechados primeiro, depois abertos, a consulta de pé por último; do mais velho para o mais novo) — o cartão mais vivo recebe o
   # id MAIOR, e é nele que a próxima mensagem do paciente cai (a caixa trava em conversa única: o Chatwoot usa a conversa de maior id do contato).
   def ordenar(linhas)
     linhas.sort_by { |l| ordem_do_cartao(l) }

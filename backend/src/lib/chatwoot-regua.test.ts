@@ -650,7 +650,7 @@ test('ehArquivo: histórico importado da KOMMO é arquivo SÓ enquanto ninguém 
   const agora = Z('2026-11-26T12:00:00Z');
   const antesDaImportacao = importadoEm - 3 * 86_400; // a data REAL do cartão (recente: bem depois do corte de 14/11)
   const depoisDaImportacao = importadoEm + 3600;
-  const kommo = { kommo_lead_id: 123456, kommo_importado_em: importadoEm };
+  const kommo = { kommo_lead_id: 123456, kommo_importado_em: importadoEm, kommo_aberto: true };
   const c = (extra: Record<string, unknown> = {}) => ({ labels: ['historico'], status: 'resolved', last_activity_at: antesDaImportacao, additional_attributes: kommo, custom_attributes: { etapa: 'Perdido' }, ...extra });
   assert.equal(ehArquivo(c(), agora), true, 'recém-importada, resolvida, com atividade de 3 dias atrás: arquivo (o corte de 14/11 NÃO vale para ela)');
   assert.equal(ehArquivo(c({ additional_attributes: { ...kommo, kommo_lead_id: '123' } }), agora), true, 'id como texto também');
@@ -664,12 +664,19 @@ test('ehArquivo: histórico importado da KOMMO é arquivo SÓ enquanto ninguém 
   assert.equal(ehArquivo(c({ labels: ['outra'] }), agora), false, 'sem a etiqueta volta a ser conversa normal');
   assert.equal(ehArquivo(c({ additional_attributes: { kommo_lead_id: '', kommo_importado_em: importadoEm } }), agora), false);
   assert.equal(ehArquivo(c({ additional_attributes: { kommo_lead_id: null, kommo_importado_em: importadoEm } }), agora), false);
-  // consulta de pé (cartão AGENDADO / NÃO COMPARECEU com consulta de hoje em diante): nasce VIVA, a régua manda os lembretes
-  for (const situacao_consulta of ['Agendado', 'Confirmado', 'Remarcado', 'Não compareceu']) {
+  // consulta de pé: cartão ABERTO com consulta de HOJE em diante e situação de pé — nasce VIVA, a régua manda os lembretes
+  for (const situacao_consulta of ['Agendado', 'Confirmado', 'Remarcado']) {
     assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-27', situacao_consulta } }), agora), false, `consulta amanhã (${situacao_consulta}): viva desde o nascimento`);
   }
-  assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-10-01', situacao_consulta: 'Agendado' } }), agora), true, 'consulta de mais de 35 dias atrás: arquivo');
+  assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-26', situacao_consulta: 'Agendado' } }), agora), false, 'consulta HOJE (Belém) ainda vale');
+  // decisão do João: a consulta dos ÚLTIMOS 35 DIAS (a regra de Parauapebas) NÃO tira a conversa da Kommo do arquivo; nem Perdido/Fechou/Alta (cartão fechado), mesmo com consulta futura
+  assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-20', situacao_consulta: 'Atendido' } }), agora), true, 'consulta de 6 dias atrás: arquivo');
+  assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-25', situacao_consulta: 'Não compareceu' } }), agora), true, 'consulta de ontem, faltou: arquivo');
+  assert.equal(ehArquivo(c({ additional_attributes: { ...kommo, kommo_aberto: false }, custom_attributes: { etapa: 'Fechou', data_consulta: '2026-11-27', situacao_consulta: 'Agendado' } }), agora), true, 'cartão FECHADO (Fechou/Perdido/Alta): arquivo mesmo com consulta futura');
+  assert.equal(ehArquivo(c({ additional_attributes: { kommo_lead_id: 1, kommo_importado_em: importadoEm }, custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-27', situacao_consulta: 'Agendado' } }), agora), true, 'sem kommo_aberto não presume aberto');
   assert.equal(ehArquivo(c({ custom_attributes: { etapa: 'Agendado', data_consulta: '2026-11-27', situacao_consulta: 'Desmarcado' } }), agora), true, 'desmarcada: arquivo');
+  // o paciente que fala DEPOIS acorda o que nasceu arquivo, e a consulta de pé volta ao normal
+  assert.equal(ehArquivo(c({ status: 'open', last_activity_at: depoisDaImportacao, custom_attributes: { etapa: 'Fechou', data_consulta: '2026-10-01', situacao_consulta: 'Atendido' } }), agora), false);
   // sem o instante da importação (conversa que não é nossa de verdade) cai na regra geral, a do corte de 14/11
   assert.equal(ehArquivo(c({ additional_attributes: { kommo_lead_id: 1 } }), agora), false, 'sem kommo_importado_em: regra geral (atividade depois do corte = viva)');
 });
@@ -699,9 +706,9 @@ function cicloDaKommo(raw: any, agora: string, vistosAntes: ReadonlyMap<string, 
 test('integração Kommo: o paciente que VOLTA depois da importação é visto pela régua — a véspera sai, o que já estava no cartão não vira disparo', () => {
   const importadoEm = Math.floor(Date.parse('2026-11-25T12:00:00Z') / 1000);
   const meta = { sender: { name: 'Maria', phone_number: '+5594999990000', identifier: '5594999990000' } };
-  const base = { id: 77, created_at: importadoEm - 40 * 86_400, labels: ['historico'], additional_attributes: { kommo_lead_id: 9001, kommo_importado_em: importadoEm }, meta, last_non_activity_message: null };
+  const base = { id: 77, created_at: importadoEm - 40 * 86_400, labels: ['historico'], additional_attributes: { kommo_lead_id: 9001, kommo_importado_em: importadoEm, kommo_aberto: true }, meta, last_non_activity_message: null };
   // (a) cartão PERDIDO importado: arquivo enquanto ninguém mexe; o paciente volta -> viva; a etapa antiga é ponto de partida (nada de follow-up de meses atrás)
-  const perdido = { ...base, status: 'resolved', last_activity_at: importadoEm - 3 * 86_400, custom_attributes: { etapa: 'Perdido' } };
+  const perdido = { ...base, additional_attributes: { ...base.additional_attributes, kommo_aberto: false }, status: 'resolved', last_activity_at: importadoEm - 3 * 86_400, custom_attributes: { etapa: 'Perdido' } };
   const antes = cicloDaKommo(perdido, '2026-11-26T11:00:00Z', new Map());
   assert.equal(antes.arquivo, true, 'ninguém mexeu: a régua não toca');
   const voltou = { ...perdido, status: 'open', last_activity_at: Math.floor(Date.parse('2026-11-26T12:00:00Z') / 1000) };

@@ -126,6 +126,11 @@ export interface LinhaDoCartao {
   mensagens_total: number;
   /** códigos curtos (sem dado de paciente) do que não pôde ser mapeado */
   avisos: string[];
+  /**
+   * Cartão ABERTO com consulta de hoje em diante e situação de pé (Agendado/Confirmado/Remarcado): a conversa nasce VIVA (régua, agenda e telas a veem; o
+   * paciente recebe os lembretes do CRM), vai para o TOPO da lista (última atividade = a hora da importação) e é o DESTINO da próxima mensagem do paciente.
+   */
+  consulta_de_pe: boolean;
 }
 
 // ── telefone ─────────────────────────────────────────────────────────────────────────────────────────
@@ -301,6 +306,28 @@ export function traduzirEtapa(c: CartaoDaKommo): Traducao {
 
 // ── atributos da conversa ────────────────────────────────────────────────────────────────────────────
 
+/** O dia de hoje em Belém (AAAA-MM-DD), o mesmo formato de `data_consulta`. */
+const hojeEmBelem = (agora: Date): string => dataDoCrm(Math.floor(agora.getTime() / 1000));
+/** Situações em que a consulta marcada ainda vai acontecer. */
+const SITUACOES_VIVAS: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado']);
+
+/** Cartão ABERTO, consulta de hoje em diante (Belém) e situação de pé: a conversa nasce viva. Fechado (Ganho/Perdido/Alta), consulta passada e etapa sem consulta: arquivo. */
+export function consultaDePe(c: CartaoDaKommo, m: { atributos: Record<string, unknown> }, agora: Date): boolean {
+  const aberto = c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO;
+  const dia = m.atributos.data_consulta;
+  return aberto && typeof dia === 'string' && dia >= hojeEmBelem(agora) && SITUACOES_VIVAS.has(String(m.atributos.situacao_consulta ?? ''));
+}
+
+/**
+ * A posição do cartão na conversa do paciente (a MESMA do importador Ruby, `K.ordem_do_cartao`): consulta de pé primeiro (é nela que o paciente responde «confirmo»),
+ * depois aberto > fechado, depois o atualizado mais recentemente, depois o id. A maior posição vira a conversa de MAIOR id = a que recebe a próxima mensagem.
+ */
+export const ordemDoCartao = (x: { consultaDePe: boolean; aberto: boolean; atualizadoEm: number; id: number }): [number, number, number, number] => [x.consultaDePe ? 1 : 0, x.aberto ? 1 : 0, x.atualizadoEm, x.id];
+export function compararOrdem(a: readonly number[], b: readonly number[]): number {
+  for (let i = 0; i < Math.max(a.length, b.length); i++) if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) < (b[i] ?? 0) ? -1 : 1;
+  return 0;
+}
+
 export interface Montagem {
   atributos: Record<string, string | number | boolean>;
   etiquetas: string[];
@@ -314,7 +341,7 @@ function diaDoCampo(c: CartaoDaKommo, nome: string, epoch: number): string {
   return tipo === 'date' ? dataSoDoCrm(epoch) : dataDoCrm(epoch);
 }
 
-export function atributosDoCartao(c: CartaoDaKommo): Montagem {
+export function atributosDoCartao(c: CartaoDaKommo, agora: Date = new Date()): Montagem {
   const t = traduzirEtapa(c);
   const a: Record<string, string | number | boolean> = {};
   const avisos: string[] = [];
@@ -337,6 +364,12 @@ export function atributosDoCartao(c: CartaoDaKommo): Montagem {
   // cartão na etapa AGENDADO (ou Confirmado) com data de consulta e o campo «Situação» em branco: a situação é a da etapa — sem ela a régua não manda véspera/dia
   // (SITUACOES_DE_PE) e a conversa importada nasceria como arquivo, sem lembrete
   else if (consulta && (t.etapa === 'Agendado' || t.etapa === 'Confirmado') && t.funil === 'Comercial') a.situacao_consulta = t.etapa;
+  // NÃO COMPARECEU com consulta de HOJE EM DIANTE (a Kommo move o cartão para a etapa e remarca a data): o paciente vai à consulta nova — a situação nasce «Remarcado»
+  // (de pé: a régua manda véspera/dia/preparo). Com «Não compareceu» a régua mandaria o «você faltou» (falta-48h) 2 dias DEPOIS de uma consulta que ainda não houve.
+  if (a.situacao_consulta === 'Não compareceu' && typeof a.data_consulta === 'string' && a.data_consulta >= hojeEmBelem(agora) && c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO) {
+    a.situacao_consulta = 'Remarcado';
+    avisos.push('nao-compareceu-com-consulta-futura');
+  }
   const categoriaKommo = txt(valorDoCampo(c, 'Categoria da consulta'));
   const categoria = t.categoria ?? (categoriaKommo ? daLista(categoriaKommo, LISTAS_DO_CRM.categoria_consulta) : null);
   if (categoria) a.categoria_consulta = categoria;
@@ -536,7 +569,7 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
 
 /** `msgs` null = a Kommo não entregou a conversa (a nota diz isso, em vez de «nenhuma mensagem»). */
 export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date): LinhaDoCartao {
-  const m = atributosDoCartao(c);
+  const m = atributosDoCartao(c, agora);
   const { mensagens, total } = mensagensParaCrm(msgs ?? []);
   const telefone = foneParaWhatsApp(contato?.telefone);
   const nome = (contato?.nome ?? '').trim() || c.nome.trim() || `Cartão ${c.id}`;
@@ -560,5 +593,6 @@ export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, 
     mensagens,
     mensagens_total: total,
     avisos: m.avisos,
+    consulta_de_pe: consultaDePe(c, m, agora),
   };
 }

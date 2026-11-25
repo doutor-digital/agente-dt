@@ -256,6 +256,46 @@ test('exportar conta quantas conversas NASCEM vivas pela regra de arquivo real (
   assert.equal(rTodas.nascemVivas, 4);
 });
 
+test('o seco mede o DESTINO e o TOPO: consulta de pé vem na frente no mesmo telefone (0 fora do destino) e as vivas cabem nas 200 do quadro', async () => {
+  const { ehArquivo } = await import('./chatwoot-regua.js');
+  const consulta = (iso: string, situacao = 'Agendado') => [{ field_id: 1, field_name: '◷ Data da Consulta', field_type: 'date_time', values: [{ value: SEG(iso) }] }, { field_id: 2, field_name: '✓ Situação da consulta', field_type: 'select', values: [{ value: situacao }] }] as KommoLead['custom_fields_values'];
+  // mesmo telefone: um AGENDADO com consulta de pé (atualizado há tempos) e um cartão aberto mais NOVO sem consulta
+  const mesmo = '47991230000';
+  const { amb } = kommoDeMentira([
+    lead(1, 1, 11, { updated_at: SEG('2026-11-01T00:00:00Z'), custom_fields_values: consulta('2026-11-28T13:00:00Z') }),
+    lead(2, 1, 10, { updated_at: SEG('2026-11-24T00:00:00Z') }),
+    lead(3, 1, 11, { updated_at: SEG('2026-11-02T00:00:00Z'), custom_fields_values: consulta('2026-11-29T13:00:00Z') }), // 2ª consulta de pé do mesmo paciente
+  ], { telefones: { 1: mesmo, 2: mesmo, 3: mesmo } });
+  const r = await exportar(amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(r.consultaDePeForaDoDestino, 0, 'a consulta de pé está na frente do aberto mais novo: o destino é uma consulta de pé');
+  assert.equal(r.telefonesComVariasConsultasDePe, 1, 'duas consultas de pé no mesmo telefone: só uma é o destino (aviso para olhar)');
+  assert.equal(r.nascemVivas, 2);
+  // 250 cartões AGENDADOS com consulta de pé: nascem vivas e vão ao topo; 200 cabem no quadro, 50 não
+  const muitos = Array.from({ length: 250 }, (_, i) => lead(i + 1, 1, 11, { updated_at: SEG('2026-11-20T00:00:00Z') + i, custom_fields_values: consulta('2026-11-28T13:00:00Z') }));
+  const r2 = await exportar(kommoDeMentira(muitos).amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(r2.nascemVivas, 250);
+  assert.equal(r2.vivasForaDoTopo, 50, 'o quadro/Hoje leem 200: as outras 50 vivas não apareceriam');
+  const poucas = await exportar(kommoDeMentira(muitos.slice(0, 12)).amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(poucas.vivasForaDoTopo, 0);
+  // vivas misturadas a 400 arquivadas mais recentes: como as vivas nascem com a hora da importação, ficam NO TOPO (0 fora)
+  const mistura = [...muitos.slice(0, 12), ...Array.from({ length: 400 }, (_, i) => lead(1000 + i, 1, 10, { updated_at: SEG('2026-11-25T14:00:00Z') }))];
+  const rm = await exportar(kommoDeMentira(mistura).amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(rm.nascemVivas, 12);
+  assert.equal(rm.vivasForaDoTopo, 0);
+});
+
+test('lista opcional (motivos de perda e usuários): 403 é engolido com aviso; 5xx/429 repete e, se persistir, SOBE o erro', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10)]);
+  const avisos: string[] = [];
+  const sem403: Ambiente = { ...amb, log: (t) => avisos.push(t), porta: { ...amb.porta, listUsers: async () => { throw Object.assign(new Error('x'), { status: 403 }); } } };
+  assert.equal((await lerSelecao(sem403)).cartoes.length, 1);
+  assert.ok(avisos.some((a) => a.includes('usuários indisponível')));
+  let chamadas = 0;
+  const engasgada: Ambiente = { ...amb, porta: { ...amb.porta, listLossReasons: async () => { chamadas++; throw Object.assign(new Error('x'), { status: 502 }); } } };
+  await assert.rejects(() => lerSelecao(engasgada));
+  assert.equal(chamadas, 3, 'tentou 3 vezes antes de subir o erro');
+});
+
 test('cartão APAGADO no meio da paginação não faz a leitura pular o seguinte: a 2ª passada recupera e a conta diz quantos', async () => {
   const muitos = Array.from({ length: POR_PAGINA * 2 + 10 }, (_, i) => lead(i + 1, 1, 10));
   const { amb } = kommoDeMentira(muitos);
