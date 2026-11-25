@@ -7,6 +7,7 @@ import { fusoDaUnidade } from './fuso.js';
 import { enviarTelegramSofia } from './telegram.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
+import { avisoClinicaAtivo, avisarClinicaNaoFechou, avisoSemTrecho, reenviarMarcouPendentes, silencioDepoisDe } from './aviso-clinica-agendamento.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -174,11 +175,42 @@ export function motivoParaNaoAvisar(
   return null;
 }
 
+/**
+ * Para quem cada candidato vira aviso nesta varredura.
+ *  - `paraVigia`: o alerta de sempre (nota no cartão + Telegram do João), uma vez por lead, com o filtro da chave
+ *    «agendamento-perdido-filtro» exatamente como era: ligado pula quem tem motivo (sem marcar como avisado), seco só anota
+ *    o «pularia», desligado avisa tudo.
+ *  - `paraClinica`: o aviso à recepção (chave «aviso-clinica-agendamento»). Segue o seu próprio caminho: o «já avisado» do
+ *    vigia não o cala (o vigia avisa 1 vez por lead para sempre; a recepção, 1 por lead a cada 24 h), e a MESMA decisão do
+ *    filtro (adiou / não respondeu / madrugada) vale SEMPRE, até na unidade em que o filtro do vigia está desligado.
+ *  - `pularia`: o motivo a anotar na tela «só no papel» (filtro em seco).
+ */
+export function quemAvisar(a: {
+  jaAvisado: boolean;
+  filtro: Estado;
+  /** a chave do aviso à recepção está ligada ou em seco nesta unidade E esta oferta ainda não foi avisada */
+  avisaClinica: boolean;
+  c: { pacienteRespondeu: boolean; adiou: boolean };
+  minutosLocais: number;
+}): { paraVigia: boolean; paraClinica: boolean; pularia: string | null } {
+  const motivo = motivoParaNaoAvisar(a.c, a.minutosLocais);
+  let paraVigia = !a.jaAvisado;
+  let pularia: string | null = null;
+  if (paraVigia && a.filtro !== 'desligado' && motivo) {
+    if (a.filtro === 'ligado') paraVigia = false; // não marca como avisado: se o paciente voltar a falar, vale de novo
+    else pularia = motivo;
+  }
+  return { paraVigia, paraClinica: a.avisaClinica && motivo === null, pularia };
+}
+
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
 /** Leads cujo cartão já mostrou consulta → até quando não precisa reler (ms). */
 const comConsulta = new Map<string, number>();
+
+/** Ofertas cujo aviso à recepção já saiu (ou já tinha saído) → até quando não precisa reler o cartão (ms). */
+const comAvisoDaClinica = new Map<string, number>();
 
 interface Candidato {
   unitId: string;
@@ -259,6 +291,33 @@ async function candidatos(): Promise<Candidato[]> {
   return linhas.map((l) => ({ ...l, ofereceuEm: new Date(l.ofereceuEm), pacienteRespondeu: Boolean(l.pacienteRespondeu), adiou: Boolean(l.adiou) }));
 }
 
+/**
+ * A última fala do paciente neste cartão (em qualquer unidade da mesma conta Kommo, como `pacienteRespondeu`). Só o aviso à
+ * recepção usa. Sem ela o aviso sai sem o trecho; nunca lança.
+ */
+async function ultimaFalaDoPaciente(unitId: string, sub: string | null | undefined, leadId: string): Promise<string | null> {
+  try {
+    const linhas = await prisma.$queryRawUnsafe<Array<{ content: string | null }>>(
+      `select m.content as content
+         from messages m
+         join conversations c on c.id = m.conversation_id
+         join units cu        on cu.id = c.unit_id
+        where c.lead_id = $1
+          and (cu.id = $2 or ($3::text is not null and cu.kommo_subdomain = $3))
+          and m.role = 'user'
+        order by m.created_at desc
+        limit 1`,
+      leadId,
+      unitId,
+      sub ?? null,
+    );
+    return linhas[0]?.content ?? null;
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId }, 'agendamento perdido: não li a última fala do paciente (o aviso à recepção sai sem ela)');
+    return null;
+  }
+}
+
 /** Já avisamos deste lead? Um alerta por lead, sempre. */
 async function jaAvisado(unitId: string, leadId: string): Promise<boolean> {
   const n = await prisma.executionStep.count({
@@ -276,6 +335,10 @@ async function varrer(): Promise<void> {
   try {
     const agora = Date.now();
     for (const [chave, ate] of comConsulta) if (ate <= agora) comConsulta.delete(chave);
+    for (const [chave, ate] of comAvisoDaClinica) if (ate <= agora) comAvisoDaClinica.delete(chave);
+
+    // «A Sofia marcou» que ficou guardado da madrugada ou que a Evolution recusou (chave aviso-clinica-agendamento). Nunca lança.
+    await reenviarMarcouPendentes();
 
     const lista = await candidatos();
     if (lista.length === 0) return;
@@ -298,22 +361,29 @@ async function varrer(): Promise<void> {
 
       const filtro = estadoDoFiltro(unit.slug);
       const minutosLocais = minutosNoFuso(fusoDaUnidade(unit));
+      // Aviso à recepção no WhatsApp (chave aviso-clinica-agendamento): segue o seu próprio caminho — o «já avisado» do vigia
+      // (nota + Telegram, uma vez por lead) não o cala, e o estado do filtro acima não o liga nem o desliga.
+      const avisaClinica = avisoClinicaAtivo(unit.slug);
 
       // Um lote por unidade (50 cartões por chamada) em vez de um GET por candidato.
-      const aChecar: Array<{ c: Candidato; leadId: number; chave: string }> = [];
+      const aChecar: Array<{ c: Candidato; leadId: number; chave: string; paraVigia: boolean; paraClinica: boolean }> = [];
       for (const c of itens) {
         const leadId = Number(c.leadId);
         if (!Number.isFinite(leadId) || leadId <= 0) continue;
         // A chave leva a hora da oferta: oferta nova no mesmo lead é relida.
         const chave = `${unitId}:${c.leadId}:${c.ofereceuEm.getTime()}`;
         if (comConsulta.has(chave)) continue;
-        if (await jaAvisado(unitId, c.leadId)) continue;
-        if (filtro !== 'desligado') {
-          const motivo = motivoParaNaoAvisar(c, minutosLocais);
-          if (motivo && filtro === 'ligado') continue; // não marca como avisado: se o paciente voltar a falar, vale de novo
-          if (motivo) registrarSimulacao(unit, ID_FILTRO, { leadId, acao: 'pularia', alvo: 'alerta de agendamento perdido', motivo });
-        }
-        aChecar.push({ c, leadId, chave });
+        const d = quemAvisar({
+          jaAvisado: await jaAvisado(unitId, c.leadId),
+          filtro,
+          avisaClinica: avisaClinica && !comAvisoDaClinica.has(chave),
+          c,
+          minutosLocais,
+        });
+        if (d.pularia) registrarSimulacao(unit, ID_FILTRO, { leadId, acao: 'pularia', alvo: 'alerta de agendamento perdido', motivo: d.pularia });
+        const { paraVigia, paraClinica } = d;
+        if (!paraVigia && !paraClinica) continue;
+        aChecar.push({ c, leadId, chave, paraVigia, paraClinica });
       }
       if (aChecar.length === 0) continue;
 
@@ -327,7 +397,7 @@ async function varrer(): Promise<void> {
       }
       const porId = new Map(cartoes.map((l) => [l.id, l]));
 
-      for (const { c, leadId, chave } of aChecar) {
+      for (const { c, leadId, chave, paraVigia, paraClinica } of aChecar) {
         const lead = porId.get(leadId);
         if (!lead) continue; // cartão apagado ou de outra conta: não há a quem avisar
         if (cartaoTemConsulta(lead, c.ofereceuEm)) {
@@ -335,6 +405,18 @@ async function varrer(): Promise<void> {
           comConsulta.set(chave, Date.now() + JANELA_HORAS * 60 * 60_000);
           continue;
         }
+
+        if (paraClinica) {
+          // Sem esperar: WhatsApp lento não segura a varredura. Nunca lança (falha vira log).
+          void (async () => {
+            const ultimaFala = avisoSemTrecho() ? null : await ultimaFalaDoPaciente(unitId, unit.kommoSubdomain, c.leadId);
+            const desfecho = await avisarClinicaNaoFechou({ unit, leadId, nome: lead.name, ultimaFala, ofereceuEm: c.ofereceuEm });
+            // Saiu (ou já tinha saído): esta oferta não volta a ser lida. Seco, recusado, sem destino: espera 1 h para tentar de novo.
+            const silencio = silencioDepoisDe(desfecho, JANELA_HORAS * 60 * 60_000);
+            if (silencio !== null) comAvisoDaClinica.set(chave, Date.now() + silencio);
+          })().catch(() => undefined);
+        }
+        if (!paraVigia) continue;
 
         const texto =
           `${MARCA} · ${unit.slug} · lead ${leadId} — a IA ofereceu horário e ` +

@@ -121,3 +121,33 @@ test('filtro: a janela cobre a madrugada inteira — a oferta das 20h ainda est�
   // Janela de 6 h configurada à mão: 20:00 + 90 min de carência = 21:30 (silêncio) → só às 08:00, 12 h depois.
   assert.ok(janelaEfetivaH(6, 90) >= 13.5);
 });
+
+// ── Para quem cada candidato vira aviso: vigia de sempre × recepção (aviso-clinica-agendamento) ──
+
+test('quemAvisar: o vigia fica EXATAMENTE como era — desligado avisa tudo, seco só anota o pularia, ligado pula quem tem motivo, e quem já foi avisado nunca repete', async () => {
+  const { quemAvisar } = await import('./agendamento-perdido-worker.js');
+  const adiou = { pacienteRespondeu: true, adiou: true };
+  const respondeu = { pacienteRespondeu: true, adiou: false };
+  const base = { jaAvisado: false, avisaClinica: false, minutosLocais: 14 * 60 };
+  assert.deepEqual(quemAvisar({ ...base, filtro: 'desligado', c: adiou }), { paraVigia: true, paraClinica: false, pularia: null });
+  assert.equal(quemAvisar({ ...base, filtro: 'seco', c: adiou }).paraVigia, true);
+  assert.match(String(quemAvisar({ ...base, filtro: 'seco', c: adiou }).pularia), /adiou/);
+  assert.deepEqual(quemAvisar({ ...base, filtro: 'ligado', c: adiou }), { paraVigia: false, paraClinica: false, pularia: null });
+  assert.deepEqual(quemAvisar({ ...base, filtro: 'ligado', c: respondeu }), { paraVigia: true, paraClinica: false, pularia: null });
+  assert.deepEqual(quemAvisar({ ...base, filtro: 'desligado', c: respondeu, jaAvisado: true }), { paraVigia: false, paraClinica: false, pularia: null });
+});
+
+test('quemAvisar: a recepção usa a MESMA decisão do filtro, sempre — até com o filtro do vigia desligado — e o «já avisado» do vigia não a cala', async () => {
+  const { quemAvisar } = await import('./agendamento-perdido-worker.js');
+  const base = { jaAvisado: false, avisaClinica: true, minutosLocais: 14 * 60 };
+  for (const filtro of ['desligado', 'seco', 'ligado'] as const) {
+    assert.equal(quemAvisar({ ...base, filtro, c: { pacienteRespondeu: true, adiou: true } }).paraClinica, false, 'adiou: ' + filtro);
+    assert.equal(quemAvisar({ ...base, filtro, c: { pacienteRespondeu: false, adiou: false } }).paraClinica, false, 'não respondeu: ' + filtro);
+    assert.equal(quemAvisar({ ...base, filtro, c: { pacienteRespondeu: true, adiou: false }, minutosLocais: 2 * 60 }).paraClinica, false, 'madrugada: ' + filtro);
+    assert.equal(quemAvisar({ ...base, filtro, c: { pacienteRespondeu: true, adiou: false } }).paraClinica, true, 'respondeu e ficou sem consulta: ' + filtro);
+  }
+  // o vigia já avisou esse lead (nota + Telegram) numa varredura anterior: a recepção ainda pode ser avisada na manhã seguinte
+  assert.deepEqual(quemAvisar({ ...base, filtro: 'ligado', jaAvisado: true, c: { pacienteRespondeu: true, adiou: false } }), { paraVigia: false, paraClinica: true, pularia: null });
+  // chave desligada (ou oferta já avisada): nada para a recepção
+  assert.equal(quemAvisar({ ...base, avisaClinica: false, filtro: 'ligado', c: { pacienteRespondeu: true, adiou: false } }).paraClinica, false);
+});

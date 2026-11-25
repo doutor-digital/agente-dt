@@ -24,6 +24,7 @@ import { buildGerarSinalPix, registrarLeadDoSinal } from './sinal-pix-tool.js';
 import { acompanharRemarcacao } from '../lib/sinal-pix.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
 import { avisoLigadoPara, chaveDoAviso, textoDoAviso } from '../lib/aviso-de-agendamento.js';
+import { avisarClinicaMarcou, avisoClinicaAtivo } from '../lib/aviso-clinica-agendamento.js';
 import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
@@ -1822,6 +1823,24 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
         title: `Consulta marcada: ${args.data} ${args.hora} (idSchedule ${r.data?.idSchedule})`,
         payload: { ...args, idSchedule: r.data?.idSchedule, especialista },
       });
+
+      // Aviso à RECEPÇÃO (grupo de WhatsApp da unidade) no instante em que a consulta é gravada na franquia — chave
+      // aviso-clinica-agendamento (nasce desligada). Sem esperar e sem lançar: falha no WhatsApp nunca derruba o agendamento.
+      if (avisoClinicaAtivo(fresca.slug)) {
+        void avisarClinicaMarcou({
+          unit: fresca,
+          leadId: args.leadId,
+          idClient: args.idClient,
+          nome: paciente?.name,
+          // a franquia não devolveu um nome de gente: tenta o do cartão do Kommo antes de «paciente (sem nome)»
+          nomeDoCartao: kommo && args.leadId ? () => kommo.getLead(args.leadId!).then((l) => l?.name ?? null) : undefined,
+          data: args.data,
+          hora: args.hora,
+          idCategory: args.idCategory,
+          remarcando: args.remarcando,
+          idSchedule: r.data?.idSchedule ?? null,
+        }).catch(() => undefined);
+      }
 
       if (args.leadId) {
         await prisma.spineLeadLink
