@@ -20,7 +20,8 @@ const { executarPlano, relatorioFinal } = await import('./executar.js');
 type BancoPorta = import('./executar.js').BancoPorta;
 type ConfigGravada = import('./executar.js').ConfigGravada;
 const { montarPlano } = await import('./plano.js');
-const { lerAdminsDD, ADMINS_DD_PADRAO } = await import('./fase2.js');
+const { lerAdminsDD, ADMINS_DD_PADRAO, travaDaReferencia } = await import('./fase2.js');
+type PortasExternas = import('./portas.js').PortasExternas;
 const { lerQuestionario } = await import('./questionario.js');
 const { chatwootFalso } = await import('./chatwoot-falso.js');
 const { contaHttp, contaHttpSoLeitura, plataformaHttp } = await import('./chatwoot-http.js');
@@ -88,9 +89,10 @@ function bancoFalso() {
   return { banco, escritas, e };
 }
 
-function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number } = {}) {
+function montar(opcoes: { semPlataforma?: boolean; senha?: string; semKapso?: boolean; falharVinculo?: number; caixasDaReferencia?: Array<{ id: number; name: string; channel_type: string; lock_to_single_conversation: boolean; provider?: string }> } = {}) {
   const falso = chatwootFalso({ semPlataforma: opcoes.semPlataforma, falharVinculo: opcoes.falharVinculo, existentes: [{ id: 5, name: 'Suzanne', email: 'suzanne.mychelly1@gmail.com' }, { id: 6, name: 'João', email: 'joao@doutordigital.test' }] });
   falso.semear({
+    inboxes: (opcoes.caixasDaReferencia ?? []).map(({ provider, ...i }) => ({ ...i, channel: provider ? { provider } : {}, agent_bot: null, membros: [] })),
     labels: [
       { id: 1, title: 'quente', description: 'lead quente', color: '#ff0000', show_on_sidebar: true },
       { id: 2, title: 'perdido-preco', description: 'motivo', color: '#999999', show_on_sidebar: false },
@@ -286,6 +288,40 @@ test('o cofre não sobrescreve um segredo que já existe com outro valor', async
   await assert.rejects(segredos.guardar('CHATWOOT_API_TOKEN_X', 'dois'), /não sobrescrevo/);
   assert.equal(await segredos.ler('CHATWOOT_API_TOKEN_X'), 'um');
   await assert.rejects(segredos.guardar('nome inválido', 'x'), /inválido/);
+});
+
+test('a caixa de WhatsApp nasce com a MESMA trava de conversa única da caixa Cloud da referência — sem Cloud nela, ligada', async () => {
+  const q = ler('questionario.exemplo.yaml');
+  const real = { ...q, unidade: { ...q.unidade, slug: 'clinica-trava', nome: 'Clínica Trava' }, chatwoot: { ...q.chatwoot, subdominio: 'travateste' }, whatsapp: { ...q.whatsapp, prefixo_modelos: 'trava_' }, meta: { ...q.meta, token_env: 'META_ADS_TOKEN_TRAVA', conta_env: 'META_ADS_CONTA_TRAVA', dataset_id_env: 'META_DATASET_ID_TRAVA' } } as typeof DEMO;
+  const wa = (id: number, provider: string | undefined, lock: boolean) => ({ id, name: `WhatsApp ${id}`, channel_type: 'Channel::Whatsapp', ...(provider ? { provider } : {}), lock_to_single_conversation: lock });
+  for (const [ref, esperado] of [
+    [[wa(3, 'whatsapp_cloud', true)], true],
+    [[wa(3, 'whatsapp_cloud', false)], false],
+    [[wa(2, 'default', false), wa(3, 'whatsapp_cloud', true)], true],
+    [[wa(2, 'default', true), wa(3, 'whatsapp_cloud', false)], false],
+    // só o Lite (trava desligada) na referência: a trava do Lite NÃO é copiada para a caixa Cloud — vale o padrão, ligada
+    [[wa(2, 'default', false)], true],
+    [[{ id: 7, name: 'Instagram', channel_type: 'Channel::Instagram', lock_to_single_conversation: false }], true],
+    [[], true],
+  ] as const) {
+    const { falso, segredos, externas } = montar({ caixasDaReferencia: [...ref] });
+    await segredos.guardar('KAPSO_API_KEY', 'kapso-chave-secreta');
+    const b = bancoFalso();
+    await rodar(real, b, externas);
+    const conta = falso.contas.get(b.e.config!.contaId!)!;
+    assert.equal(conta.inboxes[0]!.lock_to_single_conversation, esperado, JSON.stringify(ref));
+  }
+});
+
+test('travaDaReferencia: referência que falha na leitura NÃO para a criação da caixa — trava ligada e o motivo no aviso; sem referência, também', async () => {
+  const quebrada = { get: async () => { throw new Error('502'); } } as unknown as PortasExternas['referencia'];
+  const r = await travaDaReferencia({ referencia: quebrada } as unknown as PortasExternas);
+  assert.equal(r.trava, true);
+  assert.match(r.aviso ?? '', /não consegui ler/);
+  const sem = await travaDaReferencia({ referencia: undefined } as unknown as PortasExternas);
+  assert.deepEqual(sem, { trava: true, aviso: 'sem conta de referência: trava ligada (padrão)' });
+  const cloud = { get: async (rota: string) => (rota === 'inboxes' ? { payload: [{ id: 3, channel_type: 'Channel::Whatsapp' }] } : { id: 3, provider: 'whatsapp_cloud', lock_to_single_conversation: false }) } as unknown as PortasExternas['referencia'];
+  assert.deepEqual(await travaDaReferencia({ referencia: cloud } as unknown as PortasExternas), { trava: false, aviso: null });
 });
 
 test('CLÍNICA DE VERDADE (modo real): a caixa é WhatsApp Cloud com a chave do Kapso, os 33 modelos vão ao Kapso UMA vez e a 2ª rodada não manda nada', async () => {
