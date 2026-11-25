@@ -75,6 +75,7 @@ import {
   historicoDasMensagens,
   idsDasPaginas,
   montarQuadro,
+  colunaDaEtapa,
   nomeSeTemConta,
   notaDaMudanca,
   sessaoDosCabecalhos,
@@ -855,7 +856,7 @@ export async function funilConversaHandler(req: Request, res: Response): Promise
     ]);
     const lista = etapasDoAtributo(defs);
     const doTrat = etapasDoTratamento(defs);
-    const cartao = cartaoDaConversa(conv, lista, undefined, doTrat);
+    const cartao = cartaoDaConversa(conv, lista, undefined, doTrat, etapasDoContexto(a.c));
     const historico = historicoDasMensagens(msgs);
     const contato = conv?.meta?.sender ?? {};
     const tarefas = await prisma.funilTarefa.findMany({
@@ -936,7 +937,7 @@ async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, e
   const conv = (await cw(a, 'GET', `conversations/${conversaId}`)) as any;
   const attrs = (conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {}) as Record<string, unknown>;
   const atual = attrs[ATRIBUTO_ETAPA_TRATAMENTO];
-  const de = typeof atual === 'string' && lista.includes(atual) ? atual : lista[0]!;
+  const de = colunaDaEtapa(typeof atual === 'string' ? atual : '', lista, etapasDoContexto(a.c), true);
   if (de === etapa) {
     res.json({ ok: true, igual: true });
     return;
@@ -975,7 +976,7 @@ export async function funilMoverHandler(req: Request, res: Response): Promise<vo
     }
     const conv = (await cw(a, 'GET', `conversations/${p.data.conversaId}`)) as any;
     const atual = conv?.custom_attributes?.[ATRIBUTO_ETAPA];
-    const de = typeof atual === 'string' && lista.includes(atual) ? atual : lista[0]!;
+    const de = colunaDaEtapa(typeof atual === 'string' ? atual : '', lista, etapasDoContexto(a.c), false);
     if (de === p.data.etapa) {
       res.json({ ok: true, igual: true });
       return;

@@ -99,9 +99,19 @@ export function problemasDoMapa(bruto: unknown): string[] {
       else vistos.add(papel);
       if (typeof nome !== 'string' || !nome.trim() || nome.trim() !== nome || nome.length > 60) p.push(`${funil}: nome inválido para ${String(papel)} (1 a 60 letras, sem espaço nas pontas)`);
     }
+    // dois papéis com o mesmo nome (mesmo só diferindo em caixa ou acento, que a leitura trata como igual): só o alias Agendado/Confirmado
+    const porNome = new Map<string, string[]>();
+    for (const e of lista as Array<{ papel?: unknown; nome?: unknown }>) {
+      if (typeof e?.nome !== 'string' || typeof e?.papel !== 'string') continue;
+      porNome.set(semAcento(e.nome), [...(porNome.get(semAcento(e.nome)) ?? []), e.papel]);
+    }
+    for (const papeisDoNome of porNome.values()) {
+      const alias = funil === 'comercial' && papeisDoNome.length === 2 && papeisDoNome.includes('Agendado') && papeisDoNome.includes('Confirmado');
+      if (papeisDoNome.length > 1 && !alias) p.push(`${funil}: o mesmo nome em mais de um papel (${papeisDoNome.join(', ')}); só «Confirmado» pode repetir o nome de «Agendado»`);
+    }
     // um nome da conta que é o NOME DE OUTRO papel do molde tornaria a leitura ambígua (ex.: «Agendado» como nome do papel «Faltou»)
     for (const e of lista as Array<{ papel: string; nome: string }>) {
-      if (typeof e?.nome === 'string' && papeis.includes(e.nome) && e.nome !== e.papel && !(lista as Array<{ papel: string; nome: string }>).some((x) => x.papel === e.nome && x.nome === e.nome)) {
+      if (typeof e?.nome === 'string' && papeis.some((x) => semAcento(x) === semAcento(e.nome)) && semAcento(e.nome) !== semAcento(e.papel) && !(lista as Array<{ papel: string; nome: string }>).some((x) => semAcento(x.papel) === semAcento(e.nome) && semAcento(x.nome) === semAcento(e.nome))) {
         p.push(`${funil}: o nome «${e.nome}» da etapa ${e.papel} é o nome de outro papel`);
       }
     }
@@ -159,7 +169,8 @@ function papelNaLista<P extends string>(lista: ReadonlyArray<EtapaDaConta<P>>, n
   const chave = semAcento(nome);
   const achados = lista.filter((e) => semAcento(e.nome) === chave);
   if (!achados.length) return null;
-  const preferido = achados.find((e) => prioridade.includes(e.papel));
+  // dois papéis com o mesmo nome (alias): vale o que vem primeiro em `prioridade`, não o da ordem do quadro
+  const preferido = [...achados].filter((e) => prioridade.includes(e.papel)).sort((a, b) => prioridade.indexOf(a.papel) - prioridade.indexOf(b.papel))[0];
   return (preferido ?? achados[0]!).papel;
 }
 

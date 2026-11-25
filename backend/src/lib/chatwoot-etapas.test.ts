@@ -163,10 +163,20 @@ test('configuração inválida nunca vira mapa pela metade', () => {
   assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Fechou', nome: 'A' }, { papel: 'Fechou', nome: 'B' }] }).some((m) => /repetido/.test(m)));
   assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Fechou', nome: ' sujo ' }] }).length > 0);
   // o nome da conta que é o nome de OUTRO papel do molde tornaria a leitura ambígua
-  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Faltou', nome: 'Agendado' }, { papel: 'Agendado', nome: 'AGENDADO' }] }).some((m) => /outro papel/.test(m)));
+  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Faltou', nome: 'Agendado' }, { papel: 'Agendado', nome: 'AGENDADO' }] }).some((m) => /outro papel|mesmo nome/.test(m)));
   // a conta que mantém o nome do molde para o mesmo papel está certa
   assert.deepEqual(problemasDoMapa({ comercial: [{ papel: 'Perdido', nome: 'Perdido' }], tratamento: [{ papel: 'Alta', nome: 'Alta' }] }), []);
   aplicarEtapasDasContas([{ contaId: 3, etapas: { comercial: [{ papel: 'Inventado', nome: 'X' }], tratamento: [] } }]);
   assert.equal(etapasDaConta(3), ETAPAS_DO_MOLDE);
   aplicarEtapasDasContas([]);
+});
+
+test('o alias «Confirmado» não tira «Agendado» da leitura, qualquer que seja a ordem do mapa; e nomes repetidos são recusados', () => {
+  const invertido = { ...COLUNA_DE_TIMBO, comercial: [...COLUNA_DE_TIMBO.comercial].reverse() };
+  assert.deepEqual(problemasDoMapa(invertido), []);
+  const m = mapaDaColuna(invertido) as MapaDeEtapas;
+  assert.equal(papelDaEtapa(m, 'AGENDADO'), 'Agendado');
+  // o mesmo nome (até só em caixa/acento) em dois papéis que NÃO são o par Agendado/Confirmado
+  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Faltou', nome: 'Agendado' }, { papel: 'Agendado', nome: 'agendado' }] }).some((x) => /mesmo nome/.test(x)));
+  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Perdido', nome: 'PERDIDO' }, { papel: 'Frio', nome: 'Perdído' }] }).some((x) => /mesmo nome/.test(x)));
 });

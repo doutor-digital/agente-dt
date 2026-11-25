@@ -22,7 +22,6 @@ import { leadsDoTelefone } from '../lib/chatwoot-campos-retroativos-kommo.js';
 import { chamar, contextoDaCaixa, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { desfazerCampos, lerArgumentos, rodarCampos, type PortasDosCampos } from '../lib/chatwoot-campos-retroativos-run.js';
 import type { FatoDeQualificacao } from '../lib/chatwoot-campos-retroativos.js';
-import { ehMolde, etapasDoContexto } from '../lib/chatwoot-etapas.js';
 
 /** o mesmo teto do worker da régua (25 por página) */
 const MAX_PAGINAS = 200;
@@ -31,8 +30,6 @@ async function portasReais(caixa: number, slug: string): Promise<PortasDosCampos
   const base = contextoDoAmbiente();
   const ctx = base ? contextoDaCaixa(base, caixa) : null;
   if (!ctx?.conta) throw new Error(`o Chatwoot não está configurado para a caixa ${caixa} neste servidor`);
-  // este preenchimento retroativo decide e confere pelos NOMES do molde; conta com etapas próprias (igual à Kommo) usa o importador, que já grava nos nomes dela
-  if (!ehMolde(etapasDoContexto(ctx))) throw new Error('esta conta tem etapas próprias (unit_chatwoot.etapas): o preenchimento retroativo não cobre — recuso para não gravar etapa com o nome errado');
   const chat = portaDoChatwoot(ctx);
   const chatRegua = chatDoChatwoot(ctx);
   const paginar = chatRegua.pagina;

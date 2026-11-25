@@ -23,6 +23,7 @@ const { montarQuadro, cartaoDaConversa, exigeConfirmacao } = await import('./fun
 const { situacaoPeloCrm } = await import('./disparo/chatwoot/publico.js');
 const { aplicarConfigs, SEMENTE_PARAUAPEBAS, contaDaCaixa } = await import('./chatwoot-unidades.js');
 const { conversaCrua } = await import('./chatwoot-etapas.js');
+const { colunaDaEtapa } = await import('./funil-chatwoot.js');
 
 const TIMBO = () => etapasDaConta(3);
 beforeEach(() => aplicarEtapasDasContas([{ contaId: 3, etapas: COLUNA_DE_TIMBO }]));
@@ -208,4 +209,49 @@ test('disparo sem agenda: a situação pelo CRM lê o papel', () => {
 
 test('os 15 papéis comerciais existem e nenhum nome do molde de Parauapebas mudou', () => {
   assert.equal(PAPEIS_COMERCIAIS.length, 15);
+});
+
+test('quadro/ficha/mover usam a MESMA coluna: colunaDaEtapa (nome antigo do molde → coluna do papel; sem mapa, como sempre)', () => {
+  const lista = ['Leads de entrada', 'EM QUALIFICAÇÃO', 'AGENDADO', 'PERDIDO'];
+  assert.equal(colunaDaEtapa('Agendado', lista, TIMBO(), false), 'AGENDADO');
+  assert.equal(colunaDaEtapa('AGENDADO', lista, TIMBO(), false), 'AGENDADO');
+  assert.equal(colunaDaEtapa('', lista, TIMBO(), false), 'Leads de entrada');
+  assert.equal(colunaDaEtapa('Em tratamento', ['Leads de entrada', 'EM TRATAMENTO', 'ALTA'], TIMBO(), true), 'EM TRATAMENTO');
+  assert.equal(colunaDaEtapa('Agendado', lista, null, false), 'Leads de entrada', 'sem mapa: fora da lista = 1ª coluna (como antes)');
+  assert.equal(colunaDaEtapa('Perdido', ['Novo lead', 'Perdido'], null, false), 'Perdido');
+});
+
+test('a ficha e o copiloto leem a etapa em papel (conversaLidaDoChatwoot com o mapa da conta)', () => {
+  assert.equal(conversaLidaDoChatwoot(bruta('EM NEGOCIAÇÃO'), etapasDaConta(3))!.attrs.etapa, 'Pós-consulta');
+});
+
+test('o leitor do banco só aplica o mapa das linhas ACEITAS (válida ou inerte sem conflito) e avisa do mapa inválido', async () => {
+  const { recarregarConfigChatwoot } = await import('./chatwoot-unidades-banco.js');
+  const { prisma } = await import('./prisma.js');
+  const U = await import('./chatwoot-unidades.js');
+  const dados = { nome: 'Doutor Hérnia Timbó', cidade: 'Timbó', endereco: 'Rua A, 1 — Centro, Timbó/SC, 89120-000', mapa: 'https://maps.example/timbo' };
+  const timbo = { unitId: 'u-timbo', contaId: 3, subdominio: 'drtimbo', prefixoModelos: 'timbo_', usuarioCelularId: null, gerenteId: null, metaAgendamentosDia: null, kapsoPhoneNumberId: null, wabaId: null, envSufixo: 'TIMBO', dadosModelos: dados, unit: { slug: 'doutor-hernia-timbo' }, caixas: [], etapas: COLUNA_DE_TIMBO };
+  const p = prisma as unknown as { unitChatwoot: unknown };
+  const antes = p.unitChatwoot;
+  try {
+    // Timbó é INERTE (sem caixa): o mapa vale mesmo assim
+    p.unitChatwoot = { findMany: async () => [timbo] };
+    await recarregarConfigChatwoot();
+    assert.equal(etapasDaConta(3).comercial[1]!.nome, 'EM QUALIFICAÇÃO');
+    // a linha DESCARTADA por conflito (prefixo de Parauapebas) não manda no mapa
+    p.unitChatwoot = { findMany: async () => [{ ...timbo, prefixoModelos: U.SEMENTE_PARAUAPEBAS.prefixoModelos }] };
+    await recarregarConfigChatwoot();
+    assert.equal(etapasDaConta(3).comercial[1]!.nome, 'Sofia qualifica');
+    // mapa inválido: a conta fica no molde
+    p.unitChatwoot = { findMany: async () => [{ ...timbo, etapas: { comercial: [{ papel: 'Inventado', nome: 'X' }], tratamento: [] } }] };
+    await recarregarConfigChatwoot();
+    assert.equal(etapasDaConta(3).comercial[1]!.nome, 'Sofia qualifica');
+    // linha sem mapa (nula): molde
+    p.unitChatwoot = { findMany: async () => [{ ...timbo, etapas: null }] };
+    await recarregarConfigChatwoot();
+    assert.equal(etapasDaConta(3).comercial[1]!.nome, 'Sofia qualifica');
+  } finally {
+    p.unitChatwoot = antes;
+    aplicarConfigs([SEMENTE_PARAUAPEBAS]);
+  }
 });

@@ -21,6 +21,7 @@ import { prisma } from '../lib/prisma.js';
 import { chamar, contaChatwootDoAmbiente, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import type { SessaoChatwoot } from '../lib/funil-chatwoot.js';
 import { conversaLidaDoChatwoot, type ConversaLida } from '../lib/chatwoot-porta.js';
+import { etapasDoContexto } from '../lib/chatwoot-etapas.js';
 import { CAIXAS_REGUA } from '../lib/chatwoot-regua.js';
 import { diaEmBelem } from '../lib/chatwoot-hoje.js';
 import { gradeDoDia, hojeLocal } from '../agent/agenda-tools.js';
@@ -59,7 +60,8 @@ export function leituraComLogin(c: ContextoChatwoot, sessao: SessaoChatwoot): Po
   return {
     async conversa(id) {
       const raw = (await chamar(c, 'GET', `conversations/${id}`, { sessao })) as { inbox_id?: unknown } | null;
-      const lida = conversaLidaDoChatwoot(raw);
+      // a etapa chega em PAPEL (o copiloto conhece o nome do molde; a conta pode chamá-la de outro jeito)
+      const lida = conversaLidaDoChatwoot(raw, etapasDoContexto(c));
       if (!lida) throw Object.assign(new Error('conversa não encontrada'), { status: 404 });
       const caixa = Number(raw?.inbox_id);
       return { lida, caixa: Number.isInteger(caixa) && caixa > 0 ? caixa : null };

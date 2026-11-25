@@ -5,7 +5,7 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { aplicarEtapasDasContas } from './chatwoot-etapas.js';
+import { aplicarEtapasDasContas, problemasDoMapa } from './chatwoot-etapas.js';
 import { aplicarConfigs, aplicarDominios, configDaLinha, linhasInertasSemConflito, mesclarComSemente, type LinhaDoBanco } from './chatwoot-unidades.js';
 
 const avisados = new Set<string>();
@@ -33,7 +33,21 @@ export async function recarregarConfigChatwoot(): Promise<void> {
       // descartou acima (prefixo ou caixa repetidos, ou inválida por outro motivo) NÃO vira origem confiável
       aplicarDominios(linhasInertasSemConflito(linhas, lista));
       // as etapas por conta: TODA linha com conta própria (a de Timbó pode ainda não ter caixa); a conta do ambiente nunca tem mapa
-      aplicarEtapasDasContas(linhas);
+      // só as linhas que o sistema ACEITOU (configuração válida ou inerte sem conflito): a descartada (caixa/prefixo repetido) não manda no mapa
+      const aceitas = new Set(lista.map((c) => c.slug));
+      const inertas = linhasInertasSemConflito(linhas, lista);
+      const dasEtapas = linhas.filter((l) => aceitas.has(l.unit.slug) || inertas.includes(l));
+      // mapa gravado mas inválido: a conta fica no molde (nunca um mapa pela metade) — e isso aparece no log, uma vez por motivo
+      for (const l of dasEtapas) {
+        if (l.etapas === null || l.etapas === undefined) continue;
+        const problemas = problemasDoMapa(l.etapas);
+        if (!problemas.length) continue;
+        const chave = `${l.unit.slug}|etapas|${problemas.join(';')}`;
+        if (avisados.has(chave)) continue;
+        avisados.add(chave);
+        logger.warn({ slug: l.unit.slug, problemas }, 'chatwoot-unidades: unit_chatwoot.etapas inválido — a conta segue com as etapas do molde');
+      }
+      aplicarEtapasDasContas(dasEtapas);
       ultimoErro = null;
     } catch (err) {
       // uma vez por erro diferente (banco fora do ar ou tabela ainda não migrada não pode virar uma linha de log por minuto)

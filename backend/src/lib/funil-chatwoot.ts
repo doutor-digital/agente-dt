@@ -150,6 +150,19 @@ export function situacaoDaTarefa(vencimentos: Date[], agora: Date): SituacaoTare
   return dia(prox) === dia(agora) ? { tipo: 'hoje' } : { tipo: 'futura' };
 }
 
+/**
+ * A coluna do funil de um valor de etapa (NOME da conta). Valor vazio ou fora da lista = a 1ª etapa; conversa que ainda tem o nome antigo do molde (conta
+ * recém-trocada) cai na coluna do MESMO papel, não na 1ª. Sem mapa: como sempre. O quadro, a ficha e o «de» da nota ao mover usam esta mesma conta.
+ */
+export function colunaDaEtapa(nome: string, lista: readonly string[], mapa: MapaDeEtapas | null | undefined, doTratamento: boolean): string {
+  if (lista.includes(nome)) return nome;
+  if (nome && !ehMolde(mapa)) {
+    const dela = doTratamento ? nomeDoTratamentoParaGravar(mapa, papelDaEtapaDoTratamento(mapa, nome)) : nomeParaGravar(mapa, papelDaEtapa(mapa, nome));
+    if (dela && lista.includes(dela)) return dela;
+  }
+  return lista[0]!;
+}
+
 /** Uma conversa do Chatwoot vira cartão. Etapa vazia ou fora da lista = a 1ª etapa (o lead novo cai em "Novo"). */
 export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTarefa = { tipo: 'sem' }, etapasDoTrat: readonly string[] = [], mapa?: MapaDeEtapas | null): Cartao {
   const attrs = c?.custom_attributes && typeof c.custom_attributes === 'object' ? c.custom_attributes : {};
@@ -157,16 +170,7 @@ export function cartaoDaConversa(c: any, etapas: string[], tarefa: SituacaoTaref
   // conta SEM `etapa_tratamento`: um funil só, como sempre. Com ela, a conversa do Tratamento mostra a etapa DO tratamento
   const funil: FunilDoQuadro = etapasDoTrat.length ? funilDaConversa(attrs) : 'comercial';
   const brutaTrat = typeof attrs[ATRIBUTO_ETAPA_TRATAMENTO] === 'string' ? attrs[ATRIBUTO_ETAPA_TRATAMENTO].trim() : '';
-  // a coluna é um NOME da conta. Conversa que ainda tem o nome antigo do molde (conta recém-trocada) cai na coluna do mesmo papel, não na 1ª
-  const colunaDe = (nome: string, lista: readonly string[], paraNome: (m: MapaDeEtapas | null | undefined, papel: string) => string | null, paraPapel: (m: MapaDeEtapas | null | undefined, n: string) => string): string => {
-    if (lista.includes(nome)) return nome;
-    if (nome && !ehMolde(mapa)) {
-      const dela = paraNome(mapa, paraPapel(mapa, nome));
-      if (dela && lista.includes(dela)) return dela;
-    }
-    return lista[0]!;
-  };
-  const etapa = funil === 'tratamento' ? colunaDe(brutaTrat, etapasDoTrat, nomeDoTratamentoParaGravar, papelDaEtapaDoTratamento) : colunaDe(bruta, etapas, nomeParaGravar, papelDaEtapa);
+  const etapa = funil === 'tratamento' ? colunaDaEtapa(brutaTrat, etapasDoTrat, mapa, true) : colunaDaEtapa(bruta, etapas, mapa, false);
   const msgs = Array.isArray(c?.messages) ? c.messages : [];
   // a última mensagem de verdade (avisos do sistema, tipo 2, como "Atribuído a…", não contam)
   const reais = msgs.filter((m: any) => Number(m?.message_type) !== 2);
