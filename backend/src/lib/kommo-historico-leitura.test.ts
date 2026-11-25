@@ -299,6 +299,19 @@ test('cartão numa etapa que a Kommo não lista mais não some calado: entra na 
   assert.equal((await exportar(amb, { gravar: false, entregar: () => undefined })).semEtapaConhecida, 2);
 });
 
+test('o seco agrupa o MESMO paciente com e sem o 9 (como o importador): a consulta de pé do cartão com o 9 é o destino do cartão antigo sem o 9', async () => {
+  const { ehArquivo } = await import('./chatwoot-regua.js');
+  const consulta = [{ field_id: 1, field_name: '◷ Data da Consulta', field_type: 'date_time', values: [{ value: SEG('2026-11-28T13:00:00Z') }] }, { field_id: 2, field_name: '✓ Situação da consulta', field_type: 'select', values: [{ value: 'Agendado' }] }] as KommoLead['custom_fields_values'];
+  const { amb } = kommoDeMentira([
+    lead(1, 1, 11, { updated_at: SEG('2026-11-01T00:00:00Z'), custom_fields_values: consulta }),
+    lead(2, 1, 10, { updated_at: SEG('2026-11-24T00:00:00Z') }),
+  ], { telefones: { 1: '5547991234567', 2: '554791234567' } });
+  const r = await exportar(amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(r.telefonesDistintos, 1, 'o mesmo celular com e sem o 9 é UM paciente');
+  assert.equal(r.telefonesRepetidos, 1);
+  assert.equal(r.consultaDePeForaDoDestino, 0);
+});
+
 test('lista opcional (motivos de perda e usuários): 403 é engolido com aviso; 5xx/429 repete e, se persistir, SOBE o erro', async () => {
   const { amb } = kommoDeMentira([lead(1, 1, 10)]);
   const avisos: string[] = [];

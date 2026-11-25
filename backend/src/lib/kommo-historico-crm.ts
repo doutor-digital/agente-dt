@@ -13,13 +13,13 @@
  *   TRATAMENTO funil=Tratamento e `etapa_tratamento`: Incoming leads→Entrada · EM TRATAMENTO→Em tratamento · ALTA→Alta · TRATAMENTO CANCELADO→Tratamento cancelado
  *              (quem está em tratamento não leva etapa comercial)
  *
- * A etiqueta `historico` é a TRAVA que protege o paciente: a régua e o CAPI tratam o que já vem com ela como «estado inicial» e nunca disparam
- * por ele. Por isso ela vai em TODA conversa importada (e o importador não a tira).
- */
+ * A etiqueta `historico` (em toda conversa importada) faz a régua tratar o que a conversa já mostra como «estado inicial» na 1ª vista. O CAPI (Meta) NÃO depende dela
+ * nas conversas da Kommo: quem protege contra compra falsa é a lista `capi_inicial` (os eventos que o estado importado já alcança, calculada com a função do próprio CAPI),
+ * gravada na conversa pelo importador (`kommo_capi_inicial`). Enquanto ninguém mexe na conversa ela é ARQUIVO (`ehArquivo`); depois, é conversa como qualquer outra. */
 
 import { SITUACOES_DE_CONSULTA_DE_PE } from './chatwoot-regua.js';
 
-export const ETIQUETA_HISTORICO = 'historico';
+export const ETIQUETA_HISTORICO = 'historico'; // a mesma de `chatwoot-regua.ts` (este módulo não o importa para ficar sem dependências do servidor)
 export const ETIQUETA_CONFERIR_ETAPA = 'conferir-etapa';
 export const TETO_DE_MENSAGENS = 50;
 export const LIMITE_DA_NOTA = 3500;
@@ -148,6 +148,15 @@ export interface LinhaDoCartao {
  */
 /** DDDs que existem no Brasil. */
 const DDDS = new Set([11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 24, 27, 28, 31, 32, 33, 34, 35, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55, 61, 62, 63, 64, 65, 66, 67, 68, 69, 71, 73, 74, 75, 77, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 96, 97, 98, 99]);
+
+/**
+ * A chave do MESMO paciente no CRM: celular brasileiro com e sem o 9 depois do DDD é um contato só (como `K.variantes_do_fone` do importador e o `BrazilPhoneNormalizer` do
+ * Chatwoot); a forma canônica é a COM o 9. O relatório do seco agrupa por ela, para os números baterem com o que o importador faz.
+ */
+export function chaveDoTelefone(fone: string): string {
+  const m = /^55(\d{2})([6-9]\d{7})$/.exec(fone);
+  return m ? `55${m[1]}9${m[2]}` : fone;
+}
 
 export function foneParaWhatsApp(bruto: string | null | undefined): string | null {
   let d = String(bruto ?? '').replace(/\D/g, '');

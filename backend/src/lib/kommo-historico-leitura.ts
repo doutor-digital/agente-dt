@@ -9,7 +9,7 @@
  * (leitura pela metade nunca vira «importado»). Conversa que a Kommo não entrega (conta sem escopo de chats) vira «sem conversa», contada.
  */
 import type { KommoLead, KommoPipeline, KommoTalk, KommoTalkMessage } from '../services/kommo.service.js';
-import { atributosDoCartao, compararOrdem, consultaDePe, linhaDoCartao, ordemDoCartao, type CartaoDaKommo, type ContatoDaKommo, type LinhaDoCartao, type MensagemDaKommo, foneParaWhatsApp } from './kommo-historico-crm.js';
+import { atributosDoCartao, chaveDoTelefone, compararOrdem, consultaDePe, linhaDoCartao, ordemDoCartao, type CartaoDaKommo, type ContatoDaKommo, type LinhaDoCartao, type MensagemDaKommo, foneParaWhatsApp } from './kommo-historico-crm.js';
 
 export const MESES_DOS_FECHADOS = 6;
 export const POR_PAGINA = 250;
@@ -338,9 +338,9 @@ export async function exportar(
     if (foneDoCartao) {
       const aberto = c.statusId !== STATUS_GANHO && c.statusId !== STATUS_PERDIDO;
       const pe = consultaDePe(c, m, agora);
-      const grupo = porFone.get(foneDoCartao) ?? [];
+      const grupo = porFone.get(chaveDoTelefone(foneDoCartao)) ?? [];
       grupo.push({ ordem: ordemDoCartao({ consultaDePe: pe, aberto, atualizadoEm: c.atualizadoEm, id: c.id }), pe });
-      porFone.set(foneDoCartao, grupo);
+      porFone.set(chaveDoTelefone(foneDoCartao), grupo);
       if (opcoes.arquivo) {
         const ultima = Math.min(Math.max(c.atualizadoEm, c.criadoEm), agoraSeg);
         const viva = !opcoes.arquivo({ labels: m.etiquetas, status: 'resolved', last_activity_at: ultima, additional_attributes: { kommo_lead_id: c.id, kommo_importado_em: agoraSeg, kommo_aberto: aberto }, custom_attributes: m.atributos }, agora);
@@ -356,7 +356,7 @@ export async function exportar(
     if (!fone) {
       if (ct?.telefone) r.telefoneInvalido++;
       else r.semTelefone++;
-    } else fones.set(fone, (fones.get(fone) ?? 0) + 1);
+    } else fones.set(chaveDoTelefone(fone), (fones.get(chaveDoTelefone(fone)) ?? 0) + 1);
   }
   // destino: a maior posição do telefone é a conversa de maior id. Se o telefone tem consulta de pé e o destino NÃO é de consulta de pé, o «confirmo» cairia na conversa errada
   for (const grupo of porFone.values()) {
