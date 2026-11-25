@@ -14,6 +14,8 @@ import { prisma } from '../lib/prisma.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { ehArquivo } from '../lib/chatwoot-regua.js';
 import { eventosAlcancados } from '../lib/chatwoot-capi.js';
+import { recarregarConfigChatwoot } from '../lib/chatwoot-unidades-banco.js';
+import { ehMolde, etapasDaConta } from '../lib/chatwoot-etapas.js';
 import { exportar, inicioDosFechados, type Ambiente, type PortaKommo } from '../lib/kommo-historico-leitura.js';
 
 const arg = (nome: string): string | undefined => process.argv.find((a) => a.startsWith(`--${nome}=`))?.slice(nome.length + 3);
@@ -33,11 +35,15 @@ async function main(): Promise<void> {
   const unit = await prisma.unit.findUnique({ where: { slug } });
   if (!unit?.kommoSubdomain || !unit.kommoAccessToken) throw new ErroDeUso('unidade ou credencial da Kommo ausente');
   const kommo = createKommoClientSemFreio(unit);
-  const amb: Ambiente = { porta: kommo as unknown as PortaKommo, eventosCapi: eventosAlcancados, pausa: (ms) => new Promise((r) => setTimeout(r, ms)), agora: () => new Date(), log };
-
-  log(`${SECO ? 'CONFERÊNCIA EM SECO (nada é escrito)' : 'EXPORTANDO'} — unidade ${slug}${limite ? `, limite ${limite} cartões` : ''}; fechados desde ${new Date(inicioDosFechados(new Date()) * 1000).toISOString().slice(0, 10)}`);
+  // o processo avulso não carrega a configuração do banco sozinho: as etapas da conta (unit_chatwoot.etapas) entram por aqui
+  await recarregarConfigChatwoot();
   // a conta do Chatwoot desta unidade (unit_chatwoot): vai no cabeçalho e o importador RECUSA gravar em outra (nunca a 1, a de Parauapebas)
   const cfg = await prisma.unitChatwoot.findUnique({ where: { unitId: unit.id } });
+  const mapa = etapasDaConta(cfg?.contaId ?? null);
+  const amb: Ambiente = { porta: kommo as unknown as PortaKommo, eventosCapi: eventosAlcancados, pausa: (ms) => new Promise((r) => setTimeout(r, ms)), agora: () => new Date(), log, mapa };
+
+  log(`ETAPAS ${ehMolde(mapa) ? 'do molde da rede (a conta não tem mapa próprio)' : 'da conta (nomes da Kommo)'}`);
+  log(`${SECO ? 'CONFERÊNCIA EM SECO (nada é escrito)' : 'EXPORTANDO'} — unidade ${slug}${limite ? `, limite ${limite} cartões` : ''}; fechados desde ${new Date(inicioDosFechados(new Date()) * 1000).toISOString().slice(0, 10)}`);
   const contaId = cfg?.contaId ?? null;
   if (!contaId || contaId <= 1) throw new ErroDeUso('a unidade não tem conta própria do Chatwoot em unit_chatwoot (conta_id vazio ou 1): não exporto');
   const fd = saida ? openSync(saida, 'w', 0o600) : null;

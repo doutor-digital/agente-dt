@@ -33,7 +33,9 @@ O telefone vira `contact_inboxes.source_id` (só dígitos, com DDI — o `wa_id`
 - **NOTA-resumo** privada, no começo da conversa: etapa na Kommo, responsável, datas, consulta, motivo de perda, orçamento, queixa, observações, valores, origem, etiquetas da Kommo e o que ficou para conferir.
 - **Mensagens**: as **últimas 50** da conversa da Kommo (lida em páginas de 100 até o fim, até 5 conversas do cartão, para as 50 serem as últimas de verdade e o total da nota bater), com a data/hora original; do paciente = recebida, o resto = enviada (sem remetente e marcada como externa, como o Chatwoot grava o que a clínica manda por outro app). Anexo vira «[imagem]», «[áudio]»… (a mídia da Kommo não é baixada).
 
-### De/para das etapas (o mesmo de 12/11 de Parauapebas, estendido)
+### De/para das etapas (sem mapa da conta: o molde da rede; com `unit_chatwoot.etapas`, os nomes da Kommo)
+
+> A partir de 25/11/2026 o exportador lê o mapa de etapas da conta (`unit_chatwoot.etapas`, ver `ops/etapas-conta/README.md`): com ele, EM ESPERA, CONFERIR NA FRANQUIA, NÃO COMPARECEU e RETORNO PÓS-TRATAMENTO viram etapa de verdade (sem `conferir-etapa`), «Atendimento assumido por humano» = Sim vira EM QUALIFICAÇÃO + etiqueta `esperando-humano`, e os nomes gravados são os da conta. A tabela abaixo é a do molde (conta sem mapa).
 
 | Kommo | CRM |
 |---|---|

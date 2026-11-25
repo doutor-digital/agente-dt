@@ -408,3 +408,73 @@ test('capi_inicial: os eventos do CAPI que o estado importado já alcança (a me
   assert.deepEqual(eventos(cartao({ etapa: 'AGENDADO', campos: camposDaConsulta(BELEM_AMANHA, 'Agendado') })), ['AddToCart']);
   assert.deepEqual(eventos(cartao({ etapa: 'EM QUALIFICAÇÃO' })), []);
 });
+
+// ── com o mapa da conta (Timbó: nomes da Kommo) ──────────────────────────────────────────────
+const { mapaDaColuna } = await import('./chatwoot-etapas.js');
+const { ETAPAS_DE_TIMBO_NA_COLUNA } = await import('./chatwoot-etapas-timbo.js');
+const TIMBO_MAPA = mapaDaColuna(ETAPAS_DE_TIMBO_NA_COLUNA)!;
+
+test('COM o mapa: EM ESPERA, CONFERIR NA FRANQUIA, NÃO COMPARECEU e RETORNO PÓS-TRATAMENTO viram etapa de verdade (sem conferir-etapa); sem mapa, igual a antes', () => {
+  const casos: Array<[string, string, string | null, string | null]> = [
+    ['EM ESPERA', 'Em espera', 'EM ESPERA', null],
+    ['CONFERIR NA FRANQUIA', 'Conferir na franquia', 'CONFERIR NA FRANQUIA', null],
+    ['NÃO COMPARECEU', 'Faltou', 'NÃO COMPARECEU', 'Não compareceu'],
+    ['RETORNO PÓS-TRATAMENTO', 'Retorno pós-tratamento', 'RETORNO PÓS-TRATAMENTO', null],
+  ];
+  for (const [kommo, papel, nome, situacao] of casos) {
+    const c = cartao({ etapa: kommo });
+    const t = traduzirEtapa(c, TIMBO_MAPA);
+    assert.equal(t.etapa, papel, kommo);
+    assert.deepEqual(t.etiquetas, [], `${kommo}: sem conferir-etapa`);
+    assert.equal(t.aviso, null);
+    const l = linhaDoCartao(c, null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+    assert.equal(l.atributos.etapa, nome, `${kommo}: o nome que vai para o CRM é o da conta`);
+    assert.ok(!l.etiquetas.includes('conferir-etapa'));
+    if (situacao) assert.equal(l.atributos.situacao_consulta, situacao);
+    // sem mapa: como antes (sem coluna + conferir-etapa; NÃO COMPARECEU = Agendado + situação)
+    const antes = traduzirEtapa(c);
+    assert.equal(antes.etapa, kommo === 'NÃO COMPARECEU' ? 'Agendado' : null);
+    if (kommo !== 'NÃO COMPARECEU') assert.deepEqual(antes.etiquetas, ['conferir-etapa']);
+  }
+});
+
+test('COM o mapa: o nome da conta vai para o CRM em toda etapa; capi_inicial e a nota continuam em papel; «assumido por humano» = qualificação + esperando-humano', () => {
+  const por = (etapa: string, extra: Partial<CartaoDaKommo> = {}) => linhaDoCartao(cartao({ etapa, ...extra }), null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+  assert.equal(por('EM QUALIFICAÇÃO').atributos.etapa, 'EM QUALIFICAÇÃO');
+  assert.equal(por('AGENDADO').atributos.etapa, 'AGENDADO');
+  assert.equal(por('AGENDADO', { campos: [campo('Situação da consulta', 'Confirmado')] }).atributos.etapa, 'AGENDADO', 'Confirmado grava na etapa AGENDADO');
+  assert.equal(por('AGENDADO', { campos: [campo('Situação da consulta', 'Confirmado')] }).atributos.situacao_consulta, 'Confirmado');
+  assert.equal(por('COMPARECEU').atributos.etapa, 'COMPARECEU');
+  assert.equal(por('EM NEGOCIAÇÃO').atributos.etapa, 'EM NEGOCIAÇÃO');
+  assert.equal(por('GANHO / CONCLUÍDO', { statusId: 142 }).atributos.etapa, 'GANHO / CONCLUÍDO');
+  assert.equal(por('PERDIDO', { statusId: 143 }).atributos.etapa, 'PERDIDO');
+  // CAPI: decide pelo papel (AGENDADO/ COMPARECEU alcançam os mesmos eventos de antes)
+  assert.deepEqual(por('AGENDADO').capi_inicial, ['AddToCart']);
+  assert.deepEqual(por('COMPARECEU').capi_inicial, ['AddToCart', 'InitiateCheckout'].filter((e) => linhaDoCartao(cartao({ etapa: 'COMPARECEU' }), null, [], AGORA, eventosAlcancados).capi_inicial.includes(e)));
+  const h = por('EM QUALIFICAÇÃO', { campos: [campo('Atendimento assumido por humano', 'Sim')] });
+  assert.equal(h.atributos.etapa, 'EM QUALIFICAÇÃO');
+  assert.ok(h.etiquetas.includes('esperando-humano'));
+  const semHumano = por('EM QUALIFICAÇÃO');
+  assert.ok(!semHumano.etiquetas.includes('esperando-humano'));
+  // tratamento
+  assert.equal(por('EM TRATAMENTO', { funil: 'TRATAMENTO' }).atributos.etapa_tratamento, 'EM TRATAMENTO');
+  assert.equal(por('ALTA', { funil: 'TRATAMENTO', statusId: 142 }).atributos.etapa_tratamento, 'ALTA');
+  assert.equal(por('TRATAMENTO CANCELADO', { funil: 'TRATAMENTO', statusId: 143 }).atributos.etapa_tratamento, 'TRATAMENTO CANCELADO');
+});
+
+test('SEM mapa a linha é EXATAMENTE a de antes (o mesmo objeto de atributos; esperando humano continua etapa do molde)', () => {
+  const c = cartao({ etapa: 'EM QUALIFICAÇÃO', campos: [campo('Atendimento assumido por humano', 'Sim')] });
+  const a = linhaDoCartao(c, null, [], AGORA, eventosAlcancados);
+  assert.equal(a.atributos.etapa, 'Esperando humano');
+  assert.ok(!a.etiquetas.includes('esperando-humano'));
+  assert.deepEqual(a.atributos, atributosDoCartao(c, AGORA).atributos);
+});
+
+test('COM o mapa: NÃO COMPARECEU com consulta FUTURA fica Agendado + Remarcado (de pé: a régua manda véspera); só a falta de verdade é «NÃO COMPARECEU»', () => {
+  const futura = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: [campo('Data da Consulta', CONSULTA, 'date_time')] }), null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+  assert.equal(futura.atributos.etapa, 'AGENDADO');
+  assert.equal(futura.atributos.situacao_consulta, 'Remarcado');
+  const passada = linhaDoCartao(cartao({ etapa: 'NÃO COMPARECEU', campos: [campo('Data da Consulta', CONSULTA - 10 * 86400, 'date_time')] }), null, [], AGORA, eventosAlcancados, TIMBO_MAPA);
+  assert.equal(passada.atributos.etapa, 'NÃO COMPARECEU');
+  assert.equal(passada.atributos.situacao_consulta, 'Não compareceu');
+});
