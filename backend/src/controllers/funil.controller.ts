@@ -57,6 +57,12 @@ import {
   MAX_PAGINAS,
   camposParaGravar,
   cartaoDaConversa,
+  ATRIBUTO_ETAPA_TRATAMENTO,
+  ATRIBUTO_FUNIL,
+  ehFunilDoQuadro,
+  etapasDoTratamento,
+  exigeConfirmacao,
+  notaDaMudancaDeTratamento,
   chaveConfere,
   desdeAEtapa,
   etapasDoAtributo,
@@ -374,13 +380,16 @@ export async function funilQuadroHandler(req: Request, res: Response): Promise<v
     const t0 = Date.now();
     const defs = await definicoes(a);
     const lista = etapasDoAtributo(defs);
+    // conta com `etapa_tratamento`: dois funis (Comercial e Tratamento); `?funil=tratamento` pede o segundo (qualquer outro valor = Comercial)
+    const doTrat = etapasDoTratamento(defs);
+    const funilPedido = ehFunilDoQuadro(req.query.funil) ? req.query.funil : 'comercial';
     const tDefs = Date.now() - t0;
     const paginas = await paginasDasCaixas(a, Number(req.query.caixa), 'com-etapa');
     const tPaginas = Date.now() - t0 - tDefs;
     const tarefas = await vencimentosAbertos(a.c.conta!.conta, idsDasPaginas(paginas));
     // o tempo de cada parte no log (como na aba Automações): quadro lento aparece com o motivo
     if (Date.now() - t0 > 2000) logger.warn({ conta: a.c.conta!.conta, paginas: paginas.length, ms: { definicoes: tDefs, leitura: tPaginas, tarefas: Date.now() - t0 - tDefs - tPaginas } }, 'funil: quadro demorou');
-    res.json({ ...montarQuadro(paginas, lista, tarefas), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
+    res.json({ ...montarQuadro(paginas, lista, tarefas, doTrat, funilPedido), chatwoot: a.c.conta!.url, conta: a.c.conta!.conta, eu: a.logado, euId: a.logadoId, podeEscrever: !!a.sessao });
   } catch (e) {
     falhou(res, e, 'quadro');
   }
@@ -835,7 +844,8 @@ export async function funilConversaHandler(req: Request, res: Response): Promise
       (cw(a, 'GET', 'agents') as Promise<any>).catch(() => []),
     ]);
     const lista = etapasDoAtributo(defs);
-    const cartao = cartaoDaConversa(conv, lista);
+    const doTrat = etapasDoTratamento(defs);
+    const cartao = cartaoDaConversa(conv, lista, undefined, doTrat);
     const historico = historicoDasMensagens(msgs);
     const contato = conv?.meta?.sender ?? {};
     const tarefas = await prisma.funilTarefa.findMany({
@@ -845,8 +855,10 @@ export async function funilConversaHandler(req: Request, res: Response): Promise
     });
     res.json({
       cartao,
-      etapas: lista,
-      desdeEtapa: desdeAEtapa(historico, cartao.etapa, cartao.criado),
+      // conversa do Tratamento: a etapa é a DO TRATAMENTO (a ficha move por ela)
+      etapas: cartao.funil === 'tratamento' ? doTrat : lista,
+      funil: cartao.funil,
+      desdeEtapa: desdeAEtapa(historico, cartao.etapa, cartao.criado, cartao.funil === 'tratamento'),
       atributos: conv?.custom_attributes ?? {},
       responsavelId: Number(conv?.meta?.assignee?.id) || null,
       caixaId: cartao.caixaId,
@@ -876,6 +888,10 @@ export async function funilConversaHandler(req: Request, res: Response): Promise
 const moverSchema = z.object({
   conversaId: z.number().int().positive(),
   etapa: z.string().trim().min(1).max(60),
+  /** `tratamento` = muda a etapa DO TRATAMENTO (`etapa_tratamento`); sem isto (ou `comercial`) muda a etapa comercial, como sempre */
+  funil: z.enum(['comercial', 'tratamento']).optional(),
+  /** mover no Tratamento para Alta ou Tratamento cancelado (a régua observa e manda mensagem ao paciente) só vale com `confirmar: true` */
+  confirmar: z.boolean().optional(),
   quem: z.string().trim().max(80).nullable().optional(),
 });
 
@@ -892,6 +908,40 @@ async function gravarAtributos(a: Acesso, conversaId: number, mudar: Record<stri
   return atuais;
 }
 
+/** Muda a etapa DO TRATAMENTO (`etapa_tratamento`) — o mesmo atributo que a régua observa (Alta, Tratamento cancelado): é o mesmo efeito de mudá-lo na própria conversa. */
+async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, etapa: string, quem: string | null, defs: unknown[], confirmou: boolean): Promise<void> {
+  const lista = etapasDoTratamento(defs);
+  if (!lista.length) {
+    res.status(400).json({ error: 'esta conta não tem o funil de Tratamento' });
+    return;
+  }
+  if (!lista.includes(etapa)) {
+    res.status(400).json({ error: `etapa do tratamento desconhecida: ${etapa}` });
+    return;
+  }
+  if (exigeConfirmacao(etapa) && !confirmou) {
+    res.status(409).json({ error: `mover para «${etapa}» pode mandar mensagem ao paciente (a régua observa essa etapa): confirme`, precisaConfirmar: true });
+    return;
+  }
+  const conv = (await cw(a, 'GET', `conversations/${conversaId}`)) as any;
+  const attrs = (conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {}) as Record<string, unknown>;
+  const atual = attrs[ATRIBUTO_ETAPA_TRATAMENTO];
+  const de = typeof atual === 'string' && lista.includes(atual) ? atual : lista[0]!;
+  if (de === etapa) {
+    res.json({ ok: true, igual: true });
+    return;
+  }
+  // a conversa que nunca teve `funil` ganha «Tratamento» (se a lista do atributo tem essa opção): sem isso o quadro a devolveria ao Comercial
+  const funilTem = valoresDoAtributo(defs, ATRIBUTO_FUNIL).find((v) => v.toLowerCase() === 'tratamento');
+  const semFunil = typeof attrs[ATRIBUTO_FUNIL] !== 'string' || !(attrs[ATRIBUTO_FUNIL] as string).trim();
+  await gravarAtributos(a, conversaId, { [ATRIBUTO_ETAPA_TRATAMENTO]: etapa, ...(semFunil && funilTem ? { [ATRIBUTO_FUNIL]: funilTem } : {}) });
+  await cw(a, 'POST', `conversations/${conversaId}/messages`, {
+    corpo: { content: notaDaMudancaDeTratamento(de, etapa, quem), private: true, message_type: 'outgoing' },
+  }).catch((e) => logger.warn({ err: String(e), conversa: conversaId }, 'funil: a nota interna falhou (a etapa do tratamento foi gravada)'));
+  logger.info({ conversa: conversaId, de, para: etapa, quem, funil: 'tratamento' }, 'funil: etapa do tratamento mudada');
+  res.json({ ok: true, de, para: etapa });
+}
+
 export async function funilMoverHandler(req: Request, res: Response): Promise<void> {
   const a = await autorizado(req, res);
   if (!a) return;
@@ -903,7 +953,12 @@ export async function funilMoverHandler(req: Request, res: Response): Promise<vo
   // logado pelo Chatwoot: vale o nome do perfil, não o que a página mandou
   const quem = a.logado ?? p.data.quem ?? null;
   try {
-    const lista = etapasDoAtributo(await definicoes(a));
+    const defs = await definicoes(a);
+    if (p.data.funil === 'tratamento') {
+      await moverNoTratamento(a, res, p.data.conversaId, p.data.etapa, quem, defs, p.data.confirmar === true);
+      return;
+    }
+    const lista = etapasDoAtributo(defs);
     if (!lista.includes(p.data.etapa)) {
       res.status(400).json({ error: `etapa desconhecida: ${p.data.etapa}` });
       return;
@@ -1379,12 +1434,20 @@ body{background:#f4f6f9}
 .hj-tab th{font-size:12px;color:#475467;text-align:left;font-weight:600;padding:8px}
 .hj-tab td{padding:9px 8px;border-top:1px solid var(--linha);font-variant-numeric:tabular-nums}
 
+/* seletor Comercial | Tratamento (só nas contas que têm o atributo etapa_tratamento) */
+.funis{display:flex;gap:2px;padding:2px;border:1px solid var(--linha);border-radius:10px;background:#f2f4f7}
+.funis button{border:0;background:transparent;padding:5px 12px;border-radius:8px;font:inherit;font-size:13px;font-weight:600;color:#475467;cursor:pointer}
+.funis button b{margin-left:6px;font-weight:600;color:#98a2b3;font-variant-numeric:tabular-nums}
+.funis button.on{background:#fff;color:#101828;box-shadow:0 1px 2px rgba(16,24,40,.12)}
+.funis button.on b{color:#1f73d6}
+.funis button:focus-visible{outline:2px solid #1f93ff;outline-offset:1px}
 @media (max-width:760px){.col{flex-basis:260px}.topo{padding-right:56px}}
 /*__TELAS_CSS__*/
 </style></head><body>
 <div class="topo" id="topo">
   <div class="linha-a">
     <h1>Funil</h1>
+    <div class="funis" id="funis" role="tablist" aria-label="Funil" hidden></div>
     <div class="resumo" id="resumo"></div>
     <div class="dir"><span id="atual" class="atual"></span><button id="ajuda" class="ic ajuda" type="button" hidden title="Ver a aula desta tela" aria-label="Ver a aula em vídeo desta tela">?</button><button id="recarregar" class="ic" type="button" title="Atualizar agora" aria-label="Atualizar agora">↻</button><button id="novo" class="bt azul" type="button" hidden title="Novo lead (N)">+ Novo lead</button></div>
   </div>
@@ -1402,7 +1465,7 @@ body{background:#f4f6f9}
 (function(){
   var q=new URLSearchParams(location.search), K=q.get('k')||'', MENU=q.get('menu')==='1', TELA=['hoje','oport','mkt','gestor'].indexOf(q.get('tela'))>=0?q.get('tela'):'', ORIGEM_CW=__ORIGEM_CW__, DENTRO=window.parent!==window;
   /*__CONTA_JS__*/
-  var S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
+  var funilAtual='comercial', S=null, iniciado=false, timer=null, morta=null, dados=null, caixas=[], aberta=null, ficha=null, filtro='', recolhidas={}, atualizadoEm=0, arrastando=null, formNaColuna=null, aba='principal', modo='mensagem', ctxConversa=null;
   var CORES=['#64748b','#1f93ff','#d97706','#7c3aed','#4f46e5','#16a34a','#15803d','#0d9488','#db2777','#dc2626','#94a3b8'];
   var AV=[['#1f73d6','#e6f1ff'],['#c2410c','#fff0e6'],['#15803d','#e8f7ee'],['#7c3aed','#f1ebff'],['#be185d','#fdebf3'],['#0f766e','#e6f6f4'],['#a16207','#fdf6e3'],['#4338ca','#eceeff']];
   var vistos=null, chegou=null;
@@ -1447,6 +1510,7 @@ body{background:#f4f6f9}
   }
   function ordenar(a,b){ var o=$('ordem').value; if(o==='espera') return (esperando(b)-esperando(a))||(a.atividade-b.atividade); if(o==='valor') return (b.valor-a.valor)||(b.atividade-a.atividade); return b.atividade-a.atividade; }
   function guardar(){ try{ localStorage.setItem('funil:recolhidas',JSON.stringify(recolhidas)); localStorage.setItem('funil:ordem',$('ordem').value); }catch(e){} }
+  try{ var fSalvo=localStorage.getItem('funil:funil'); if(fSalvo==='tratamento'||fSalvo==='comercial') funilAtual=fSalvo; }catch(e){}
   try{ recolhidas=JSON.parse(localStorage.getItem('funil:recolhidas')||'{}')||{}; var oSalva=localStorage.getItem('funil:ordem'); if(oSalva) setTimeout(function(){ $('ordem').value=oSalva; },0); }catch(e){}
   function desenharResumo(){
     var todos=[]; dados.colunas.forEach(function(c){ todos=todos.concat(c.cartoes); });
@@ -1464,7 +1528,14 @@ body{background:#f4f6f9}
   setInterval(function(){ if(atualizadoEm) $('atual').textContent='atualizado há '+Math.max(0,Math.round((Date.now()-atualizadoEm)/1000))+' s'; },5000);
 
   // ── quadro ────────────────────────────────────────────────────────────────
-  async function mover(id,etapa){ msg('Gravando…'); try{ await api('POST','mover',{conversaId:id,etapa:etapa}); msg('Movido para '+etapa+'.'); chegou=id; await carregar(); }catch(e){ msg(e.message); } }
+  // Comercial | Tratamento: só aparece quando a conta tem os dois funis (atributo etapa_tratamento); cada um com as suas etapas
+  function desenharFunis(){
+    var box=$('funis'); box.textContent=''; var fs=(dados&&dados.funis)||[]; box.hidden=fs.length<2; if(fs.length<2) return;
+    fs.forEach(function(f){ var b=el('button',f.id===dados.funil?'on':null,f.nome); b.type='button'; b.setAttribute('role','tab'); b.setAttribute('aria-selected',String(f.id===dados.funil)); b.appendChild(el('b',null,String(f.total))); b.onclick=function(){ if(f.id===funilAtual) return; funilAtual=f.id; filtro=''; formNaColuna=null; $('busca').value=''; try{ localStorage.setItem('funil:funil',f.id); }catch(e){} carregar(); }; box.appendChild(b); });
+  }
+  // Alta e Tratamento cancelado: a régua observa essas etapas e pode mandar mensagem ao paciente — pergunta antes (qualquer caminho: arrastar, → ou a ficha)
+  function confirmaTratamento(etapa,funil){ if(funil!=='tratamento'||(etapa!=='Alta'&&etapa!=='Tratamento cancelado')) return {ok:true,confirmar:undefined}; var ok=window.confirm('Mover para «'+etapa+'» pode mandar uma mensagem ao paciente (a régua observa essa etapa). Mover mesmo?'); return {ok:ok,confirmar:ok?true:undefined}; }
+  async function mover(id,etapa){ var cf=confirmaTratamento(etapa,dados&&dados.funil); if(!cf.ok) return; msg('Gravando…'); try{ await api('POST','mover',{conversaId:id,etapa:etapa,confirmar:cf.confirmar,funil:dados&&dados.funil==='tratamento'?'tratamento':undefined}); msg('Movido para '+etapa+'.'); chegou=id; await carregar(); }catch(e){ msg(e.message); } }
   function formRapida(col,etapa){
     var f=el('form','formr'); var nome=el('input'); nome.placeholder='Nome'; nome.required=true; var tel=el('input'); tel.placeholder='Telefone com DDD'; tel.required=true; tel.inputMode='tel';
     var cx=el('select'); caixas.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; cx.appendChild(o); }); if($('caixa').value) cx.value=$('caixa').value;
@@ -1483,6 +1554,8 @@ body{background:#f4f6f9}
   var NS='http://www.w3.org/2000/svg';
   function icone(caminho){ var v=document.createElementNS(NS,'svg'); v.setAttribute('viewBox','0 0 16 16'); v.setAttribute('width','13'); v.setAttribute('height','13'); v.setAttribute('aria-hidden','true'); var p=document.createElementNS(NS,'path'); p.setAttribute('d',caminho); p.setAttribute('fill','none'); p.setAttribute('stroke','currentColor'); p.setAttribute('stroke-width','1.6'); p.setAttribute('stroke-linecap','round'); v.appendChild(p); return v; }
   var RELOGIO='M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 5v3.2l2 1.3', MAIS='M8 3.5v9M3.5 8h9';
+  // «recolhida» é por funil (a coluna «Alta» do Tratamento não é a «Alta» de outra etapa do Comercial); o Comercial segue com a chave de sempre
+  function chaveCol(e){ return dados&&dados.funil==='tratamento'?'t:'+e:e; }
   function desenhar(){
     var ordem=0;
     var termo=$('busca').value.trim().toLowerCase(), box=$('quadro'); box.textContent='';
@@ -1490,10 +1563,10 @@ body{background:#f4f6f9}
     dados.colunas.forEach(function(col,i){
       var c=el('section','col'); c.style.setProperty('--cor',CORES[i%CORES.length]);
       var vis=col.cartoes.filter(function(k){ if(!passa(k)) return false; return !termo || k.nome.toLowerCase().indexOf(termo)>=0 || (k.telefone||'').replace(/[^0-9]/g,'').indexOf(termo.replace(/[^0-9]/g,'')||'x')>=0; }).sort(ordenar);
-      if(recolhidas[col.etapa]) c.classList.add('fechada');
+      if(recolhidas[chaveCol(col.etapa)]) c.classList.add('fechada');
       var cab=el('header','cab'), t1=el('div','t1');
-      var ne=el('button','nomeEtapa',col.etapa); ne.type='button'; ne.title=recolhidas[col.etapa]?'Abrir a coluna':'Recolher a coluna'; ne.onclick=function(){ recolhidas[col.etapa]=!recolhidas[col.etapa]; guardar(); desenhar(); }; t1.appendChild(ne); t1.appendChild(el('span','qtd',String(vis.length)));
-      if(dados.podeEscrever){ var mais=el('button','mais'); mais.type='button'; mais.title='Adicionar lead em '+col.etapa; mais.setAttribute('aria-label','Adicionar lead em '+col.etapa); mais.appendChild(icone(MAIS)); mais.onclick=function(){ formNaColuna=formNaColuna===col.etapa?null:col.etapa; desenhar(); }; t1.appendChild(mais); }
+      var ne=el('button','nomeEtapa',col.etapa); ne.type='button'; ne.title=recolhidas[chaveCol(col.etapa)]?'Abrir a coluna':'Recolher a coluna'; ne.onclick=function(){ recolhidas[chaveCol(col.etapa)]=!recolhidas[chaveCol(col.etapa)]; guardar(); desenhar(); }; t1.appendChild(ne); t1.appendChild(el('span','qtd',String(vis.length)));
+      if(dados.podeEscrever&&dados.funil!=='tratamento'){ var mais=el('button','mais'); mais.type='button'; mais.title='Adicionar lead em '+col.etapa; mais.setAttribute('aria-label','Adicionar lead em '+col.etapa); mais.appendChild(icone(MAIS)); mais.onclick=function(){ formNaColuna=formNaColuna===col.etapa?null:col.etapa; desenhar(); }; t1.appendChild(mais); }
       cab.appendChild(t1); if(col.soma) cab.appendChild(el('div','soma',brl(col.soma))); c.appendChild(cab);
       var lista=el('div','lista');
       if(dados.podeEscrever&&formNaColuna===col.etapa) lista.appendChild(formRapida(c,col.etapa));
@@ -1521,6 +1594,7 @@ body{background:#f4f6f9}
         d.appendChild(pe);
         var ac=el('div','acoes'), prox=dados.etapas[dados.etapas.indexOf(k.etapa)+1];
         if(prox&&/perd/i.test(prox)) prox=null; // o → nunca leva para Perdido (perder é decisão, não clique sem querer)
+        if(prox&&dados.funil==='tratamento'&&(prox==='Alta'||prox==='Tratamento cancelado')) prox=null; // nem para Alta ou Tratamento cancelado: o → é clique sem querer (arrastar ou a ficha pedem confirmação)
         if(prox&&dados.podeEscrever){ var bp=el('button',null,'→'); bp.type='button'; bp.title='Mover para '+prox; bp.setAttribute('aria-label','Mover para '+prox); bp.onclick=function(ev){ ev.stopPropagation(); mover(k.id,prox); }; ac.appendChild(bp); }
         if(dados.podeEscrever){ var bt=el('button',null,'⏰'); bt.type='button'; bt.title='Tarefa: ligar amanhã às 9h'; bt.setAttribute('aria-label','Criar tarefa para amanhã às 9h'); bt.onclick=async function(ev){ ev.stopPropagation(); var am=new Date(Date.now()+864e5); am.setHours(9,0,0,0); if(bt.disabled) return; bt.disabled=true; msg('Criando tarefa…'); try{ await api('POST','tarefa',{conversaId:k.id,texto:'Ligar para '+k.nome,venceEm:am.toISOString()}); msg('Tarefa criada para amanhã 9h.'); carregar(); }catch(e){ msg(e.message); bt.disabled=false; } }; ac.appendChild(bt); }
         var ab=el('a',null,'↗'); ab.href=linkCw(k.id); ab.target='_top'; ab.title='Abrir a conversa'; ab.setAttribute('aria-label','Abrir a conversa'); ab.draggable=false; ab.onclick=function(ev){ ev.stopPropagation(); }; ac.appendChild(ab);
@@ -1541,8 +1615,8 @@ body{background:#f4f6f9}
     if(TELA==='hoje'){ await carregarHoje(); return; }
     if(TELA){ await carregarTela(); return; }
     try{
-      dados=await api('GET','quadro'+($('caixa').value?('?caixa='+encodeURIComponent($('caixa').value)):''));
-      $('novo').hidden=!dados.podeEscrever; atualizadoEm=Date.now(); $('atual').textContent='atualizado agora'; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
+      dados=await api('GET','quadro?funil='+funilAtual+($('caixa').value?('&caixa='+encodeURIComponent($('caixa').value)):''));
+      funilAtual=dados.funil||'comercial'; $('novo').hidden=!dados.podeEscrever||funilAtual==='tratamento'; desenharFunis(); atualizadoEm=Date.now(); $('atual').textContent='atualizado agora'; desenhar(); if(!$('msg').textContent||/Carregando/.test($('msg').textContent)) msg(dados.total+' leads');
     }catch(e){ msg(e.message); if(!dados){ var qd=$('quadro'); qd.textContent=''; qd.appendChild(el('div','vazio',e.message)); } }
   }
 
@@ -1567,7 +1641,7 @@ body{background:#f4f6f9}
     var esq=el('div','esq'), t=el('div','t'), vt=el('button',null,'‹'); vt.type='button'; vt.title='Voltar ao funil'; vt.onclick=fecharFicha; t.appendChild(vt); t.appendChild(el('span',null,k.nome)); esq.appendChild(t);
     var tg=el('div','tags'); k.etiquetas.forEach(function(x){ tg.appendChild(el('span',null,x)); }); esq.appendChild(tg);
     var et=el('div','etapa'), cx=caixas.filter(function(c){ return c.id===f.caixaId; })[0]; et.appendChild(el('small',null,cx?cx.nome:'Funil'));
-    var nm=el('div','nm'), sel=seletor(f.etapas,k.etapa,null,function(v){ acao('POST','mover',{conversaId:k.id,etapa:v}); }); nm.appendChild(sel);
+    var nm=el('div','nm'), sel=seletor(f.etapas,k.etapa,null,function(v){ var cf=confirmaTratamento(v,f.funil); if(!cf.ok){ recarregarFicha(); return; } acao('POST','mover',{conversaId:k.id,etapa:v,confirmar:cf.confirmar,funil:f.funil==='tratamento'?'tratamento':undefined}); }); nm.appendChild(sel);
     var dias=Math.max(0,Math.floor((Date.now()/1000-(f.desdeEtapa||k.criado))/86400)); nm.appendChild(el('em',null,'('+dias+(dias===1?' dia)':' dias)'))); et.appendChild(nm);
     var pg=el('div','prog'), idx=f.etapas.indexOf(k.etapa); f.etapas.forEach(function(_,i){ pg.appendChild(el('span',i<=idx?'f':null)); }); et.appendChild(pg); esq.appendChild(et);
     var abas=el('div','abas'); [['principal','Principal'],['paciente','Paciente'],['origem','Origem'],['estatisticas','Estatísticas']].forEach(function(a){ var b=el('button',aba===a[0]?'on':null,a[1]); b.type='button'; b.onclick=function(){ aba=a[0]; desenharFicha(); }; abas.appendChild(b); }); esq.appendChild(abas);

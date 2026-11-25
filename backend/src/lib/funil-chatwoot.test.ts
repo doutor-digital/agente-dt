@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ETAPAS_PADRAO, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos } from './funil-chatwoot.js';
+import { exigeConfirmacao, ETAPAS_PADRAO, etapasDoTratamento, funilDaConversa, notaDaMudancaDeTratamento, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos } from './funil-chatwoot.js';
 
 test('chave: derivada do token, 32 hex, só confere a certa', () => {
   const k = chaveDoFunil('token-do-chatwoot');
@@ -200,4 +200,53 @@ test('cartão: a nossa mensagem de espera (crm-demora) como última pública NÃ
   assert.equal(c.ultimaDela, true);
   // resposta de gente depois dela: a paciente deixa de esperar
   assert.equal(cartaoDaConversa(conv(8, { messages: [{ message_type: 0, content: 'quero marcar', private: false }, nossa, { message_type: 1, content: 'Oi, Maria!', private: false }] }), etapas).ultimaDela, false);
+});
+
+test('funilDaConversa: `funil` explícito manda; sem ele, etapa_tratamento preenchida = Tratamento; o resto é Comercial', () => {
+  assert.equal(funilDaConversa({}), 'comercial');
+  assert.equal(funilDaConversa({ funil: 'Tratamento' }), 'tratamento');
+  assert.equal(funilDaConversa({ funil: ' tratamento ' }), 'tratamento');
+  // a MESMA regra da régua e da Sofia: etapa_tratamento preenchida = Tratamento, mesmo com funil «Comercial» escrito
+  assert.equal(funilDaConversa({ funil: 'Comercial', etapa_tratamento: 'Alta' }), 'tratamento');
+  assert.equal(funilDaConversa({ funil: 'Comercial' }), 'comercial');
+  assert.equal(funilDaConversa({ etapa_tratamento: 'Em tratamento' }), 'tratamento');
+  assert.equal(funilDaConversa({ etapa_tratamento: '  ' }), 'comercial');
+  assert.equal(funilDaConversa({ funil: 3, etapa_tratamento: null }), 'comercial');
+});
+
+test('etapasDoTratamento lê as opções de `etapa_tratamento` (vazio = a conta não tem o funil de Tratamento)', () => {
+  assert.deepEqual(etapasDoTratamento([{ attribute_key: 'etapa_tratamento', attribute_values: ['Entrada', ' Alta ', 'Entrada'] }]), ['Entrada', 'Alta']);
+  assert.deepEqual(etapasDoTratamento([{ attribute_key: 'etapa', attribute_values: ['Novo'] }]), []);
+  assert.deepEqual(etapasDoTratamento(undefined), []);
+});
+
+test('montarQuadro com Tratamento: cartão sem etapa_tratamento válida vai para a 1ª etapa do tratamento; quadro sem etapasDoTrat é o de sempre (campos novos só somam)', () => {
+  const pag = { data: { payload: [conv(1, { custom_attributes: { funil: 'Tratamento' } }), conv(2, { custom_attributes: { etapa: 'Agendado' } })] } };
+  const trat = montarQuadro([pag], ['Novo', 'Agendado'], new Map(), ['Entrada', 'Alta'], 'tratamento');
+  assert.deepEqual(trat.etapas, ['Entrada', 'Alta']);
+  assert.deepEqual(trat.colunas[0]!.cartoes.map((k) => k.id), [1]);
+  assert.deepEqual(trat.funis.map((f) => [f.id, f.total]), [['comercial', 1], ['tratamento', 1]]);
+  const velho = montarQuadro([pag], ['Novo', 'Agendado']);
+  assert.equal(velho.total, 2);
+  assert.deepEqual(velho.funis, []);
+  assert.ok(velho.colunas.flatMap((c) => c.cartoes).every((k) => k.funil === 'comercial'));
+});
+
+test('a nota do tratamento tem outro prefixo (desdeAEtapa só lê as notas da etapa comercial)', () => {
+  assert.equal(notaDaMudancaDeTratamento('Alta', 'Em tratamento', 'Ana'), '📋 Etapa do tratamento: Alta → Em tratamento (por Ana) — pelo funil');
+  assert.ok(!notaDaMudancaDeTratamento('A', 'B', null).startsWith('📋 Etapa:'));
+});
+
+test('desdeAEtapa conta os dias pela nota CERTA: a do tratamento para quem está no Tratamento, a comercial para o resto', () => {
+  const h = (texto: string, quando: number) => ({ id: quando, tipo: 'nota' as const, texto, quem: null, quando, anexo: false });
+  const historico = [h('📋 Etapa: Novo lead → Agendado (por Ana) — pelo funil', 100), h('📋 Etapa do tratamento: Entrada → Em tratamento (por Bia) — pelo funil', 500)];
+  assert.equal(desdeAEtapa(historico, 'Em tratamento', 10, true), 500);
+  assert.equal(desdeAEtapa(historico, 'Agendado', 10), 100);
+  assert.equal(desdeAEtapa(historico, 'Em tratamento', 10), 10, 'a nota do tratamento não vale para a etapa comercial');
+  assert.equal(desdeAEtapa(historico, 'Agendado', 10, true), 10);
+});
+
+test('só Alta e Tratamento cancelado (as etapas que a régua observa) pedem confirmação', () => {
+  assert.ok(exigeConfirmacao('Alta') && exigeConfirmacao('Tratamento cancelado'));
+  for (const e of ['Entrada', 'Em tratamento', 'Falta de retorno', 'alta']) assert.equal(exigeConfirmacao(e), false, e);
 });
