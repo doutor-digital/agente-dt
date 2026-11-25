@@ -286,9 +286,26 @@ export function caixasDeContasProprias(): number[] {
 /** O domínio dos CRMs das clínicas: <subdominio>.doutordigitalconsultoria.com. */
 export const DOMINIO_DOS_CRMS = 'doutordigitalconsultoria.com';
 
-/** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado na configuração). Quem não tem subdomínio não entra. */
+/** Subdomínio aceito: o mesmo formato de `problemasDaConfig` (minúsculas e dígitos), nunca algo que vire caminho, porta ou outro host. */
+export const subdominioValido = (s: unknown): s is string => typeof s === 'string' && /^[a-z0-9]{3,40}$/.test(s);
+
+/**
+ * TODA linha de `unit_chatwoot` com subdomínio, MESMO a que ainda não vale como configuração (sem caixa = inerte: os workers a ignoram, e continuam ignorando).
+ * O endereço da clínica existe desde o dia em que a conta foi criada (Timbó, conta 3, 25/11/2026): as telas por iframe têm de aceitar a origem dele
+ * (o `menu.js` também precisará da conta dele: outro PR). Só leitura de endereço; não entra em `configDaUnidade` nem em nenhum mapa de caixa.
+ */
+let dominiosDasLinhas: ReadonlyArray<{ subdominio: string; contaId: number | null }> = [];
+export function aplicarDominios(linhas: ReadonlyArray<{ subdominio?: string | null; contaId?: number | null }>): void {
+  const porSub = new Map<string, number | null>();
+  for (const l of linhas) if (subdominioValido(l.subdominio)) porSub.set(l.subdominio, Number.isInteger(l.contaId) && (l.contaId as number) > 0 ? (l.contaId as number) : null);
+  dominiosDasLinhas = [...porSub.entries()].map(([subdominio, contaId]) => ({ subdominio, contaId }));
+}
+
+/** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado em `unit_chatwoot`, com ou sem caixa). Quem não tem subdomínio não entra. */
 export function origensDasClinicas(): string[] {
-  return [...configs.values()].filter((c) => !!c.subdominio).map((c) => `https://${c.subdominio}.${DOMINIO_DOS_CRMS}`).sort();
+  const subs = new Set<string>([...configs.values()].map((c) => c.subdominio).filter(subdominioValido));
+  for (const d of dominiosDasLinhas) subs.add(d.subdominio);
+  return [...subs].map((s) => `https://${s}.${DOMINIO_DOS_CRMS}`).sort();
 }
 
 /** As unidades SEM conta própria (as da conta do ambiente), em ordem alfabética. */
@@ -382,6 +399,32 @@ export function configDaLinha(l: LinhaDoBanco): ConfigChatwootUnidade {
     },
     caixas: l.caixas.map((x) => ({ id: x.caixaId, tipo: x.tipo as TipoDeCaixa, instanciaEvolution: x.instanciaEvolution })),
   };
+}
+
+/**
+ * As linhas cujo ENDEREÇO entra nas origens aceitas além das configurações vivas: só a INERTE (o ÚNICO problema é «sem nenhuma caixa» — a clínica já existe, falta ligar o canal)
+ * e que não colide com ninguém: o prefixo dos modelos não pode ser de OUTRA unidade viva (nem de outra inerte que veio antes, por slug) — a mesma regra que descarta uma
+ * configuração em `mesclarComSemente`. Linha VÁLIDA mas descartada por conflito (prefixo ou caixa repetidos) NÃO entra: o sistema a ignorou, não é origem confiável.
+ * Quem já está viva (`vivas`) entra pelas configurações, não por aqui.
+ */
+export function linhasInertasSemConflito(linhas: readonly LinhaDoBanco[], vivas: readonly ConfigChatwootUnidade[]): LinhaDoBanco[] {
+  const vivasPorSlug = new Set(vivas.map((c) => c.slug));
+  const prefixoDe = new Map<string, string>(vivas.map((c) => [c.prefixoModelos, c.slug]));
+  const inertas = linhas
+    .map((l) => ({ l, c: configDaLinha(l) }))
+    .filter(({ c }) => {
+      const p = problemasDaConfig(c);
+      return p.length > 0 && p.every((m) => m === 'sem nenhuma caixa') && !vivasPorSlug.has(c.slug);
+    })
+    .sort((a, b) => (a.c.slug < b.c.slug ? -1 : a.c.slug > b.c.slug ? 1 : 0));
+  const aceitas: LinhaDoBanco[] = [];
+  for (const { l, c } of inertas) {
+    const dono = prefixoDe.get(c.prefixoModelos);
+    if (dono && dono !== c.slug) continue; // o prefixo já é de outra unidade
+    prefixoDe.set(c.prefixoModelos, c.slug);
+    aceitas.push(l);
+  }
+  return aceitas;
 }
 
 /** A lista final: o que está no banco (válido) + a semente de Parauapebas se o banco não tem linha válida para ela. */
