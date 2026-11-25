@@ -73,8 +73,9 @@ const VALIDADE_LISTAS_MS = 5 * 60_000;
 export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
   const listas = new Map<string, { em: number; valores: string[] }>();
   let contaEtiquetas: { em: number; valores: string[] } | null = null;
-  const mapa = etapasDoContexto(ctx);
-  const ler = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`), mapa);
+  // o mapa é pedido a CADA chamada (a porta fica guardada em cache por conta e vive mais que a gravação do mapa: o servidor relê a configuração de minuto em minuto)
+  const mapa = (): MapaDeEtapas => etapasDoContexto(ctx);
+  const ler = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`), mapa());
   /** a conversa COMO O CHATWOOT A TEM (nomes da conta): é o que se mescla na gravação, para nunca regravar uma etapa que ninguém pediu para mudar */
   const lerCrua = async (id: number) => conversaLidaDoChatwoot(await chamar(ctx, 'GET', `conversations/${id}`));
   return {
@@ -83,7 +84,7 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       const atual = await lerCrua(id);
       if (!atual) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
       // papel → nome da conta; papel que a conta não tem sai da gravação (a etapa de agora fica); sem mapa, `parcial` segue igual
-      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...atributosParaGravar(mapa, parcial) } } });
+      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...atributosParaGravar(mapa(), parcial) } } });
     },
     async adicionarEtiquetas(id, etiquetas) {
       const atual = await lerCrua(id);
@@ -106,16 +107,16 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
     },
     async valoresDoAtributo(chave) {
       const g = listas.get(chave);
-      if (g && Date.now() - g.em < VALIDADE_LISTAS_MS) return g.valores;
-      // (a lista guardada JÁ está em papéis)
+      // a lista guardada é a do Chatwoot (nomes da conta); a tradução para papéis é feita a cada pergunta, com o mapa de AGORA
+      const traduz = (v: string[]): string[] => (chave === 'etapa' ? papeisDaLista(mapa(), v) : chave === 'etapa_tratamento' ? papeisDoTratamentoDaLista(mapa(), v) : v);
+      if (g && Date.now() - g.em < VALIDADE_LISTAS_MS) return traduz(g.valores);
       const defs = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'conversation_attribute' } })) as unknown;
       const lista = Array.isArray(defs) ? defs : [];
       const def = lista.find((d: any) => d?.attribute_key === chave) as { attribute_values?: unknown } | undefined;
       const doChatwoot = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((v) => String(v).trim()).filter(Boolean) : [];
       // a pergunta é «esta conta tem a etapa X?»: `etapa` volta em PAPÉIS (o que a conta não tem não aparece); `etapa_tratamento` idem
-      const valores = chave === 'etapa' ? papeisDaLista(mapa, doChatwoot) : chave === 'etapa_tratamento' ? papeisDoTratamentoDaLista(mapa, doChatwoot) : doChatwoot;
-      listas.set(chave, { em: Date.now(), valores });
-      return valores;
+      listas.set(chave, { em: Date.now(), valores: doChatwoot });
+      return traduz(doChatwoot);
     },
     async destinoDaPassagem(id) {
       const raw = (await chamar(ctx, 'GET', `conversations/${id}`)) as { inbox_id?: unknown; meta?: { assignee?: { id?: unknown; name?: unknown } | null } } | null;

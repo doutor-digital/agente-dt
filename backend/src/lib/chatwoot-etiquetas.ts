@@ -76,7 +76,10 @@ const opcoesGuardadas = new Map<number, { ate: number; v: string[] }>();
 
 export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
   return {
-    mapaDeEtapas: etapasDoContexto(ctx),
+    // getter: o mapa de AGORA a cada clique (a ponte pode ficar guardada por mais tempo que a gravação do mapa)
+    get mapaDeEtapas() {
+      return etapasDoContexto(ctx);
+    },
     conversa: (id) => chamar(ctx, 'GET', `conversations/${id}`),
     async gravarAtributos(id, atributos) {
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: atributos } });

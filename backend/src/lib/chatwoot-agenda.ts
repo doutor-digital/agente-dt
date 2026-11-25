@@ -77,7 +77,7 @@ export function desejadoDe(s: SpineSchedule): Desejado | null {
 }
 
 /** Etapas em que a conversa ainda não é «paciente marcado»: com consulta de pé na agenda, a etapa passa a Agendado/Confirmado (como a sincronização franquia → Kommo move para AGENDADO). */
-const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate', 'Em espera', 'Faltou']);
+const ETAPAS_QUE_VIRAM_AGENDADO: ReadonlySet<string> = new Set(['', 'Novo lead', 'Sofia qualifica', 'Esperando humano', 'Resgate', 'Em espera', 'Conferir na franquia', 'Faltou']);
 /** Etapas de quem desistiu: consulta nova de pé NÃO as mexe (decisão humana); só vai para o log. */
 const ETAPAS_SEGURADAS: ReadonlySet<string> = new Set(['Perdido', 'Frio']);
 /** Só estas duas (igual a `agendamentoQueVale`): Remarcado é horário que NÃO vale mais, a data nova pode estar fora da janela lida. */
@@ -109,6 +109,8 @@ export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoj
  */
 export function etapaDaFalta(atual: Record<string, unknown>, d: Desejado, mapa?: MapaDeEtapas | null): string | undefined {
   if (d.situacao_consulta !== 'Não compareceu' || nomeParaGravar(mapa, 'Faltou') === null) return undefined;
+  // a falta de uma Sessão ou de um Retorno após tratamento é de paciente em tratamento, não de lead: a mesma regra de categoria que promove a Agendado (`etapaDaConsulta`)
+  if (!d.categoria_consulta || !CATEGORIAS_COMERCIAIS.has(d.categoria_consulta)) return undefined;
   if (String(atual.funil ?? '').trim() === 'Tratamento' || String(atual.etapa_tratamento ?? '').trim() !== '') return undefined;
   const etapa = String(atual.etapa ?? '').trim();
   return etapa === 'Agendado' || etapa === 'Confirmado' ? 'Faltou' : undefined;
