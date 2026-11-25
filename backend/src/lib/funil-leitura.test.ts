@@ -207,3 +207,28 @@ test('memória: envelhecerSe tira o «fresco» das entradas pedidas (serve na ho
   assert.deepEqual(await m.obter(1, 'unidade-b|x', buscar), { valor: 2, de: 'fresco' }, 'a B não foi afetada');
   assert.equal((await m.obter(1, 'unidade-a|x', buscar)).valor, 3, 'a A já vem renovada');
 });
+
+test('histórico da KOMMO: página inteira de cartões importados (data recente) NÃO encerra a leitura — a conversa viva e quieta que vem depois é lida e fica', async () => {
+  const importadoEm = AGORA - 3600;
+  // o cartão importado leva a data REAL do cartão (ontem): fica ACIMA de conversas vivas mais quietas na lista por última atividade
+  const importada = (id: number, etapa = 'Agendado') => ({ id, status: 'resolved', labels: ['historico'], last_activity_at: AGORA - 86_400, additional_attributes: { kommo_lead_id: id, kommo_importado_em: importadoEm }, custom_attributes: { etapa } });
+  // viva e quieta: o paciente escreveu há 5 dias e a equipe ainda não respondeu (sem a etiqueta, não é arquivo)
+  const quieta = (id: number) => viva(id, { last_activity_at: AGORA - 5 * 86_400 });
+  const caixa = { 7: [cheia((i) => importada(i), 1), cheia((i) => importada(i), 100), [...cheia((i) => quieta(i), 500).slice(0, 3), ...cheia((i) => importada(i), 600).slice(0, 4)]] };
+  for (const c of caixa[7].flat()) if (c.status === 'resolved') assert.equal(ehArquivo(c), true, 'as importadas e intactas SÃO arquivo (a premissa do teste)');
+  const { buscar, pedidos } = chatwootDeMentira(caixa);
+  const leitura = await lerPaginasCruas(buscar, [7], 10);
+  assert.equal(leitura.paginas.length, 3, 'leu as 3 páginas: a 1ª e a 2ª só de cartões importados NÃO pararam a leitura');
+  assert.equal(leitura.cortou, false);
+  const ficam = (semArquivo(leitura.paginas[2], 'fora') as any).data.payload.map((c: any) => c.id);
+  assert.deepEqual(ficam, [500, 501, 502], 'a conversa viva quieta fica; as importadas da mesma página saem do «Hoje»/gestão');
+  const noQuadro = (semArquivo(leitura.paginas[2], 'com-etapa') as any).data.payload;
+  assert.equal(noQuadro.length, 7, 'no quadro as importadas com etapa continuam aparecendo, ao lado da viva');
+  assert.equal(pedidos.length, 3);
+  // o oráculo da regra ANTIGA (parar na 1ª página só de arquivo) teria lido UMA página e escondido a conversa viva
+  const antiga = await leituraDeAntes(buscar, [7], 10, 1, 'fora');
+  assert.equal(antiga.paginas.length, 1, 'a regra de antes parava na 1ª página: a viva ficaria de fora');
+  // o histórico de Parauapebas (sem kommo_lead_id) segue parando na 1ª página só de arquivo
+  const { buscar: b2 } = chatwootDeMentira({ 3: [cheia((i) => arquivo(i), 1), cheia((i) => viva(i), 100)] });
+  assert.equal((await lerPaginasCruas(b2, [3], 10)).paginas.length, 1);
+});

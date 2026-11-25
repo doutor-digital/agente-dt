@@ -14,7 +14,7 @@
  * faria um ciclo com a listagem velha enxergar «etapa nova» e mandar a mensagem). As marcas do CAPI só saem depois de uma guarda e com o campo
  * conferido vazio de novo.
  */
-import { conversaDoChatwoot, ehArquivo, type AjustesDaRegua, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
+import { conversaDoChatwoot, ehArquivo, historicoSilencia, type AjustesDaRegua, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
 import type { EventoCapi } from './chatwoot-capi.js';
 import { BuscaDeContatosIncompleta } from './chatwoot-campos-retroativos-kommo.js';
 import {
@@ -301,7 +301,7 @@ export async function rodarCampos(o: OpcoesDosCampos, p: PortasDosCampos, log: (
         log(`aviso  conversa ${plano.conversa}: é arquivo (histórico parado) e entra nos fluxos normais depois de gravada`);
       }
       const etapaDepois = plano.alteracoes.find((x) => x.campo === 'etapa')?.depois ?? ent.conv.attrs.etapa;
-      if (ent.status === 'resolved' && !ent.conv.etiquetas.includes('historico') && !ent.conv.etiquetas.includes('falta-etapa') && vazio(etapaDepois)) {
+      if (ent.status === 'resolved' && !historicoSilencia(raw) && !ent.conv.etiquetas.includes('falta-etapa') && vazio(etapaDepois)) {
         r.ganhamFaltaEtapa++;
         log(`aviso  conversa ${plano.conversa}: resolvida e sem etapa depois de gravar — o resolver do webhook põe a etiqueta falta-etapa (e mexe na última atividade)`);
       }

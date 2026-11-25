@@ -13,7 +13,7 @@
  *
  * O que NÃO muda: as mesmas páginas, na mesma ordem, com a mesma regra de parada (a de hoje), uma por vez.
  */
-import { arquivoComEtapa, ehArquivo } from './chatwoot-regua.js';
+import { arquivoComEtapa, ehArquivo, importadaDaKommo } from './chatwoot-regua.js';
 
 /**
  * Conversas de ARQUIVO (histórico unificado no canal oficial, ninguém mexeu depois — `ehArquivo`): 'fora' = some da tela
@@ -41,6 +41,10 @@ export interface LeituraCrua {
  * As páginas da listagem de conversas, caixa por caixa, `lote` páginas por vez. A lista vem pela última atividade (mais nova primeiro) e o
  * arquivo é sempre mais velho que as conversas vivas: página CHEIA SÓ DE ARQUIVO = dali para trás é tudo arquivo, a caixa para de ser lida
  * (sem «cortou» falso). O fim da caixa se mede pela página CRUA (25 por página).
+ *
+ * EXCEÇÃO — o histórico da Kommo: a conversa importada leva a data REAL do cartão (recente, às vezes de ontem) e não obedece a «o arquivo é sempre mais
+ * velho que as vivas»: uma conversa viva e quieta (consulta de pé, paciente que voltou há uma semana, conversa normal) pode ficar ABAIXO de uma página
+ * inteira de cartões importados. Página com conversa importada da Kommo nunca encerra a leitura da caixa: a leitura segue até o fim da caixa ou o teto.
  */
 export async function lerPaginasCruas(buscar: Buscar, caixas: number[], maxPaginas: number, lote = 1): Promise<LeituraCrua> {
   const paginas: unknown[] = [];
@@ -55,7 +59,7 @@ export async function lerPaginasCruas(buscar: Buscar, caixas: number[], maxPagin
       for (const pg of lidas) {
         const crua: any[] = Array.isArray(pg?.data?.payload) ? pg.data.payload : [];
         if (crua.length < 25) acabou = true;
-        if (crua.length > 0 && crua.every((c) => ehArquivo(c))) acabou = true;
+        if (crua.length > 0 && crua.every((c) => ehArquivo(c) && !importadaDaKommo(c))) acabou = true;
         paginas.push(pg);
       }
       if (acabou) break;

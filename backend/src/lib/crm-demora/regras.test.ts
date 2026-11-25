@@ -225,6 +225,13 @@ test('nunca para grupo, contato interno, histórico, conversa resolvida ou adiad
   assert.deepEqual(decidir(35, { status: 'pending' }).devidos, ['espera', 'aviso-10', 'aviso-30'], 'pendente (robô) também espera a equipe');
 });
 
+test('histórico da Kommo: o rótulo historico só silencia enquanto a conversa é arquivo — o paciente que voltou é avisado; as outras seguem o rótulo', () => {
+  const lida = { ...LIDA, etiquetas: ['historico'] };
+  assert.deepEqual(decidir(35, { lida, historicoSilencia: true }).devidos, [], 'arquivo da Kommo (ninguém mexeu): calada');
+  assert.deepEqual(decidir(35, { lida, historicoSilencia: false }).devidos, ['espera', 'aviso-10', 'aviso-30'], 'o paciente voltou depois da importação: a demora vale como em qualquer conversa');
+  assert.deepEqual(decidir(35, { lida }).devidos, [], 'sem o campo vale o rótulo, como sempre valeu (Parauapebas, Instagram/Messenger)');
+});
+
 test('a mensagem ao paciente respeita sem-follow-up e a janela de 24 h; o aviso à equipe não', () => {
   assert.deepEqual(decidir(12, { lida: { ...LIDA, etiquetas: ['sem-follow-up'] } }).devidos, ['aviso-10'], 'o paciente pediu para não receber: a equipe ainda é avisada');
   assert.deepEqual(decidir(12, { ultimaDoPacienteMin: 24 * 60 }).devidos, ['aviso-10'], 'janela de 24 h fechada: sem texto livre');

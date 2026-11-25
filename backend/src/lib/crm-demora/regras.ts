@@ -146,6 +146,11 @@ export interface EntradaDaDecisao {
   /** open | pending | resolved | snoozed */
   status: string;
   lida: Pick<ConversaLida, 'etiquetas' | 'grupo' | 'interno' | 'attrs'>;
+  /**
+   * O rótulo `historico` silencia o aviso (`historicoSilencia` da régua: o histórico da Kommo só silencia enquanto ninguém mexeu depois da importação).
+   * Sem o campo, vale o rótulo em `lida.etiquetas`, como sempre valeu.
+   */
+  historicoSilencia?: boolean;
   /** a Sofia está ligada na unidade (`chatwoot-ia` = ligado) */
   iaLigada: boolean;
   /** a conversa é de caixa de WhatsApp oficial (a janela de 24 h vale) */
@@ -233,7 +238,7 @@ export function decidirDemora(e: EntradaDaDecisao): Decisao {
   if (minutos < MINUTOS_DO_PASSO.espera) return saida;
   const etiquetas = e.lida.etiquetas;
   // conversa que não é de paciente a atender: nada sai (nem aviso à equipe)
-  const naoE = e.lida.grupo ? 'grupo' : e.lida.interno ? 'contato interno' : tem(etiquetas, ETIQUETA_HISTORICO) ? 'histórico' : e.status !== 'open' && e.status !== 'pending' ? `conversa ${e.status || 'sem status'}` : null;
+  const naoE = e.lida.grupo ? 'grupo' : e.lida.interno ? 'contato interno' : (e.historicoSilencia ?? tem(etiquetas, ETIQUETA_HISTORICO)) ? 'histórico' : e.status !== 'open' && e.status !== 'pending' ? `conversa ${e.status || 'sem status'}` : null;
   const foraDoHorario = !dentroDaJanela(e.agora, e.fuso, e.janela);
   const sofiaAtendendo = tem(etiquetas, ETIQUETA_SOFIA_ATENDENDO);
   const sofiaPodeResponder = e.iaLigada && sofiaPodeAtender({ status: e.status, lida: { id: 0, nome: '', telefone: null, attrs: e.lida.attrs, etiquetas: [...etiquetas], grupo: e.lida.grupo, interno: e.lida.interno } });
