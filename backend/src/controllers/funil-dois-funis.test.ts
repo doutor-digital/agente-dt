@@ -82,7 +82,7 @@ function preparar(comTratamento: boolean) {
     conversa(1, { etapa: 'Agendado', funil: 'Comercial' }),
     conversa(2, { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', valor_fechado: '2000' }),
     conversa(3, { etapa_tratamento: 'Alta' }), // sem `funil`: quem tem etapa do tratamento é do Tratamento
-    conversa(4, { funil: 'Comercial', etapa_tratamento: 'Alta', etapa: 'Sofia qualifica' }), // `funil` explícito manda: voltou para o Comercial
+    conversa(4, { funil: 'Comercial', etapa_tratamento: 'Alta', etapa: 'Sofia qualifica' }), // mesma regra da régua: etapa_tratamento preenchida = Tratamento
     conversa(5, { funil: 'Tratamento', etapa_tratamento: 'Etapa apagada' }), // etapa que a lista não tem = 1ª do tratamento
     conversa(6, {}), // sem nada: Comercial, 1ª coluna
   ];
@@ -115,18 +115,18 @@ test('conta com etapa_tratamento: o Comercial NÃO mostra quem é do Tratamento,
   const c = await quadro();
   assert.equal(c.funil, 'comercial');
   assert.deepEqual(c.etapas, ETAPAS);
-  assert.deepEqual(c.funis, [{ id: 'comercial', nome: 'Comercial', total: 3 }, { id: 'tratamento', nome: 'Tratamento', total: 3 }]);
-  assert.equal(c.total, 3);
+  assert.deepEqual(c.funis, [{ id: 'comercial', nome: 'Comercial', total: 2 }, { id: 'tratamento', nome: 'Tratamento', total: 4 }]);
+  assert.equal(c.total, 2);
   assert.deepEqual(ids(c.colunas[0]), [6], '«Novo lead»: só a conversa sem etapa');
   assert.deepEqual(ids(c.colunas.find((x: any) => x.etapa === 'Agendado')), [1]);
-  assert.deepEqual(ids(c.colunas.find((x: any) => x.etapa === 'Sofia qualifica')), [4], 'funil explícito Comercial vence a etapa do tratamento');
+  assert.deepEqual(ids(c.colunas.find((x: any) => x.etapa === 'Sofia qualifica')), [], 'a conversa 4 tem etapa_tratamento: é do Tratamento (como a régua a trata)');
   const t = await quadro({ funil: 'tratamento' });
   assert.equal(t.funil, 'tratamento');
   assert.deepEqual(t.etapas, TRAT);
-  assert.equal(t.total, 3);
+  assert.equal(t.total, 4);
   assert.deepEqual(ids(t.colunas.find((x: any) => x.etapa === 'Entrada')), [5], 'etapa que a lista não tem = a 1ª do tratamento');
   assert.deepEqual(ids(t.colunas.find((x: any) => x.etapa === 'Em tratamento')), [2]);
-  assert.deepEqual(ids(t.colunas.find((x: any) => x.etapa === 'Alta')), [3]);
+  assert.deepEqual(ids(t.colunas.find((x: any) => x.etapa === 'Alta')), [3, 4]);
   assert.equal(t.colunas.find((x: any) => x.etapa === 'Em tratamento').soma, 2000, 'a soma em R$ também vale no Tratamento');
   assert.ok(t.colunas.every((col: any) => col.cartoes.every((k: any) => k.funil === 'tratamento' && k.etapa === col.etapa)));
   // valor estranho no pedido = Comercial
@@ -143,12 +143,12 @@ test('mover NO TRATAMENTO grava etapa_tratamento (a etapa comercial fica), põe 
   assert.match(notas[0]!, /^📋 Etapa do tratamento: Alta → Em tratamento \(por Suzanne\) — pelo funil$/);
   // conversa que já tem funil: não mexe nele nem nos outros atributos
   const r2 = resp();
-  await funilMoverHandler(pedido({}, { conversaId: 2, etapa: 'Alta', funil: 'tratamento' }), asRes(r2));
+  await funilMoverHandler(pedido({}, { conversaId: 2, etapa: 'Alta', funil: 'tratamento', confirmar: true }), asRes(r2));
   assert.deepEqual(conversas[1].custom_attributes, { funil: 'Tratamento', etapa_tratamento: 'Alta', valor_fechado: '2000' });
   // mesma etapa: nada
   const antes = escritas.length;
   const r3 = resp();
-  await funilMoverHandler(pedido({}, { conversaId: 2, etapa: 'Alta', funil: 'tratamento' }), asRes(r3));
+  await funilMoverHandler(pedido({}, { conversaId: 2, etapa: 'Alta', funil: 'tratamento', confirmar: true }), asRes(r3));
   assert.deepEqual(r3.corpo, { ok: true, igual: true });
   assert.equal(escritas.length, antes);
   // etapa que não é do tratamento: recusada, nada gravado
@@ -196,4 +196,40 @@ test('a página tem o seletor Comercial | Tratamento (escondido por padrão), pe
   assert.match(html, /funil:dados&&dados\.funil==='tratamento'\?'tratamento':undefined/);
   const js = /<script>([\s\S]*?)<\/script>/.exec(html)![1]!;
   assert.doesNotThrow(() => new Function(js));
+});
+
+test('mover para Alta ou Tratamento cancelado SEM confirmar é recusado no servidor (409) e nada é gravado; com confirmar grava; as outras etapas não pedem', async () => {
+  preparar(true);
+  for (const etapa of ['Alta', 'Tratamento cancelado']) {
+    const r = resp();
+    await funilMoverHandler(pedido({}, { conversaId: 5, etapa, funil: 'tratamento' }), asRes(r));
+    assert.equal(r.codigo, 409, etapa);
+    assert.equal(r.corpo.precisaConfirmar, true);
+  }
+  assert.equal(escritas.length, 0, 'nada gravado sem confirmação');
+  const ok = resp();
+  await funilMoverHandler(pedido({}, { conversaId: 5, etapa: 'Tratamento cancelado', funil: 'tratamento', confirmar: true }), asRes(ok));
+  assert.equal(ok.codigo, 200);
+  assert.equal(conversas[4].custom_attributes.etapa_tratamento, 'Tratamento cancelado');
+  const livre = resp();
+  await funilMoverHandler(pedido({}, { conversaId: 5, etapa: 'Em tratamento', funil: 'tratamento' }), asRes(livre));
+  assert.equal(livre.codigo, 200);
+});
+
+test('a ficha do Tratamento conta os dias desde a nota do TRATAMENTO (não desde a criação da conversa)', async () => {
+  preparar(true);
+  const t = resp();
+  await funilConversaHandler(pedido({}, undefined, { id: '2' }), asRes(t));
+  assert.equal(t.codigo, 200);
+  assert.equal(t.corpo.desdeEtapa, conversas[1].created_at, 'sem nota: vale a criação');
+});
+
+test('a página pede confirmação antes de mover para Alta/Tratamento cancelado (arrastar, → e ficha) e guarda «recolhida» por funil', () => {
+  const r = resp();
+  paginaFunilHandler({} as Request, asRes(r));
+  const html = String(r.corpo);
+  assert.match(html, /window\.confirm\('Mover para «'\+etapa\+'»/);
+  assert.match(html, /confirmar:cf\.confirmar/);
+  assert.match(html, /function chaveCol\(e\)\{ return dados&&dados\.funil==='tratamento'\?'t:'\+e:e; \}/);
+  assert.match(html, /\$\('busca'\)\.value=''/);
 });

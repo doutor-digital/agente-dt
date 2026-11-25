@@ -82,13 +82,12 @@ export function etapasDoTratamento(definicoes: unknown): string[] {
 }
 
 /**
- * De qual funil é a conversa? `funil` explícito (Comercial/Tratamento) manda; sem ele, quem tem `etapa_tratamento` preenchida é do Tratamento. O resto é Comercial.
+ * De qual funil é a conversa? A MESMA regra da régua (`chatwoot-regua.ts`) e da Sofia (`chatwoot-sofia.ts`): é do Tratamento quem tem `funil` = Tratamento OU `etapa_tratamento` preenchida; o resto é Comercial.
  * (A conversa de Tratamento não tem etapa comercial: antes de existir o quadro do Tratamento ela caía na 1ª coluna do Comercial, «Novo lead».)
  */
 export function funilDaConversa(attrs: Record<string, unknown>): FunilDoQuadro {
   const f = typeof attrs[ATRIBUTO_FUNIL] === 'string' ? attrs[ATRIBUTO_FUNIL].trim().toLowerCase() : '';
   if (f === 'tratamento') return 'tratamento';
-  if (f === 'comercial') return 'comercial';
   return typeof attrs[ATRIBUTO_ETAPA_TRATAMENTO] === 'string' && attrs[ATRIBUTO_ETAPA_TRATAMENTO].trim() ? 'tratamento' : 'comercial';
 }
 
@@ -265,10 +264,11 @@ export function historicoDasMensagens(payload: unknown): ItemDoHistorico[] {
 }
 
 /** Desde quando a conversa está na etapa atual: a última nota "📋 Etapa: … → <etapa>" do funil; sem ela, a criação. */
-export function desdeAEtapa(historico: ItemDoHistorico[], etapa: string, criado: number): number {
+export function desdeAEtapa(historico: ItemDoHistorico[], etapa: string, criado: number, doTratamento = false): number {
+  const prefixo = doTratamento ? '📋 Etapa do tratamento:' : '📋 Etapa:';
   for (let i = historico.length - 1; i >= 0; i--) {
     const h = historico[i]!;
-    if (h.tipo === 'nota' && h.texto.startsWith('📋 Etapa:') && h.texto.includes(`→ ${etapa}`)) return h.quando;
+    if (h.tipo === 'nota' && h.texto.startsWith(prefixo) && h.texto.includes(`→ ${etapa}`)) return h.quando;
   }
   return criado;
 }
@@ -322,6 +322,10 @@ export function telefoneParaCadastro(v: unknown): string | null {
 export function notaDaMudanca(de: string, para: string, quem: string | null): string {
   return `📋 Etapa: ${de} → ${para}${quem ? ` (por ${quem})` : ''} — pelo funil`;
 }
+
+/** Etapas do tratamento que a RÉGUA observa (mandam mensagem ao paciente): mover para elas pelo funil pede confirmação. */
+export const ETAPAS_DO_TRATAMENTO_QUE_A_REGUA_OBSERVA: readonly string[] = ['Alta', 'Tratamento cancelado'];
+export const exigeConfirmacao = (etapa: string): boolean => ETAPAS_DO_TRATAMENTO_QUE_A_REGUA_OBSERVA.includes(etapa);
 
 /** A mesma nota para a etapa DO TRATAMENTO (outro prefixo: `desdeAEtapa` só lê as notas da etapa comercial). */
 export function notaDaMudancaDeTratamento(de: string, para: string, quem: string | null): string {

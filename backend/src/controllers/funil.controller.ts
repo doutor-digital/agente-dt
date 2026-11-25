@@ -61,6 +61,7 @@ import {
   ATRIBUTO_FUNIL,
   ehFunilDoQuadro,
   etapasDoTratamento,
+  exigeConfirmacao,
   notaDaMudancaDeTratamento,
   chaveConfere,
   desdeAEtapa,
@@ -857,7 +858,7 @@ export async function funilConversaHandler(req: Request, res: Response): Promise
       // conversa do Tratamento: a etapa é a DO TRATAMENTO (a ficha move por ela)
       etapas: cartao.funil === 'tratamento' ? doTrat : lista,
       funil: cartao.funil,
-      desdeEtapa: desdeAEtapa(historico, cartao.etapa, cartao.criado),
+      desdeEtapa: desdeAEtapa(historico, cartao.etapa, cartao.criado, cartao.funil === 'tratamento'),
       atributos: conv?.custom_attributes ?? {},
       responsavelId: Number(conv?.meta?.assignee?.id) || null,
       caixaId: cartao.caixaId,
@@ -889,6 +890,8 @@ const moverSchema = z.object({
   etapa: z.string().trim().min(1).max(60),
   /** `tratamento` = muda a etapa DO TRATAMENTO (`etapa_tratamento`); sem isto (ou `comercial`) muda a etapa comercial, como sempre */
   funil: z.enum(['comercial', 'tratamento']).optional(),
+  /** mover no Tratamento para Alta ou Tratamento cancelado (a régua observa e manda mensagem ao paciente) só vale com `confirmar: true` */
+  confirmar: z.boolean().optional(),
   quem: z.string().trim().max(80).nullable().optional(),
 });
 
@@ -906,7 +909,7 @@ async function gravarAtributos(a: Acesso, conversaId: number, mudar: Record<stri
 }
 
 /** Muda a etapa DO TRATAMENTO (`etapa_tratamento`) — o mesmo atributo que a régua observa (Alta, Tratamento cancelado): é o mesmo efeito de mudá-lo na própria conversa. */
-async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, etapa: string, quem: string | null, defs: unknown[]): Promise<void> {
+async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, etapa: string, quem: string | null, defs: unknown[], confirmou: boolean): Promise<void> {
   const lista = etapasDoTratamento(defs);
   if (!lista.length) {
     res.status(400).json({ error: 'esta conta não tem o funil de Tratamento' });
@@ -914,6 +917,10 @@ async function moverNoTratamento(a: Acesso, res: Response, conversaId: number, e
   }
   if (!lista.includes(etapa)) {
     res.status(400).json({ error: `etapa do tratamento desconhecida: ${etapa}` });
+    return;
+  }
+  if (exigeConfirmacao(etapa) && !confirmou) {
+    res.status(409).json({ error: `mover para «${etapa}» pode mandar mensagem ao paciente (a régua observa essa etapa): confirme`, precisaConfirmar: true });
     return;
   }
   const conv = (await cw(a, 'GET', `conversations/${conversaId}`)) as any;
@@ -948,7 +955,7 @@ export async function funilMoverHandler(req: Request, res: Response): Promise<vo
   try {
     const defs = await definicoes(a);
     if (p.data.funil === 'tratamento') {
-      await moverNoTratamento(a, res, p.data.conversaId, p.data.etapa, quem, defs);
+      await moverNoTratamento(a, res, p.data.conversaId, p.data.etapa, quem, defs, p.data.confirmar === true);
       return;
     }
     const lista = etapasDoAtributo(defs);
@@ -1524,9 +1531,11 @@ body{background:#f4f6f9}
   // Comercial | Tratamento: só aparece quando a conta tem os dois funis (atributo etapa_tratamento); cada um com as suas etapas
   function desenharFunis(){
     var box=$('funis'); box.textContent=''; var fs=(dados&&dados.funis)||[]; box.hidden=fs.length<2; if(fs.length<2) return;
-    fs.forEach(function(f){ var b=el('button',f.id===dados.funil?'on':null,f.nome); b.type='button'; b.setAttribute('role','tab'); b.setAttribute('aria-selected',String(f.id===dados.funil)); b.appendChild(el('b',null,String(f.total))); b.onclick=function(){ if(f.id===funilAtual) return; funilAtual=f.id; filtro=''; formNaColuna=null; try{ localStorage.setItem('funil:funil',f.id); }catch(e){} carregar(); }; box.appendChild(b); });
+    fs.forEach(function(f){ var b=el('button',f.id===dados.funil?'on':null,f.nome); b.type='button'; b.setAttribute('role','tab'); b.setAttribute('aria-selected',String(f.id===dados.funil)); b.appendChild(el('b',null,String(f.total))); b.onclick=function(){ if(f.id===funilAtual) return; funilAtual=f.id; filtro=''; formNaColuna=null; $('busca').value=''; try{ localStorage.setItem('funil:funil',f.id); }catch(e){} carregar(); }; box.appendChild(b); });
   }
-  async function mover(id,etapa){ msg('Gravando…'); try{ await api('POST','mover',{conversaId:id,etapa:etapa,funil:dados&&dados.funil==='tratamento'?'tratamento':undefined}); msg('Movido para '+etapa+'.'); chegou=id; await carregar(); }catch(e){ msg(e.message); } }
+  // Alta e Tratamento cancelado: a régua observa essas etapas e pode mandar mensagem ao paciente — pergunta antes (qualquer caminho: arrastar, → ou a ficha)
+  function confirmaTratamento(etapa,funil){ if(funil!=='tratamento'||(etapa!=='Alta'&&etapa!=='Tratamento cancelado')) return {ok:true,confirmar:undefined}; var ok=window.confirm('Mover para «'+etapa+'» pode mandar uma mensagem ao paciente (a régua observa essa etapa). Mover mesmo?'); return {ok:ok,confirmar:ok?true:undefined}; }
+  async function mover(id,etapa){ var cf=confirmaTratamento(etapa,dados&&dados.funil); if(!cf.ok) return; msg('Gravando…'); try{ await api('POST','mover',{conversaId:id,etapa:etapa,confirmar:cf.confirmar,funil:dados&&dados.funil==='tratamento'?'tratamento':undefined}); msg('Movido para '+etapa+'.'); chegou=id; await carregar(); }catch(e){ msg(e.message); } }
   function formRapida(col,etapa){
     var f=el('form','formr'); var nome=el('input'); nome.placeholder='Nome'; nome.required=true; var tel=el('input'); tel.placeholder='Telefone com DDD'; tel.required=true; tel.inputMode='tel';
     var cx=el('select'); caixas.forEach(function(c){ var o=el('option',null,c.nome); o.value=c.id; cx.appendChild(o); }); if($('caixa').value) cx.value=$('caixa').value;
@@ -1545,6 +1554,8 @@ body{background:#f4f6f9}
   var NS='http://www.w3.org/2000/svg';
   function icone(caminho){ var v=document.createElementNS(NS,'svg'); v.setAttribute('viewBox','0 0 16 16'); v.setAttribute('width','13'); v.setAttribute('height','13'); v.setAttribute('aria-hidden','true'); var p=document.createElementNS(NS,'path'); p.setAttribute('d',caminho); p.setAttribute('fill','none'); p.setAttribute('stroke','currentColor'); p.setAttribute('stroke-width','1.6'); p.setAttribute('stroke-linecap','round'); v.appendChild(p); return v; }
   var RELOGIO='M8 2.5a5.5 5.5 0 1 0 0 11a5.5 5.5 0 1 0 0-11M8 5v3.2l2 1.3', MAIS='M8 3.5v9M3.5 8h9';
+  // «recolhida» é por funil (a coluna «Alta» do Tratamento não é a «Alta» de outra etapa do Comercial); o Comercial segue com a chave de sempre
+  function chaveCol(e){ return dados&&dados.funil==='tratamento'?'t:'+e:e; }
   function desenhar(){
     var ordem=0;
     var termo=$('busca').value.trim().toLowerCase(), box=$('quadro'); box.textContent='';
@@ -1552,9 +1563,9 @@ body{background:#f4f6f9}
     dados.colunas.forEach(function(col,i){
       var c=el('section','col'); c.style.setProperty('--cor',CORES[i%CORES.length]);
       var vis=col.cartoes.filter(function(k){ if(!passa(k)) return false; return !termo || k.nome.toLowerCase().indexOf(termo)>=0 || (k.telefone||'').replace(/[^0-9]/g,'').indexOf(termo.replace(/[^0-9]/g,'')||'x')>=0; }).sort(ordenar);
-      if(recolhidas[col.etapa]) c.classList.add('fechada');
+      if(recolhidas[chaveCol(col.etapa)]) c.classList.add('fechada');
       var cab=el('header','cab'), t1=el('div','t1');
-      var ne=el('button','nomeEtapa',col.etapa); ne.type='button'; ne.title=recolhidas[col.etapa]?'Abrir a coluna':'Recolher a coluna'; ne.onclick=function(){ recolhidas[col.etapa]=!recolhidas[col.etapa]; guardar(); desenhar(); }; t1.appendChild(ne); t1.appendChild(el('span','qtd',String(vis.length)));
+      var ne=el('button','nomeEtapa',col.etapa); ne.type='button'; ne.title=recolhidas[chaveCol(col.etapa)]?'Abrir a coluna':'Recolher a coluna'; ne.onclick=function(){ recolhidas[chaveCol(col.etapa)]=!recolhidas[chaveCol(col.etapa)]; guardar(); desenhar(); }; t1.appendChild(ne); t1.appendChild(el('span','qtd',String(vis.length)));
       if(dados.podeEscrever&&dados.funil!=='tratamento'){ var mais=el('button','mais'); mais.type='button'; mais.title='Adicionar lead em '+col.etapa; mais.setAttribute('aria-label','Adicionar lead em '+col.etapa); mais.appendChild(icone(MAIS)); mais.onclick=function(){ formNaColuna=formNaColuna===col.etapa?null:col.etapa; desenhar(); }; t1.appendChild(mais); }
       cab.appendChild(t1); if(col.soma) cab.appendChild(el('div','soma',brl(col.soma))); c.appendChild(cab);
       var lista=el('div','lista');
@@ -1583,7 +1594,7 @@ body{background:#f4f6f9}
         d.appendChild(pe);
         var ac=el('div','acoes'), prox=dados.etapas[dados.etapas.indexOf(k.etapa)+1];
         if(prox&&/perd/i.test(prox)) prox=null; // o → nunca leva para Perdido (perder é decisão, não clique sem querer)
-        if(prox&&dados.funil==='tratamento'&&/alta|cancel/i.test(prox)) prox=null; // nem para Alta ou Tratamento cancelado: a régua observa essa etapa (só arrastando, de propósito)
+        if(prox&&dados.funil==='tratamento'&&(prox==='Alta'||prox==='Tratamento cancelado')) prox=null; // nem para Alta ou Tratamento cancelado: o → é clique sem querer (arrastar ou a ficha pedem confirmação)
         if(prox&&dados.podeEscrever){ var bp=el('button',null,'→'); bp.type='button'; bp.title='Mover para '+prox; bp.setAttribute('aria-label','Mover para '+prox); bp.onclick=function(ev){ ev.stopPropagation(); mover(k.id,prox); }; ac.appendChild(bp); }
         if(dados.podeEscrever){ var bt=el('button',null,'⏰'); bt.type='button'; bt.title='Tarefa: ligar amanhã às 9h'; bt.setAttribute('aria-label','Criar tarefa para amanhã às 9h'); bt.onclick=async function(ev){ ev.stopPropagation(); var am=new Date(Date.now()+864e5); am.setHours(9,0,0,0); if(bt.disabled) return; bt.disabled=true; msg('Criando tarefa…'); try{ await api('POST','tarefa',{conversaId:k.id,texto:'Ligar para '+k.nome,venceEm:am.toISOString()}); msg('Tarefa criada para amanhã 9h.'); carregar(); }catch(e){ msg(e.message); bt.disabled=false; } }; ac.appendChild(bt); }
         var ab=el('a',null,'↗'); ab.href=linkCw(k.id); ab.target='_top'; ab.title='Abrir a conversa'; ab.setAttribute('aria-label','Abrir a conversa'); ab.draggable=false; ab.onclick=function(ev){ ev.stopPropagation(); }; ac.appendChild(ab);
@@ -1630,7 +1641,7 @@ body{background:#f4f6f9}
     var esq=el('div','esq'), t=el('div','t'), vt=el('button',null,'‹'); vt.type='button'; vt.title='Voltar ao funil'; vt.onclick=fecharFicha; t.appendChild(vt); t.appendChild(el('span',null,k.nome)); esq.appendChild(t);
     var tg=el('div','tags'); k.etiquetas.forEach(function(x){ tg.appendChild(el('span',null,x)); }); esq.appendChild(tg);
     var et=el('div','etapa'), cx=caixas.filter(function(c){ return c.id===f.caixaId; })[0]; et.appendChild(el('small',null,cx?cx.nome:'Funil'));
-    var nm=el('div','nm'), sel=seletor(f.etapas,k.etapa,null,function(v){ acao('POST','mover',{conversaId:k.id,etapa:v,funil:f.funil==='tratamento'?'tratamento':undefined}); }); nm.appendChild(sel);
+    var nm=el('div','nm'), sel=seletor(f.etapas,k.etapa,null,function(v){ var cf=confirmaTratamento(v,f.funil); if(!cf.ok){ recarregarFicha(); return; } acao('POST','mover',{conversaId:k.id,etapa:v,confirmar:cf.confirmar,funil:f.funil==='tratamento'?'tratamento':undefined}); }); nm.appendChild(sel);
     var dias=Math.max(0,Math.floor((Date.now()/1000-(f.desdeEtapa||k.criado))/86400)); nm.appendChild(el('em',null,'('+dias+(dias===1?' dia)':' dias)'))); et.appendChild(nm);
     var pg=el('div','prog'), idx=f.etapas.indexOf(k.etapa); f.etapas.forEach(function(_,i){ pg.appendChild(el('span',i<=idx?'f':null)); }); et.appendChild(pg); esq.appendChild(et);
     var abas=el('div','abas'); [['principal','Principal'],['paciente','Paciente'],['origem','Origem'],['estatisticas','Estatísticas']].forEach(function(a){ var b=el('button',aba===a[0]?'on':null,a[1]); b.type='button'; b.onclick=function(){ aba=a[0]; desenharFicha(); }; abas.appendChild(b); }); esq.appendChild(abas);
