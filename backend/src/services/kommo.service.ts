@@ -2667,6 +2667,25 @@ export class KommoClient {
   }
 
   /**
+   * Cartões nestas etapas que mexeram desde `desdeEpochSeg`, ordenados por ID (uma página de 250). Diferente de `listLeadsDasEtapasDesde`
+   * (ordem por `updated_at`), a ordem por id NÃO muda se alguém editar um cartão no meio da leitura: andar por `page` nunca pula ninguém.
+   * É o que a importação do histórico usa para os cartões fechados. LANÇA se o Kommo falhar.
+   */
+  async listLeadsDasEtapasPorId(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, desdeEpochSeg: number, page = 1): Promise<KommoLead[]> {
+    const params: Record<string, unknown> = { limit: 250, page, 'filter[updated_at][from]': desdeEpochSeg, 'order[id]': 'asc' };
+    etapas.forEach((e, i) => {
+      params[`filter[statuses][${i}][pipeline_id]`] = e.pipelineId;
+      params[`filter[statuses][${i}][status_id]`] = e.statusId;
+    });
+    try {
+      const { data } = await this.http.get<{ _embedded?: { leads?: KommoLead[] } } | ''>('/leads', { params });
+      return (data && data._embedded?.leads) || [];
+    } catch (err) {
+      wrapAxiosError(err, `listLeadsDasEtapasPorId(${page})`);
+    }
+  }
+
+  /**
    * Cartões nestas etapas que mexeram desde `desdeEpochSeg`, os MAIS ANTIGOS primeiro (uma página de 250): quem varre
    * a janela anda por ela pela data do último cartão lido, sem ficar preso nas primeiras páginas. Junta etapas de
    * funis diferentes numa chamada (ex.: o 143 do COMERCIAL e o do TRATAMENTO). LANÇA se o Kommo falhar.

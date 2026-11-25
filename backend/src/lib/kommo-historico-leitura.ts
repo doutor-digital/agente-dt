@@ -25,7 +25,8 @@ export interface PortaKommo {
   listLossReasons(): Promise<Array<{ id: number; name: string }>>;
   listUsers(): Promise<Array<{ id: number; name: string }>>;
   listLeadsAbertosPagina(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, page?: number): Promise<KommoLead[]>;
-  listLeadsDasEtapasDesde(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, desdeEpochSeg: number, page?: number): Promise<KommoLead[]>;
+  /** cartões destas etapas mexidos desde a data, ordenados por ID (estável: editar um cartão no meio da leitura não muda a posição, ao contrário de `updated_at`) */
+  listLeadsDasEtapasPorId(etapas: ReadonlyArray<{ pipelineId: number; statusId: number }>, desdeEpochSeg: number, page?: number): Promise<KommoLead[]>;
   listLeadsPorIds(ids: number[], opcoes?: { contatos?: boolean }): Promise<KommoLead[]>;
   contatosBasicos(ids: number[]): Promise<Map<number, { nome: string | null; telefone: string | null }>>;
   listTalks(leadId: number): Promise<KommoTalk[]>;
@@ -42,8 +43,10 @@ export interface Ambiente {
 
 /** Hoje − 6 meses (calendário), em segundos. */
 export function inicioDosFechados(agora: Date, meses = MESES_DOS_FECHADOS): number {
-  const d = new Date(agora.getTime());
-  d.setUTCMonth(d.getUTCMonth() - meses);
+  // o dia fica limitado ao último dia do mês de destino (31/08 − 6 meses = 28/02, e não 03/03)
+  const alvoMes = agora.getUTCMonth() - meses;
+  const ultimoDia = new Date(Date.UTC(agora.getUTCFullYear(), alvoMes + 1, 0)).getUTCDate();
+  const d = new Date(Date.UTC(agora.getUTCFullYear(), alvoMes, Math.min(agora.getUTCDate(), ultimoDia), agora.getUTCHours(), agora.getUTCMinutes(), agora.getUTCSeconds()));
   return Math.floor(d.getTime() / 1000);
 }
 
@@ -94,7 +97,7 @@ async function todasAsPaginas(ler: (page: number) => Promise<KommoLead[]>, pausa
   }
 }
 
-export async function lerSelecao(amb: Ambiente, opcoes: { limite?: number } = {}): Promise<Selecao> {
+export async function lerSelecao(amb: Ambiente): Promise<Selecao> {
   const { porta, pausa } = amb;
   const pipelines = await porta.listPipelines();
   const porId = new Map(pipelines.map((p) => [p.id, p]));
@@ -108,20 +111,20 @@ export async function lerSelecao(amb: Ambiente, opcoes: { limite?: number } = {}
   for (const l of await todasAsPaginas((p) => porta.listLeadsAbertosPagina(abertas, p), pausa, 'cartões abertos')) leads.set(l.id, l);
   const desde = inicioDosFechados(amb.agora());
   let fora = 0;
+  // fechados: o filtro de data vai para a Kommo (`updated_at` ≥ início da janela é sempre um superconjunto de `closed_at` ≥ início: quem fechou na
+  // janela foi mexido depois), a ordem é por ID (estável) e o que vale é QUANDO fechou (`closed_at`), conferido aqui
   if (fechadas.length) {
-    for (const l of await todasAsPaginas((p) => porta.listLeadsDasEtapasDesde(fechadas, desde, p), pausa, 'cartões fechados')) {
-      // `updated_at` mexe por qualquer coisa: o que vale é QUANDO fechou
+    for (const l of await todasAsPaginas((p) => porta.listLeadsDasEtapasPorId(fechadas, desde, p), pausa, 'cartões fechados')) {
       if ((Number(l.closed_at) || 0) >= desde) leads.set(l.id, l);
       else fora++;
     }
   }
 
   const ordenados = [...leads.values()].sort((a, b) => (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0) || b.id - a.id);
-  const escolhidos = opcoes.limite && opcoes.limite > 0 ? ordenados.slice(0, opcoes.limite) : ordenados;
 
   // contato principal de cada cartão (a lista não traz o vínculo): em lotes de 50
   const contatoDoLead = new Map<number, number>();
-  const ids = escolhidos.map((l) => l.id);
+  const ids = ordenados.map((l) => l.id);
   for (let i = 0; i < ids.length; i += 50) {
     await pausa(250);
     for (const l of await porta.listLeadsPorIds(ids.slice(i, i + 50), { contatos: true })) {
@@ -135,7 +138,7 @@ export async function lerSelecao(amb: Ambiente, opcoes: { limite?: number } = {}
 
   const cartoes: CartaoDaKommo[] = [];
   const contatos = new Map<number, ContatoDaKommo>();
-  for (const l of escolhidos) {
+  for (const l of ordenados) {
     const c = cartaoDoLead(l, porId, motivos, usuarios);
     if (!c) continue;
     cartoes.push(c);
@@ -146,23 +149,52 @@ export async function lerSelecao(amb: Ambiente, opcoes: { limite?: number } = {}
   return { cartoes, contatos, fechadosForaDaJanela: fora };
 }
 
-/** A conversa de um cartão: as conversas mais recentes primeiro (até MAX_TALKS_POR_CARTAO), mensagens de cada uma. `null` = a Kommo não entregou. */
-export async function lerConversa(amb: Ambiente, leadId: number): Promise<MensagemDaKommo[] | null> {
-  const { porta, pausa } = amb;
-  try {
-    const talks = [...(await porta.listTalks(leadId))]
-      .sort((a, b) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0))
-      .slice(0, MAX_TALKS_POR_CARTAO);
-    const todas: MensagemDaKommo[] = [];
-    for (const t of talks) {
-      await pausa(250);
-      todas.push(...(await porta.listTalkMessages(Number(t.talk_id), 100)));
+/** O erro da Kommo que quer dizer «esta conta/cartão/conversa não tem o que entregar» (sem escopo de chats, ou sem conversa). */
+const semConversaNaKommo = (e: unknown): boolean => [403, 404].includes(Number((e as { status?: number })?.status));
+
+/** Repete 3 vezes (espera crescente, mais longa para o 429) e, se persistir, SOBE o erro. */
+async function comTentativas<T>(amb: Ambiente, fazer: () => Promise<T>): Promise<T> {
+  for (let tentativa = 1; ; tentativa++) {
+    try {
+      return await fazer();
+    } catch (e) {
+      if (semConversaNaKommo(e) || tentativa >= 3) throw e;
+      await amb.pausa((Number((e as { status?: number })?.status) === 429 ? 10_000 : 2_000) * tentativa);
     }
-    return todas;
-  } catch {
-    return null;
   }
 }
+
+/**
+ * A conversa de um cartão: as conversas mais recentes primeiro (até MAX_TALKS_POR_CARTAO), mensagens de cada uma. 403/404 numa conversa a pula e
+ * mantém as que já foram lidas; `null` = nenhuma conversa a entregar. Qualquer OUTRO erro (429, 5xx, rede) é repetido e, se persistir, SOBE
+ * (`exportar` conta como «falha de leitura»): cartão sem mensagem porque a Kommo engasgou não pode virar «nenhuma mensagem».
+ */
+export async function lerConversa(amb: Ambiente, leadId: number): Promise<MensagemDaKommo[] | null> {
+  const { porta, pausa } = amb;
+  let talks: KommoTalk[];
+  try {
+    talks = await comTentativas(amb, () => porta.listTalks(leadId));
+  } catch (e) {
+    if (semConversaNaKommo(e)) return null;
+    throw e;
+  }
+  const maisRecentes = [...talks].sort((a, b) => (b.updated_at ?? b.created_at ?? 0) - (a.updated_at ?? a.created_at ?? 0)).slice(0, MAX_TALKS_POR_CARTAO);
+  const todas: MensagemDaKommo[] = [];
+  let leu = false;
+  for (const t of maisRecentes) {
+    await pausa(250);
+    try {
+      todas.push(...(await comTentativas(amb, () => porta.listTalkMessages(Number(t.talk_id), 100))));
+      leu = true;
+    } catch (e) {
+      if (!semConversaNaKommo(e)) throw e;
+    }
+  }
+  return maisRecentes.length && !leu ? null : todas;
+}
+
+/** Falhas de leitura SEGUIDAS que fazem a exportação parar (a Kommo está fora do ar: não adianta seguir). */
+export const FALHAS_SEGUIDAS_MAX = 10;
 
 // ── o relatório (só agregados) ───────────────────────────────────────────────────────────────────────
 
@@ -179,6 +211,8 @@ export interface Relatorio {
   /** telefones que aparecem em mais de um cartão (viram UM contato com várias conversas) */
   telefonesRepetidos: number;
   semConversa: number;
+  /** a Kommo engasgou (429/5xx) e a conversa NÃO foi lida: o cartão sai com a nota «não entregou» */
+  falhasDeLeitura: number;
   mensagens: number;
   cartoesComMensagem: number;
   /** o seco só lê esta amostra de conversas */
@@ -192,7 +226,7 @@ export interface Relatorio {
 
 const vazioRelatorio = (): Relatorio => ({
   cartoes: 0, abertos: 0, fechados: 0, fechadosForaDaJanela: 0, porEtapa: {}, semTelefone: 0, telefoneInvalido: 0, semContato: 0, telefonesDistintos: 0, telefonesRepetidos: 0,
-  semConversa: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0,
+  semConversa: 0, falhasDeLeitura: 0, mensagens: 0, cartoesComMensagem: 0, amostra: 0, mensagensEstimadas: 0, segundosPorCartao: 0, duracaoEstimadaMin: 0, avisos: {}, linhasGravadas: 0,
 });
 
 /**
@@ -201,7 +235,7 @@ const vazioRelatorio = (): Relatorio => ({
  */
 export async function exportar(amb: Ambiente, opcoes: { gravar: boolean; limite?: number; entregar: (l: LinhaDoCartao) => void }): Promise<Relatorio> {
   const r = vazioRelatorio();
-  const sel = await lerSelecao(amb, { limite: opcoes.limite });
+  const sel = await lerSelecao(amb);
   r.cartoes = sel.cartoes.length;
   r.fechadosForaDaJanela = sel.fechadosForaDaJanela;
   const fones = new Map<string, number>();
@@ -222,19 +256,29 @@ export async function exportar(amb: Ambiente, opcoes: { gravar: boolean; limite?
   r.telefonesDistintos = fones.size;
   r.telefonesRepetidos = [...fones.values()].filter((n) => n > 1).length;
 
-  const comTelefone = sel.cartoes.filter((c) => foneParaWhatsApp(sel.contatos.get(c.id)?.telefone));
+  // `--limite`: os N cartões mais recentes QUE TÊM telefone (cortar antes poderia gravar menos, ou nenhum, e parecer que funcionou)
+  const comTelefone = sel.cartoes.filter((c) => foneParaWhatsApp(sel.contatos.get(c.id)?.telefone)).slice(0, opcoes.limite && opcoes.limite > 0 ? opcoes.limite : undefined);
   const passo = opcoes.gravar ? 1 : Math.max(1, Math.floor(comTelefone.length / AMOSTRA_DO_SECO));
   const lidos = new Set<number>();
   let segundos = 0;
+  let seguidas = 0;
   for (let i = 0; i < comTelefone.length; i += passo) {
     if (!opcoes.gravar && lidos.size >= AMOSTRA_DO_SECO) break;
     const c = comTelefone[i]!;
     const t0 = Date.now();
-    const msgs = await lerConversa(amb, c.id);
+    let msgs: MensagemDaKommo[] | null;
+    try {
+      msgs = await lerConversa(amb, c.id);
+      seguidas = 0;
+      if (msgs === null) r.semConversa++;
+    } catch {
+      msgs = null;
+      r.falhasDeLeitura++;
+      if (++seguidas >= FALHAS_SEGUIDAS_MAX) throw new Error(`${FALHAS_SEGUIDAS_MAX} conversas seguidas sem leitura: a Kommo está engasgada — paro (nada foi importado)`);
+    }
     segundos += (Date.now() - t0) / 1000;
     lidos.add(c.id);
-    if (msgs === null) r.semConversa++;
-    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs ?? [], amb.agora());
+    const linha = linhaDoCartao(c, sel.contatos.get(c.id) ?? null, msgs, amb.agora());
     r.mensagens += linha.mensagens.length;
     if (linha.mensagens.length) r.cartoesComMensagem++;
     if (opcoes.gravar) {

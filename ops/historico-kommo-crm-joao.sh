@@ -51,7 +51,7 @@ done
 SSH=(ssh -i "$CHAVE" -o ConnectTimeout=15 -o ServerAliveInterval=20 "$VPS")
 
 acompanhar() { # $1 = nome do log na VPS
-  local log="/root/kit/logs/$1" desde=0 saiu=0 tmp
+  local log="/root/kit/logs/$1" desde=0 saiu=0 tmp mortos=0 vivo
   tmp="$(mktemp)"; trap 'rm -f "$tmp"' RETURN
   echo "acompanhando $log (Ctrl-C só para de olhar; a rodada continua na VPS)"
   while true; do
@@ -61,6 +61,10 @@ acompanhar() { # $1 = nome do log na VPS
       grep -qE '^LOG FIM do processo' "$tmp" && saiu=1
     fi
     [ "$saiu" = 1 ] && break
+    # o processo na VPS morreu sem escrever o FIM (reinício, OOM, kill)? 3 conferências seguidas sem ele: avisa e para de esperar
+    vivo="$("${SSH[@]}" "pgrep -f '[r]odar-na-vps.sh /root/kit/logs/$1' > /dev/null && echo s || echo n" 2>/dev/null || echo s)"
+    if [ "$vivo" = n ]; then mortos=$((mortos + 1)); else mortos=0; fi
+    if [ "$mortos" -ge 3 ]; then echo "O processo na VPS terminou SEM escrever o fim. Olhe o log (/root/kit/logs/$1) antes de rodar de novo; o registro de ids do que já foi gravado está lá."; break; fi
     sleep 10
   done
   echo "REGISTRO (ids, para desfazer) no log da VPS: /root/kit/logs/$1"

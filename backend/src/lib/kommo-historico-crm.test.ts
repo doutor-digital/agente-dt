@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   atributosDoCartao,
+  cortar,
   foneParaWhatsApp,
   linhaDoCartao,
   mensagensParaCrm,
@@ -37,6 +38,13 @@ test('telefone: 10/11 dígitos ganham o 55; formato com máscara; lixo vira null
   assert.equal(foneParaWhatsApp(null), null);
   assert.equal(foneParaWhatsApp('5547991234567890123'), null);
   assert.equal(foneParaWhatsApp('+351912345678'), '351912345678', 'número de fora do Brasil entra como veio');
+  assert.equal(foneParaWhatsApp('047 99123-4567'), '5547991234567', 'prefixo de tronco 0 («047…»)');
+  assert.equal(foneParaWhatsApp('(0xx47) 3333-4444'), '554733334444');
+  assert.equal(foneParaWhatsApp('13051234567'), null, '11 dígitos que não são DDD brasileiro + 9…: não é telefone que a gente saiba usar (sem país)');
+  assert.equal(foneParaWhatsApp('12850123456'), null, 'DDD 12 existe, mas o 3º dígito 8 não é celular de 11 dígitos: não ganha 55');
+  assert.equal(foneParaWhatsApp('1295012345678'), '1295012345678', 'com DDI de país (13 dígitos) entra como veio');
+  assert.equal(foneParaWhatsApp('10991234567'), null, 'DDD 10 não existe');
+  assert.equal(foneParaWhatsApp('4733334444'), '554733334444');
 });
 
 test('nome do campo: tira símbolo e acento (a Kommo põe «◷ Data da Consulta»)', () => {
@@ -208,10 +216,14 @@ test('nota-resumo: cartão, etapa na Kommo, datas, campos com valor, aviso e a c
   assert.ok(n.includes('as 50 últimas de 120 mensagens'));
 });
 
-test('nota: cabe no limite mesmo com texto enorme', () => {
-  const c = cartao({ campos: [campo('Queixa', 'x'.repeat(5000), 'textarea'), campo('Observações', 'y'.repeat(5000), 'textarea')] });
-  const n = notaDoCartao(c, atributosDoCartao(c), { importadoEm: AGORA, mensagensTotal: 0, mensagensNaConversa: 0 });
-  assert.ok(n.length <= 3500);
+test('nota: cabe no limite mesmo com texto enorme, e o RODAPÉ (conversa, etiquetas, o que conferir) nunca é o que se corta', () => {
+  const muitos = Array.from({ length: 30 }, (_, i) => campo(['Queixa', 'Observações', 'Observações de consulta', 'Negociação feita', 'Profissão', 'Plano de saúde'][i % 6]!, `${'x'.repeat(390)}${i}`, 'textarea'));
+  const c = cartao({ etiquetas: ['retomar', 'frio'], campos: [...muitos, campo('Queixa', 'y'.repeat(5000), 'textarea')] });
+  const n = notaDoCartao(c, atributosDoCartao(c), { importadoEm: AGORA, mensagensTotal: 0, mensagensNaConversa: 0, conversaNaoLida: true });
+  assert.ok(n.length <= 3500, `tamanho ${n.length}`);
+  assert.ok(n.includes('Etiquetas na Kommo: retomar, frio'));
+  assert.ok(n.includes('a Kommo não entregou a conversa'), 'a frase de estado da conversa continua na nota');
+  assert.ok(n.startsWith('📥 Histórico da Kommo'));
 });
 
 // ── mensagens ──
@@ -245,6 +257,24 @@ test('linha do cartão: contato, telefone, marcas, aberto/fechado e sem_telefone
   assert.equal(semFone.nome, 'Lead 777', 'sem nome no contato: o do cartão');
   const semContato = linhaDoCartao(cartao(), null, [], AGORA);
   assert.equal(semContato.sem_telefone, 'ausente');
+});
+
+test('corte por ponto de código: emoji não vira meio-emoji e surrogate solitário sai', () => {
+  const t = `${'a'.repeat(9)}📥${'b'.repeat(5)}`;
+  assert.equal(cortar(t, 10), `${'a'.repeat(9)}📥`);
+  assert.equal(cortar(t, 9), 'a'.repeat(9));
+  assert.equal(cortar('ok\uD83D', 10), 'ok\uFFFD');
+  const l = linhaDoCartao(cartao({ campos: [campo('Queixa', `${'q'.repeat(3300)}📥📥📥`, 'textarea')] }), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA);
+  assert.doesNotThrow(() => JSON.parse(JSON.stringify(l)));
+  assert.ok(l.nota.isWellFormed(), 'a nota não tem surrogate solitário');
+});
+
+test('conversa que a Kommo não entregou (null) NÃO vira «nenhuma mensagem»: a nota diz a verdade', () => {
+  const nao = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, null, AGORA);
+  assert.ok(nao.nota.includes('a Kommo não entregou a conversa'));
+  assert.ok(!nao.nota.includes('nenhuma mensagem'));
+  const vazia = linhaDoCartao(cartao(), { id: 1, nome: 'A', telefone: '47991234567' }, [], AGORA);
+  assert.ok(vazia.nota.includes('nenhuma mensagem na Kommo'));
 });
 
 test('a linha é JSON puro (vai para o arquivo) e não traz URL nem token', () => {

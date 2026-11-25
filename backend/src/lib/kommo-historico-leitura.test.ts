@@ -24,14 +24,14 @@ interface Chamadas { abertas: number; fechadas: number; talks: number; msgs: num
 function kommoDeMentira(leads: KommoLead[], opcoes: { telefones?: Record<number, string | null>; semConversa?: Set<number>; msgsPorLead?: number } = {}) {
   const c: Chamadas = { abertas: 0, fechadas: 0, talks: 0, msgs: 0 };
   const abertos = leads.filter((l) => l.status_id !== 142 && l.status_id !== 143);
-  const fechados = leads.filter((l) => l.status_id === 142 || l.status_id === 143);
   const paginar = (lista: KommoLead[], page: number) => lista.slice((page - 1) * POR_PAGINA, page * POR_PAGINA);
   const porta: PortaKommo = {
     listPipelines: async () => PIPES,
     listLossReasons: async () => [{ id: 900, name: 'Sem interesse' }],
     listUsers: async () => [{ id: 5, name: 'Camily' }],
     listLeadsAbertosPagina: async (_e, page = 1) => (c.abertas++, paginar(abertos, page)),
-    listLeadsDasEtapasDesde: async (_e, desde, page = 1) => (c.fechadas++, paginar(fechados.filter((l) => (l.updated_at ?? 0) >= desde), page)),
+    listLeadsDasEtapasPorId: async (etapas, desde, page = 1) =>
+      (c.fechadas++, paginar(leads.filter((l) => etapas.some((e) => e.pipelineId === l.pipeline_id && e.statusId === l.status_id) && (l.updated_at ?? 0) >= desde).sort((a, b) => a.id - b.id), page)),
     listLeadsPorIds: async (ids) => leads.filter((l) => ids.includes(l.id)).map((l) => ({ ...l, _embedded: { contacts: [{ id: 1000 + l.id, is_main: true }] } })),
     contatosBasicos: async (ids) => new Map(ids.map((i) => [i, { nome: `Paciente ${i - 1000}`, telefone: opcoes.telefones && (i - 1000) in opcoes.telefones ? opcoes.telefones[i - 1000]! : `4799${String(i).padStart(7, '0')}` }])),
     listTalks: async (id) => {
@@ -48,9 +48,11 @@ function kommoDeMentira(leads: KommoLead[], opcoes: { telefones?: Record<number,
   return { amb, c };
 }
 
-test('janela dos fechados: hoje menos 6 meses de calendário', () => {
+test('janela dos fechados: hoje menos 6 meses de calendário, com o dia limitado ao último do mês de destino', () => {
   assert.equal(inicioDosFechados(AGORA), SEG('2026-05-25T15:00:00Z'));
-  assert.equal(inicioDosFechados(new Date('2026-08-31T10:00:00Z')), SEG('2026-03-03T10:00:00Z') /* 31/02 vira 03/03 */);
+  assert.equal(inicioDosFechados(new Date('2026-08-31T10:00:00Z')), SEG('2026-02-28T10:00:00Z'), '31/08 − 6 meses = 28/02 (e não 03/03)');
+  assert.equal(inicioDosFechados(new Date('2026-03-31T10:00:00Z')), SEG('2025-09-30T10:00:00Z'));
+  assert.equal(inicioDosFechados(new Date('2026-02-10T10:00:00Z')), SEG('2025-08-10T10:00:00Z'), 'vira o ano');
 });
 
 test('escopo B: todos os abertos (os dois funis) + ganhos/perdidos fechados nos últimos 6 meses; fechado mais velho fica fora', () => {
@@ -80,10 +82,17 @@ test('cartão: funil e etapa por nome, responsável, motivo de perda nativo e ca
   assert.deepEqual(c.campos, [{ nome: '✓ Situação da consulta', tipo: 'select', valor: 'Agendado' }]);
 });
 
-test('--limite: só os N mais recentes (os fechados também entram na conta)', async () => {
+test('a seleção vem do mais recente para o mais velho', async () => {
   const { amb } = kommoDeMentira([lead(1, 1, 10, { updated_at: 10 }), lead(2, 1, 10, { updated_at: 30 }), lead(3, 1, 10, { updated_at: 20 })]);
-  const s = await lerSelecao(amb, { limite: 2 });
-  assert.deepEqual(s.cartoes.map((c) => c.id), [2, 3]);
+  assert.deepEqual((await lerSelecao(amb)).cartoes.map((c) => c.id), [2, 3, 1]);
+});
+
+test('--limite vale DEPOIS de tirar quem não tem telefone: os N mais recentes QUE TÊM telefone (não grava menos que o pedido)', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10, { updated_at: 10 }), lead(2, 1, 10, { updated_at: 40 }), lead(3, 1, 10, { updated_at: 30 }), lead(4, 1, 10, { updated_at: 20 })], { telefones: { 2: null, 3: '12' } });
+  const linhas: LinhaDoCartao[] = [];
+  const r = await exportar(amb, { gravar: true, limite: 2, entregar: (l) => linhas.push(l) });
+  assert.deepEqual(linhas.map((l) => l.lead_id), [4, 1], 'os mais recentes (2 e 3) estão sem telefone utilizável: entram o 4 e o 1');
+  assert.equal(r.cartoes, 4, 'o relatório conta a seleção inteira');
 });
 
 test('paginação completa (mais de 250 cartões) e o TETO de páginas lança em vez de cortar calado', async () => {
@@ -102,10 +111,53 @@ test('a leitura FALHA: o erro sobe (página vazia quer dizer «acabou», nunca �
   await assert.rejects(() => lerSelecao(quebrada), /kommo fora do ar/);
 });
 
-test('conversa: as mais recentes primeiro, até 5 conversas; Kommo que não entrega = null (nunca derruba)', async () => {
-  const { amb } = kommoDeMentira([lead(1, 1, 10)], { semConversa: new Set([2]) });
+test('conversa: as mais recentes primeiro, até 5 conversas; 403/404 (sem conversa) = null', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10)]);
   assert.equal((await lerConversa(amb, 1))!.length, 3);
-  assert.equal(await lerConversa(amb, 2), null);
+  for (const status of [403, 404]) {
+    const sem: Ambiente = { ...amb, porta: { ...amb.porta, listTalks: async () => { throw Object.assign(new Error('x'), { status }); } } };
+    assert.equal(await lerConversa(sem, 2), null, `http ${status}`);
+  }
+});
+
+test('conversa com 2 talks: a 2ª dá 404, mas as mensagens da 1ª, já lidas, ficam', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10)]);
+  const duas: Ambiente = {
+    ...amb,
+    porta: {
+      ...amb.porta,
+      listTalks: async () => [{ talk_id: 1, updated_at: 9 } as KommoTalk, { talk_id: 2, updated_at: 5 } as KommoTalk],
+      listTalkMessages: async (talkId) => {
+        if (talkId === 2) throw Object.assign(new Error('x'), { status: 404 });
+        return [{ id: 'm1', type: 'x', text: 'oi', created_at: 1, author: { type: 'external' } } as KommoTalkMessage];
+      },
+    },
+  };
+  assert.equal((await lerConversa(duas, 1))!.length, 1);
+});
+
+test('exportar: cartão cuja conversa a Kommo engasgou sai com a nota «não entregou» e é CONTADO; 10 falhas seguidas param a exportação', async () => {
+  const leads = Array.from({ length: 12 }, (_, i) => lead(i + 1, 1, 10));
+  const { amb } = kommoDeMentira(leads);
+  const engasga = (quantos: number): Ambiente => {
+    let n = 0;
+    return { ...amb, pausa: async () => undefined, porta: { ...amb.porta, listTalks: async (id) => { if (n++ < quantos * 3) throw Object.assign(new Error('503'), { status: 503 }); return amb.porta.listTalks(id); } } };
+  };
+  const linhas: LinhaDoCartao[] = [];
+  const r = await exportar(engasga(2), { gravar: true, entregar: (l) => linhas.push(l) });
+  assert.equal(r.falhasDeLeitura, 2);
+  assert.equal(linhas.filter((l) => l.nota.includes('a Kommo não entregou a conversa')).length, 2);
+  assert.equal(linhas.length, 12, 'os cartões sem conversa lida também saem (com a nota dizendo a verdade)');
+  await assert.rejects(() => exportar(engasga(99), { gravar: true, entregar: () => undefined }), /conversas seguidas sem leitura/);
+});
+
+test('conversa: erro que NÃO é «sem conversa» (429, 5xx, rede) é repetido e, se persistir, SOBE — nunca vira «nenhuma mensagem»', async () => {
+  const { amb } = kommoDeMentira([lead(1, 1, 10)]);
+  let falhas = 2;
+  const engasga: Ambiente = { ...amb, porta: { ...amb.porta, listTalks: async (id) => { if (falhas-- > 0) throw Object.assign(new Error('429'), { status: 429 }); return amb.porta.listTalks(id); } } };
+  assert.equal((await lerConversa(engasga, 1))!.length, 3, 'passou na 3ª tentativa');
+  const sempre: Ambiente = { ...amb, porta: { ...amb.porta, listTalks: async () => { throw Object.assign(new Error('503'), { status: 503 }); } } };
+  await assert.rejects(() => lerConversa(sempre, 1), /503/);
 });
 
 test('exportar GRAVAR: uma linha por cartão COM telefone, conversa lida, contagens do relatório', async () => {

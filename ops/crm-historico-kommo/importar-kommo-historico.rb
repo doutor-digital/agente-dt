@@ -155,7 +155,7 @@ end
 def achar_contato(inbox, linha, cache)
   variantes = K.variantes_do_fone(linha[:telefone])
   canonico = variantes.first
-  return cache[canonico].merge(situacao: :repetido_na_rodada) if cache.key?(canonico)
+  return cache[canonico].merge(repetido: true) if cache.key?(canonico) # a situação ORIGINAL do telefone segue valendo (conversa viva continua indo para o «HI.»)
 
   ci = ContactInbox.where(inbox_id: inbox.id, source_id: variantes).order(:id).first
   if ci
@@ -226,18 +226,24 @@ def importar!
           c[:cartoes_ja_importados] += 1
         else
           c[:cartoes_novos] += 1
-          case achado[:situacao]
-          when :novo then c[:contatos_novos] += 1
-          when :reaproveitado, :contato_sem_caixa then c[:contatos_reaproveitados] += 1
-          when :com_conversa_viva then c[:contatos_com_conversa_viva_no_crm] += 1
-          when :repetido_na_rodada then c[:cartoes_do_mesmo_telefone] += 1
+          if achado[:repetido]
+            c[:cartoes_do_mesmo_telefone] += 1
+          else
+            case achado[:situacao]
+            when :novo then c[:contatos_novos] += 1
+            when :reaproveitado, :contato_sem_caixa then c[:contatos_reaproveitados] += 1
+            when :com_conversa_viva then c[:contatos_com_conversa_viva_no_crm] += 1
+            end
           end
         end
         contagem_por_valor(c, 'etapa', linha[:atributos]['etapa'])
         contagem_por_valor(c, 'etapa_tratamento', linha[:atributos]['etapa_tratamento'])
         c[:perdidos] += 1 if linha[:atributos]['etapa'] == 'Perdido'
         c[:mensagens_no_arquivo] += linha[:mensagens].size
-        next unless GRAVAR
+        unless GRAVAR
+          c[:erros_seguidos] = 0
+          next
+        end
 
         ids = { contatos: [], contact_inboxes: [], conversas: [], taggings: [], mensagens: [] }
         gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas_da_conta, tags, ids, c, cache)
@@ -297,6 +303,8 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
   situacao = achado[:situacao]
 
   ActiveRecord::Base.transaction do
+    # cartão JÁ importado: o contato e a conversa já existem (o paciente pode ter voltado a escrever e a conversa dele já ser «viva»); só se completa a conversa
+    contato_id = Conversation.where(id: existente).pick(:contact_id) if existente
     unless contato_id
       contato_id = Contact.insert_all!([{ account_id: conta.id, name: linha[:nome], phone_number: "+#{canonico}",
                                           additional_attributes: { 'origem_historico' => 'kommo', 'kommo_contato_id' => linha[:contato_id] }.compact, custom_attributes: {},
@@ -304,7 +312,7 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
                                        returning: %w[id]).rows.first.first
       ids[:contatos] << contato_id
     end
-    if ci_id.nil?
+    if ci_id.nil? && !existente
       # contato novo, contato sem caixa, ou contato que já tem conversa viva (então o histórico fica no «HI.<número>», nunca no da conversa viva)
       fonte = situacao == :com_conversa_viva ? "HI.#{canonico}" : canonico
       ci_id = ContactInbox.where(inbox_id: inbox.id, source_id: fonte).pick(:id)
@@ -367,7 +375,7 @@ def gravar_cartao!(conta, inbox, linha, achado, existente, definicoes, etiquetas
   end
   d.each { |k, v| c[k] += v }
   # só DEPOIS do commit: os próximos cartões do MESMO telefone nesta rodada caem neste contato e neste contact_inbox
-  cache[canonico] = { contato_id: contato_id, ci_id: ci_id, situacao: situacao == :com_conversa_viva ? :com_conversa_viva : :reaproveitado }
+  cache[canonico] = { contato_id: contato_id, ci_id: ci_id, situacao: situacao == :com_conversa_viva ? :com_conversa_viva : :reaproveitado } unless existente
 end
 
 # ─── execução ───────────────────────────────────────────────────────────────────────────────────────────────────────

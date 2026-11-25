@@ -180,7 +180,9 @@ if FASE == 1
     # J: valor fora da lista e atributo sem definição são descartados; origem passa
     cartao(1008, 'telefone' => '5547991230007', 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Etapa Inventada', 'foo_bar' => 'x', 'origem' => 'Indicação', 'valor_fechado' => 4500, 'kommo_lead_id' => 1008 }),
     # E: sem telefone (recusado, contado)  F: lixo
-    cartao(1009, 'telefone' => nil)
+    cartao(1009, 'telefone' => nil),
+    # K: SEGUNDO cartão do paciente que já tem conversa viva: também vai pelo HI.<número> (nunca pelo contact_inbox da viva)
+    cartao(1010, 'telefone' => TELEFONES[:viva], 'aberto' => false, 'etapa_kommo' => 'PERDIDO', 'fechado_em' => T.call(90), 'atualizado_em' => T.call(90), 'atributos' => { 'funil' => 'Comercial', 'etapa' => 'Perdido', 'kommo_lead_id' => 1010 })
   ].map(&:to_json)
   linhas << '{isto não é json'
   File.write(ARQ, linhas.join("\n"))
@@ -191,8 +193,8 @@ if FASE == 1
   confere('SECO não escreveu nada no banco (nem a etiqueta conferir-etapa)', contagem.call == base, contagem.call.inspect)
   confere('SECO não disparou nada', silencio?, $conta.inspect)
   rs = $ultimo_resumo
-  confere('SECO conta: 9 cartões no arquivo (+1 linha que nem é JSON), 1 recusado por falta de telefone, 8 válidos', rs[:cartoes_no_arquivo] == 9 && rs[:linha_recusada_sem_telefone] == 1 && rs[:linha_recusada_json] == 1 && rs[:cartoes_novos] == 8, rs.inspect)
-  confere('SECO conta contatos novos / reaproveitados / com conversa viva', rs[:contatos_novos] == 4 && rs[:contatos_reaproveitados] == 2 && rs[:contatos_com_conversa_viva_no_crm] == 1 && rs[:cartoes_do_mesmo_telefone] == 1, rs.inspect)
+  confere('SECO conta: 10 cartões no arquivo (+1 linha que nem é JSON), 1 recusado por falta de telefone, 9 válidos', rs[:cartoes_no_arquivo] == 10 && rs[:linha_recusada_sem_telefone] == 1 && rs[:linha_recusada_json] == 1 && rs[:cartoes_novos] == 9, rs.inspect)
+  confere('SECO conta contatos novos / reaproveitados / com conversa viva', rs[:contatos_novos] == 4 && rs[:contatos_reaproveitados] == 2 && rs[:contatos_com_conversa_viva_no_crm] == 1 && rs[:cartoes_do_mesmo_telefone] == 2, rs.inspect)
 
   # ── gravando (a importação de VERDADE, medida) ──
   medir { rodar_importador(GRAVAR: '1', ARQUIVO: ARQ, CONTA: conta.id) }
@@ -203,7 +205,7 @@ if FASE == 1
   hist = Conversation.where(account_id: conta.id).select { |c| c.additional_attributes.key?('kommo_lead_id') }.sort_by(&:id)
   por_lead = hist.index_by { |c| c.additional_attributes['kommo_lead_id'] }
 
-  confere('os 8 cartões válidos viraram conversa (o sem telefone e o JSON ruim não)', hist.size == 8 && por_lead.keys.sort == [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008], por_lead.keys.sort.inspect)
+  confere('os 9 cartões válidos viraram conversa (o sem telefone e o JSON ruim não)', hist.size == 9 && por_lead.keys.sort == [1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008, 1010], por_lead.keys.sort.inspect)
   confere('todas RESOLVIDAS, sem responsável, sem prioridade, sem espera', hist.all? { |c| c.resolved? && c.assignee_id.nil? && c.priority.nil? && c.waiting_since.nil? })
   confere('todas com a marca de origem kommo e a etiqueta historico (a trava da régua e do CAPI)', hist.all? { |c| c.additional_attributes['origem_historico'] == 'kommo' && c.reload.label_list.include?('historico') })
   confere('etiquetas: as da conta entram, a que a conta não tem some; a automação não pôs nada (sair)', por_lead[1001].label_list.sort == %w[anuncio historico quente] && !hist.any? { |c| c.label_list.include?('sair') }, por_lead[1001].label_list.inspect)
@@ -234,6 +236,8 @@ if FASE == 1
   confere('G: existia SEM o 9; o cartão veio COM o 9 e caiu no MESMO contato e contact_inbox (nenhum contato duplicado)', g.contact.name == 'Existente sem 9' && g.contact_inbox.source_id == '554791230005' && Contact.where(account_id: conta.id).where("phone_number LIKE '+554791230005' OR phone_number LIKE '+5547991230005'").count == 1)
   h = por_lead[1006]
   confere('H: paciente que JÁ escreveu: o histórico vai por um contact_inbox próprio HI.<número> (não rouba a próxima mensagem)', h.contact_id == conv_viva.contact_id && h.contact_inbox.source_id == 'HI.5547991230006' && h.contact_inbox_id != conv_viva.contact_inbox_id)
+  k10 = por_lead[1010]
+  confere('K: o 2º cartão do paciente com conversa viva também vai pelo HI.<número> (e é o MESMO contact_inbox do H)', k10.contact_inbox.source_id == 'HI.5547991230006' && k10.contact_inbox_id == h.contact_inbox_id && ContactInbox.where(inbox_id: caixa.id, source_id: 'HI.5547991230006').count == 1)
   confere('H: a conversa VIVA ficou idêntica', foto_viva(conv_viva) == fotos_antes[:viva], "#{fotos_antes[:viva]} != #{foto_viva(conv_viva)}")
   i7 = por_lead[1007]
   confere('I: contato existente sem caixa é reaproveitado (nenhum duplicado) e ganha o contact_inbox', i7.contact.name == 'Existe sem caixa' && i7.contact_inbox.source_id == '5547991230004' && Contact.where(account_id: conta.id, phone_number: '+5547991230004').count == 1)
@@ -267,7 +271,7 @@ if FASE == 2
   rs = $ultimo_resumo
   d = contagem.call
   confere('IDEMPOTENTE: 2ª rodada não criou contato, contact_inbox, conversa nem etiqueta; só a 1 mensagem nova (+0 notas)', d[0..2] == antes[0..2] && d[4] == antes[4] && d[3] == antes[3] + 1, "#{antes} -> #{d}")
-  confere('IDEMPOTENTE: o resumo diz 8 já importados, 0 novos, 1 mensagem gravada', rs[:cartoes_ja_importados] == 8 && rs[:cartoes_novos].zero? && rs[:mensagens_gravadas] == 1 && rs[:notas_gravadas].zero?, rs.inspect)
+  confere('IDEMPOTENTE: o resumo diz 9 já importados, 0 novos, 1 mensagem gravada', rs[:cartoes_ja_importados] == 9 && rs[:cartoes_novos].zero? && rs[:mensagens_gravadas] == 1 && rs[:notas_gravadas].zero?, rs.inspect)
   confere('IDEMPOTENTE: em silêncio', silencio?, $conta.inspect)
   a.reload
   confere('o que a EQUIPE mexeu não é sobrescrito (etapa continua Compareceu) e o que estava vazio é preenchido (retomar_em)', a.custom_attributes['etapa'] == 'Compareceu' && a.custom_attributes['retomar_em'] == '2026-12-05', a.custom_attributes.inspect)
@@ -309,17 +313,22 @@ if FASE == 3
 end
 
 if FASE == 4
-  ENV['MODO'] = 'desfazer'
-  ENV['REGISTRO'] = File.join(TRAB, 'registro.jsonl')
+  registro = File.join(TRAB, 'registro.jsonl')
   conta = conta_do_teste
   contagem = -> { [Contact.count, ContactInbox.count, Conversation.count, Message.count, ActsAsTaggableOn::Tagging.count] }
   antes = contagem.call
   # a equipe já usou duas coisas: reabriu/respondeu a conversa C (o paciente escreveu na fase 3) e pôs uma NOTA no contato do cartão 1007
   nota_contato = Contact.find_by!(account_id: conta.id, phone_number: '+5547991230004')
   Note.create!(account_id: conta.id, contact: nota_contato, user: User.first, content: 'ligar amanhã')
-  st = rodar_importador(GRAVAR: nil, REGISTRO: ENV['REGISTRO'], CONTA: conta.id)
+  # re-rodada DEPOIS de o paciente ter escrito (a conversa dele agora é «viva» no contact_inbox principal): não pode nascer HI.<número> à toa nem contato duplicado
+  contatos_antes = Contact.where(account_id: conta.id).count
+  cis_antes = ContactInbox.count
+  rodar_importador(GRAVAR: '1', ARQUIVO: ARQ, CONTA: conta.id, MODO: nil, REGISTRO: nil)
+  confere('RE-RODADA depois de o paciente escrever: nenhum contato nem contact_inbox novo', Contact.where(account_id: conta.id).count == contatos_antes && ContactInbox.count == cis_antes, "#{cis_antes} -> #{ContactInbox.count}")
+  antes = contagem.call
+  st = rodar_importador(GRAVAR: nil, MODO: 'desfazer', REGISTRO: registro, CONTA: conta.id, ARQUIVO: nil)
   confere('DESFAZER em seco não apagou nada', contagem.call == antes && st == 0)
-  rodar_importador(GRAVAR: '1', REGISTRO: ENV['REGISTRO'], CONTA: conta.id)
+  rodar_importador(GRAVAR: '1', MODO: 'desfazer', REGISTRO: registro, CONTA: conta.id, ARQUIVO: nil)
   restantes = Conversation.where(account_id: conta.id).select { |c| c.additional_attributes.key?('kommo_lead_id') }.map { |c| c.additional_attributes['kommo_lead_id'] }.sort
   confere('DESFAZER: só ficaram as conversas que a equipe/o paciente já usaram (C reaberta, G e a que recebeu mensagem do paciente)', restantes == [1003, 1005], restantes.inspect)
   confere('DESFAZER: as mensagens do histórico saíram e as do paciente ficaram', Message.where('source_id LIKE ?', 'kommo:%').where.not(conversation_id: Conversation.where(account_id: conta.id).pluck(:id)).none? && Message.where(content: ['oi, voltei', 'bom dia, sem o nove', 'de novo']).count == 3)

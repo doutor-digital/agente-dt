@@ -132,16 +132,26 @@ export interface LinhaDoCartao {
  * Telefone para o WhatsApp do CRM: só dígitos, com DDI. O Kommo guarda muita gente sem o 55 (DDD + número): 10 ou 11 dígitos ganham o 55.
  * Número que não parece telefone (curto, ou comprido demais) volta null. Não mexe no 9 (o Chatwoot casa as duas formas do Brasil).
  */
+/** DDDs que existem no Brasil. */
+const DDDS = new Set([11, 12, 13, 14, 15, 16, 17, 18, 19, 21, 22, 24, 27, 28, 31, 32, 33, 34, 35, 37, 38, 41, 42, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55, 61, 62, 63, 64, 65, 66, 67, 68, 69, 71, 73, 74, 75, 77, 79, 81, 82, 83, 84, 85, 86, 87, 88, 89, 91, 92, 93, 94, 95, 96, 97, 98, 99]);
+
 export function foneParaWhatsApp(bruto: string | null | undefined): string | null {
   let d = String(bruto ?? '').replace(/\D/g, '');
-  if (d.startsWith('00')) d = d.slice(2);
-  if (d.length === 10 || d.length === 11) d = `55${d}`;
-  if (d.length < 11 || d.length > 15) return null;
-  if (d.startsWith('55') && (d.length < 12 || d.length > 13)) return null;
+  if (d.startsWith('00')) d = d.slice(2); // prefixo de ligação internacional
+  else if (d.startsWith('0')) d = d.replace(/^0+/, ''); // prefixo de tronco brasileiro: «047 99123-4567» = DDD 47
+  // sem DDI: 10 dígitos = DDD + número (fixo/celular antigo), 11 = DDD + 9 + número; o DDD tem de existir. Fora desse formato e sem DDI de país: não é telefone.
+  if (d.length === 10 && DDDS.has(Number(d.slice(0, 2)))) d = `55${d}`;
+  else if (d.length === 11 && DDDS.has(Number(d.slice(0, 2))) && d[2] === '9') d = `55${d}`;
+  else if (d.length === 10 || d.length === 11) return null;
+  if (d.length < 12 || d.length > 15) return null;
+  if (d.startsWith('55') && d.length > 13) return null;
   return d;
 }
 
 // ── datas ────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Corta por PONTO DE CÓDIGO (um emoji não vira meio-emoji) e tira surrogate solitário: texto que vai para JSON/Postgres tem de ser válido. */
+export const cortar = (texto: string, n: number): string => Array.from(String(texto).toWellFormed()).slice(0, n).join('');
 
 const doisD = (n: number) => String(n).padStart(2, '0');
 function emBelem(epochSeg: number): Date {
@@ -432,7 +442,7 @@ function formatar(f: { tipo: string; valor: unknown }): string {
   return txt(f.valor).replace(/\s+/g, ' ');
 }
 
-export function notaDoCartao(c: CartaoDaKommo, m: Montagem, extra: { importadoEm: Date; mensagensTotal: number; mensagensNaConversa: number }): string {
+export function notaDoCartao(c: CartaoDaKommo, m: Montagem, extra: { importadoEm: Date; mensagensTotal: number; mensagensNaConversa: number; conversaNaoLida?: boolean }): string {
   const t = traduzirEtapa(c);
   const l: string[] = [];
   l.push(`📥 Histórico da Kommo — cartão #${c.id} (importado em ${dataBr(Math.floor(extra.importadoEm.getTime() / 1000))})`);
@@ -453,19 +463,26 @@ export function notaDoCartao(c: CartaoDaKommo, m: Montagem, extra: { importadoEm
       const v = formatar(f);
       if (!v) continue;
       vistos.add(alvo);
-      l.push(`${rotulo}: ${v.slice(0, 400)}`);
+      l.push(`${rotulo}: ${cortar(v, 400)}`);
     }
   }
-  if (c.etiquetas.length) l.push(`Etiquetas na Kommo: ${c.etiquetas.slice(0, 20).join(', ')}`);
-  if (m.avisos.length) l.push(`Para conferir: ${m.avisos.join(', ')}`);
-  l.push(
-    extra.mensagensTotal > extra.mensagensNaConversa
+  // o RODAPÉ (etiquetas, o que conferir, a situação da conversa) nunca é cortado: o que passar do limite sai do MEIO (campos)
+  const rodape: string[] = [];
+  if (c.etiquetas.length) rodape.push(`Etiquetas na Kommo: ${c.etiquetas.slice(0, 20).join(', ')}`);
+  if (m.avisos.length) rodape.push(`Para conferir: ${m.avisos.join(', ')}`);
+  rodape.push(
+    extra.conversaNaoLida
+      ? 'Conversa: a Kommo não entregou a conversa deste cartão (sem permissão de chats ou sem conversa).'
+      : extra.mensagensTotal > extra.mensagensNaConversa
       ? `Conversa: as ${extra.mensagensNaConversa} últimas de ${extra.mensagensTotal} mensagens estão abaixo.`
       : extra.mensagensTotal > 0
         ? `Conversa: ${extra.mensagensTotal} mensagens estão abaixo.`
         : 'Conversa: nenhuma mensagem na Kommo.',
   );
-  return l.join('\n').slice(0, LIMITE_DA_NOTA);
+  const fim = cortar(rodape.join('\n'), 1500);
+  const todo = l.join('\n');
+  const folga = Math.max(200, LIMITE_DA_NOTA - fim.length - 3);
+  return todo.length > folga ? `${cortar(todo, folga)}\n…\n${fim}` : `${todo}\n${fim}`;
 }
 
 // ── mensagens ────────────────────────────────────────────────────────────────────────────────────────
@@ -482,7 +499,7 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
     vistas.add(id);
     const anexo = m.attachment?.type ? (ROTULO_DO_ANEXO[String(m.attachment.type)] ?? `[${String(m.attachment.type).slice(0, 20)}]`) : '';
     const corpo = String(m.text ?? '').replace(/\u0000/g, '').trim();
-    const texto = [corpo, anexo].filter(Boolean).join('\n').slice(0, 20_000);
+    const texto = cortar([corpo, anexo].filter(Boolean).join('\n'), 20_000);
     if (!texto) continue;
     todas.push({ id, em: m.created_at, entrada: m.author?.type === 'external', texto });
   }
@@ -491,9 +508,10 @@ export function mensagensParaCrm(msgs: readonly MensagemDaKommo[], teto = TETO_D
 
 // ── o cartão inteiro ─────────────────────────────────────────────────────────────────────────────────
 
-export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[], agora: Date): LinhaDoCartao {
+/** `msgs` null = a Kommo não entregou a conversa (a nota diz isso, em vez de «nenhuma mensagem»). */
+export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, msgs: readonly MensagemDaKommo[] | null, agora: Date): LinhaDoCartao {
   const m = atributosDoCartao(c);
-  const { mensagens, total } = mensagensParaCrm(msgs);
+  const { mensagens, total } = mensagensParaCrm(msgs ?? []);
   const telefone = foneParaWhatsApp(contato?.telefone);
   const nome = (contato?.nome ?? '').trim() || c.nome.trim() || `Cartão ${c.id}`;
   return {
@@ -501,7 +519,7 @@ export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, 
     v: 1,
     lead_id: c.id,
     contato_id: contato?.id ?? null,
-    nome: nome.slice(0, 255),
+    nome: cortar(nome, 255),
     telefone,
     sem_telefone: telefone ? null : contato?.telefone ? 'invalido' : 'ausente',
     funil_kommo: c.funil,
@@ -512,7 +530,7 @@ export function linhaDoCartao(c: CartaoDaKommo, contato: ContatoDaKommo | null, 
     fechado_em: c.fechadoEm,
     atributos: m.atributos,
     etiquetas: m.etiquetas,
-    nota: notaDoCartao(c, m, { importadoEm: agora, mensagensTotal: total, mensagensNaConversa: mensagens.length }),
+    nota: notaDoCartao(c, m, { importadoEm: agora, mensagensTotal: total, mensagensNaConversa: mensagens.length, conversaNaoLida: msgs === null }),
     mensagens,
     mensagens_total: total,
     avisos: m.avisos,
