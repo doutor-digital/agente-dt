@@ -112,7 +112,7 @@ export const GUIA_DAS_ETAPAS: Readonly<Record<EtapaDoCrm, GuiaDaEtapa>> = {
 
 /**
  * Os passos de uma etapa para a unidade que NÃO aceita pagamento antecipado (`units.accepts_advance_payment = false`, ex.: Timbó: a consulta é paga no dia, na clínica).
- * Só «Agendado» muda: sem os passos do Pix e do «pagou-antecipado» (o robô do pré-pagamento nunca dispara onde ninguém marca «Pagamento antecipado»).
+ * Só «Agendado» muda: sem os passos do Pix e do «pagou-antecipado» (o robô do pré-pagamento só dispara quando alguém marca «Pagamento antecipado»: aqui ninguém deve marcar).
  */
 export const PASSOS_SEM_ANTECIPADO: Readonly<Partial<Record<EtapaDoCrm, readonly string[]>>> = {
   Agendado: ['Confira Data, Hora (HH:MM) e Situação da consulta', 'A consulta é paga no dia, na clínica: não ofereça Pix nem pagamento antecipado', 'Lembretes saem sozinhos. Combinou tudo? Pode Resolver'],
