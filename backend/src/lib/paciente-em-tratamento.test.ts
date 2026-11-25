@@ -93,7 +93,7 @@ test('a ficha vira sinal: tratamento 44/45 ativo, 46 não; sessão futura que n�
   // abandonou há meses mas a franquia ainda diz "em andamento": é lead que volta, a Sofia responde
   const velha = sch('Sessão de fisioterapia', '2026-03-05T13:00:00Z', 42);
   const abandonou = sinalDaFicha(7, { schedules: [velha], treatments: [trat(45)] }, agora);
-  assert.deepEqual(abandonou, { tipo: 'paciente', idClient: 7, tratamentoAtivo: false, sessaoFutura: false });
+  assert.deepEqual(abandonou, { tipo: 'paciente', idClient: 7, tratamentoAtivo: false, sessaoFutura: false, avaliacaoRecente: false });
   assert.equal(decidir({ ...base, sinal: abandonou }).calar, false);
   // tratamento fechado que nunca teve sessão nem agenda: não prova nada
   const semSessao = sinalDaFicha(7, { schedules: [], treatments: [trat(44)] }, agora);
@@ -120,7 +120,7 @@ test('consultarFranquia: paciente com tratamento ativo → sinal de paciente; fi
   const fichaAtiva = async () => ({ schedules: [{ idSchedule: 1, idTreatment: 1, idStatus: 42, statusName: 'Atendido', clientName: null, categoryName: 'Sessão', physicalTherapist: null, dateAttendanceUtc: new Date(Date.now() - 5 * 86_400_000).toISOString(), dateAttendanceLocal: null, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false }], treatments: [{ idTreatment: 1, idStatus: 45, statusName: null, typeName: null }] });
 
   const ok = await consultarFranquia(unitOk, '+55 21 98888-9999', { indice: indiceComPaciente, ficha: fichaAtiva });
-  assert.deepEqual(ok, { tipo: 'paciente', idClient: 42, tratamentoAtivo: true, sessaoFutura: false });
+  assert.deepEqual(ok, { tipo: 'paciente', idClient: 42, tratamentoAtivo: true, sessaoFutura: false, avaliacaoRecente: false });
 
   const semFicha = await consultarFranquia(unitOk, '21988889999', { indice: indiceComPaciente, ficha: async () => null });
   assert.equal(semFicha.tipo, 'indisponivel');
@@ -181,4 +181,24 @@ test('porta: turno aberto pela Ponte ("Passar para a Sofia") NUNCA cala — a eq
   assert.equal(portaRodaNoTurno({ isChatMessage: true, humanMessage: 'Confirmado', passadoPelaPonte: false }), true);
   assert.equal(portaRodaNoTurno({ isChatMessage: true, humanMessage: '   ', passadoPelaPonte: false }), false);
   assert.equal(portaRodaNoTurno({ isChatMessage: false, humanMessage: 'Confirmado', passadoPelaPonte: false }), false);
+});
+
+test('avaliação recente (unidade que saiu da Kommo): avaliou há até 60 dias — atendida ou ainda sem baixa — conta; falta, desmarcado, mais de 60 dias e avaliação futura não', () => {
+  const agora = new Date('2026-11-25T18:00:00Z');
+  const sch = (categoryName: string, dia: string, idStatus: number) =>
+    ({ idSchedule: 1, idTreatment: null, idStatus, statusName: null, clientName: null, categoryName, physicalTherapist: null, dateAttendanceUtc: dia, dateAttendanceLocal: dia, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false });
+  const recente = (idStatus: number, dia = '2026-11-25T13:00:00Z') => {
+    const s = sinalDaFicha(9, { schedules: [sch('AVALIAÇÃO', dia, idStatus)], treatments: [] }, agora);
+    return s.tipo === 'paciente' && s.avaliacaoRecente;
+  };
+  assert.equal(recente(42), true, 'atendida hoje');
+  assert.equal(recente(38), true, 'confirmada e já passou (a recepção ainda não deu baixa)');
+  assert.equal(recente(42, '2026-10-01T13:00:00Z'), true, '55 dias');
+  assert.equal(recente(42, '2026-09-01T13:00:00Z'), false, 'mais de 60 dias');
+  assert.equal(recente(40), false, 'não compareceu');
+  assert.equal(recente(57), false, 'desmarcada');
+  assert.equal(recente(37, '2026-11-26T13:00:00Z'), false, 'avaliação ainda vai acontecer');
+  // a regra do Kommo (decidir) não muda: avaliação recente sozinha não cala ali
+  const s = sinalDaFicha(9, { schedules: [sch('AVALIAÇÃO', '2026-11-25T13:00:00Z', 42)], treatments: [] }, agora);
+  assert.equal(decidir({ ...base, sinal: s }).calar, false);
 });

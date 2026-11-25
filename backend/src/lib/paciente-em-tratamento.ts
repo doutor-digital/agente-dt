@@ -20,7 +20,7 @@
  *
  * Número INTERNO (`NUMEROS_INTERNOS`) também cala: hoje a lista só barra o cadastro na franquia.
  */
-import { SpineService, type SpineClientDetail } from '../services/spine.service.js';
+import { SpineService, SPINE_STATUS, type SpineClientDetail } from '../services/spine.service.js';
 import { resumoDaAgenda } from './widget-agenda.js';
 import { chaveDoTelefone, consultarIndice, type Entrada } from './franquia-indice-telefones.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
@@ -38,13 +38,25 @@ export const TIMEOUT_FRANQUIA_MS = 3000;
 const TRATAMENTO_ATIVO = new Set([44, 45]);
 /** Decisão de 14/09: sem sessão futura, só é "em tratamento agora" quem fez sessão nos últimos 30 dias; o resto "parou no meio". */
 export const DIAS_SEM_SESSAO = 30;
+/** Janela da «avaliação recente» (corte de Timbó, 25/11): quem avaliou há até 60 dias e escreve está na negociação, não é lead novo. */
+export const DIAS_AVALIACAO_RECENTE = 60;
+/** Avaliação que conta: atendida, ou ainda «de pé» porque a recepção dá baixa dias depois. Falta e desmarcado não contam. */
+const AVALIACAO_QUE_CONTA: ReadonlySet<number> = new Set([SPINE_STATUS.ATENDIDO, SPINE_STATUS.AGENDADO, SPINE_STATUS.CONFIRMADO, SPINE_STATUS.REMARCADO]);
 
 export function calarPacienteEstado(slug: string, raw: string | undefined = process.env.CALAR_PACIENTE_EM_TRATAMENTO_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_CALAR_PACIENTE, raw);
 }
 
 export type SinalDaFranquia =
-  | { tipo: 'paciente'; idClient: number; tratamentoAtivo: boolean; sessaoFutura: boolean }
+  | {
+      tipo: 'paciente';
+      idClient: number;
+      tratamentoAtivo: boolean;
+      sessaoFutura: boolean;
+      /** avaliação/retorno nos últimos `DIAS_AVALIACAO_RECENTE` dias, atendida ou ainda sem baixa (não conta falta nem desmarcado). Só a unidade que
+       *  saiu da Kommo usa (kommo-cortado.ts): lá não há o cartão em COMPARECEU/NEGOCIAÇÃO que segurava a Sofia. */
+      avaliacaoRecente?: boolean;
+    }
   /** o telefone só existe como LEAD na franquia */
   | { tipo: 'lead' }
   | { tipo: 'nao_achou' }
@@ -105,7 +117,11 @@ export function sinalDaFicha(idClient: number, ficha: Pick<SpineClientDetail, 's
   const recente = Number.isFinite(ultima) && agora.getTime() - ultima <= DIAS_SEM_SESSAO * 86_400_000;
   const tratamentoAtivo = recente && ficha.treatments.some((t) => t.idStatus !== null && TRATAMENTO_ATIVO.has(t.idStatus));
   const sessaoFutura = !!agenda.proximaSessao;
-  return { tipo: 'paciente', idClient, tratamentoAtivo, sessaoFutura };
+  const uc = agenda.ultimaConsulta;
+  const quandoUc = uc?.quando ? Date.parse(uc.quando) : NaN;
+  const avaliacaoRecente =
+    !!uc && uc.idStatus !== null && AVALIACAO_QUE_CONTA.has(uc.idStatus) && Number.isFinite(quandoUc) && agora.getTime() - quandoUc <= DIAS_AVALIACAO_RECENTE * 86_400_000;
+  return { tipo: 'paciente', idClient, tratamentoAtivo, sessaoFutura, avaliacaoRecente };
 }
 
 /** Puro: o que o índice diz do telefone. Paciente vence lead; sem entrada com id utilizável não se afirma nada. */

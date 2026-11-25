@@ -46,7 +46,8 @@ const SEGUE_SEM_FRANQUIA = /^(unidade sem franquia conectada|telefone ilegível|
 
 /**
  * Puro: o sinal da franquia cala a Sofia na unidade cortada? Devolve o motivo (vai para a nota e o Registro) ou null (a Sofia segue).
- *  - paciente com tratamento ativo ou sessão futura → cala (a mesma regra do `decidir` de paciente-em-tratamento.ts);
+ *  - paciente com tratamento ativo, sessão futura ou AVALIAÇÃO nos últimos 60 dias → cala: na Kommo o cartão dele estaria em COMPARECEU/
+ *    NEGOCIAÇÃO e a Sofia não falava (corte de Timbó, 25/11: a Sofia tratou como lead quem avaliou no mesmo dia);
  *  - lead, não achado, paciente sem tratamento e sem sessão → segue;
  *  - franquia NÃO CONFERIU (ficha que não veio, estouro do tempo, erro): CALA. Na unidade cortada a franquia é a única barreira contra
  *    responder paciente em tratamento — melhor calar que errar, como fazia a trava do Kommo («kommo-indisponivel»);
@@ -57,7 +58,9 @@ export function tratamentoNaFranquia(s: SinalDaFranquia): string | null {
     if (SEGUE_SEM_FRANQUIA.test(s.motivo)) return null;
     return `não consegui conferir na franquia se é paciente em tratamento (${s.motivo.slice(0, 120)})`;
   }
-  if (s.tipo !== 'paciente' || (!s.tratamentoAtivo && !s.sessaoFutura)) return null;
-  const por = [s.tratamentoAtivo ? 'tratamento ativo' : '', s.sessaoFutura ? 'sessão futura' : ''].filter(Boolean).join(' + ');
+  if (s.tipo !== 'paciente' || (!s.tratamentoAtivo && !s.sessaoFutura && !s.avaliacaoRecente)) return null;
+  const por = [s.tratamentoAtivo ? 'tratamento ativo' : '', s.sessaoFutura ? 'sessão futura' : '', s.avaliacaoRecente ? 'avaliação nos últimos 60 dias' : '']
+    .filter(Boolean)
+    .join(' + ');
   return `paciente da franquia (idClient ${s.idClient}) com ${por}`;
 }
