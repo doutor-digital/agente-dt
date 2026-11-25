@@ -262,3 +262,56 @@ test('tela do Funil: a conta com etapas próprias recebe `confirmam` (os nomes d
   assert.deepEqual(confirmamNaTela(doTrat, TIMBO()), { confirmam: ['ALTA', 'TRATAMENTO CANCELADO'] });
   assert.deepEqual(confirmamNaTela(['Entrada', 'Em tratamento', 'Alta', 'Tratamento cancelado'], etapasDaConta(1)), {}, 'Parauapebas: nenhum campo novo na resposta');
 });
+
+test('LIGAR o mapa não vira «entrou na etapa»: a régua viu a conversa SEM mapa com o nome da Kommo cru e DEPOIS o mapa entra → 0 mudança e 0 candidato', async () => {
+  const { atualizarVistos, candidatos } = await import('./chatwoot-regua.js');
+  const t1 = new Date('2026-11-25T12:00:00Z');
+  const partida = { primeiraVez: false, desde: new Date('2026-01-01T00:00:00Z') };
+  const casos: Array<['etapa' | 'etapa_tratamento', string]> = [['etapa', 'PERDIDO'], ['etapa', 'GANHO / CONCLUÍDO'], ['etapa', 'AGENDADO'], ['etapa_tratamento', 'ALTA'], ['etapa_tratamento', 'TRATAMENTO CANCELADO'], ['etapa_tratamento', 'EM TRATAMENTO']];
+  for (const [campo, nome] of casos) {
+    // sem data de consulta: o que se mede é a ETAPA (a véspera/dia de uma consulta marcada é decisão por data, igual com ou sem mapa)
+    const attrs = { [campo]: nome, funil: campo === 'etapa_tratamento' ? 'Tratamento' : 'Comercial', pagamento_antecipado: 'Sim', situacao_consulta: 'Agendado', data_consulta: '', hora_consulta: '' };
+    const semMapa = conversaDoChatwoot(bruta('', attrs), null)!;
+    const v0 = atualizarVistos(semMapa, new Map(), new Date('2026-11-20T12:00:00Z'), { primeiraVez: false, desde: null }).vistos; // a régua JÁ viu (não inicial)
+    const comMapa = conversaDoChatwoot(bruta('', attrs), TIMBO())!;
+    const r = atualizarVistos(comMapa, v0, t1, partida);
+    assert.deepEqual(r.mudancas, [], `${campo}=${nome}: nada mudou`);
+    assert.deepEqual(candidatos(comMapa, r.vistos).map((k) => k.regra), [], `${campo}=${nome}: nenhum candidato`);
+  }
+  // «Confirmado» (molde) → AGENDADO (alias): também não é mudança
+  const conf = conversaDoChatwoot(bruta('Confirmado', { situacao_consulta: 'Confirmado' }), null)!;
+  const vc = atualizarVistos(conf, new Map(), new Date('2026-11-20T12:00:00Z'), { primeiraVez: false, desde: null }).vistos;
+  assert.deepEqual(atualizarVistos(conversaDoChatwoot(bruta('AGENDADO', { situacao_consulta: 'Confirmado' }), TIMBO())!, vc, t1, partida).mudancas, []);
+  // mudança REAL de etapa com o mapa ligado continua sendo mudança (Agendado → PERDIDO)
+  const ag = conversaDoChatwoot(bruta('AGENDADO'), TIMBO())!;
+  const va = atualizarVistos(ag, new Map(), new Date('2026-11-20T12:00:00Z'), { primeiraVez: false, desde: null }).vistos;
+  const real = atualizarVistos(conversaDoChatwoot(bruta('PERDIDO'), TIMBO())!, va, t1, partida);
+  assert.deepEqual(real.mudancas.map((m) => [m.tipo, m.campo]), [['atualizar', 'etapa']]);
+  // Parauapebas (sem mapa): comparação exata, como sempre — «PERDIDO» não é «Perdido»
+  const p0 = conversaDoChatwoot(bruta('Perdido'), null)!;
+  const vp = atualizarVistos(p0, new Map(), new Date('2026-11-20T12:00:00Z'), { primeiraVez: false, desde: null }).vistos;
+  assert.equal(atualizarVistos(conversaDoChatwoot(bruta('PERDIDO'), null)!, vp, t1, partida).mudancas.length, 1);
+  assert.equal(Object.keys(p0).includes('mapaDeEtapas'), false, 'a conversa sem mapa é a de sempre');
+  assert.equal(Object.keys(conversaDoChatwoot(bruta('PERDIDO'), TIMBO())!).includes('mapaDeEtapas'), false, 'e com mapa o campo não aparece em JSON/spread/deepEqual');
+});
+
+test('o mapa gravado COM O SERVIDOR NO AR vale na chamada seguinte: a porta da Sofia e a ponte do botão Perdido não guardam o mapa de quando foram montadas', async () => {
+  const { portasDaPonte } = await import('./chatwoot-etiquetas.js');
+  aplicarEtapasDasContas([]); // a porta nasce SEM mapa
+  const { ctx, gravado } = chatwootFalso({ etapa: 'EM QUALIFICAÇÃO', queixa: 'x' });
+  const porta = portaDoChatwoot(ctx);
+  const ponte = portasDaPonte(ctx);
+  assert.equal((await porta.conversa(5))!.attrs.etapa, 'EM QUALIFICAÇÃO', 'sem mapa: como veio');
+  assert.deepEqual(await porta.valoresDoAtributo('etapa'), ['Leads de entrada', 'EM QUALIFICAÇÃO', 'AGENDADO', 'PERDIDO'], 'sem mapa: a lista como o Chatwoot a entrega (e fica guardada)');
+  assert.equal(ponte.mapaDeEtapas, etapasDaConta(3));
+  // o servidor relê a configuração (a cada minuto) e o mapa entra
+  aplicarEtapasDasContas([{ contaId: 3, etapas: COLUNA_DE_TIMBO }]);
+  assert.equal((await porta.conversa(5))!.attrs.etapa, 'Sofia qualifica', 'a PRÓXIMA chamada já lê em papel');
+  await porta.gravarAtributos(5, { etapa: 'Perdido' });
+  assert.equal(gravado.at(-1)!.corpo.custom_attributes.etapa, 'PERDIDO', 'e grava o nome da conta');
+  assert.deepEqual(await porta.valoresDoAtributo('etapa'), ['Novo lead', 'Sofia qualifica', 'Agendado', 'Perdido'], 'a lista guardada também é traduzida com o mapa de AGORA');
+  assert.equal(ponte.mapaDeEtapas.comercial[1]!.nome, 'EM QUALIFICAÇÃO', 'a ponte do botão «Perdido» também');
+  // e o caminho de volta: o mapa sai
+  aplicarEtapasDasContas([]);
+  assert.equal((await porta.conversa(5))!.attrs.etapa, 'EM QUALIFICAÇÃO');
+});
