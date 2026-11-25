@@ -93,7 +93,7 @@ test('tratamentoNaFranquia: paciente com tratamento ativo OU sessão futura cala
   assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: true, sessaoFutura: true })), /tratamento ativo \+ sessão futura$/);
   assert.equal(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: false }), null);
   // avaliou há pouco (corte de Timbó 25/11: avaliou de manhã e à tarde a Sofia o tratou como lead): cala
-  assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: false, avaliacaoRecente: true })), /avaliação nos últimos 60 dias$/);
+  assert.match(String(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: false, avaliacaoRecente: true })), /avaliação\/retorno nos últimos 60 dias$/);
   assert.equal(tratamentoNaFranquia({ tipo: 'paciente', idClient: 42, tratamentoAtivo: false, sessaoFutura: false, avaliacaoRecente: false }), null);
   assert.equal(tratamentoNaFranquia({ tipo: 'lead' }), null);
   assert.equal(tratamentoNaFranquia({ tipo: 'nao_achou' }), null);

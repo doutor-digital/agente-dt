@@ -183,7 +183,7 @@ test('porta: turno aberto pela Ponte ("Passar para a Sofia") NUNCA cala — a eq
   assert.equal(portaRodaNoTurno({ isChatMessage: false, humanMessage: 'Confirmado', passadoPelaPonte: false }), false);
 });
 
-test('avaliação recente (unidade que saiu da Kommo): avaliou há até 60 dias — atendida ou ainda sem baixa — conta; falta, desmarcado, mais de 60 dias e avaliação futura não', () => {
+test('avaliação recente (unidade que saiu da Kommo): atendida em 60 dias ou sem baixa em 7 conta, olhando TODAS as passadas; falta, desmarcado, velha e futura não', () => {
   const agora = new Date('2026-11-25T18:00:00Z');
   const sch = (categoryName: string, dia: string, idStatus: number) =>
     ({ idSchedule: 1, idTreatment: null, idStatus, statusName: null, clientName: null, categoryName, physicalTherapist: null, dateAttendanceUtc: dia, dateAttendanceLocal: dia, dayLocal: null, timeLocal: null, isBusy: true, requiresManualValidation: false });
@@ -193,11 +193,20 @@ test('avaliação recente (unidade que saiu da Kommo): avaliou há até 60 dias 
   };
   assert.equal(recente(42), true, 'atendida hoje');
   assert.equal(recente(38), true, 'confirmada e já passou (a recepção ainda não deu baixa)');
+  assert.equal(recente(38, '2026-11-15T13:00:00Z'), false, 'sem baixa há 10 dias: não cala a Sofia por 2 meses');
   assert.equal(recente(42, '2026-10-01T13:00:00Z'), true, '55 dias');
   assert.equal(recente(42, '2026-09-01T13:00:00Z'), false, 'mais de 60 dias');
   assert.equal(recente(40), false, 'não compareceu');
   assert.equal(recente(57), false, 'desmarcada');
   assert.equal(recente(37, '2026-11-26T13:00:00Z'), false, 'avaliação ainda vai acontecer');
+  // olha TODAS as consultas passadas: avaliou há 20 dias e faltou/desmarcou o retorno depois continua sendo quem avaliou (sênior, #465)
+  const varias = (...xs: Array<[string, number]>) => {
+    const s = sinalDaFicha(9, { schedules: xs.map(([d, st]) => sch('AVALIAÇÃO', d, st)), treatments: [] }, agora);
+    return s.tipo === 'paciente' && s.avaliacaoRecente;
+  };
+  assert.equal(varias(['2026-11-05T13:00:00Z', 42], ['2026-11-22T13:00:00Z', 40]), true, 'avaliou há 20 dias e faltou ao retorno há 3');
+  assert.equal(varias(['2026-11-15T13:00:00Z', 42], ['2026-11-24T13:00:00Z', 57]), true, 'avaliou há 10 dias e o retorno de ontem foi desmarcado');
+  assert.equal(varias(['2026-11-22T13:00:00Z', 40], ['2026-11-24T13:00:00Z', 57]), false, 'só falta e desmarcado');
   // a regra do Kommo (decidir) não muda: avaliação recente sozinha não cala ali
   const s = sinalDaFicha(9, { schedules: [sch('AVALIAÇÃO', '2026-11-25T13:00:00Z', 42)], treatments: [] }, agora);
   assert.equal(decidir({ ...base, sinal: s }).calar, false);
