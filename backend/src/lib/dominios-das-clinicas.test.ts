@@ -31,32 +31,16 @@ test('unidade SEM caixa: o endereço entra nas origens aceitas e no mapa subdom�
   assert.deepEqual(Object.keys(U.CAIXAS_REGUA).map(Number).filter((c) => U.CAIXAS_REGUA[c] === 'doutor-hernia-timbo'), []);
   assert.ok(U.origensDasClinicas().includes('https://drtimbo.doutordigitalconsultoria.com'));
   assert.ok(origensDoChatwoot({ CHATWOOT_URL: 'https://atendimento.doutordigitalconsultoria.com', CHATWOOT_TOKEN: 'x', CHATWOOT_CONTA_ID: '1' } as NodeJS.ProcessEnv).includes('https://drtimbo.doutordigitalconsultoria.com'), 'origem aceita pelas telas e pelo CORS (server.ts usa origensDoChatwoot)');
-  assert.deepEqual(U.dominiosDasClinicas(1), { drherniaparauapebas: 1, drtimbo: 3 }, 'Parauapebas = conta do ambiente; Timbó = conta 3 mesmo sem caixa');
 });
 
 test('sem a linha crua, a inerte NÃO entra (o registro vem do banco, não de adivinhação)', () => {
   U.aplicarConfigs(U.mesclarComSemente([U.configDaLinha(linhaTimbo as never)]));
   assert.ok(!U.origensDasClinicas().some((o) => o.includes('drtimbo')));
-  assert.deepEqual(U.dominiosDasClinicas(1), { drherniaparauapebas: 1 });
 });
 
-test('subdomínio fora do formato (porta, caminho, maiúscula, curto) nunca vira origem nem entra no mapa; conta inválida cai na do ambiente; sem conta do ambiente, fica de fora', () => {
-  U.aplicarDominios([
-    { subdominio: 'ruim.com/x', contaId: 4 },
-    { subdominio: 'Maiuscula', contaId: 5 },
-    { subdominio: 'ab', contaId: 6 },
-    { subdominio: 'ok123', contaId: -2 },
-    { subdominio: 'otimo', contaId: 7 },
-    { subdominio: null, contaId: 8 },
-  ]);
-  assert.deepEqual(U.origensDasClinicas().filter((o) => !o.includes('drherniaparauapebas')), ['https://ok123.doutordigitalconsultoria.com', 'https://otimo.doutordigitalconsultoria.com']);
-  assert.deepEqual(U.dominiosDasClinicas(1), { drherniaparauapebas: 1, ok123: 1, otimo: 7 });
-  assert.deepEqual(U.dominiosDasClinicas(null), { otimo: 7 }, 'sem conta do ambiente, a linha sem conta própria não entra');
-});
-
-test('a configuração válida manda sobre a linha crua (mesmo subdomínio, contas diferentes)', () => {
-  U.aplicarDominios([{ subdominio: 'drherniaparauapebas', contaId: 9 }]);
-  assert.equal(U.dominiosDasClinicas(1).drherniaparauapebas, 1);
+test('subdomínio fora do formato (porta, caminho, maiúscula, curto) nunca vira origem', () => {
+  U.aplicarDominios([{ subdominio: 'ruim.com/x', contaId: 4 }, { subdominio: 'Maiuscula', contaId: 5 }, { subdominio: 'ab', contaId: 6 }, { subdominio: 'otimo', contaId: 7 }, { subdominio: null, contaId: 8 }]);
+  assert.deepEqual(U.origensDasClinicas().filter((o) => !o.includes('drherniaparauapebas')), ['https://otimo.doutordigitalconsultoria.com']);
 });
 
 test('o leitor do banco (recarregarConfigChatwoot) registra o endereço da linha inerte, e a releitura sem a linha o tira', async () => {
@@ -68,8 +52,11 @@ test('o leitor do banco (recarregarConfigChatwoot) registra o endereço da linha
     p.unitChatwoot = { findMany: async () => [linhaTimbo] };
     await recarregarConfigChatwoot();
     assert.ok(U.origensDasClinicas().includes('https://drtimbo.doutordigitalconsultoria.com'));
-    assert.equal(U.dominiosDasClinicas(1).drtimbo, 3);
     assert.equal(U.configDaUnidade('doutor-hernia-timbo'), undefined, 'continua inerte');
+    // linha rejeitada por OUTRO motivo (subdomínio ok, mas conta inválida) não vira origem confiável
+    p.unitChatwoot = { findMany: async () => [{ ...linhaTimbo, contaId: -4 }] };
+    await recarregarConfigChatwoot();
+    assert.ok(!U.origensDasClinicas().some((o) => o.includes('drtimbo')), 'só entra linha válida ou inerte por falta de caixa');
     p.unitChatwoot = { findMany: async () => [] };
     await recarregarConfigChatwoot();
     assert.ok(!U.origensDasClinicas().some((o) => o.includes('drtimbo')));

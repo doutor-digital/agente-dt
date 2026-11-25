@@ -292,26 +292,13 @@ export const subdominioValido = (s: unknown): s is string => typeof s === 'strin
 /**
  * TODA linha de `unit_chatwoot` com subdomínio, MESMO a que ainda não vale como configuração (sem caixa = inerte: os workers a ignoram, e continuam ignorando).
  * O endereço da clínica existe desde o dia em que a conta foi criada (Timbó, conta 3, 25/11/2026): as telas por iframe têm de aceitar a origem dele
- * e o `menu.js` precisa saber a conta dele, com ou sem caixa. Só leitura de endereço; não entra em `configDaUnidade` nem em nenhum mapa de caixa.
+ * (o `menu.js` também precisará da conta dele: outro PR). Só leitura de endereço; não entra em `configDaUnidade` nem em nenhum mapa de caixa.
  */
 let dominiosDasLinhas: ReadonlyArray<{ subdominio: string; contaId: number | null }> = [];
 export function aplicarDominios(linhas: ReadonlyArray<{ subdominio?: string | null; contaId?: number | null }>): void {
   const porSub = new Map<string, number | null>();
   for (const l of linhas) if (subdominioValido(l.subdominio)) porSub.set(l.subdominio, Number.isInteger(l.contaId) && (l.contaId as number) > 0 ? (l.contaId as number) : null);
   dominiosDasLinhas = [...porSub.entries()].map(([subdominio, contaId]) => ({ subdominio, contaId }));
-}
-
-/** subdomínio → conta, das clínicas válidas E das inertes. Conta nula = a do ambiente (`contaDoAmbiente`: Parauapebas); sem ela, o subdomínio fica de fora. */
-export function dominiosDasClinicas(contaDoAmbiente: number | null): Record<string, number> {
-  const m: Record<string, number> = {};
-  const pôr = (sub: string | null | undefined, conta: number | null | undefined): void => {
-    if (!subdominioValido(sub)) return;
-    const c = conta ?? contaDoAmbiente;
-    if (typeof c === 'number' && Number.isInteger(c) && c > 0) m[sub] = c;
-  };
-  for (const c of dominiosDasLinhas) pôr(c.subdominio, c.contaId);
-  for (const c of configs.values()) pôr(c.subdominio, c.contaId); // a configuração válida manda sobre a linha crua
-  return m;
 }
 
 /** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado em `unit_chatwoot`, com ou sem caixa). Quem não tem subdomínio não entra. */
