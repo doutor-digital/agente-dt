@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { desdeAEtapa, exigeConfirmacao, ETAPAS_PADRAO, etapasDoTratamento, funilDaConversa, notaDaMudancaDeTratamento, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos } from './funil-chatwoot.js';
+import { exigeConfirmacao, ETAPAS_PADRAO, etapasDoTratamento, funilDaConversa, notaDaMudancaDeTratamento, cartaoDaConversa, chaveConfere, chaveDoFunil, etapasDoAtributo, montarQuadro, nomeSeTemConta, notaDaMudanca, sessaoDosCabecalhos } from './funil-chatwoot.js';
 
 test('chave: derivada do token, 32 hex, só confere a certa', () => {
   const k = chaveDoFunil('token-do-chatwoot');
