@@ -43,11 +43,11 @@ async function main(): Promise<void> {
   try {
     if (fd !== null) writeSync(fd, `${JSON.stringify({ tipo: 'cabecalho', v: 1, unidade: slug, conta_id: contaId, gerado_em: Math.floor(Date.now() / 1000), fechados_desde: inicioDosFechados(new Date()) })}\n`);
     const r = await exportar(amb, { gravar: !SECO, arquivo: ehArquivo, ...(limite ? { limite } : {}), entregar: (l) => { if (fd !== null) writeSync(fd, `${JSON.stringify(l)}\n`); } });
-    log(`RESUMO cartões=${r.cartoes} abertos=${r.abertos} fechados_6m=${r.fechados} fechados_fora_da_janela=${r.fechadosForaDaJanela} cartoes_lidos_na_conta=${r.lidosNaConta}`);
+    log(`RESUMO cartões=${r.cartoes} abertos=${r.abertos} fechados_6m=${r.fechados} fechados_fora_da_janela=${r.fechadosForaDaJanela} cartoes_lidos_na_conta=${r.lidosNaConta} recuperados_na_2a_passada=${r.recuperadosNaPaginacao}`);
     for (const [etapa, n] of Object.entries(r.porEtapa).sort()) log(`ETAPA ${etapa} = ${n}`);
     log(`TELEFONE sem=${r.semTelefone} invalido=${r.telefoneInvalido} sem_contato=${r.semContato} distintos=${r.telefonesDistintos} repetidos_em_mais_de_um_cartao=${r.telefonesRepetidos}`);
     log(`CONVERSA ${SECO ? `amostra=${r.amostra}` : `lidas=${r.amostra}`} sem_conversa=${r.semConversa} falhas_de_leitura=${r.falhasDeLeitura} com_mensagem=${r.cartoesComMensagem} mensagens=${r.mensagens}${SECO ? ` estimativa_total=${r.mensagensEstimadas}` : ''} segundos_por_cartao=${r.segundosPorCartao}`);
-    log(`VIVAS_DEPOIS_DE_IMPORTAR = ${r.ficariamVivas} (conversas que a régua/CAPI/telas NÃO tratariam como arquivo; meta 0)`);
+    log(`NASCEM_VIVAS = ${r.nascemVivas} (cartões cuja conversa já nasce VIVA — consulta de pé: recebem os lembretes do CRM; as demais nascem arquivo até o paciente voltar)`);
     if (SECO) log(`DURACAO estimada da exportação = ${r.duracaoEstimadaMin} min`);
     for (const [a, n] of Object.entries(r.avisos).sort()) log(`AVISO ${a} = ${n}`);
     if (!SECO) log(`ARQUIVO linhas=${r.linhasGravadas}`);
@@ -63,7 +63,8 @@ main()
   })
   .catch(async (e) => {
     // só a mensagem das NOSSAS recusas de uso; erro da Kommo/axios pode trazer URL com telefone: vai só a classe e o status
-    const status = (e as { response?: { status?: number } })?.response?.status;
+    // KommoApiError traz `.status`; o axios cru traz `.response.status`
+    const status = (e as { status?: number })?.status ?? (e as { response?: { status?: number } })?.response?.status;
     log(`ERRO FATAL (${e instanceof ErroDeUso ? e.message : `${e instanceof Error ? e.name : 'erro'}${status ? ` http ${status}` : ''}`})`);
     await prisma.$disconnect().catch(() => undefined);
     log('FIM');

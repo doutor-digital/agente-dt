@@ -44,6 +44,15 @@ test('evento: resolvida sem etapa → pôr; completou depois → tirar; aberta s
   assert.equal(eventoDeResolucao(semEtiquetas, CAIXAS), null, 'sem a lista de etiquetas no aviso: não mexe (não apaga as outras)');
 });
 
+test('evento: conversa da KOMMO importada — em silêncio enquanto ninguém mexeu; o paciente que voltou e foi resolvido sem etapa recebe a etiqueta como qualquer um', () => {
+  const importadoEm = 1_790_000_000;
+  const kommo = { kommo_lead_id: 9001, kommo_importado_em: importadoEm };
+  const base = { ...conv({ labels: ['historico'] }), additional_attributes: kommo };
+  assert.equal(eventoDeResolucao({ ...base, last_activity_at: importadoEm - 86_400 }, CAIXAS), null, 'ninguém mexeu: histórico fora');
+  assert.equal(eventoDeResolucao({ ...base, last_activity_at: importadoEm + 600 }, CAIXAS)?.acao, 'por', 'o paciente voltou e a equipe resolveu sem etapa: pede a etapa');
+  assert.equal(eventoDeResolucao({ ...conv({ labels: ['historico'] }), additional_attributes: {}, last_activity_at: importadoEm + 600 }, CAIXAS), null, 'histórico que não é da Kommo: vale o rótulo');
+});
+
 test('aplicar: manda a lista COMPLETA de etiquetas; interruptor desliga; falha não lança', async () => {
   const chamadas: Array<[number, string[]]> = [];
   const p = { etiquetas: async (c: number, l: string[]) => { chamadas.push([c, l]); } };

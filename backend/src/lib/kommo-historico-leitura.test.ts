@@ -98,7 +98,7 @@ test('paginação completa (mais de 250 cartões) e o TETO de páginas lança em
   const muitos = Array.from({ length: POR_PAGINA + 40 }, (_, i) => lead(i + 1, 1, 10));
   const { amb, c } = kommoDeMentira(muitos);
   assert.equal((await lerSelecao(amb)).cartoes.length, POR_PAGINA + 40);
-  assert.equal(c.abertas, 2);
+  assert.equal(c.abertas, 4, '2 páginas × 2 passadas');
   const infinita: Ambiente = { ...amb, porta: { ...amb.porta, listLeadsPagina: async () => Array.from({ length: POR_PAGINA }, (_, i) => lead(i + 1, 1, 10)) } };
   await assert.rejects(() => lerSelecao(infinita), /passou de \d+ páginas: leitura incompleta/);
   assert.ok(MAX_PAGINAS >= 40);
@@ -238,13 +238,47 @@ test('exportar SECO: não entrega linha nenhuma, lê só uma amostra das convers
   assert.equal(r.linhasGravadas, 0);
 });
 
-test('exportar conta quantas conversas importadas ficariam «vivas» pela regra de arquivo (meta 0) e o relatório traz a conta', async () => {
-  const { amb } = kommoDeMentira([lead(1, 1, 11), lead(2, 1, 10), lead(3, 2, 20)]);
-  const arquivoCerto = (raw: { labels: string[]; status: string; additional_attributes: Record<string, unknown> }) => raw.labels.includes('historico') && raw.status === 'resolved' && raw.additional_attributes.kommo_lead_id !== undefined;
-  const r = await exportar(amb, { gravar: false, arquivo: arquivoCerto, entregar: () => undefined });
-  assert.equal(r.ficariamVivas, 0);
-  const r2 = await exportar(amb, { gravar: false, arquivo: () => false, entregar: () => undefined });
-  assert.equal(r2.ficariamVivas, 3, 'se a regra de arquivo NÃO pegasse, as 3 apareceriam como vivas');
+test('exportar conta quantas conversas NASCEM vivas pela regra de arquivo real (consulta de pé) — pode ser > 0 — e o relatório traz a conta', async () => {
+  const { ehArquivo } = await import('./chatwoot-regua.js');
+  const campoConsulta = (iso: string) => [{ field_id: 1, field_name: '◷ Data da Consulta', field_type: 'date', values: [{ value: SEG(iso) }] }, { field_id: 2, field_name: '✓ Situação da consulta', field_type: 'select', values: [{ value: 'Agendado' }] }];
+  // 1: AGENDADO com consulta de hoje em diante (nasce VIVO); 2: AGENDADO com consulta de 4 meses atrás (arquivo); 3: PERDIDO (arquivo); 4: em qualificação sem consulta (arquivo)
+  const { amb } = kommoDeMentira([
+    lead(1, 1, 11, { custom_fields_values: campoConsulta('2026-11-28T03:00:00Z') as KommoLead['custom_fields_values'] }),
+    lead(2, 1, 11, { custom_fields_values: campoConsulta('2026-07-01T03:00:00Z') as KommoLead['custom_fields_values'] }),
+    lead(3, 1, 143, { closed_at: SEG('2026-11-01T00:00:00Z') }),
+    lead(4, 1, 10),
+  ]);
+  const r = await exportar(amb, { gravar: false, arquivo: ehArquivo, entregar: () => undefined });
+  assert.equal(r.nascemVivas, 1, 'só o AGENDADO com consulta de pé nasce vivo — a conta PODE ser > 0 (antes a regra tornava o número sempre 0)');
+  const r0 = await exportar(amb, { gravar: false, arquivo: () => true, entregar: () => undefined });
+  assert.equal(r0.nascemVivas, 0);
+  const rTodas = await exportar(amb, { gravar: false, arquivo: () => false, entregar: () => undefined });
+  assert.equal(rTodas.nascemVivas, 4);
+});
+
+test('cartão APAGADO no meio da paginação não faz a leitura pular o seguinte: a 2ª passada recupera e a conta diz quantos', async () => {
+  const muitos = Array.from({ length: POR_PAGINA * 2 + 10 }, (_, i) => lead(i + 1, 1, 10));
+  const { amb } = kommoDeMentira(muitos);
+  // lista por id decrescente: a página 1 traz os ids 510..261; DEPOIS de lê-la, o cartão 300 (já na página 2) é apagado e... o que desliza é o da fronteira
+  let viva = [...muitos].sort((x, y) => y.id - x.id);
+  let passada1 = true;
+  let paginasLidas = 0;
+  const porta: PortaKommo = {
+    ...amb.porta,
+    listLeadsPagina: async (page) => {
+      const fatia = viva.slice((page - 1) * POR_PAGINA, page * POR_PAGINA);
+      if (passada1 && page === 1) viva = viva.filter((l) => l.id !== 400); // apagado logo depois de a página 1 ser entregue (id 400 está nela)
+      if (page === 3) passada1 = false;
+      paginasLidas++;
+      return fatia;
+    },
+  };
+  const sel = await lerSelecao({ ...amb, porta });
+  // sem a 2ª passada, o cartão que estava no topo da página 2 (id 260) deslizou para a página 1 já lida e sumiria
+  assert.equal(sel.cartoes.length, muitos.length, 'todos, sem repetir (o apagado já tinha sido lido na 1ª passada: existia quando a leitura começou)');
+  assert.ok(sel.cartoes.some((c) => c.id === 260), 'o cartão da fronteira foi recuperado');
+  assert.equal(sel.recuperadosNaPaginacao, 1);
+  assert.ok(paginasLidas >= 6, 'duas passadas de 3 páginas');
 });
 
 test('o relatório conta os avisos (etapa sem coluna, perdido sem motivo) sem texto de paciente', async () => {

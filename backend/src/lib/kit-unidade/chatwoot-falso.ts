@@ -33,7 +33,7 @@ interface ContaFalsa {
   attrs: Atributo[];
   rules: Regra[];
   canned: Array<{ id: number; short_code: string; content: string }>;
-  inboxes: Array<{ id: number; name: string; channel_type: string; channel: Record<string, unknown>; agent_bot: number | null; membros: number[]; lock_to_single_conversation?: boolean }>;
+  inboxes: Array<{ id: number; name: string; channel_type: string; channel: Record<string, unknown>; agent_bot: number | null; membros: number[] }>;
   teams: Array<{ id: number; name: string; membros: number[] }>;
   agents: Array<{ id: number; name: string; email: string; role: string }>;
   bots: Array<{ id: number; name: string; outgoing_url: string; access_token: string }>;
@@ -45,7 +45,7 @@ export interface OpcoesDoFalso {
   tokenDaPlataforma?: string;
   tokenDeReferencia?: string;
   /** sem isto a conta de referência (a 1) nasce vazia */
-  referencia?: Partial<Pick<ContaFalsa, 'labels' | 'rules' | 'inboxes'>> & { attrs?: Array<Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }> };
+  referencia?: Partial<Pick<ContaFalsa, 'labels' | 'rules'>> & { attrs?: Array<Omit<Atributo, 'attribute_display_type' | 'attribute_model'> & { attribute_display_type: number | string; attribute_model: number | string }> };
   /** liga/desliga a plataforma (conta que o João ainda não criou o Platform App) */
   semPlataforma?: boolean;
   /** quantas vezes o vínculo do usuário à conta falha com 500 (para provar a recuperação) */
@@ -80,7 +80,6 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
     labels: o.referencia?.labels ?? [],
     attrs: (o.referencia?.attrs ?? []).map(atributoDoFalso),
     rules: o.referencia?.rules ?? [],
-    inboxes: o.referencia?.inboxes ?? [],
   });
 
   const resposta = (status: number, corpo: unknown): Response => new Response(corpo === null ? '' : JSON.stringify(corpo), { status });
@@ -199,13 +198,9 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
       if (metodo === 'GET') return resposta(200, { payload: c2.inboxes.map((x) => ({ id: x.id, name: x.name, channel_type: x.channel_type, agent_bot: x.agent_bot })) });
       if (c2.inboxes.some((x) => x.name === corpo.name)) return erro422('Name has already been taken');
       const tipo = corpo.channel?.type === 'api' ? 'Channel::Api' : 'Channel::Whatsapp';
-      const nova = { id: id(), name: corpo.name, channel_type: tipo, channel: corpo.channel ?? {}, agent_bot: null as number | null, membros: [] as number[], lock_to_single_conversation: corpo.lock_to_single_conversation as boolean | undefined };
+      const nova = { id: id(), name: corpo.name, channel_type: tipo, channel: corpo.channel ?? {}, agent_bot: null as number | null, membros: [] as number[] };
       c2.inboxes.push(nova);
       return resposta(200, { id: nova.id, name: nova.name, channel_type: tipo });
-    }
-    if (metodo === 'GET' && (m = /^inboxes\/(\d+)$/.exec(rota))) {
-      const i = c2.inboxes.find((x) => x.id === Number(m![1]));
-      return i ? resposta(200, { id: i.id, name: i.name, channel_type: i.channel_type, provider: (i.channel as { provider?: string }).provider ?? null, lock_to_single_conversation: i.lock_to_single_conversation ?? false }) : resposta(404, { error: 'Resource could not be found' });
     }
     if (metodo === 'GET' && (m = /^inboxes\/(\d+)\/agent_bot$/.exec(rota))) {
       const i = c2.inboxes.find((x) => x.id === Number(m![1]));
@@ -287,12 +282,11 @@ export function chatwootFalso(o: OpcoesDoFalso = {}) {
     usuarios,
     kapso,
     /** conta de referência com o molde mínimo (etiquetas, atributos e uma regra), como a de Parauapebas */
-    semear(c: Partial<Pick<ContaFalsa, 'labels' | 'attrs' | 'rules' | 'inboxes'>>) {
+    semear(c: Partial<Pick<ContaFalsa, 'labels' | 'attrs' | 'rules'>>) {
       const ref = contas.get(1)!;
       ref.labels.push(...(c.labels ?? []));
       ref.attrs.push(...(c.attrs ?? []));
       ref.rules.push(...(c.rules ?? []));
-      ref.inboxes.push(...(c.inboxes ?? []));
     },
   };
 }

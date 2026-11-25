@@ -299,7 +299,7 @@ test('campo de DATA sem hora: o dia UTC do valor (03:00 UTC e 00:00 UTC dão o M
 test('etapa de ENTRADA reconhecida pelo TIPO (1), com qualquer nome; valor em reais no formato pt-BR', () => {
   assert.equal(traduzirEtapa(cartao({ etapa: 'Leads de entrada', statusTipo: 1 })).etapa, 'Novo lead');
   assert.equal(traduzirEtapa(cartao({ funil: 'TRATAMENTO', etapa: 'Entrada nova', statusTipo: 1 })).etapaTratamento, 'Entrada');
-  for (const [bruto, esperado] of [['1.500,00', 1500], ['1500.50', 1500.5], ['250', 250], ['1.234.567,89', 1234567.89], ['R$ ?', undefined]] as const) {
+  for (const [bruto, esperado] of [['1.500,00', 1500], ['1500.50', 1500.5], ['250', 250], ['1.234.567,89', 1234567.89], ['1.500', 1500], ['2.500.000', 2500000], ['1.5', 1.5], ['0.500', 0.5], ['1500.500', 1500.5], ['R$ ?', undefined]] as const) {
     const m = atributosDoCartao(cartao({ etapa: 'GANHO / CONCLUÍDO', statusId: 142, fechadoEm: 1_790_050_000, campos: [campo('Valor do tratamento', bruto, 'monetary')] }));
     assert.equal(m.atributos.valor_fechado, esperado, bruto);
   }

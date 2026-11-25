@@ -12,6 +12,12 @@ module KommoHistorico
   ETIQUETAS_CRIADAS = [ETIQUETA, ETIQUETA_CONFERIR].freeze
   MARCA_CONVERSA = 'kommo_lead_id' # additional_attributes da conversa: o id do cartão na Kommo (a chave de idempotência)
   MARCA_ORIGEM = 'origem_historico'
+  # instante (epoch, segundos) em que a conversa foi gravada: o backend (`ehArquivo`) só trata a conversa como arquivo ENQUANTO ninguém mexeu depois dele
+  MARCA_IMPORTADO_EM = 'kommo_importado_em'
+  # a posição do cartão na conversa [aberto?1:0, atualizado_em, lead_id]: decide, em qualquer rodada, se um cartão novo vira a conversa de destino ou entra na que já existe
+  MARCA_ORDEM = 'kommo_ordem'
+  # o trecho que a nota-resumo traz quando a Kommo não entregou a conversa (a mesma frase do backend, kommo-historico-crm.ts): se a rodada seguinte consegue ler, a nota é reescrita
+  NOTA_SEM_CONVERSA = 'a Kommo não entregou a conversa deste cartão'
   # chaves que a conversa recebe mesmo sem atributo definido na conta (o código do CRM já as lê; a tela só mostra quando o kit as criar)
   ATRIBUTOS_SEM_DEFINICAO = %w[origem valor_fechado].freeze
   LIMITE_TEXTO = 20_000
@@ -87,9 +93,14 @@ module KommoHistorico
     "kommo-nota:#{linha[:lead_id]}"
   end
 
-  # Ordem de gravação: fechados primeiro, depois abertos; dentro de cada grupo, do mais velho para o mais novo — o cartão mais vivo recebe o
-  # id MAIOR, e é nele que a próxima mensagem do paciente cai (o Chatwoot reabre a última conversa do contato na caixa).
+  # A posição do cartão: aberto vale mais que fechado; dentro do grupo, o atualizado mais recentemente; empate, o id da Kommo.
+  def ordem_do_cartao(linha)
+    [linha[:aberto] ? 1 : 0, linha[:atualizado_em].to_i, linha[:lead_id].to_i]
+  end
+
+  # Ordem de gravação: da menor posição para a maior (fechados primeiro, depois abertos; do mais velho para o mais novo) — o cartão mais vivo recebe o
+  # id MAIOR, e é nele que a próxima mensagem do paciente cai (a caixa trava em conversa única: o Chatwoot usa a conversa de maior id do contato).
   def ordenar(linhas)
-    linhas.sort_by { |l| [l[:aberto] ? 1 : 0, l[:atualizado_em], l[:lead_id]] }
+    linhas.sort_by { |l| ordem_do_cartao(l) }
   end
 end

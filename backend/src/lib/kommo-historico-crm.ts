@@ -193,9 +193,11 @@ const ehSim = (v: unknown): boolean => semAcento(txt(v)) === 'SIM' || v === true
 
 /** Valor em reais: aceita número ou texto; sem valor/zero = null. */
 function dinheiro(v: unknown): number | null {
-  // «1.500,00» (pt-BR): com vírgula, o ponto é milhar; sem vírgula, «1500.50» é o formato da Kommo
+  // «1.500,00» (pt-BR): com vírgula, o ponto é milhar; «1.500» e «2.500.000» (grupos de 3 dígitos depois do ponto, sem vírgula) também são milhar;
+  // sem vírgula e fora disso, «1500.50» é o formato da Kommo
   const t = String(v ?? '').trim();
-  const n = typeof v === 'number' ? v : Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : t);
+  const milhar = /^[1-9]\d{0,2}(\.\d{3})+$/.test(t);
+  const n = typeof v === 'number' ? v : Number(t.includes(',') ? t.replace(/\./g, '').replace(',', '.') : milhar ? t.replace(/\./g, '') : t);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 const reais = (n: number): string => `R$ ${n.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;

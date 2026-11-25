@@ -10,7 +10,7 @@
  */
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA, ETIQUETA_HISTORICO } from './chatwoot-regua.js';
+import { CAIXAS_REGUA, historicoSilencia } from './chatwoot-regua.js';
 
 export const ETIQUETA_FALTA = 'falta-etapa';
 
@@ -41,7 +41,8 @@ export function eventoDeResolucao(corpo: any, caixas: Readonly<Record<number, st
   // sem a lista de etiquetas no aviso não mexe: regravar a lista a partir de nada apagaria as outras etiquetas
   if (!Array.isArray(corpo?.labels)) return null;
   const etiquetas: string[] = corpo.labels.map(String);
-  if (etiquetas.includes(ETIQUETA_HISTORICO)) return null;
+  // histórico em silêncio: conversa antiga que ninguém mexeu. A da Kommo em que o paciente voltou já não é (ver `historicoSilencia`)
+  if (historicoSilencia(corpo)) return null;
   const tem = etiquetas.includes(ETIQUETA_FALTA);
   const falta = camposFaltandoAoResolver(corpo?.custom_attributes);
   const resolvida = String(corpo?.status ?? '') === 'resolved';

@@ -82,6 +82,22 @@ class KommoHistoricoTest < Minitest::Test
     assert_equal [2, 3, 1], K.ordenar([a, b, c]).map { |x| x[:lead_id] }
   end
 
+  def test_ordem_do_cartao_aberto_vale_mais_que_fechado_e_depois_o_mais_recente
+    aberto_velho, = K.validar(linha('lead_id' => 1, 'aberto' => true, 'atualizado_em' => 100))
+    fechado_novo, = K.validar(linha('lead_id' => 2, 'aberto' => false, 'atualizado_em' => 900))
+    aberto_novo, = K.validar(linha('lead_id' => 3, 'aberto' => true, 'atualizado_em' => 500))
+    assert_equal [1, 100, 1], K.ordem_do_cartao(aberto_velho)
+    assert_equal 1, (K.ordem_do_cartao(aberto_velho) <=> K.ordem_do_cartao(fechado_novo)), 'aberto vale mais que fechado, mesmo mais velho'
+    assert_equal 1, (K.ordem_do_cartao(aberto_novo) <=> K.ordem_do_cartao(aberto_velho))
+    assert_equal(-1, (K.ordem_do_cartao(fechado_novo) <=> [1, 0, 0]))
+    # a ordem de gravação e a de destino são a MESMA: o último gravado é o que vale mais
+    assert_equal K.ordenar([aberto_novo, fechado_novo, aberto_velho]).last[:lead_id], [aberto_velho, fechado_novo, aberto_novo].max_by { |l| K.ordem_do_cartao(l) }[:lead_id]
+  end
+
+  def test_nota_sem_conversa_e_a_mesma_frase_do_backend
+    assert_includes 'Conversa: a Kommo não entregou a conversa deste cartão (sem permissão de chats ou sem conversa).', K::NOTA_SEM_CONVERSA
+  end
+
   def test_source_ids_distintos_por_cartao_e_por_mensagem
     l, = K.validar(linha)
     assert_equal 'kommo:777:a', K.source_id_da_mensagem(l, l[:mensagens][0])

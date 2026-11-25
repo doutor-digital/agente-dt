@@ -53,6 +53,39 @@ export const CORTE_DO_HISTORICO_MS = Date.parse('2026-11-14T03:00:00Z');
 const SITUACOES_QUE_TIRAM_DO_ARQUIVO: ReadonlySet<string> = new Set(['Agendado', 'Confirmado', 'Remarcado', 'Atendido', 'Não compareceu']);
 /** Depois de quantos dias da consulta a conversa do histórico volta a ser arquivo (as sequências da régua vão até 30 dias). */
 export const DIAS_DA_CONSULTA_VIVA = 35;
+/** Os atributos que a importação da Kommo (ops/crm-historico-kommo) põe na conversa que CRIA: o id do cartão e o instante (epoch, segundos) da gravação. */
+export const KOMMO_LEAD_ID = 'kommo_lead_id';
+export const KOMMO_IMPORTADO_EM = 'kommo_importado_em';
+
+/** A conversa foi criada pela importação da Kommo e leva o instante da gravação (sem ele não dá para saber se alguém mexeu depois). */
+export function importadaDaKommo(raw: any): boolean {
+  const ad = raw?.additional_attributes;
+  const lead = ad?.[KOMMO_LEAD_ID];
+  const em = Number(ad?.[KOMMO_IMPORTADO_EM]);
+  return lead !== undefined && lead !== null && String(lead) !== '' && Number.isFinite(em) && em > 0;
+}
+
+/**
+ * Conversa da Kommo que NINGUÉM mexeu desde a importação: continua resolvida e a última atividade não passou do instante da gravação. Basta o paciente
+ * escrever (a caixa tem a trava de conversa única: a mensagem cai nesta conversa e a reabre), a equipe responder ou alguém reabrir, e ela deixa de valer
+ * como arquivo — a marca não é «arquivo para sempre».
+ */
+function intactaDesdeAImportacao(raw: any): boolean {
+  if (raw?.status !== 'resolved') return false;
+  const t = Number(raw?.last_activity_at) * 1000;
+  const importadaEm = Number(raw?.additional_attributes?.[KOMMO_IMPORTADO_EM]) * 1000;
+  return !(Number.isFinite(t) && t > importadaEm);
+}
+
+/** Consulta de pé: a de hoje em diante (Belém) ou de até 35 dias atrás, com situação Agendado/Confirmado/Remarcado/Atendido/Não compareceu. */
+function consultaDePe(raw: any, agora: Date): boolean {
+  const a = raw?.custom_attributes;
+  const dia = lerData(a?.data_consulta);
+  const hoje = lerData(diaEmBelem(agora));
+  if (!dia || !hoje) return false;
+  return dia.iso >= somarDias(hoje, -DIAS_DA_CONSULTA_VIVA).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta));
+}
+
 /**
  * Paciente com consulta marcada não é arquivo, mesmo parado: a consulta de hoje em diante (Belém) ou de até 35 dias atrás, com situação
  * Agendado/Confirmado/Remarcado/Atendido/Não compareceu. É paciente vivo: a régua manda véspera/dia/preparo e depois falta,
@@ -67,18 +100,28 @@ export function ehArquivo(raw: any, agora: Date = new Date()): boolean {
   // `additional_attributes.meta_conversation_id`. Enquanto estiver RESOLVIDA é SEMPRE arquivo, mesmo com última mensagem depois de 14/11 — a pessoa
   // que escreve de novo abre outra conversa (a caixa não trava em conversa única), então esta não "volta a viver" e não aparece no funil como lead
   // novo. Se alguém a REABRIU (status diferente de resolved), é trabalho da equipe: segue a regra de sempre (atividade depois do corte = viva).
-  // O mesmo vale para o histórico da KOMMO (importação de Timbó, ops/crm-historico-kommo): a marca é `additional_attributes.kommo_lead_id` (o id do cartão).
-  // O corte de 14/11 abaixo é de Parauapebas e a «consulta de pé» tiraria do arquivo o cartão AGENDADO importado — por isso a regra vem antes deles.
   const ad = raw?.additional_attributes;
-  const importada = (typeof ad?.meta_conversation_id === 'string' && ad.meta_conversation_id !== '') || (ad?.kommo_lead_id !== undefined && ad?.kommo_lead_id !== null && String(ad.kommo_lead_id) !== '');
-  if (importada && raw?.status === 'resolved') return true;
+  if (typeof ad?.meta_conversation_id === 'string' && ad.meta_conversation_id !== '' && raw?.status === 'resolved') return true;
+  // Histórico da KOMMO (importação de Timbó, ops/crm-historico-kommo): a caixa do WhatsApp TRAVA em conversa única, então a próxima mensagem do paciente
+  // cai nesta mesma conversa. É arquivo SÓ enquanto ninguém mexeu depois da importação; mexeu (paciente voltou, equipe respondeu, alguém reabriu), é uma
+  // conversa como qualquer outra — régua, agenda, CAPI, telas e o aviso de demora a enxergam. O corte de 14/11 abaixo é de Parauapebas (as datas importadas
+  // de Timbó são recentes e o tirariam do arquivo todas de uma vez): aqui vale o instante da importação. A consulta de pé (cartão AGENDADO, NÃO COMPARECEU
+  // com consulta de hoje em diante) mantém a conversa VIVA desde o nascimento: o paciente recebe os lembretes do CRM.
+  if (importadaDaKommo(raw)) return intactaDesdeAImportacao(raw) && !consultaDePe(raw, agora);
   const t = Number(raw?.last_activity_at) * 1000;
   if (Number.isFinite(t) && t > 0 && t >= CORTE_DO_HISTORICO_MS) return false;
-  const a = raw?.custom_attributes;
-  const dia = lerData(a?.data_consulta);
-  const hoje = lerData(diaEmBelem(agora));
-  if (!dia || !hoje) return true;
-  return !(dia.iso >= somarDias(hoje, -DIAS_DA_CONSULTA_VIVA).iso && SITUACOES_QUE_TIRAM_DO_ARQUIVO.has(str(a?.situacao_consulta)));
+  return !consultaDePe(raw, agora);
+}
+
+/**
+ * O rótulo `historico` SILENCIA o aviso de demora e a etiqueta `falta-etapa` (a conversa não é de um paciente a atender). Na conversa da Kommo o rótulo
+ * só silencia enquanto ela é arquivo: o paciente que voltou é atendido como qualquer outro. Nas demais (Parauapebas, Instagram/Messenger) vale o rótulo,
+ * como sempre valeu.
+ */
+export function historicoSilencia(raw: any, agora: Date = new Date()): boolean {
+  const etiquetas: unknown[] = Array.isArray(raw?.labels) ? raw.labels : [];
+  if (!etiquetas.some((e) => String(e) === ETIQUETA_HISTORICO)) return false;
+  return importadaDaKommo(raw) ? ehArquivo(raw, agora) : true;
 }
 /** Arquivo que mesmo assim vale no funil: tem etapa (a do Kommo, gravada na unificação). */
 export function arquivoComEtapa(raw: any): boolean {
