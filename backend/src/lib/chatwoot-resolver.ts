@@ -11,12 +11,13 @@
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA, historicoSilencia } from './chatwoot-regua.js';
+import { etapasDaCaixa, papeisDosAtributos, type MapaDeEtapas } from './chatwoot-etapas.js';
 
 export const ETIQUETA_FALTA = 'falta-etapa';
 
 /** Etapa sempre; Perdido → motivo do não agendamento; Fechou → valor fechado (> 0). */
-export function camposFaltandoAoResolver(a: Record<string, unknown> | null | undefined): string[] {
-  const at = a ?? {};
+export function camposFaltandoAoResolver(a: Record<string, unknown> | null | undefined, mapa?: MapaDeEtapas | null): string[] {
+  const at = papeisDosAtributos(mapa, a ?? {});
   const f: string[] = [];
   const etapa = String(at.etapa ?? '').trim();
   if (!etapa) f.push('etapa');
@@ -44,7 +45,7 @@ export function eventoDeResolucao(corpo: any, caixas: Readonly<Record<number, st
   // histórico em silêncio: conversa antiga que ninguém mexeu. A da Kommo em que o paciente voltou já não é (ver `historicoSilencia`)
   if (historicoSilencia(corpo)) return null;
   const tem = etiquetas.includes(ETIQUETA_FALTA);
-  const falta = camposFaltandoAoResolver(corpo?.custom_attributes);
+  const falta = camposFaltandoAoResolver(corpo?.custom_attributes, etapasDaCaixa(Number(corpo?.inbox_id)));
   const resolvida = String(corpo?.status ?? '') === 'resolved';
   let acao: EventoDeResolucao['acao'] = null;
   if (resolvida && falta.length && !tem) acao = 'por';

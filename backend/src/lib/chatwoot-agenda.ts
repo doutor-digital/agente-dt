@@ -19,6 +19,7 @@ import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
+import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
 import { desfechoDaAgenda } from './franquia-calendario.js';
@@ -125,7 +126,10 @@ export function descricao(m: Record<string, string>): string {
 export interface ConversaDaCaixa {
   id: number;
   telefone: string;
+  /** os atributos com `etapa` em PAPEL (é com eles que se decide) */
   attrs: Record<string, unknown>;
+  /** os mesmos como o Chatwoot os tem (nomes da conta): é com eles que se mescla a gravação. Ausente = os de `attrs`. */
+  attrsDaConta?: Record<string, unknown>;
   atividade: number;
 }
 
@@ -181,6 +185,7 @@ const seguradasLogadas = new Set<string>();
 
 async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<ConversaDaCaixa[]> {
   const saida: ConversaDaCaixa[] = [];
+  const mapa = etapasDoContexto(ctx);
   for (let p = 1; p <= MAX_PAGINAS; p++) {
     const r = (await chamar(ctx, 'GET', 'conversations', { query: { inbox_id: String(caixa), status: 'all', assignee_type: 'all', page: String(p) } })) as {
       data?: { payload?: any[] };
@@ -191,7 +196,9 @@ async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<C
       const tel = String(c?.meta?.sender?.phone_number ?? '');
       // arquivo do histórico (unificado, parado): a agenda não grava nele — a consulta vai para a conversa viva
       if (!tel || /@g\.us$/i.test(String(c?.meta?.sender?.identifier ?? '')) || ehArquivo(c)) continue;
-      saida.push({ id: Number(c.id), telefone: tel, attrs: c?.custom_attributes ?? {}, atividade: Number(c?.last_activity_at) || 0 });
+      const crus = c?.custom_attributes ?? {};
+      const papeis = papeisDosAtributos(mapa, crus);
+      saida.push({ id: Number(c.id), telefone: tel, attrs: papeis, ...(papeis !== crus ? { attrsDaConta: crus } : {}), atividade: Number(c?.last_activity_at) || 0 });
     }
   }
   return saida;
@@ -260,13 +267,13 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
       if (modo === 'seco') {
         if (notasFeitas.has(chave)) continue;
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
-          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(muda)}`, message_type: 'outgoing', private: true },
+          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
         notasFeitas.add(chave);
       } else {
-        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: { ...conversa.attrs, ...muda } } });
+        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), ...atributosParaGravar(etapasDoContexto(ctx), muda) } } });
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
-          corpo: { content: `📅 Agenda da franquia: ${descricao(muda)}`, message_type: 'outgoing', private: true },
+          corpo: { content: `📅 Agenda da franquia: ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
       }
       gravadas++;

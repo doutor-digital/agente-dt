@@ -20,6 +20,7 @@ import { SEMENTE_PARAUAPEBAS, ehUsuarioCelular } from './chatwoot-unidades.js';
 // `unit_chatwoot`); os nomes e o formato antigos continuam aqui para quem já importava deles daqui.
 export { CAIXAS_REGUA, CAIXAS_CLOUD, CAIXAS_HISTORICO, GERENTE_DA_CAIXA } from './chatwoot-unidades.js';
 import { padraoMin } from './robos-tempo.js';
+import { ehMolde, nomeParaGravar, papelDaEtapa, papelDaEtapaDoTratamento, papeisDosAtributos, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { ehMensagemDeEspera } from './crm-demora/marca.js';
 
 export const ID_REGUA = 'chatwoot-regua';
@@ -403,6 +404,12 @@ export function atualizarVistos(
   const obs = camposObservados(c);
   const novo = new Map(vistos);
   const mudancas: Mudanca[] = [];
+  // a memória pode ter sido gravada ANTES de a conta ter o mapa (o nome da Kommo cru: «PERDIDO», «ALTA»…): comparar em PAPEL dos dois lados, senão ligar o mapa viraria «entrou na etapa»
+  // e dispararia follow-up, alta-conclusão/NPS, cancelamento e pré-pagamento sobre conversa antiga. Sem mapa (Parauapebas): comparação exata, como sempre.
+  const mapaDaConta = (c as { mapaDeEtapas?: MapaDeEtapas }).mapaDeEtapas;
+  // «Confirmado» é alias de «Agendado» na conta que não tem etapa própria para ele (a diferença é a situacao_consulta): vir de «Confirmado» e ler «Agendado» NÃO é entrar numa etapa
+  const confirmadoEhAlias = !!mapaDaConta && nomeParaGravar(mapaDaConta, 'Confirmado') === nomeParaGravar(mapaDaConta, 'Agendado');
+  const emPapel = (campo: string, v: string): string => (!mapaDaConta ? v : campo === 'etapa' ? papelDaEtapa(mapaDaConta, v) : campo === 'etapa_tratamento' ? papelDaEtapaDoTratamento(mapaDaConta, v) : v);
   if (!conhecida) {
     novo.set(CAMPO_VISTO_CONVERSA, { valor: '1', desde: agora, inicial: inicialNovo });
     mudancas.push({ tipo: 'criar', campo: CAMPO_VISTO_CONVERSA, valor: '1', desde: agora, inicial: inicialNovo });
@@ -412,7 +419,7 @@ export function atualizarVistos(
     if (!antes) {
       novo.set(campo, { valor, desde: agora, inicial: inicialNovo });
       mudancas.push({ tipo: 'criar', campo, valor, desde: agora, inicial: inicialNovo });
-    } else if (antes.valor !== valor) {
+    } else if (emPapel(campo, antes.valor) !== valor && !(campo === 'etapa' && antes.valor === 'Confirmado' && valor === 'Agendado' && confirmadoEhAlias)) {
       novo.set(campo, { valor, desde: agora, inicial: false });
       mudancas.push({ tipo: 'atualizar', campo, valor, desde: agora });
     }
@@ -963,7 +970,7 @@ export function decidirEtiquetaCelular(c: ConversaRegua, slug: string): 'por' | 
  * Uma conversa da listagem do Chatwoot → o que a régua precisa. null = não é paciente (grupo, bot do Evolution).
  * `last_non_activity_message` vem na própria listagem: nenhuma chamada por conversa.
  */
-export function conversaDoChatwoot(raw: any): ConversaRegua | null {
+export function conversaDoChatwoot(raw: any, mapa?: MapaDeEtapas | null): ConversaRegua | null {
   const id = Number(raw?.id);
   if (!Number.isInteger(id) || id <= 0) return null;
   const sender = raw?.meta?.sender ?? {};
@@ -972,15 +979,19 @@ export function conversaDoChatwoot(raw: any): ConversaRegua | null {
   if (/@g\.us$/i.test(identificador) || str(adicionais.type).toLowerCase() === 'group' || adicionais.group === true) return null;
   if (str(sender.phone_number) === TELEFONE_BOT_EVOLUTION) return null;
   const ultima = resumoDaMensagem(raw?.last_non_activity_message);
-  return {
+  const conversa: ConversaRegua = {
     id,
     nome: str(sender.name),
     etiquetas: Array.isArray(raw?.labels) ? raw.labels.map(String) : [],
-    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? raw.custom_attributes : {},
+    // `etapa` e `etapa_tratamento` entram como PAPEL (o nome da conta vira o do molde): a régua só conhece papéis. Sem mapa: o mesmo objeto de sempre.
+    attrs: raw?.custom_attributes && typeof raw.custom_attributes === 'object' ? papeisDosAtributos(mapa, raw.custom_attributes) : {},
     criadaEm: new Date(Number(raw?.created_at) * 1000 || 0),
     atendente: str(raw?.meta?.assignee?.name) || null,
     ultima,
     telefone: str(sender.phone_number),
     ...(importadaDaKommo(raw) && Array.isArray(raw.additional_attributes[KOMMO_CAPI_INICIAL]) ? { kommoCapiInicial: raw.additional_attributes[KOMMO_CAPI_INICIAL].map(String) } : {}),
   };
+  // o mapa de etapas da conta vai junto, MAS fora do que se enumera (JSON, spread, deepEqual): `atualizarVistos` o usa para ler a memória em PAPEL. Sem mapa, a conversa é a de sempre.
+  if (!ehMolde(mapa)) Object.defineProperty(conversa, 'mapaDeEtapas', { value: mapa, enumerable: false });
+  return conversa;
 }

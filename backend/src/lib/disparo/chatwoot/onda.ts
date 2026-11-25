@@ -17,6 +17,7 @@ import { problemaNoModelo } from '../regras.js';
 import { conferirModeloDaOnda, type ConferenciaDoModelo } from './canal.js';
 import { quemAprova, ajusteDaUnidade, type AjusteDaUnidade } from './ajuste.js';
 import { DIAS_SEM_REPETIR_DISPARO, calcularPublico, situacaoPeloCrm, type DepsDoPublico, type PublicoCalculado } from './publico.js';
+import { etapasDoContexto } from '../../chatwoot-etapas.js';
 import { filtroSchema, resumoDoFiltro, type Filtro } from './filtro.js';
 import { ultimoPedidoDeSaidaDoContato } from './mensagens.js';
 import { estimativaDoDisparo, type EstimativaDeCusto } from './custo.js';
@@ -49,7 +50,7 @@ export function depsDoPublico(unit: Unit, ctx: ContextoChatwoot): DepsDoPublico 
       return new Set(linhas.map((l) => l.chave));
     },
     // com agenda: a franquia, a mesma do motor (sem cartão, casa pelo nome inteiro). Sem agenda: a etapa do CRM.
-    franquia: async (e, c) => (franquia ? franquia({ leadId: null, nomeCompleto: e.nomeCompleto, telefone: e.telefone }) : situacaoPeloCrm(c.attrs)),
+    franquia: async (e, c) => (franquia ? franquia({ leadId: null, nomeCompleto: e.nomeCompleto, telefone: e.telefone }) : situacaoPeloCrm(c.attrs, etapasDoContexto(ctx))),
     agora: () => new Date(),
   };
 }

@@ -13,6 +13,7 @@
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
+import { etapasDoContexto, nomeParaGravar, type MapaDeEtapas } from './chatwoot-etapas.js';
 import { MOTIVO_POR_ETIQUETA, motivoNaLista } from './motivo-do-botao.js';
 
 export const PREFIXO_PERDIDO = 'perdido-';
@@ -46,14 +47,15 @@ export interface Mudanca {
  * Leitura fresca da conversa → o que gravar, ou null se não há etiqueta de Perdido (já tratada).
  * Duas etiquetas de Perdido juntas: vale a última da lista. Todas as `perdido-*` saem; as outras etiquetas ficam.
  */
-export function mudancaDaConversa(conv: any, opcoesDoMotivo?: readonly string[]): Mudanca | null {
+export function mudancaDaConversa(conv: any, opcoesDoMotivo?: readonly string[], mapa?: MapaDeEtapas | null): Mudanca | null {
   const etiquetas: string[] = Array.isArray(conv?.labels) ? conv.labels.map(String) : [];
   const comando = etiquetas.filter((e) => Object.hasOwn(MOTIVO_POR_ETIQUETA, e));
   if (!comando.length) return null;
   const motivo = motivoNaLista(MOTIVO_POR_ETIQUETA[comando[comando.length - 1]]!, opcoesDoMotivo);
   const atuais = conv?.custom_attributes && typeof conv.custom_attributes === 'object' ? conv.custom_attributes : {};
   return {
-    atributos: { ...atuais, etapa: ETAPA_PERDIDO, motivo_nao_agendamento: motivo },
+    // `atuais` são os atributos COMO O CHATWOOT OS TEM; a etapa nova vai com o nome que a conta dá ao papel Perdido
+    atributos: { ...atuais, etapa: nomeParaGravar(mapa, ETAPA_PERDIDO) ?? ETAPA_PERDIDO, motivo_nao_agendamento: motivo },
     etiquetas: etiquetas.filter((e) => !(Object.hasOwn(MOTIVO_POR_ETIQUETA, e))),
     motivo,
   };
@@ -65,6 +67,8 @@ export interface PortasDaPonte {
   gravarEtiquetas(id: number, etiquetas: string[]): Promise<void>;
   /** as opções de `motivo_nao_agendamento` desta conta (opcional: sem isto vale o valor de sempre) */
   opcoesDoMotivo?(): Promise<string[]>;
+  /** as etapas desta conta (opcional: sem isto, o molde) */
+  mapaDeEtapas?: MapaDeEtapas;
 }
 
 /** As opções de `motivo_nao_agendamento` por conta, guardadas 60 s (um clique de «Perdido» não baixa as definições todas de novo). */
@@ -72,6 +76,10 @@ const opcoesGuardadas = new Map<number, { ate: number; v: string[] }>();
 
 export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
   return {
+    // getter: o mapa de AGORA a cada clique (a ponte pode ficar guardada por mais tempo que a gravação do mapa)
+    get mapaDeEtapas() {
+      return etapasDoContexto(ctx);
+    },
     conversa: (id) => chamar(ctx, 'GET', `conversations/${id}`),
     async gravarAtributos(id, atributos) {
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: atributos } });
@@ -110,7 +118,7 @@ export async function aplicarEtiqueta(e: EventoDeEtiqueta, p: PortasDaPonte, tra
     } catch {
       opcoes = undefined;
     }
-    const m = mudancaDaConversa(conv, opcoes);
+    const m = mudancaDaConversa(conv, opcoes, p.mapaDeEtapas);
     if (!m) return 'nada';
     await p.gravarAtributos(e.conversa, m.atributos);
     await p.gravarEtiquetas(e.conversa, m.etiquetas);

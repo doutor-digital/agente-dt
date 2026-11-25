@@ -384,6 +384,8 @@ export type LinhaDoBanco = {
   /** coluna nova (passo 1): linha lida antes dela existir vem sem o campo */
   contaId?: number | null;
   subdominio?: string | null;
+  /** coluna nova (etapas por conta): ver `chatwoot-etapas.ts` */
+  etapas?: unknown;
   prefixoModelos: string;
   usuarioCelularId: number | null;
   gerenteId: number | null;

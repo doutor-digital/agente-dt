@@ -1965,6 +1965,8 @@ model UnitChatwoot {
   contaId Int? @map("conta_id")
   /// Subdomínio do CRM da clínica (<subdominio>.doutordigitalconsultoria.com): a origem do Chatwoot dela, aceita pelas telas que entram por iframe. Null = só a origem principal.
   subdominio String? @map("subdominio")
+  /// Etapas do CRM desta conta com o nome que ela usa (igual ao da Kommo): { comercial: [{papel, nome}], tratamento: [{papel, nome}] }, na ordem do quadro. Null = o molde da rede (Parauapebas). Ver lib/chatwoot-etapas.ts.
+  etapas Json? @map("etapas")
   /// Dados que entram NO TEXTO dos modelos: { nome, cidade, endereco, mapa, telefone?, valorConsulta?, valorComSinal? }.
   dadosModelos Json @map("dados_modelos")
   atualizadoPor String?  @map("atualizado_por")

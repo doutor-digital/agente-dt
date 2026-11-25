@@ -21,6 +21,7 @@ import type { Modo, Porto, VereditoExtra } from '../lote.js';
 import type { ResultadoDoTemplate } from '../../whatsapp-meta.js';
 import { caixaWhatsappOficial, conferirModeloDaOnda, type CaixaOficial, type ConferenciaDoModelo } from './canal.js';
 import { idDaMensagem, ultimoPedidoDeSaidaDoContato } from './mensagens.js';
+import { etapasDoContexto } from '../../chatwoot-etapas.js';
 import { conversaDoPublico, situacaoPeloCrm, DIAS_SEM_REPETIR_DISPARO } from './publico.js';
 import { ETIQUETA_SEM_FOLLOW_UP } from './filtro.js';
 import { prisma } from '../../prisma.js';
@@ -241,7 +242,7 @@ export function portoChatwoot(deps: DepsDoPortoChatwoot): Porto & { ocupouAUnida
         if (conv.etiquetas.some((e) => e.trim().toLowerCase() === ETIQUETA_SEM_FOLLOW_UP)) return { tipo: 'barrou', estado: 'descartado', motivo: 'ganhou a etiqueta sem-follow-up depois da montagem' };
         if (conv.interno) return { tipo: 'barrou', estado: 'descartado', motivo: 'contato interno' };
         if (!u.spineToken) {
-          const s = situacaoPeloCrm(conv.attrs);
+          const s = situacaoPeloCrm(conv.attrs, etapasDoContexto(ctx));
           if (s !== 'livre') return { tipo: 'barrou', estado: 'descartado', motivo: `já é paciente pela etapa do CRM (${s})` };
         }
         // recebeu OUTRO disparo desde a montagem (a lista foi montada há horas; a regra dos 7 dias vale na hora de mandar, não só na montagem)

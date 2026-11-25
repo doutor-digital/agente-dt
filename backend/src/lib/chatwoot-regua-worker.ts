@@ -56,6 +56,7 @@ import {
   type Visto,
 } from './chatwoot-regua.js';
 import { configDaUnidade, nomeDoModeloNaMeta } from './chatwoot-unidades.js';
+import { atributosParaGravar, etapasDaCaixa, etapasDoContexto } from './chatwoot-etapas.js';
 import { textosDoSlug } from './chatwoot-modelos.js';
 import { modoDaDemora, numeroDaGerenteNoBanco } from './crm-demora/gerente.js';
 import { confereCartaoNoKommo } from './kommo-cortado.js';
@@ -324,7 +325,8 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
       await chamar(ctx, 'POST', `conversations/${conversationId}/labels`, { corpo: { labels: etiquetas } });
     },
     async atributos(conversationId, attrs) {
-      await chamar(ctx, 'POST', `conversations/${conversationId}/custom_attributes`, { corpo: { custom_attributes: attrs } });
+      // `attrs` é a conversa INTEIRA com `etapa` em papel (conversaDoChatwoot): volta para o nome da conta, e o que a conta não conhece fica como veio
+      await chamar(ctx, 'POST', `conversations/${conversationId}/custom_attributes`, { corpo: { custom_attributes: atributosParaGravar(etapasDoContexto(ctx), attrs, true) } });
     },
     async atribuir(conversationId, agente) {
       await chamar(ctx, 'POST', `conversations/${conversationId}/assignments`, { corpo: { assignee_id: agente } });
@@ -394,6 +396,7 @@ async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ c
   const conversas: ConversaRegua[] = [];
   const atividades = new Map<number, number>();
   let truncada = true;
+  const mapa = etapasDaCaixa(caixa);
   for (let p = 1; p <= MAX_PAGINAS; p++) {
     const pagina = await chat.pagina(caixa, p);
     if (pagina.length === 0) {
@@ -401,7 +404,7 @@ async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ c
       break;
     }
     for (const raw of pagina) {
-      const c = conversaDoChatwoot(raw);
+      const c = conversaDoChatwoot(raw, mapa);
       // conversa de arquivo (histórico unificado, ninguém mexeu depois, sem consulta marcada): a régua não toca
       if (!c || vistas.has(c.id) || ehArquivo(raw, agora)) continue;
       vistas.add(c.id);

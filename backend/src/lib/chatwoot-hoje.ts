@@ -14,6 +14,7 @@
  */
 import { META_AGENDAMENTOS_POR_CAIXA } from './chatwoot-unidades.js';
 import { ehMensagemDeEspera } from './crm-demora/marca.js';
+import { nomeParaGravar, type MapaDeEtapas } from './chatwoot-etapas.js';
 
 const DIA = 86_400_000;
 export const DIA_MS = DIA;
@@ -89,7 +90,9 @@ export function semInteracao(c: any, agora: number): boolean {
   return etiquetas.includes('sem-resposta') || (ETAPAS_QUALIFICACAO.has(etapa) && !!ultimaNossa && agora - ultimaEm > DIA);
 }
 
-export function montarHoje(conversas: any[], agora: number, agendadasHoje: ReadonlySet<number>): Hoje {
+export function montarHoje(conversas: any[], agora: number, agendadasHoje: ReadonlySet<number>, mapa?: MapaDeEtapas | null): Hoje {
+  // `conversas` chegam com a etapa em PAPEL; na tela vai o nome que a conta usa
+  const nomeDaEtapa = (papel: string): string => nomeParaGravar(mapa, papel) ?? papel;
   const dia = diaEmBelem(agora);
   const amanha = somar(dia, 1);
   const n = { chegaram: 0, esperando: 0, naoInteragiram: 0, agendaram: 0, naAgenda: 0, faltaConfirmar: 0 };
@@ -131,7 +134,7 @@ export function montarHoje(conversas: any[], agora: number, agendadasHoje: Reado
     if (consulta === dia) n.naAgenda++;
     if ((consulta === dia || consulta === amanha) && (situ === '' || situ === 'Agendado')) n.faltaConfirmar++;
 
-    if ((etapa === 'Compareceu' || etapa === 'Pós-consulta') && !sim(a.fechou_tratamento)) separou.naoFecharam.push({ id, nome, detalhe: etapa });
+    if ((etapa === 'Compareceu' || etapa === 'Pós-consulta') && !sim(a.fechou_tratamento)) separou.naoFecharam.push({ id, nome, detalhe: nomeDaEtapa(etapa) });
     const alta = data10(a.data_alta);
     if (alta && somar(alta, 60) <= dia) separou.retorno60.push({ id, nome, detalhe: `alta em ${alta.split('-').reverse().join('/')}` });
     const retomar = data10(a.retomar_em);
