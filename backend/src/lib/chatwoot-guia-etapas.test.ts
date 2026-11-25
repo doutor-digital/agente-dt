@@ -176,7 +176,7 @@ class No {
 
 let ultimoImpedido = false;
 
-function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boolean } = {}) {
+function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boolean; contasSemAntecipado?: number[]; conta?: number } = {}) {
   const intervalos: Array<() => void> = [];
   const pedidos: Array<{ url: string; metodo: string }> = [];
   const body = new No('body');
@@ -223,12 +223,12 @@ function montar(opcoes: { etapa?: () => string; painel?: boolean; logado?: boole
     },
   };
   janela.top = janela;
-  const loc = { pathname: '/app/accounts/1/conversations/5' };
+  const loc = { pathname: `/app/accounts/${opcoes.conta ?? 1}/conversations/5` };
   const fetchFalso = async (url: string, o: any = {}) => {
     pedidos.push({ url: String(url), metodo: String(o?.method ?? 'GET').toUpperCase() });
     return { ok: true, json: async () => ({ custom_attributes: { etapa: opcoes.etapa ? opcoes.etapa() : 'Agendado' } }) };
   };
-  const js = G.guiaJs(JSON.stringify(AGENTE), {} as NodeJS.ProcessEnv);
+  const js = G.guiaJs(JSON.stringify(AGENTE), {} as NodeJS.ProcessEnv, opcoes.contasSemAntecipado ?? []);
   new Function('window', 'document', 'location', 'fetch', 'setInterval', 'setTimeout', js)(janela, doc, loc, fetchFalso, (f: () => void) => intervalos.push(f), (f: () => void) => f());
   // o botão do painel está dentro do embrulho de verdade: o script sobe por closest('.text-sm') até o embrulho
   secao.parentElement = embrulho;
@@ -470,4 +470,39 @@ test('Agendado: o guia diz o que o robô do pré-pagamento lê — «Pagamento a
   assert.match(passos, /Vai pagar antes\? Marque «Pagamento antecipado»/);
   assert.match(passos, /etiqueta «pagou-antecipado»/);
   assert.doesNotMatch(passos, /Pagou o sinal\? Marque «Pagamento antecipado»/, 'marcar o campo para quem já pagou faria o robô cobrar de novo');
+});
+
+test('unidade SEM pagamento antecipado (Timbó, conta 3): Agendado não mostra Pix nem «pagou-antecipado» e diz que a consulta é paga no dia; a aula e as outras etapas são as mesmas', async () => {
+  const sem = montar({ etapa: () => 'Agendado', conta: 3, contasSemAntecipado: [3] });
+  await sem.tick();
+  const t = sem.texto();
+  assert.match(t, /Confira Data, Hora \(HH:MM\) e Situação da consulta/);
+  assert.match(t, /A consulta é paga no dia, na clínica: não ofereça Pix nem pagamento antecipado/);
+  assert.match(t, /Aula 3\.2 · Marcar a consulta/);
+  assert.doesNotMatch(t, /Marque «Pagamento antecipado»|pagou-antecipado|o robô pergunta|o robô para de cobrar/);
+  assert.doesNotMatch(t, /Vai pagar antes/);
+  // as outras etapas da mesma conta não mudam
+  let etapa = 'Perdido';
+  const outra = montar({ etapa: () => etapa, conta: 3, contasSemAntecipado: [3] });
+  await outra.tick();
+  assert.match(outra.texto(), /Escolha o Motivo do não agendamento/);
+});
+
+test('conta que ACEITA antecipado (ou que não está na lista): Agendado segue com os passos do Pix, como sempre', async () => {
+  const aceita = montar({ etapa: () => 'Agendado', conta: 1, contasSemAntecipado: [3] });
+  await aceita.tick();
+  assert.match(aceita.texto(), /Vai pagar antes\? Marque «Pagamento antecipado»/);
+  assert.match(aceita.texto(), /pagou-antecipado/);
+  const semLista = montar({ etapa: () => 'Agendado', conta: 3 });
+  await semLista.tick();
+  assert.match(semLista.texto(), /Vai pagar antes\?/);
+});
+
+test('o conteúdo do guia leva só ids de conta inteiros e positivos, e os passos sem antecipado cobrem só etapas que existem', () => {
+  const c = G.conteudoDoGuia([3, 0, -1, 2.5, 7]);
+  assert.deepEqual(c.semAntecipado, [3, 7]);
+  assert.deepEqual(G.conteudoDoGuia().semAntecipado, []);
+  for (const e of Object.keys(G.PASSOS_SEM_ANTECIPADO)) assert.ok(G.ETAPAS_DO_CRM.includes(e as never), e);
+  assert.doesNotMatch(G.PASSOS_SEM_ANTECIPADO.Agendado!.join(' '), /pagou-antecipado|Marque/);
+  assert.equal(new Function(`return ${JSON.stringify(c)}`)().semAntecipado.length, 2);
 });

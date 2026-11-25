@@ -51,6 +51,7 @@ import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArqui
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, semArquivo, type Arquivo, type LeituraCrua } from '../lib/funil-leitura.js';
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
+import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import {
   ATRIBUTO_ETAPA,
@@ -1817,7 +1818,7 @@ body{background:#f4f6f9}
  * tela. Passa ao quadro só o login de quem já está logado no Chatwoot (o cookie da sessão dele), e só para este servidor.
  * Se um dia o Chatwoot mudar o menu e o item não achar lugar, aparece um botão "Funil" no canto (nada quebra).
  */
-export function menuFunilHandler(_req: Request, res: Response): void {
+export async function menuFunilHandler(_req: Request, res: Response): Promise<void> {
   if (!origemDoCrm()) {
     res.status(404).type('application/javascript').send('/* funil desligado */');
     return;
@@ -1833,7 +1834,7 @@ export function menuFunilHandler(_req: Request, res: Response): void {
     .type('application/javascript')
     .set('Cache-Control', 'public, max-age=300')
     .set('Cross-Origin-Resource-Policy', 'cross-origin')
-    .send(montarMenuJs(agente));
+    .send(montarMenuJs(agente, await contasSemAntecipado().catch(() => [])));
 }
 
 /**
@@ -1841,10 +1842,10 @@ export function menuFunilHandler(_req: Request, res: Response): void {
  * independentes no MESMO arquivo, porque o DASHBOARD_SCRIPTS da produção carrega só este endereço. Erro de EXECUÇÃO do botão
  * não derruba o menu (o `try`); erro de SINTAXE derrubaria o arquivo todo, por isso o teste `menu.js … PARSEIAM` é obrigatório.
  */
-export function montarMenuJs(agente: string): string {
+export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly number[] = []): string {
   const origem = JSON.stringify(agente);
   // o guia da etapa («O que fazer agora») é um terceiro bloco independente: se falhar ao executar, o menu e a assistente seguem
-  const guia = guiaJs(origem);
+  const guia = guiaJs(origem, process.env, contasDoGuiaSemAntecipado);
   // o selo da Sofia (faixa roxa no cartão + barra na conversa) é o quarto bloco independente: só visual, só lê; falhou, o resto segue
   const selo = seloSofiaJs();
   return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${guia ? `;try{\n${guia}\n}catch(e){}\n` : ''}${selo ? `;try{\n${selo}\n}catch(e){}\n` : ''}`;

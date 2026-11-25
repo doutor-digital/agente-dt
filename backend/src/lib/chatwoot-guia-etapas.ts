@@ -110,6 +110,14 @@ export const GUIA_DAS_ETAPAS: Readonly<Record<EtapaDoCrm, GuiaDaEtapa>> = {
   },
 };
 
+/**
+ * Os passos de uma etapa para a unidade que NÃO aceita pagamento antecipado (`units.accepts_advance_payment = false`, ex.: Timbó: a consulta é paga no dia, na clínica).
+ * Só «Agendado» muda: sem os passos do Pix e do «pagou-antecipado» (o robô do pré-pagamento só dispara quando alguém marca «Pagamento antecipado»: aqui ninguém deve marcar).
+ */
+export const PASSOS_SEM_ANTECIPADO: Readonly<Partial<Record<EtapaDoCrm, readonly string[]>>> = {
+  Agendado: ['Confira Data, Hora (HH:MM) e Situação da consulta', 'A consulta é paga no dia, na clínica: não ofereça Pix nem pagamento antecipado', 'Lembretes saem sozinhos. Combinou tudo? Pode Resolver'],
+};
+
 /** O «?» das telas nossas (Funil, Hoje, Oportunidades, Agente): o botão do cabeçalho pede ao menu para abrir esta aula no mesmo modal. */
 export const AULAS_DAS_TELAS: Readonly<Record<'funil' | 'hoje' | 'oportunidades' | 'agente', AulaDoGuia>> = {
   funil: aula('4.1', 'O Funil', 'c41-funil', '1:14'),
@@ -122,14 +130,16 @@ export const AULAS_DAS_TELAS: Readonly<Record<'funil' | 'hoje' | 'oportunidades'
 export const guiaDaEtapaLigado = (env: NodeJS.ProcessEnv = process.env): boolean => env.CHATWOOT_GUIA_ETAPA !== '0';
 
 /** O que o script recebe: nada de segredo, nada de paciente — só texto de ensino e endereços públicos de vídeo. */
-export function conteudoDoGuia(): {
+export function conteudoDoGuia(contasSemAntecipado: readonly number[] = []): {
+  semAntecipado: number[];
+  passosSemAntecipado: Record<string, readonly string[]>;
   base: string;
   curso: string;
   padrao: string;
   etapas: Record<string, { passos: readonly string[]; aula: AulaDoGuia }>;
   telas: Record<string, AulaDoGuia>;
 } {
-  return { base: BASE_DOS_VIDEOS, curso: URL_DO_CURSO, padrao: ETAPA_PADRAO_DO_GUIA, etapas: { ...GUIA_DAS_ETAPAS }, telas: { ...AULAS_DAS_TELAS } };
+  return { semAntecipado: contasSemAntecipado.filter((c) => Number.isInteger(c) && c > 0), passosSemAntecipado: { ...PASSOS_SEM_ANTECIPADO } as Record<string, readonly string[]>, base: BASE_DOS_VIDEOS, curso: URL_DO_CURSO, padrao: ETAPA_PADRAO_DO_GUIA, etapas: { ...GUIA_DAS_ETAPAS }, telas: { ...AULAS_DAS_TELAS } };
 }
 
 /**
@@ -245,6 +255,9 @@ const GUIA_JS = String.raw`(function(){
   function guiaDaEtapa(etapa){
     var e = String(etapa || '').trim();
     var g = CFG.etapas[e];
+    // conta de unidade sem pagamento antecipado: os passos próprios da etapa (sem Pix); a aula e o resto são os mesmos
+    var conta = contaDaUrl();
+    if (g && conta && CFG.semAntecipado.indexOf(Number(conta)) >= 0 && CFG.passosSemAntecipado[e]) g = { passos: CFG.passosSemAntecipado[e], aula: g.aula };
     if (g) return { g: g, rotulo: e };
     return { g: CFG.etapas[CFG.padrao], rotulo: e ? e + ' · guia geral' : 'Sem etapa' };
   }
@@ -333,7 +346,7 @@ const GUIA_JS = String.raw`(function(){
 })();`;
 
 /** O JavaScript do guia, pronto para ir no `menu.js`; vazio quando `CHATWOOT_GUIA_ETAPA=0`. `agenteJson` = a origem do servidor em JSON. */
-export function guiaJs(agenteJson: string, env: NodeJS.ProcessEnv = process.env): string {
+export function guiaJs(agenteJson: string, env: NodeJS.ProcessEnv = process.env, contasSemAntecipado: readonly number[] = []): string {
   if (!guiaDaEtapaLigado(env)) return '';
-  return GUIA_JS.split('__AGENTE__').join(agenteJson).split('__GUIA__').join(JSON.stringify(conteudoDoGuia()));
+  return GUIA_JS.split('__AGENTE__').join(agenteJson).split('__GUIA__').join(JSON.stringify(conteudoDoGuia(contasSemAntecipado)));
 }
