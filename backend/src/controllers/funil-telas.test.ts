@@ -224,6 +224,14 @@ test('menu: o servidor diz quem vê Marketing e Gestor (a lista de gestores nunc
   assert.equal(corsDoAssistente('/api/public/funil/gestao', 'https://outro.exemplo.test', cw), null);
 });
 
+test('menu.js: leva as contas sem pagamento antecipado para o guia (só ids inteiros) e continua PARSEANDO', () => {
+  const js = montarMenuJs('https://agente.exemplo.test', [3, 0, 7]);
+  assert.doesNotThrow(() => new Function(js));
+  assert.match(js, /"semAntecipado":\[3,7\]/);
+  assert.match(js, /"passosSemAntecipado":\{"Agendado":\[/);
+  assert.match(montarMenuJs('https://agente.exemplo.test'), /"semAntecipado":\[\]/);
+});
+
 test('menu.js: PARSEIA, tem os cinco itens na ordem, sem lista de e-mails nem hash, e Esc/Ctrl+R continuam', () => {
   const js = montarMenuJs('https://agente.exemplo.test');
   assert.doesNotThrow(() => new Function(js));
