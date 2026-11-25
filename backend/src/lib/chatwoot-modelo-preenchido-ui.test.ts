@@ -82,11 +82,17 @@ function montar(c: Cenario = {}) {
     return i;
   });
   const estilos: Node[] = [];
+  const buscasEmMassa = { n: 0 };
   const doc = {
     body, documentElement: {}, head: { appendChild: (e: Node) => estilos.push(e) },
     createElement: () => new Node('style'),
-    querySelector: (sel: string) => (sel.startsWith('style[') ? (estilos[0] ?? null) : null),
-    querySelectorAll: (sel: string) => (sel === 'input[type="text"][placeholder]' ? body.querySelectorAll('input') : []),
+    querySelector: (sel: string) => {
+      if (sel.startsWith('style[')) return estilos[0] ?? null;
+      const m = /^input\[type="text"\]\[placeholder\^="(.*)"\]$/.exec(sel);
+      if (m) return (body.querySelectorAll('input') as Input[]).find((i) => String(i.getAttribute('placeholder')).startsWith(m[1]!.replace(/\\"/g, '"'))) ?? null;
+      return null;
+    },
+    querySelectorAll: (sel: string) => { buscasEmMassa.n++; return sel === 'input[type="text"][placeholder]' ? body.querySelectorAll('input') : []; },
     getElementById: (id: string) => (id === 'app' ? { __vue_app__: { config: { globalProperties: { $t: (k: string, p: { variable: string }) => (k.endsWith('VARIABLE_PLACEHOLDER') ? `Insira o valor para ${p.variable}` : k) } } } } : null),
     cookie: c.cookie ?? 'cw_d_session_info=' + encodeURIComponent(JSON.stringify({ 'access-token': 'tk', client: 'cl', uid: 'u@x' })),
     addEventListener: (tipo: string, f: (e: unknown) => void) => { ouvintes.push({ tipo, f }); },
@@ -114,7 +120,7 @@ function montar(c: Cenario = {}) {
   /** a pessoa digita (evento de verdade): o ouvinte da fase de captura vê `isTrusted` */
   const digitar = (inp: Input, texto: string) => { inp.value = texto; ouvintes.filter((o) => o.tipo === 'input').forEach((o) => o.f({ isTrusted: true, target: inp })); };
   const valores = () => inputs.map((i) => i.value);
-  return { rodar, inputs, valores, chamadas, estilos, titulo, digitar, h3, previa, obs, liberar: (i = liberadores.length - 1) => liberadores[i]?.(), loc, ouvintes };
+  return { buscasEmMassa, rodar, inputs, valores, chamadas, estilos, titulo, digitar, h3, previa, obs, liberar: (i = liberadores.length - 1) => liberadores[i]?.(), loc, ouvintes };
 }
 
 test('FORMULÁRIO ACHADO: pergunta ao servidor com o login da pessoa (conta da URL), manda nome do modelo + corpo cru, e preenche as caixinhas VAZIAS (valor + evento input)', async () => {
@@ -248,4 +254,16 @@ test('chave CHATWOOT_MODELO_PREENCHIDO=0 tira o bloco; menu.js leva o bloco em t
   } finally {
     if (antes === undefined) delete process.env.CHATWOOT_MODELO_PREENCHIDO; else process.env.CHATWOOT_MODELO_PREENCHIDO = antes;
   }
+});
+
+test('SAI CEDO: com o seletor de modelos fechado (nenhuma caixinha de parâmetro na página) o observador só faz UMA busca barata e não varre nada, nem pergunta ao servidor', async () => {
+  const t = montar({ placeholders: ['Pesquisar modelos'] });
+  t.buscasEmMassa.n = 0;
+  for (let i = 0; i < 20; i++) { t.obs[0]!.f(); await t.rodar(); }
+  assert.equal(t.buscasEmMassa.n, 0, 'nenhuma varredura de inputs com o seletor fechado');
+  assert.equal(t.chamadas.length, 0);
+  // aberto: passa a funcionar
+  const aberto = montar();
+  await aberto.rodar();
+  assert.equal(aberto.chamadas.length, 1);
 });

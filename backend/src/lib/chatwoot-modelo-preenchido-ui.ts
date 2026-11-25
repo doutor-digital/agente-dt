@@ -46,10 +46,12 @@ const MODELO_JS = String.raw`(function(){
   function conversaDaUrl(){ var m = String(location.pathname).match(/\/conversations\/(\d+)/); return m ? Number(m[1]) : null; }
 
   // «Insira o valor para {variable}» (o texto da língua da pessoa): o que vem antes e depois da variável, para tirar a CHAVE do placeholder
+  var moldeGuardado = null; // só guarda o que veio do $t (o app ainda pode não ter carregado a língua)
   function moldeDoPlaceholder(){
+    if (moldeGuardado) return moldeGuardado;
     try {
       var app = document.getElementById('app'), g = app && app.__vue_app__ && app.__vue_app__.config.globalProperties;
-      if (g && typeof g.$t === 'function') { var t = String(g.$t('WHATSAPP_TEMPLATES.PARSER.VARIABLE_PLACEHOLDER', { variable: '\u0001' })); var i = t.indexOf('\u0001'); if (i >= 0) return { antes: t.slice(0, i), depois: t.slice(i + 1) }; }
+      if (g && typeof g.$t === 'function') { var t = String(g.$t('WHATSAPP_TEMPLATES.PARSER.VARIABLE_PLACEHOLDER', { variable: '\u0001' })); var i = t.indexOf('\u0001'); if (i >= 0) return (moldeGuardado = { antes: t.slice(0, i), depois: t.slice(i + 1) }); }
     } catch (e) {}
     return { antes: '', depois: '' };
   }
@@ -120,6 +122,9 @@ const MODELO_JS = String.raw`(function(){
 
   function passar(){
     espera = null;
+    // SAI CEDO quando o seletor de modelos não está aberto (a página muda o tempo todo): uma busca só, pelo começo do placeholder dos parâmetros
+    var molde = moldeDoPlaceholder();
+    if (molde.antes && !document.querySelector('input[type="text"][placeholder^="' + molde.antes.replace(/"/g, '\\"') + '"]')) return;
     var conversa = conversaDaUrl(), s = conversa ? sessao() : null; if (!conversa || !s) return;
     var fs = formularios();
     for (var i = 0; i < fs.length; i++) {

@@ -582,7 +582,7 @@ export async function assistenteModeloPreenchidoHandler(req: Request, res: Respo
   }
   try {
     const { lida, caixa } = await leituraComLogin(a.c, a.sessao).conversa(conversa);
-    const r = await preenchimentoDaConversa({ modelo: corpo.modelo, corpo: typeof corpo.corpo === 'string' ? corpo.corpo : undefined, lida, caixa, conta: a.c.conta?.conta }, { unidade: (slug) => prisma.unit.findUnique({ where: { slug } }) });
+    const r = await preenchimentoDaConversa({ modelo: corpo.modelo, corpo: typeof corpo.corpo === 'string' ? corpo.corpo : undefined, lida, caixa, conta: a.c.conta?.conta, atendente: a.nome }, { unidade: (slug) => prisma.unit.findUnique({ where: { slug } }) });
     res.set('Cache-Control', 'no-store').json(r);
     return;
   } catch (e) {
@@ -598,12 +598,14 @@ export async function assistenteModeloPreenchidoHandler(req: Request, res: Respo
 
 /** A unidade da conversa (a da caixa; na conta de clínica sem caixa mapeada, a única da conta) + a regra dos valores. Separado do handler para testar sem Chatwoot nem banco. */
 export async function preenchimentoDaConversa(
-  p: { modelo: string; corpo?: string; lida: ConversaLida; caixa: number | null; conta: number | undefined },
+  p: { modelo: string; corpo?: string; lida: ConversaLida; caixa: number | null; conta: number | undefined; /** o nome de quem está logada: «Aqui é {{atendente}}» dos modelos da SDR */ atendente?: string | null; agora?: Date },
   deps: { unidade: (slug: string) => Promise<(Parameters<typeof dadosDaUnidadeDaRegua>[0]) | null> },
 ): Promise<Preenchimento> {
-  const slug = (p.caixa ? CAIXAS_REGUA[p.caixa] : undefined) ?? (p.conta !== undefined ? unidadesDaConta(p.conta)[0] : undefined);
+  // a unidade é a da CAIXA; sem caixa mapeada, só vale quando a conta tem UMA unidade (com duas, qualquer escolha seria palpite)
+  const daConta = p.conta !== undefined ? unidadesDaConta(p.conta) : [];
+  const slug = (p.caixa ? CAIXAS_REGUA[p.caixa] : undefined) ?? (daConta.length === 1 ? daConta[0] : undefined);
   const unit = slug ? await deps.unidade(slug) : null;
   if (!slug || !unit) return { origem: 'nenhuma', valores: {} };
-  const c = { id: p.lida.id, nome: p.lida.nome, etiquetas: p.lida.etiquetas, attrs: p.lida.attrs, criadaEm: new Date(0), atendente: null, ultima: null };
-  return preencherModelo({ modelo: p.modelo, corpo: p.corpo }, c, dadosDaUnidadeDaRegua(unit, slug));
+  const c = { id: p.lida.id, nome: p.lida.nome, etiquetas: p.lida.etiquetas, attrs: p.lida.attrs, criadaEm: new Date(0), atendente: p.atendente?.trim() || null, ultima: null };
+  return preencherModelo({ modelo: p.modelo, corpo: p.corpo }, c, dadosDaUnidadeDaRegua(unit, slug), p.agora);
 }

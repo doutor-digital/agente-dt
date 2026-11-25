@@ -9,11 +9,15 @@ process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 
-const { preencherModelo, nomeBaseDoModelo, parametrosDoCorpo, papelDoParametro } = await import('./modelo-preenchido.js');
+const { preencherModelo: preencherModeloReal, nomeBaseDoModelo, parametrosDoCorpo, papelDoParametro } = await import('./modelo-preenchido.js');
 const { renderizar, variaveisDoModeloCampoACampo, proximaDataDaConversa } = await import('./chatwoot-regua.js');
 const { textosDaUnidade } = await import('./chatwoot-modelos.js');
 const { SEMENTE_PARAUAPEBAS } = await import('./chatwoot-unidades.js');
+const { TEXTOS_PARAU: TEXTOS } = await import('./chatwoot-regua-textos.js');
 
+// «hoje» FIXO (25/11/2026 12:00 em Belém): os testes não podem depender do relógio
+const AGORA = new Date('2026-11-25T15:00:00Z');
+const preencherModelo = (p: { modelo: string; corpo?: string }, c: Parameters<typeof preencherModeloReal>[1], u: Parameters<typeof preencherModeloReal>[2]) => preencherModeloReal(p, c, u, AGORA);
 const conversa = (nome: string, attrs: Record<string, unknown> = {}) => ({ id: 77, nome, etiquetas: [], attrs, criadaEm: new Date(0), atendente: null, ultima: null });
 const parau = { nome: 'Doutor Hérnia Parauapebas', pixKey: null, valorAntecipado: 200 };
 const consulta = { data_consulta: '2026-12-02', hora_consulta: '15:00' };
@@ -44,7 +48,7 @@ test('MODELO DO CRM sem o dado: o campo fica VAZIO (nunca inventa), os outros v�
   assert.deepEqual(r.valores, { '1': 'Maria' });
   const semNome = preencherModelo({ modelo: 'parau_consulta_lembrete_vespera' }, conversa('+5594984325883', consulta), parau);
   assert.deepEqual(semNome.valores, { '2': '02/12 às 15:00' }, 'nome que é telefone não vira «primeiro nome»');
-  assert.deepEqual(variaveisDoModeloCampoACampo('parau_consulta_lembrete_vespera', conversa('Maria', {}), parau), [{ campo: 'contact.name', valor: 'Maria' }, { campo: 'lead.cf.2450736', valor: null }]);
+  assert.deepEqual(variaveisDoModeloCampoACampo('parau_consulta_lembrete_vespera', conversa('Maria', {}), parau, undefined, AGORA), [{ campo: 'contact.name', valor: 'Maria' }, { campo: 'lead.cf.2450736', valor: null }]);
 });
 
 test('MODELO DE FORA (timbo_*): saudação antes de {{1}} = primeiro nome; o parâmetro depois de «Data e horário:» = a próxima consulta; o resto vazio', () => {
@@ -71,7 +75,7 @@ test('entradas ruins não lançam nem inventam: nome de modelo estranho, corpo v
   assert.deepEqual(preencherModelo({ modelo: '' }, conversa('Ana'), parau), { origem: 'nenhuma', valores: {} });
   assert.deepEqual(preencherModelo({ modelo: 'timbo_z' }, conversa('Ana'), parau), { origem: 'externo', valores: {} }, 'modelo de fora sem corpo: nada a ler');
   assert.deepEqual(preencherModelo({ modelo: 'timbo_z', corpo: 'Olá, {{1}}' }, conversa(''), parau).valores, {});
-  assert.equal(proximaDataDaConversa(conversa('x', {})), null);
+  assert.equal(proximaDataDaConversa(conversa('x', {}), AGORA), null);
 });
 
 test('os valores saem LIMPOS para parâmetro (uma linha, sem aspas nem <>), como a régua os manda', () => {
@@ -89,4 +93,41 @@ test('a régua não mudou: renderizar de Parauapebas continua igual (todos os ca
   assert.equal(sem.variaveis, null);
   assert.ok(sem.faltando.some((f) => /data da consulta/.test(f)));
   assert.equal(SEMENTE_PARAUAPEBAS.prefixoModelos, 'parau_');
+});
+
+test('DATA QUE JÁ PASSOU nunca é sugerida (sonda do sênior): consulta em 20/11, hoje 25/11, próxima sessão em 02/12 → vale a sessão, nos modelos de fora e nos do CRM', () => {
+  const c = conversa('MARIA SOUZA', { data_consulta: '2026-11-20', hora_consulta: '15:00', proxima_sessao: '2026-12-02', hora_sessao: '09:00' });
+  const fora = preencherModelo({ modelo: 'timbo_confirmacao', corpo: 'Olá, {{1}}! Sua sessão está confirmada.\n🗓 Data e horário: {{2}}' }, c, { ...parau, prefixoModelos: 'timbocrm_' });
+  assert.deepEqual(fora.valores, { '1': 'Maria', '2': '02/12 às 09:00' });
+  for (const m of ['parau_consulta_lembrete_vespera', 'parau_consulta_confirmacao_dia']) assert.deepEqual(preencherModelo({ modelo: m }, c, parau).valores, { '1': 'Maria', '2': '02/12 às 09:00' }, m);
+});
+
+test('nada futuro: a data fica VAZIA (nunca a que passou); o nome continua', () => {
+  const c = conversa('Maria', { data_consulta: '2026-11-20', hora_consulta: '15:00', proxima_sessao: '2026-11-22', data_retorno: '2026-11-01' });
+  assert.deepEqual(preencherModelo({ modelo: 'parau_consulta_lembrete_vespera' }, c, parau).valores, { '1': 'Maria' });
+  assert.deepEqual(preencherModelo({ modelo: 'timbo_x', corpo: 'Olá, {{1}}\nData e horário: {{2}}' }, c, parau).valores, { '1': 'Maria' });
+  assert.equal(proximaDataDaConversa(c, AGORA), null);
+});
+
+test('o limite é o INSTANTE (Belém): hoje mais tarde vale; hoje mais cedo já passou; só com a data, vale até o fim do dia; sessão passada com retorno futuro cai no retorno', () => {
+  // AGORA = 25/11 12:00 em Belém
+  assert.equal(proximaDataDaConversa(conversa('x', { data_consulta: '2026-11-25', hora_consulta: '18:00' }), AGORA), '25/11 às 18:00');
+  assert.equal(proximaDataDaConversa(conversa('x', { data_consulta: '2026-11-25', hora_consulta: '09:00' }), AGORA), null);
+  assert.equal(proximaDataDaConversa(conversa('x', { data_consulta: '2026-11-25' }), AGORA), '25/11');
+  assert.equal(proximaDataDaConversa(conversa('x', { data_consulta: '2026-11-24' }), AGORA), null);
+  assert.equal(proximaDataDaConversa(conversa('x', { data_consulta: '2026-11-20', proxima_sessao: '2026-11-21', data_retorno: '2026-12-15' }), AGORA), '15/12');
+});
+
+test('«Aqui é {{atendente}}» dos modelos da SDR: vem de quem está logada; sem nome, vazio; a régua não muda', () => {
+  const sdr = Object.keys((TEXTOS as Record<string, string>)).find((k) => /Aqui é \{\{lead\.cf\.2450732\}\}/.test((TEXTOS as Record<string, string>)[k]!))!;
+  const com = { ...conversa('Maria', {}), atendente: 'Lorena' };
+  const r = preencherModelo({ modelo: sdr }, com, parau);
+  assert.equal(r.valores['2'], 'Lorena');
+  assert.equal(preencherModelo({ modelo: sdr }, conversa('Maria', {}), parau).valores['2'], undefined);
+});
+
+test('a RÉGUA não descarta data passada: renderizar segue idêntica (a regra nova vale só no preenchimento à mão)', () => {
+  const c = conversa('Maria', { data_consulta: '2020-01-02', hora_consulta: '15:00' });
+  assert.deepEqual(renderizar('parau_consulta_lembrete_vespera', c, parau).variaveis, ['Maria', '02/01 às 15:00']);
+  assert.deepEqual(preencherModelo({ modelo: 'parau_consulta_lembrete_vespera' }, c, parau).valores, { '1': 'Maria' });
 });
