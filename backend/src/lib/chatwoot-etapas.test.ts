@@ -165,7 +165,10 @@ test('configuração inválida nunca vira mapa pela metade', () => {
   // o nome da conta que é o nome de OUTRO papel do molde tornaria a leitura ambígua
   assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Faltou', nome: 'Agendado' }, { papel: 'Agendado', nome: 'AGENDADO' }] }).some((m) => /outro papel|mesmo nome/.test(m)));
   // a conta que mantém o nome do molde para o mesmo papel está certa
-  assert.deepEqual(problemasDoMapa({ comercial: [{ papel: 'Perdido', nome: 'Perdido' }], tratamento: [{ papel: 'Alta', nome: 'Alta' }] }), []);
+  assert.deepEqual(problemasDoMapa({ comercial: ETAPAS_DO_MOLDE.comercial, tratamento: ETAPAS_DO_MOLDE.tratamento }), []);
+  // mapa sem um papel que o código grava sozinho (Perdido, Fechou, Agendado, Sofia qualifica, Novo lead; Em tratamento, Alta) é inválido
+  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: COLUNA_DE_TIMBO.comercial.filter((e) => e.papel !== 'Perdido') }).some((x) => /falta o papel «Perdido»/.test(x)));
+  assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, tratamento: COLUNA_DE_TIMBO.tratamento.filter((e) => e.papel !== 'Alta') }).some((x) => /falta o papel «Alta»/.test(x)));
   aplicarEtapasDasContas([{ contaId: 3, etapas: { comercial: [{ papel: 'Inventado', nome: 'X' }], tratamento: [] } }]);
   assert.equal(etapasDaConta(3), ETAPAS_DO_MOLDE);
   aplicarEtapasDasContas([]);

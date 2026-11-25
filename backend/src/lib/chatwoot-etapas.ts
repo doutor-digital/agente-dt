@@ -70,6 +70,10 @@ export const SUBSTITUTO_DO_PAPEL: Readonly<Partial<Record<PapelComercial, PapelC
   'Esperando humano': 'Sofia qualifica',
 };
 
+/** Os papéis que o código grava sozinho: todo mapa precisa tê-los. */
+const PAPEIS_QUE_O_CODIGO_GRAVA: readonly PapelComercial[] = ['Novo lead', 'Sofia qualifica', 'Agendado', 'Fechou', 'Perdido'];
+const PAPEIS_DO_TRATAMENTO_QUE_O_CODIGO_GRAVA: readonly PapelDoTratamento[] = ['Em tratamento', 'Alta'];
+
 /** Quando dois papéis têm o mesmo nome, a leitura devolve o que vem primeiro nesta lista. */
 const PRIORIDADE_NA_LEITURA: readonly PapelComercial[] = ['Agendado', 'Confirmado'];
 
@@ -118,6 +122,10 @@ export function problemasDoMapa(bruto: unknown): string[] {
   };
   conferir('comercial', PAPEIS_COMERCIAIS);
   conferir('tratamento', PAPEIS_DO_TRATAMENTO);
+  // os papéis que o código grava SOZINHO (Sofia, agenda, régua, botão «Perdido»): mapa sem eles gravaria etapa que a conta não tem
+  const tem = (funil: 'comercial' | 'tratamento'): Set<string> => new Set(((o[funil] as Array<{ papel?: unknown }>) ?? []).map((e) => String(e?.papel)));
+  if (Array.isArray(o.comercial)) for (const obrigatorio of PAPEIS_QUE_O_CODIGO_GRAVA) if (!tem('comercial').has(obrigatorio)) p.push(`comercial: falta o papel «${obrigatorio}» (o código grava esta etapa sozinho)`);
+  if (Array.isArray(o.tratamento)) for (const obrigatorio of PAPEIS_DO_TRATAMENTO_QUE_O_CODIGO_GRAVA) if (!tem('tratamento').has(obrigatorio)) p.push(`tratamento: falta o papel «${obrigatorio}»`);
   return p;
 }
 

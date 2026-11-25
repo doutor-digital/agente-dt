@@ -255,3 +255,10 @@ test('o leitor do banco só aplica o mapa das linhas ACEITAS (válida ou inerte 
     aplicarConfigs([SEMENTE_PARAUAPEBAS]);
   }
 });
+
+test('tela do Funil: a conta com etapas próprias recebe `confirmam` (os nomes dela); sem mapa a resposta é a mesma de sempre', async () => {
+  const { confirmamNaTela } = await import('../controllers/funil.controller.js');
+  const doTrat = ['Leads de entrada', 'EM TRATAMENTO', 'ALTA', 'TRATAMENTO CANCELADO'];
+  assert.deepEqual(confirmamNaTela(doTrat, TIMBO()), { confirmam: ['ALTA', 'TRATAMENTO CANCELADO'] });
+  assert.deepEqual(confirmamNaTela(['Entrada', 'Em tratamento', 'Alta', 'Tratamento cancelado'], etapasDaConta(1)), {}, 'Parauapebas: nenhum campo novo na resposta');
+});

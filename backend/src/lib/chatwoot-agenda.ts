@@ -267,13 +267,13 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
       if (modo === 'seco') {
         if (notasFeitas.has(chave)) continue;
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
-          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(muda)}`, message_type: 'outgoing', private: true },
+          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
         notasFeitas.add(chave);
       } else {
         await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), ...atributosParaGravar(etapasDoContexto(ctx), muda) } } });
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
-          corpo: { content: `📅 Agenda da franquia: ${descricao(muda)}`, message_type: 'outgoing', private: true },
+          corpo: { content: `📅 Agenda da franquia: ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
       }
       gravadas++;
