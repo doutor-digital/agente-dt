@@ -109,6 +109,8 @@ export function etapaDaConsulta(atual: Record<string, unknown>, d: Desejado, hoj
  */
 export function etapaDaFalta(atual: Record<string, unknown>, d: Desejado, mapa?: MapaDeEtapas | null): string | undefined {
   if (d.situacao_consulta !== 'Não compareceu' || nomeParaGravar(mapa, 'Faltou') === null) return undefined;
+  // a falta de uma Sessão ou de um Retorno após tratamento é de paciente em tratamento, não de lead: a mesma regra de categoria que promove a Agendado (`etapaDaConsulta`)
+  if (!d.categoria_consulta || !CATEGORIAS_COMERCIAIS.has(d.categoria_consulta)) return undefined;
   if (String(atual.funil ?? '').trim() === 'Tratamento' || String(atual.etapa_tratamento ?? '').trim() !== '') return undefined;
   const etapa = String(atual.etapa ?? '').trim();
   return etapa === 'Agendado' || etapa === 'Confirmado' ? 'Faltou' : undefined;

@@ -328,6 +328,8 @@ test('papéis novos nas regras: a agenda move para «Faltou» SÓ na conta que t
   assert.equal(etapaDaFalta({ etapa: 'Agendado' }, falta, null), undefined);
   assert.equal(etapaDaFalta({ etapa: 'Perdido' }, falta, TIMBO()), undefined, 'não mexe em quem não está agendado');
   assert.equal(etapaDaFalta({ etapa: 'Agendado', funil: 'Tratamento' }, falta, TIMBO()), undefined, 'nem em paciente em tratamento');
+  assert.equal(etapaDaFalta({ etapa: 'Agendado' }, { ...falta, categoria_consulta: 'Sessão' }, TIMBO()), undefined, 'falta de Sessão não é de lead');
+  assert.equal(etapaDaFalta({ etapa: 'Agendado' }, { ...falta, categoria_consulta: 'Retorno após tratamento' }, TIMBO()), undefined);
   assert.equal(mudancas({ etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-24', hora_consulta: '10:00', categoria_consulta: 'Avaliação' }, falta, hoje, TIMBO()).etapa, 'Faltou');
   assert.equal(mudancas({ etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-24', hora_consulta: '10:00', categoria_consulta: 'Avaliação' }, falta, hoje).etapa, undefined, 'sem mapa: igual a antes');
   // remarcou: consulta de pé de novo → «Faltou» vira Agendado

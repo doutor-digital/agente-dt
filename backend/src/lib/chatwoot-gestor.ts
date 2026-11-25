@@ -162,7 +162,7 @@ export function qualificacaoDe(c: any): Qualificacao | null {
   return null;
 }
 
-const ETAPAS_DE_AGENDAMENTO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Fechou', 'Pós-consulta', 'Faltou', 'Retorno pós-tratamento']);
+const ETAPAS_DE_AGENDAMENTO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Fechou', 'Pós-consulta', 'Faltou']);
 /** Já tem consulta marcada (etapa de agendamento em diante, ou data de consulta na conversa). */
 export function agendouDe(c: any): boolean {
   const a = atributosDe(c);
