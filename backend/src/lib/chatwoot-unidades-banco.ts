@@ -5,7 +5,7 @@
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
-import { aplicarConfigs, configDaLinha, mesclarComSemente, type LinhaDoBanco } from './chatwoot-unidades.js';
+import { aplicarConfigs, aplicarDominios, configDaLinha, mesclarComSemente, type LinhaDoBanco } from './chatwoot-unidades.js';
 
 const avisados = new Set<string>();
 let carregando: Promise<void> | null = null;
@@ -28,6 +28,8 @@ export async function recarregarConfigChatwoot(): Promise<void> {
         logger.warn({ slug }, `chatwoot-unidades: ${msg}`);
       });
       aplicarConfigs(lista);
+      // o ENDEREÇO de toda linha (mesmo a inerte, sem caixa): origens aceitas e mapa subdomínio → conta; não torna a config válida
+      aplicarDominios(linhas);
       ultimoErro = null;
     } catch (err) {
       // uma vez por erro diferente (banco fora do ar ou tabela ainda não migrada não pode virar uma linha de log por minuto)

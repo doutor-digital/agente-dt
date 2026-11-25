@@ -286,9 +286,39 @@ export function caixasDeContasProprias(): number[] {
 /** O domínio dos CRMs das clínicas: <subdominio>.doutordigitalconsultoria.com. */
 export const DOMINIO_DOS_CRMS = 'doutordigitalconsultoria.com';
 
-/** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado na configuração). Quem não tem subdomínio não entra. */
+/** Subdomínio aceito: o mesmo formato de `problemasDaConfig` (minúsculas e dígitos), nunca algo que vire caminho, porta ou outro host. */
+export const subdominioValido = (s: unknown): s is string => typeof s === 'string' && /^[a-z0-9]{3,40}$/.test(s);
+
+/**
+ * TODA linha de `unit_chatwoot` com subdomínio, MESMO a que ainda não vale como configuração (sem caixa = inerte: os workers a ignoram, e continuam ignorando).
+ * O endereço da clínica existe desde o dia em que a conta foi criada (Timbó, conta 3, 25/11/2026): as telas por iframe têm de aceitar a origem dele
+ * e o `menu.js` precisa saber a conta dele, com ou sem caixa. Só leitura de endereço; não entra em `configDaUnidade` nem em nenhum mapa de caixa.
+ */
+let dominiosDasLinhas: ReadonlyArray<{ subdominio: string; contaId: number | null }> = [];
+export function aplicarDominios(linhas: ReadonlyArray<{ subdominio?: string | null; contaId?: number | null }>): void {
+  const porSub = new Map<string, number | null>();
+  for (const l of linhas) if (subdominioValido(l.subdominio)) porSub.set(l.subdominio, Number.isInteger(l.contaId) && (l.contaId as number) > 0 ? (l.contaId as number) : null);
+  dominiosDasLinhas = [...porSub.entries()].map(([subdominio, contaId]) => ({ subdominio, contaId }));
+}
+
+/** subdomínio → conta, das clínicas válidas E das inertes. Conta nula = a do ambiente (`contaDoAmbiente`: Parauapebas); sem ela, o subdomínio fica de fora. */
+export function dominiosDasClinicas(contaDoAmbiente: number | null): Record<string, number> {
+  const m: Record<string, number> = {};
+  const pôr = (sub: string | null | undefined, conta: number | null | undefined): void => {
+    if (!subdominioValido(sub)) return;
+    const c = conta ?? contaDoAmbiente;
+    if (typeof c === 'number' && Number.isInteger(c) && c > 0) m[sub] = c;
+  };
+  for (const c of dominiosDasLinhas) pôr(c.subdominio, c.contaId);
+  for (const c of configs.values()) pôr(c.subdominio, c.contaId); // a configuração válida manda sobre a linha crua
+  return m;
+}
+
+/** As origens https dos CRMs das clínicas CADASTRADAS (subdomínio gravado em `unit_chatwoot`, com ou sem caixa). Quem não tem subdomínio não entra. */
 export function origensDasClinicas(): string[] {
-  return [...configs.values()].filter((c) => !!c.subdominio).map((c) => `https://${c.subdominio}.${DOMINIO_DOS_CRMS}`).sort();
+  const subs = new Set<string>([...configs.values()].map((c) => c.subdominio).filter(subdominioValido));
+  for (const d of dominiosDasLinhas) subs.add(d.subdominio);
+  return [...subs].map((s) => `https://${s}.${DOMINIO_DOS_CRMS}`).sort();
 }
 
 /** As unidades SEM conta própria (as da conta do ambiente), em ordem alfabética. */
