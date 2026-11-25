@@ -11,6 +11,8 @@ import {
   ETAPAS_DO_MOLDE,
   PAPEIS_COMERCIAIS,
   PAPEIS_DO_TRATAMENTO,
+  PAPEIS_NOVOS,
+  etapasNoNavegadorJs,
   aplicarEtapasDasContas,
   atributosParaGravar,
   conversaCrua,
@@ -48,9 +50,13 @@ test('SEM mapa: a mesma coisa, o mesmo objeto (Parauapebas fica byte a byte igua
     assert.equal(papeisDosAtributos(mapa, attrs), attrs);
     assert.equal(conversaCrua(mapa, raw), raw);
     assert.equal(atributosParaGravar(mapa, attrs), attrs);
+    assert.deepEqual(atributosParaGravar(mapa, { etapa: 'Faltou', x: 1 }), { x: 1 }, 'papel novo nunca é gravado no molde');
+    const inteiro = { etapa: 'Faltou', x: 1 };
+    assert.equal(atributosParaGravar(mapa, inteiro, true), inteiro);
     for (const p of [...PAPEIS_COMERCIAIS, 'texto livre', '']) {
       assert.equal(papelDaEtapa(mapa, p), p);
-      assert.equal(nomeParaGravar(mapa, p), p);
+      // os 4 papéis que o molde nunca teve NÃO são gravados no molde (a lista do atributo de Parauapebas não os tem)
+      assert.equal(nomeParaGravar(mapa, p), (PAPEIS_NOVOS as readonly string[]).includes(p) ? null : p);
     }
     for (const p of [...PAPEIS_DO_TRATAMENTO, 'texto livre']) {
       assert.equal(papelDaEtapaDoTratamento(mapa, p), p);
@@ -182,4 +188,36 @@ test('o alias «Confirmado» não tira «Agendado» da leitura, qualquer que sej
   // o mesmo nome (até só em caixa/acento) em dois papéis que NÃO são o par Agendado/Confirmado
   assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Faltou', nome: 'Agendado' }, { papel: 'Agendado', nome: 'agendado' }] }).some((x) => /mesmo nome/.test(x)));
   assert.ok(problemasDoMapa({ ...COLUNA_DE_TIMBO, comercial: [{ papel: 'Perdido', nome: 'PERDIDO' }, { papel: 'Frio', nome: 'Perdído' }] }).some((x) => /mesmo nome/.test(x)));
+});
+
+test('navegador: window.__ddEtapas devolve papel e nome da conta; conta sem mapa, o nome como está; sem nenhuma conta mapeada, nada é emitido', async () => {
+  const vm = await import('node:vm');
+  assert.equal(etapasNoNavegadorJs(), '', 'sem conta com mapa o menu.js fica como era');
+  aplicarEtapasDasContas([{ contaId: 3, etapas: COLUNA_DE_TIMBO }]);
+  try {
+    const js = etapasNoNavegadorJs();
+    assert.ok(!js.includes('`') && !js.includes('${'), 'vai dentro do menu.js');
+    const ctx: { window: { __ddEtapas?: any } } = { window: {} };
+    vm.runInNewContext(js, ctx);
+    const E = ctx.window.__ddEtapas;
+    assert.equal(E.mapa(3), true);
+    assert.equal(E.mapa(1), false);
+    assert.equal(E.papel(3, 'EM QUALIFICAÇÃO'), 'Sofia qualifica');
+    assert.equal(E.papel(3, 'em qualificacao'), 'Sofia qualifica');
+    assert.equal(E.papel(3, 'AGENDADO'), 'Agendado');
+    assert.equal(E.papel(3, 'GANHO / CONCLUÍDO'), 'Fechou');
+    assert.equal(E.papel(3, 'Sofia qualifica'), 'Sofia qualifica', 'nome antigo do molde');
+    assert.equal(E.papel(1, 'Perdido'), 'Perdido', 'conta sem mapa: como está');
+    assert.equal(E.papelT(3, 'ALTA'), 'Alta');
+    assert.equal(E.nome(3, 'Sofia qualifica'), 'EM QUALIFICAÇÃO');
+    assert.equal(E.nome(3, 'Esperando humano'), 'EM QUALIFICAÇÃO', 'substituto');
+    assert.equal(E.nome(3, 'Frio'), 'Frio', 'sem equivalente: o próprio papel');
+    assert.equal(E.nome(1, 'Perdido'), 'Perdido');
+    assert.equal(E.tem(3, 'Faltou'), true);
+    assert.equal(E.tem(3, 'Esperando humano'), false);
+    assert.equal(E.tem(3, 'Confirmado'), false, 'o alias Confirmado divide o nome com Agendado: não tem etapa própria');
+    assert.equal(E.tem(3, 'Agendado'), true);
+  } finally {
+    aplicarEtapasDasContas([]);
+  }
 });

@@ -111,6 +111,29 @@ export const GUIA_DAS_ETAPAS: Readonly<Record<EtapaDoCrm, GuiaDaEtapa>> = {
 };
 
 /**
+ * Os papéis que o molde da rede nunca teve e que só existem nas contas com etapas próprias (Timbó: EM ESPERA, CONFERIR NA FRANQUIA, NÃO COMPARECEU, RETORNO PÓS-TRATAMENTO).
+ * A chave é o PAPEL; na tela o nome é o da conta. Ficam fora de `ETAPAS_DO_CRM` (a lista de Parauapebas), mas o guia as conhece.
+ */
+export const GUIA_DOS_PAPEIS_NOVOS: Readonly<Record<string, GuiaDaEtapa>> = {
+  'Em espera': {
+    passos: ['Veja o «Motivo da espera» e a data em «Retomar em»', 'Na data combinada os robôs lembram o paciente sozinhos', 'Ele voltou a falar? Mude para a etapa certa'],
+    aula: A.resgateFrio,
+  },
+  'Conferir na franquia': {
+    passos: ['Confira na agenda e no cadastro da franquia se ele já é paciente', 'Já é paciente? Siga pelo Tratamento. Não é? Volte para a qualificação', 'Enquanto confere, não mande nada ao paciente'],
+    aula: A.marcarConsulta,
+  },
+  Faltou: {
+    passos: ['Situação da consulta: Não compareceu', 'Ligue e ofereça remarcar, sem cobrar a falta', 'Remarcou? Nova data e hora: o cartão volta para Agendado'],
+    aula: A.confirmouFaltou,
+  },
+  'Retorno pós-tratamento': {
+    passos: ['É paciente que volta depois do tratamento', 'Categoria da consulta: Retorno após tratamento', 'Marcou? Preencha Data e Hora (HH:MM)'],
+    aula: A.tratamento,
+  },
+};
+
+/**
  * Os passos de uma etapa para a unidade que NÃO aceita pagamento antecipado (`units.accepts_advance_payment = false`, ex.: Timbó: a consulta é paga no dia, na clínica).
  * Só «Agendado» muda: sem os passos do Pix e do «pagou-antecipado» (o robô do pré-pagamento só dispara quando alguém marca «Pagamento antecipado»: aqui ninguém deve marcar).
  */
@@ -139,7 +162,7 @@ export function conteudoDoGuia(contasSemAntecipado: readonly number[] = []): {
   etapas: Record<string, { passos: readonly string[]; aula: AulaDoGuia }>;
   telas: Record<string, AulaDoGuia>;
 } {
-  return { semAntecipado: contasSemAntecipado.filter((c) => Number.isInteger(c) && c > 0), passosSemAntecipado: { ...PASSOS_SEM_ANTECIPADO } as Record<string, readonly string[]>, base: BASE_DOS_VIDEOS, curso: URL_DO_CURSO, padrao: ETAPA_PADRAO_DO_GUIA, etapas: { ...GUIA_DAS_ETAPAS }, telas: { ...AULAS_DAS_TELAS } };
+  return { semAntecipado: contasSemAntecipado.filter((c) => Number.isInteger(c) && c > 0), passosSemAntecipado: { ...PASSOS_SEM_ANTECIPADO } as Record<string, readonly string[]>, base: BASE_DOS_VIDEOS, curso: URL_DO_CURSO, padrao: ETAPA_PADRAO_DO_GUIA, etapas: { ...GUIA_DAS_ETAPAS, ...GUIA_DOS_PAPEIS_NOVOS }, telas: { ...AULAS_DAS_TELAS } };
 }
 
 /**
@@ -255,11 +278,13 @@ const GUIA_JS = String.raw`(function(){
   function guiaDaEtapa(etapa){
     var e = String(etapa || '').trim();
     var g = CFG.etapas[e];
+    // o nome que a conta dá à etapa (a chave do guia é o PAPEL); Esperando humano e Confirmado, que a conta não tem, mostram a etapa dela mais a dica
+    var E = window.__ddEtapas, conta0 = contaDaUrl(), nomeDela = E && conta0 ? E.nome(conta0, e) : e, dica = ST.dica || '';
     // conta de unidade sem pagamento antecipado: os passos próprios da etapa (sem Pix); a aula e o resto são os mesmos
     var conta = contaDaUrl();
     if (g && conta && CFG.semAntecipado.indexOf(Number(conta)) >= 0 && CFG.passosSemAntecipado[e]) g = { passos: CFG.passosSemAntecipado[e], aula: g.aula };
-    if (g) return { g: g, rotulo: e };
-    return { g: CFG.etapas[CFG.padrao], rotulo: e ? e + ' · guia geral' : 'Sem etapa' };
+    if (g) return { g: g, rotulo: nomeDela + dica };
+    return { g: CFG.etapas[CFG.padrao], rotulo: e ? nomeDela + ' · guia geral' : 'Sem etapa' };
   }
   function desenhar(){
     if (!ST.raiz) return;
@@ -316,8 +341,18 @@ const GUIA_JS = String.raw`(function(){
       .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
       .then(function(j){
         if (ST.conversa !== c) return;
-        var etapa = String(((j && j.custom_attributes) || {}).etapa || '').trim();
-        if (etapa !== ST.etapa) { ST.etapa = etapa; garantirCartao(); desenhar(); }
+        var at = (j && j.custom_attributes) || {}, etiquetas = (j && j.labels) || [];
+        var bruta = String(at.etapa || '').trim(), etapa = bruta, dica = '';
+        var E = window.__ddEtapas, conta1 = contaDaUrl();
+        if (E && conta1) {
+          etapa = E.papel(conta1, bruta);
+          // conta com etapas próprias: «Esperando humano» e «Confirmado» não têm coluna; o que as distingue é a etiqueta e a Situação da consulta
+          if (E.mapa(conta1)) {
+            if (etapa === 'Sofia qualifica' && etiquetas.indexOf('esperando-humano') >= 0 && !E.tem(conta1, 'Esperando humano')) { etapa = 'Esperando humano'; dica = ' · esperando humano'; }
+            else if (etapa === 'Agendado' && String(at.situacao_consulta || '') === 'Confirmado' && !E.tem(conta1, 'Confirmado')) { etapa = 'Confirmado'; dica = ' · confirmado'; }
+          }
+        }
+        if (etapa !== ST.etapa) { ST.etapa = etapa; ST.dica = dica; garantirCartao(); desenhar(); }
       })
       .catch(function(){})
       .then(function(){ ST.buscando = false; });

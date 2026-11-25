@@ -162,7 +162,7 @@ export function qualificacaoDe(c: any): Qualificacao | null {
   return null;
 }
 
-const ETAPAS_DE_AGENDAMENTO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Fechou', 'Pós-consulta']);
+const ETAPAS_DE_AGENDAMENTO = new Set(['Agendado', 'Confirmado', 'Compareceu', 'Fechou', 'Pós-consulta', 'Faltou', 'Retorno pós-tratamento']);
 /** Já tem consulta marcada (etapa de agendamento em diante, ou data de consulta na conversa). */
 export function agendouDe(c: any): boolean {
   const a = atributosDe(c);
@@ -725,7 +725,7 @@ export function semaforoDe(c: any, dia: string): Semaforo {
 }
 const PESO_SEMAFORO: Record<Semaforo, number> = { Vermelho: 0, Amarelo: 1, Verde: 2 };
 
-const ETAPAS_ENCERRADAS = new Set(['Compareceu', 'Fechou', 'Pós-consulta', 'Perdido', 'Frio']);
+const ETAPAS_ENCERRADAS = new Set(['Compareceu', 'Fechou', 'Pós-consulta', 'Perdido', 'Frio', 'Faltou']);
 const SITUACOES_ENCERRADAS = new Set(['Atendido', 'Não compareceu', 'Desmarcado', 'Remarcado']);
 
 export function montarOportunidades(conversas: any[], agora: number, mapa?: MapaDeEtapas | null): Oportunidades {
