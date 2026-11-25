@@ -107,7 +107,7 @@ function mundo(q: any) {
     const c = contaId ? falso.contas.get(contaId) : null;
     return {
       banco: { unidade: { id: 'u1', campos: { ...campos } }, configChatwoot: e.config, caixasRegistradas: [...e.caixas], automacoes: Object.fromEntries(e.automacoes.map((a) => [a, a.startsWith('chatwoot-') ? 'seco' : 'ligado'])), sofia: { ...campos }, licoes: [] },
-      chatwoot: c ? { etiquetas: c.labels.map((l: any) => l.title), atributosConversa: c.attrs.filter((a: any) => a.attribute_model === 0).map((a: any) => a.attribute_key), atributosContato: c.attrs.filter((a: any) => a.attribute_model === 1).map((a: any) => a.attribute_key), opcoesDasListas: { conversa: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 0 && a.attribute_values.length).map((a: any) => [a.attribute_key, a.attribute_values])), contato: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 1 && a.attribute_values.length).map((a: any) => [a.attribute_key, a.attribute_values])) }, caixas: c.inboxes.map((i: any) => ({ id: i.id, nome: i.name, robo: !!i.agent_bot })), times: c.teams.map((t: any) => t.name), agentes: Object.fromEntries(c.agents.map((a: any) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])), pastas: {}, mensagensProntas: c.canned.map((p: any) => p.short_code), automacoesDaConta: c.rules.length, webhookDaConta: c.webhooks.length > 0, abas: c.apps.map((a: any) => a.title) }
+      chatwoot: c ? { etiquetas: c.labels.map((l: any) => l.title), atributosConversa: c.attrs.filter((a: any) => a.attribute_model === 0).map((a: any) => a.attribute_key), atributosContato: c.attrs.filter((a: any) => a.attribute_model === 1).map((a: any) => a.attribute_key), opcoesDasListas: { conversa: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 0 && a.attribute_display_type === 6).map((a: any) => [a.attribute_key, a.attribute_values])), contato: Object.fromEntries(c.attrs.filter((a: any) => a.attribute_model === 1 && a.attribute_display_type === 6).map((a: any) => [a.attribute_key, a.attribute_values])) }, caixas: c.inboxes.map((i: any) => ({ id: i.id, nome: i.name, robo: !!i.agent_bot })), times: c.teams.map((t: any) => t.name), agentes: Object.fromEntries(c.agents.map((a: any) => [a.email.toLowerCase(), { id: a.id, nome: a.name }])), pastas: {}, mensagensProntas: c.canned.map((p: any) => p.short_code), automacoesDaConta: c.rules.length, webhookDaConta: c.webhooks.length > 0, abas: c.apps.map((a: any) => a.title) }
         : { etiquetas: [], atributosConversa: [], atributosContato: [], caixas: [], times: [], agentes: {}, pastas: {}, mensagensProntas: [], automacoesDaConta: 0 },
       plataforma: true,
       segredos: Object.fromEntries(readdirSync(dir).map((f) => [f, true])),
@@ -213,4 +213,43 @@ test('lista que a conta ainda não tem é CRIADA com as opções; atributo extra
   const f = c.attrs.find((a: any) => a.attribute_key === 'fisioterapeuta');
   assert.equal(f.attribute_display_name, 'Já existia', 'o que já existe não é trocado');
   assert.equal(f.attribute_display_type, 0);
+});
+
+test('motivo_nao_fechamento precisa conservar «Solicitado exames» (a régua cobra o documento por esse nome)', () => {
+  const r = comBloco((o) => (o.chatwoot.listas = [{ chave: 'motivo_nao_fechamento', opcoes: ['Achou caro', 'Vai pensar'] }]));
+  assert.ok(!r.ok && r.erros.join(' ').includes('precisa conservar «Solicitado exames»'));
+  assert.ok(comBloco((o) => (o.chatwoot.listas = [{ chave: 'motivo_nao_fechamento', opcoes: ['Achou caro', 'Solicitado exames'] }])).ok);
+});
+
+test('motivo_nao_agendamento sem opção parecida com os 4 motivos dos botões «Perdido: …»: o seco AVISA (com a lista do Kommo, «Plano de Saúde» e «Não deu continuidade ao atendimento» servem)', async () => {
+  const mk = (opcoes: string[]) => {
+    const o = lerYamlOuJson(TEXTO) as any;
+    o.assistente = { quer: false };
+    for (const c of ['numero_oficial', 'kapso_phone_number_id', 'waba_id']) delete o.whatsapp[c];
+    o.chatwoot.listas = [{ chave: 'motivo_nao_agendamento', opcoes }];
+    const r = lerQuestionario(JSON.stringify(o), { semCaixa: true });
+    assert.ok(r.ok, r.ok ? '' : r.erros.join('; '));
+    return montarPlano(r.q, {}, { molde: MOLDE, soCrm: true, semCaixa: true }).passos.find((p) => p.id === 'listas')!;
+  };
+  const ruim = mk(['Preço', 'Distância', 'Outro']);
+  assert.match(ruim.avisos.join(' '), /NÃO tem opção parecida com «Sem interesse», «Outra cidade», «Plano de saúde», «Não deu continuidade»/);
+  const kommo = mk(['Sem interesse', 'Outra cidade', 'Plano de Saúde', 'Não deu continuidade ao atendimento', 'Não interagiu']);
+  assert.ok(!kommo.avisos.some((a) => /NÃO tem opção parecida/.test(a)), kommo.avisos.join(' | '));
+});
+
+test('lista que a conta tem mas como TEXTO livre: o kit FALHA claro (não diz que aplicou); o plano cria quando nenhuma lista existe e altera quando existe', async () => {
+  const q0 = questionario(false);
+  const m = mundo(q0);
+  await resp(montarPlano(q0, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q0, m);
+  const c = conta(m);
+  const lista = c.attrs.find((a: any) => a.attribute_key === 'motivo_espera');
+  lista.attribute_display_type = 0; // virou texto livre na conta
+  const q = questionario(true);
+  const { res } = await resp(montarPlano(q, m.estado(), { molde: MOLDE, soCrm: true, semCaixa: true }), q, m);
+  const falhou = res.find((r) => r.id === 'listas')!;
+  assert.equal(falhou.situacao, 'falhou');
+  assert.match(falhou.notas.join(' '), /motivo_espera: já existe como atributo de outro tipo \(0\), não como lista/);
+  // plano: nenhuma lista existe = criar; alguma existe = alterar
+  const vazio = mundo(q);
+  assert.equal(montarPlano(q, { ...vazio.estado(), chatwoot: { ...(vazio.estado().chatwoot ?? {}), etiquetas: [], atributosConversa: [], atributosContato: [], caixas: [], times: [], agentes: {}, pastas: {}, mensagensProntas: [], automacoesDaConta: 0, opcoesDasListas: { conversa: {}, contato: {} } } }, { molde: MOLDE, soCrm: true, semCaixa: true }).passos.find((p) => p.id === 'listas')!.acao, 'criar');
 });

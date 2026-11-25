@@ -104,3 +104,11 @@ test('aplicar com a lista da conta: grava o nome da lista; se ler a lista falhar
   assert.equal(await aplicarEtiqueta({ conversa: 6, slug: 's' }, { ...base, opcoesDoMotivo: async () => { throw new Error('Chatwoot fora'); } }, new Set()), 'gravou');
   assert.deepEqual(chamadas, ['attrs 5 Plano de Saúde', 'attrs 6 Plano de saúde']);
 });
+
+test('aplicar: porta que LANÇA (síncrono ou rejeitando) ao ler a lista de motivos não impede o botão de gravar', async () => {
+  const chamadas: string[] = [];
+  const base = { conversa: async () => ({ labels: ['perdido-sem-interesse'], custom_attributes: {} }), gravarAtributos: async (id: number, a: Record<string, unknown>) => { chamadas.push(`attrs ${id} ${a.motivo_nao_agendamento}`); }, gravarEtiquetas: async () => {} };
+  assert.equal(await aplicarEtiqueta({ conversa: 7, slug: 's' }, { ...base, opcoesDoMotivo: () => { throw new Error('síncrono'); } }, new Set()), 'gravou');
+  assert.equal(await aplicarEtiqueta({ conversa: 8, slug: 's' }, { ...base, opcoesDoMotivo: async () => { throw new Error('rejeita'); } }, new Set()), 'gravou');
+  assert.deepEqual(chamadas, ['attrs 7 Sem interesse', 'attrs 8 Sem interesse']);
+});

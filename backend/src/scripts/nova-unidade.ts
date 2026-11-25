@@ -127,7 +127,7 @@ async function lerEstado(q: Questionario): Promise<EstadoAtual> {
         etiquetas: etiquetas.map((e) => String(e.title)),
         atributosConversa: atrC.map((a) => String(a.attribute_key)),
         atributosContato: atrK.map((a) => String(a.attribute_key)),
-        opcoesDasListas: { conversa: Object.fromEntries(atrC.filter((a) => Array.isArray(a.attribute_values) && a.attribute_values.length).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])), contato: Object.fromEntries(atrK.filter((a) => Array.isArray(a.attribute_values) && a.attribute_values.length).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])) },
+        opcoesDasListas: { conversa: Object.fromEntries(atrC.filter((a) => Number(a.attribute_display_type) === 6 && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])), contato: Object.fromEntries(atrK.filter((a) => Number(a.attribute_display_type) === 6 && Array.isArray(a.attribute_values)).map((a) => [String(a.attribute_key), a.attribute_values.map(String)])) },
         caixas: caixas.map((c) => ({ id: Number(c.id), nome: String(c.name), robo: !!c.agent_bot })),
         times: times.map((t) => String(t.name)),
         agentes: Object.fromEntries(agentes.map((a) => [String(a.email).toLowerCase(), { id: Number(a.id), nome: String(a.name) }])),

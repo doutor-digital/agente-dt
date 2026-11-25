@@ -281,6 +281,8 @@ export async function passoListas(q: Questionario, x: PortasExternas, e: EstadoD
       notas.push(`${l.chave}: criada com ${l.opcoes.length} opções`);
       continue;
     }
+    // a conta tem o atributo, mas NÃO como lista (texto livre, criado à mão): o PATCH das opções não o transforma — falha claro em vez de dizer que aplicou
+    if (Number(def.attribute_display_type) !== 6) throw new ErroDaPorta(`${l.chave}: já existe como atributo de outro tipo (${String(def.attribute_display_type)}), não como lista: apague-o na conta (Configurações → Atributos) e rode de novo`);
     const d = diferencaDaLista((def.attribute_values as unknown[] | undefined)?.map(String), l.opcoes);
     if (d.igual) {
       notas.push(`${l.chave}: já estava igual`);

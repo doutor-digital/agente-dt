@@ -89,6 +89,9 @@ export interface PortasDaPonte {
   opcoesDoMotivo?(): Promise<string[]>;
 }
 
+/** As opções de `motivo_nao_agendamento` por conta, guardadas 5 min (um clique de «Perdido» não baixa as definições todas de novo). */
+const opcoesGuardadas = new Map<number, { ate: number; v: string[] }>();
+
 export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
   return {
     conversa: (id) => chamar(ctx, 'GET', `conversations/${id}`),
@@ -96,9 +99,14 @@ export function portasDaPonte(ctx: ContextoChatwoot): PortasDaPonte {
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: atributos } });
     },
     async opcoesDoMotivo() {
+      const conta = ctx.conta?.conta ?? 0;
+      const g = opcoesGuardadas.get(conta);
+      if (g && g.ate > Date.now()) return g.v;
       const defs = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'conversation_attribute' } })) as unknown;
       const def = (Array.isArray(defs) ? defs : []).find((d: any) => d?.attribute_key === 'motivo_nao_agendamento') as { attribute_values?: unknown } | undefined;
-      return Array.isArray(def?.attribute_values) ? def!.attribute_values.map((v) => String(v).trim()).filter(Boolean) : [];
+      const v = Array.isArray(def?.attribute_values) ? def!.attribute_values.map((x) => String(x).trim()).filter(Boolean) : [];
+      opcoesGuardadas.set(conta, { ate: Date.now() + 5 * 60_000, v });
+      return v;
     },
     async gravarEtiquetas(id, etiquetas) {
       await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: etiquetas } });
@@ -115,7 +123,12 @@ export async function aplicarEtiqueta(e: EventoDeEtiqueta, p: PortasDaPonte, tra
   try {
     const conv = await p.conversa(e.conversa);
     // a lista é só para escolher o NOME do motivo: se a leitura falhar, vale o valor de sempre (o botão nunca deixa de gravar por isso)
-    const opcoes = await p.opcoesDoMotivo?.().catch(() => undefined);
+    let opcoes: string[] | undefined;
+    try {
+      opcoes = await p.opcoesDoMotivo?.();
+    } catch {
+      opcoes = undefined;
+    }
     const m = mudancaDaConversa(conv, opcoes);
     if (!m) return 'nada';
     await p.gravarAtributos(e.conversa, m.atributos);

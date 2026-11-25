@@ -129,4 +129,6 @@ export const VALORES_QUE_O_CODIGO_USA: Readonly<Record<string, readonly string[]
   origem: ['Meta Ads'],
   categoria_consulta: ['Avaliação', 'Sessão', 'Retorno', 'Retorno com exames', 'Retorno após tratamento'],
   motivo_espera: ['Exames', 'Viajando', 'Vai decidir', 'Financeiro agora não'],
+  // a régua cobra o documento de quem ficou em «Solicitado exames» (chatwoot-regua: pendencia-documento)
+  motivo_nao_fechamento: ['Solicitado exames'],
 };

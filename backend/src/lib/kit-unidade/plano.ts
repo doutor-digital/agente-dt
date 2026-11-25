@@ -23,6 +23,7 @@ import {
 } from './catalogo.js';
 import { descricaoDoExtra, diferencaDaLista } from './fase2.js';
 import { MODELO_DA_ESPERA } from '../chatwoot-regua.js';
+import { MOTIVO_POR_ETIQUETA, motivoNaLista } from '../chatwoot-etiquetas.js';
 import { camposDaSofia, camposDaUnidade, horarioDaAssistente, informacoesDaClinica, licoesDaAssistente } from './molde-sofia.js';
 import { aGravar, dadosDosModelosAGravar } from './protecao.js';
 import { configChatwootDoQuestionario, mascararCampo, mascararEmails, sufixoDoQuestionario, type Questionario } from './questionario.js';
@@ -287,7 +288,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       itens: extras.map((x) => `${x.chave} — «${x.nome}» (${x.tipo}${x.opcoes ? `, ${x.opcoes.length} opções` : ''})${x.tipo === 'lista-multipla' ? ' [vira texto: o Chatwoot não tem lista de várias escolhas; as opções ficam na descrição]' : ''} — ${cw ? (cw.atributosConversa.includes(x.chave) ? 'já existe' : 'criar') : 'criar'}`),
       execucao: 'sim',
       avisos: [cw ? 'só cria o que falta; atributo que já existe NÃO é trocado (para trocar as opções de uma lista use chatwoot.listas)' : NAO_CONSULTADO, ...extras.filter((x) => descricaoDoExtra(x).length >= 1000).map((x) => `${x.chave}: a descrição passa de 1000 caracteres e será cortada`)],
-      depende: ['conta'],
+      depende: ['conta', 'atributos'],
     });
   }
   const listas = q.chatwoot.listas ?? [];
@@ -297,8 +298,12 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       const onde = LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw?.opcoesDasListas?.contato : cw?.opcoesDasListas?.conversa;
       const hoje = onde?.[l.chave];
       if (l.chave === 'motivo_espera') {
-        const sem = l.opcoes.filter((o) => !(o in MODELO_DA_ESPERA));
+        const sem = l.opcoes.filter((o) => !Object.hasOwn(MODELO_DA_ESPERA, o));
         if (sem.length) avisosDasListas.push(`motivo_espera: ${sem.length} motivo(s) SEM modelo da régua (a régua não manda lembrete para eles; só ${Object.keys(MODELO_DA_ESPERA).join(', ')} têm): ${sem.join(', ')}`);
+      }
+      if (l.chave === 'motivo_nao_agendamento') {
+        const soltos = Object.values(MOTIVO_POR_ETIQUETA).filter((v) => !l.opcoes.includes(motivoNaLista(v, l.opcoes)));
+        if (soltos.length) avisosDasListas.push(`motivo_nao_agendamento: a lista NÃO tem opção parecida com ${soltos.map((v) => `«${v}»`).join(', ')}: o botão «Perdido: …» correspondente gravaria um valor que a tela não mostra (inclua uma opção com esse nome)`);
       }
       if (!cw || !onde) return `${l.chave}: ${l.opcoes.length} opções (lista atual não consultada)`;
       if (!hoje) return `${l.chave}: a conta ainda não tem a lista — criar com ${l.opcoes.length} opções`;
@@ -315,7 +320,7 @@ export function montarPlano(q: Questionario, estado: EstadoAtual, opcoes: Opcoes
       id: 'listas',
       sistema: 'chatwoot',
       titulo: `Listas com as opções desta clínica (${listas.length}): ${listas.map((l) => l.chave).join(', ')}`,
-      acao: !cw ? 'criar' : igualTudo ? 'nada' : 'alterar',
+      acao: !cw ? 'criar' : igualTudo ? 'nada' : listas.every((l) => !(LISTAS_EDITAVEIS[l.chave] === 'contato' ? cw.opcoesDasListas?.contato : cw.opcoesDasListas?.conversa)?.[l.chave]) ? 'criar' : 'alterar',
       itens: itensDasListas,
       execucao: 'sim',
       avisos: [...(cw ? [] : [NAO_CONSULTADO]), ...avisosDasListas, 'o código conserva os valores que grava por nome (origem «Meta Ads», categorias da agenda, os 4 motivos de espera com modelo); os botões «perdido-*» acham a opção parecida da lista (ver chatwoot-etiquetas)'],
