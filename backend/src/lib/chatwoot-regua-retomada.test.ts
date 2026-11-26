@@ -96,3 +96,26 @@ test('temConsultaOuAvaliouRecente: sem data ou data impossível não conta', () 
   assert.equal(temConsultaOuAvaliouRecente({ situacao_consulta: 'Agendado', data_consulta: '2026-11-16' }, agora), true);
   assert.equal(temConsultaOuAvaliouRecente({ situacao_consulta: 'Atendido', data_consulta: '2026-11-17' }, agora), false, 'atendido «no futuro» é dado errado: não vale');
 });
+
+// ── correções da revisão ──────────────────────────────────────────────────────────────────────────
+
+test('o que a régua segura também some da conta do preenchimento retroativo (`mudancaNaRegua`): gravar Perdido em quem tem consulta de pé não «acorda» follow-up', async () => {
+  const { mudancaNaRegua } = await import('./chatwoot-campos-retroativos.js');
+  const comConsulta = { situacao_consulta: 'Agendado', data_consulta: '2026-11-20', hora_consulta: '14:00' };
+  const agora = Z('2026-11-16T12:00:00Z');
+  const antes = conv({ ...comConsulta, etapa: 'Novo lead' });
+  const depois = conv({ ...comConsulta, etapa: 'Perdido' });
+  const vA = new Map<string, Visto>([['_visto', { valor: '1', desde: Z('2026-11-10T12:00:00Z'), inicial: false }]]);
+  const vD = new Map<string, Visto>([...vA, ['etapa', { valor: 'Perdido', desde: agora, inicial: false }]]);
+  assert.deepEqual(mudancaNaRegua(antes, depois, vA, vD, agora).acorda.filter((r) => r.startsWith('followup')), [], 'com consulta de pé a régua não manda follow-up: não acorda');
+  const semConsulta = conv({ etapa: 'Perdido' });
+  assert.deepEqual(mudancaNaRegua(conv({ etapa: 'Novo lead' }), semConsulta, vA, vD, agora).acorda.filter((r) => r.startsWith('followup')).sort(), ['followup-120h', 'followup-48h', 'followup-96h']);
+});
+
+test('a retomada segurada aparece na decisão (para o log), só quando houve; a decisão de quem não tem consulta não ganha o campo', () => {
+  const vistosPerdido = new Map<string, Visto>([['_visto', { valor: '1', desde: Z('2026-11-10T12:00:00Z'), inicial: false }], ['etapa', visto('Perdido')]]);
+  const com = decidirRegua(conv({ etapa: 'Perdido', situacao_consulta: 'Agendado', data_consulta: '2026-11-30', hora_consulta: '14:00' }), { vistos: vistosPerdido, feitos: new Set() }, Z('2026-11-18T12:00:00Z'), U) as { seguradas?: string[] };
+  assert.deepEqual(com.seguradas, ['followup-48h']);
+  const sem = decidirRegua(conv({ etapa: 'Perdido' }), { vistos: vistosPerdido, feitos: new Set() }, Z('2026-11-18T12:00:00Z'), U);
+  assert.equal('seguradas' in sem, false);
+});

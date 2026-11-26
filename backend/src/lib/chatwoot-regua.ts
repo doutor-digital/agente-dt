@@ -249,6 +249,8 @@ export interface Decisao {
   disparos: Disparo[];
   /** regras que acabaram de passar do atraso máximo sem disparar (só para o log) */
   perdidas: string[];
+  /** retomadas de lead seguradas porque a conversa tem consulta de pé ou avaliou há pouco (só quando houve; o worker as registra no log) */
+  seguradas?: string[];
 }
 
 // ── texto/valor ────────────────────────────────────────────────────────────────────────────────────
@@ -612,6 +614,7 @@ const MODELO_DA_ETIQUETA: Record<
     regra: 'sdr-retomada',
     modelo: 'parau_sdr_retomada_pos_ligacao',
     respeitaSemFollowUp: true,
+    // «Agendado»: só vale se a consulta marcada não está de pé (`retomadaSegurada` segura a conversa com consulta de pé ou avaliação recente)
     vale: (e, s, _a, t) => !t && (['Novo lead', 'Sofia qualifica', 'Esperando humano', 'Agendado'].includes(e) || s === 'Não compareceu'),
   },
   reativacao: {
@@ -887,6 +890,11 @@ export function temConsultaOuAvaliouRecente(attrs: Record<string, unknown>, agor
   return situ === 'Atendido' && dia.iso <= hoje.iso && dia.iso >= somarDias(hoje, -DIAS_DE_AVALIACAO_RECENTE).iso;
 }
 
+/** A regra é uma retomada de lead que NÃO vale para esta conversa agora (ela tem consulta de pé ou avaliou há pouco)? Uma conta só, para o envio e para a prévia do preenchimento retroativo. */
+export function retomadaSegurada(regra: string, attrs: Record<string, unknown>, agora: Date): boolean {
+  return RETOMADAS_DE_LEAD.has(regra) && temConsultaOuAvaliouRecente(attrs, agora);
+}
+
 /** Até quando a regra ainda vale. */
 export function limiteDe(k: Candidato): Date {
   if (k.kind === 'depois') return new Date(k.alvo.getTime() + ATRASO_MAX_DEPOIS_MS);
@@ -903,12 +911,15 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
   const disparos: Disparo[] = [];
   const perdidas: string[] = [];
   const aberta = janelaAberta(agora);
-  let jaTemConsulta: boolean | undefined;
+  const seguradas: string[] = [];
   for (const k of candidatos(c, memoria.vistos, ajustes)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
     // retomada de lead para quem já tem consulta ou avaliou há pouco: o texto não combina com o caso (não registra: se a consulta cair, a regra ainda vale dentro do prazo)
-    if (RETOMADAS_DE_LEAD.has(k.regra) && (jaTemConsulta ??= temConsultaOuAvaliouRecente(c.attrs, agora))) continue;
+    if (retomadaSegurada(k.regra, c.attrs, agora)) {
+      if (!seguradas.includes(k.regra)) seguradas.push(k.regra);
+      continue;
+    }
     // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
     if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
     if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
@@ -926,7 +937,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
   }
-  return { disparos, perdidas };
+  return { disparos, perdidas, ...(seguradas.length ? { seguradas } : {}) };
 }
 
 /** Por onde a mensagem iria: texto livre (caixa sem janela, ou janela de 24 h aberta) ou template aprovado (janela fechada). */
