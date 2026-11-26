@@ -1074,6 +1074,20 @@ export class KommoClient {
   }
 
   /**
+   * Telefone do contato, FALHANDO de verdade quando o Kommo não responde (`getContactBasico` devolve `null` nos dois casos: «sem telefone» e «não li»).
+   * Quem decide se o contato é paciente (o robô do convite ao WhatsApp) não pode tomar «não li» por «contato sem telefone».
+   */
+  async getContactPhoneOuErro(contactId: number): Promise<string | null> {
+    try {
+      const { data } = await this.http.get<{ custom_fields_values?: Array<{ field_code?: string; values?: Array<{ value?: string }> }> }>(`/contacts/${contactId}`);
+      const tel = data?.custom_fields_values?.find((f) => f.field_code === 'PHONE')?.values?.[0]?.value;
+      return typeof tel === 'string' && tel.trim() ? tel.trim() : null;
+    } catch (err) {
+      wrapAxiosError(err, `getContactPhoneOuErro(${contactId})`);
+    }
+  }
+
+  /**
    * Contatos que a busca do Kommo devolve para um texto, com os leads deles junto.
    *
    * ATENÇÃO a quem for usar isto para casar paciente: o `query` do Kommo é busca TEXTUAL

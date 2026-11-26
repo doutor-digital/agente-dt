@@ -25,6 +25,8 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { conviteFalaNaUnidade, type NumerosDaUnidade, type RotaDeEnvioDaUnidade } from './convite-whatsapp-estado.js';
+import { chaveDoConvite, conviteEnviado, esperarConvite } from './convite-whatsapp-marca.js';
 
 export const ID_SOFIA_SO_WHATSAPP = 'sofia-so-whatsapp';
 
@@ -33,6 +35,21 @@ export const DECISAO_CANAL_NAO_PERMITIDO = '__channel_not_allowed__';
 
 export function sofiaSoWhatsappEstado(slug: string, raw: string | undefined = process.env.SOFIA_SO_WHATSAPP_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_SOFIA_SO_WHATSAPP, raw);
+}
+
+export type UnidadeDoCanal = { id: string; slug: string; kommoSubdomain?: string | null } & NumerosDaUnidade & RotaDeEnvioDaUnidade;
+
+/**
+ * A Sofia se cala NESTE LEAD porque o robô «convite ao WhatsApp» o convidou? Só se a unidade tem o robô LIGADO (com número e rota de envio) E este lead tem a
+ * marca de «recebeu o convite» (entrega confirmada, ≤ 7 dias). Nunca por unidade: o robô que parou numa leitura que falhou, numa franquia que não respondeu, num
+ * erro de envio ou numa mensagem que virou nota não deixa a marca — e então a Sofia responde normalmente. Se o robô está decidindo este lead agora, espera (≤ 25 s)
+ * o desfecho. Nunca lança.
+ */
+export async function sofiaCaladaPeloConvite(unit: UnidadeDoCanal, leadId: number, deps: { conviteEnviado?: (chave: string) => Promise<boolean> } = {}): Promise<boolean> {
+  if (!conviteFalaNaUnidade(unit)) return false;
+  const chave = chaveDoConvite(unit, leadId);
+  await esperarConvite(chave);
+  return (deps.conviteEnviado ?? conviteEnviado)(chave);
 }
 
 /** A origem do Kommo é de rede social (Instagram, Facebook, Messenger)? Sem diferenciar maiúsculas; vazio/desconhecido = não. */
@@ -149,6 +166,8 @@ export function _esquecerOrigensParaTeste(): void {
 
 export interface DepsDoCanal {
   estado?: Estado;
+  /** o lead recebeu o convite do robô? (só o teste troca) */
+  conviteEnviado?: (chave: string) => Promise<boolean>;
   origem?: (unitId: string, leadId: number | string) => Promise<string | null>;
   agora?: () => number;
 }
@@ -157,23 +176,29 @@ export interface DepsDoCanal {
  * Para quem fala POR INICIATIVA PRÓPRIA (escada de follow-up, reativação, cutucada): este paciente é de Instagram/Facebook e a chave está
  * LIGADA? Então nada nosso sai. Chave desligada ou em seco: `false` sem ler nada (o seco só vale no webhook). Nunca lança.
  */
-export async function pacienteDeRedeSocialCalado(unit: { id: string; slug: string }, leadId: number | string, deps: DepsDoCanal = {}): Promise<boolean> {
-  if ((deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) !== 'ligado') return false;
+export async function pacienteDeRedeSocialCalado(unit: UnidadeDoCanal, leadId: number | string, deps: DepsDoCanal = {}): Promise<boolean> {
+  const propria = (deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) === 'ligado';
+  // sem a chave própria, só o robô do convite pode calar — e só o lead que ele convidou (abaixo)
+  if (!propria && !conviteFalaNaUnidade(unit)) return false;
   const agora = (deps.agora ?? Date.now)();
   const chave = `${unit.id}:${leadId}`;
   const lembrado = memoria.get(chave);
-  if (lembrado && lembrado.ate > agora) return lembrado.social;
   let social: boolean;
-  try {
-    social = origemDeRedeSocial(await (deps.origem ?? origemDoPaciente)(unit.id, leadId));
-  } catch (err) {
-    // banco fora: segue como hoje (WhatsApp) nesta passada, mas NÃO lembra — a próxima varredura pergunta de novo
-    logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sofia-so-whatsapp: não li a origem do paciente (segue como se fosse WhatsApp, sem memorizar)');
-    return false;
+  if (lembrado && lembrado.ate > agora) social = lembrado.social;
+  else {
+    try {
+      social = origemDeRedeSocial(await (deps.origem ?? origemDoPaciente)(unit.id, leadId));
+    } catch (err) {
+      // banco fora: segue como hoje (WhatsApp) nesta passada, mas NÃO lembra — a próxima varredura pergunta de novo
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sofia-so-whatsapp: não li a origem do paciente (segue como se fosse WhatsApp, sem memorizar)');
+      return false;
+    }
+    if (memoria.size >= TETO_DA_MEMORIA) memoria.clear();
+    memoria.set(chave, { social, ate: agora + VALIDADE_MS });
   }
-  if (memoria.size >= TETO_DA_MEMORIA) memoria.clear();
-  memoria.set(chave, { social, ate: agora + VALIDADE_MS });
-  return social;
+  if (!social) return false;
+  if (propria) return true;
+  return typeof leadId === 'number' || /^\d+$/.test(String(leadId)) ? sofiaCaladaPeloConvite(unit, Number(leadId), deps) : false;
 }
 
 export interface TalkComOrigem {
@@ -195,16 +220,14 @@ export function origemDoTalkMaisRecente(talks: ReadonlyArray<TalkComOrigem>): st
  * A cutucada depois da equipe começa de uma conversa que a EQUIPE puxou: pode não haver nenhuma mensagem do paciente (nem trace) para a origem
  * sair de `origemDoPaciente`. Então, além dela, olha a conversa do próprio Kommo. Chave desligada ou em seco: `false` sem ler nada. Nunca lança.
  */
-export async function cartaoDeRedeSocialCalado(
-  unit: { id: string; slug: string },
-  leadId: number,
-  talks: () => Promise<ReadonlyArray<TalkComOrigem>>,
-  deps: DepsDoCanal = {},
-): Promise<boolean> {
-  if ((deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) !== 'ligado') return false;
+export async function cartaoDeRedeSocialCalado(unit: UnidadeDoCanal, leadId: number, talks: () => Promise<ReadonlyArray<TalkComOrigem>>, deps: DepsDoCanal = {}): Promise<boolean> {
+  const propria = (deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) === 'ligado';
+  if (!propria && !conviteFalaNaUnidade(unit)) return false;
   if (await pacienteDeRedeSocialCalado(unit, leadId, deps)) return true;
   try {
-    return origemDeRedeSocial(origemDoTalkMaisRecente(await talks()));
+    const social = origemDeRedeSocial(origemDoTalkMaisRecente(await talks()));
+    if (!social) return false;
+    return propria ? true : await sofiaCaladaPeloConvite(unit, leadId, deps);
   } catch (err) {
     logger.warn({ err: String(err), unit: unit.slug, leadId }, 'sofia-so-whatsapp: não li a conversa do Kommo (segue como se fosse WhatsApp)');
     return false;

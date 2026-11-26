@@ -945,6 +945,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/confirmacao-adiada.ts',
   },
   {
+    id: 'convite-whatsapp',
+    chave: 'CONVITE_WHATSAPP_SLUGS',
+    nome: 'Convite ao WhatsApp: quem escreve no Instagram/Facebook recebe UM convite com o link da clínica',
+    oQueFaz:
+      'Quando um lead escreve DIRETO (Direct do Instagram ou Messenger do Facebook), um robô (não é a Sofia) responde uma vez: «Oi! Aqui é da Doutor Hérnia <cidade>. Para te atender mais rápido e já ver os horários, continue pelo nosso WhatsApp» + o link wa.me da clínica. O link já leva o texto «Olá! Vim pelo Instagram e quero saber mais.» — com a frase cadastrada em «origem por texto pronto» (contém: sim), o lead que chega ao WhatsApp já vem com a origem certa. No Kommo o convite sai pelo mesmo Salesbot da Sofia; no CRM (Chatwoot), pela API como mensagem do robô. Uma vez por conversa; de novo só depois de 7 dias. Onde está LIGADO e a unidade tem número e Salesbot, a Sofia não fala no Instagram/Facebook COM O LEAD QUE RECEBEU O CONVITE — nem a escada de follow-up, a reativação e a cutucada (não falam os dois).',
+    pegadinha:
+      'NUNCA convida: comentário em post (só mensagem direta), lead que JÁ conversa com a Sofia (ela respondeu nos últimos 7 dias — ligar a chave no meio de uma conversa não a cala), unidade fora da Kommo (CHATWOOT_KOMMO_CORTADO_SLUGS: quem convida é o CRM), unidade em pausa, «Pausar IA» marcado ou pausa do lead, cartão em etapa onde a Sofia não fala, conversa em que a EQUIPE já respondeu (a fala do robô e a resposta automática do celular não contam), paciente em tratamento (cartão vinculado à franquia, ou telefone com tratamento ativo, sessão futura ou avaliação recente) — contato de Instagram quase nunca tem telefone e paciente nunca é achado por nome. FALHA FECHADA: leitura que não deu = não convida. O número é o da unidade (ig_whatsapp_number / fb_whatsapp_number); unidade SEM número não convida e a Sofia continua falando por lá. Precisa de Salesbot + campo de resposta (sem eles o envio viraria nota no cartão e a Sofia continua falando); modo «bypass» não serve (cortaria o link). Se o envio falhar de modo que se SABE que nada saiu (virou nota), a marca é devolvida e o robô tenta de novo na próxima mensagem do lead, depois de 30 min; se der erro sem saber, a marca fica (melhor um convite perdido que dois). Em "só no papel" decide tudo e registra «mandaria convite» (ou o motivo de não mandar) na tela, sem enviar nada e sem gastar a marca de «uma vez». Ligar a chave NÃO liga o rastreio de origem: para marcar a origem, cadastre a frase «Vim pelo Instagram e quero saber mais» (e a do Facebook) em «origem por texto pronto» da unidade, com a opção correspondente no ⚑ Origem da conta.',
+    risco: 'comportamento',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/convite-whatsapp.ts',
+  },
+  {
     id: 'calar-cliente-do-escritorio',
     chave: 'CALAR_CLIENTE_ESCRITORIO_SLUGS',
     nome: 'IA calada para quem já é cliente do escritório',
