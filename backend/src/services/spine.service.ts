@@ -76,6 +76,8 @@ export interface SpineSchedule {
   requiresManualValidation: boolean;
   /** Quem mexeu por último no agendamento na franquia. Enquanto está AGENDADO e ninguém deu baixa, é quem marcou. */
   modifiedBy?: string | null;
+  /** Quando mexeram por último (ISO UTC). Enquanto está AGENDADO e ninguém deu baixa, é quando marcaram (a franquia não dá a data de criação). */
+  modifiedUtc?: string | null;
 }
 
 export interface SpineResult<T> {
@@ -192,6 +194,7 @@ function normalize(raw: SpineRawSchedule, tz: string): SpineSchedule {
     idStatus,
     statusName: raw.statusName ?? null,
     modifiedBy: raw.modifiedBy?.trim() || null,
+    modifiedUtc: raw.modified ?? null,
     clientName: raw.clientName ?? null,
     categoryName: raw.categoryName ?? null,
     physicalTherapist: raw.physicalTherapist ?? null,

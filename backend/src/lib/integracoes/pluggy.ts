@@ -182,6 +182,11 @@ export interface LancamentoPluggy {
   categoria: string | null;
   status: string | null;
   pagador?: string;
+  /**
+   * SÓ O TIPO do documento de quem pagou: PF (pessoa física) ou PJ (empresa). Serve para uma coisa — saber que o Pix veio de uma empresa e não de um paciente.
+   * O NÚMERO do documento (CPF/CNPJ) nunca é lido: a resposta da Pluggy o traz, mas este cliente descarta.
+   */
+  pagadorTipoDocumento?: 'PF' | 'PJ';
   recebedor?: string;
   motivo?: string;
 }
@@ -392,6 +397,9 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
     const pagador = texto(objeto(pd?.payer)?.name);
     const recebedor = texto(objeto(pd?.receiver)?.name);
     const motivo = texto(pd?.reason);
+    // só o TIPO (CPF/CNPJ) do documento: o número fica na resposta crua e não entra no modelo
+    const tipoDoc = texto(objeto(objeto(pd?.payer)?.documentNumber)?.type)?.toUpperCase();
+    const pagadorTipoDocumento: LancamentoPluggy['pagadorTipoDocumento'] | null = tipoDoc === 'CPF' ? 'PF' : tipoDoc === 'CNPJ' ? 'PJ' : null;
     return {
       id,
       data,
@@ -401,6 +409,7 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
       categoria: texto(j.category),
       status: texto(j.status),
       ...(pagador ? { pagador } : {}),
+      ...(pagadorTipoDocumento ? { pagadorTipoDocumento } : {}),
       ...(recebedor ? { recebedor } : {}),
       ...(motivo ? { motivo } : {}),
     };

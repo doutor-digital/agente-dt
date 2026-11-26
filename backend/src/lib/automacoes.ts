@@ -1372,6 +1372,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-origem.ts',
   },
+  {
+    id: 'agendados-sem-pix',
+    chave: 'AGENDADOS_SEM_PIX_SLUGS',
+    nome: 'Lista da manhã: agendados sem Pix (recepção)',
+    oQueFaz:
+      'Todo dia útil depois da sincronização do banco (12:15, hora da unidade), cruza quem foi MARCADO desde o dia útil anterior (avaliação ou consulta que ainda não aconteceu, agendada ou confirmada) com o Pix que entrou no banco (Open Finance, só leitura) e manda no grupo da recepção: primeiro nome, dia e hora da consulta e o que achei («não achei Pix» ou «a conferir»). Sem CPF, sem sobrenome, sem valor e sem saldo na mensagem.',
+    pegadinha:
+      'Só unidade com pagamento antecipado, agenda da franquia e item do banco em PLUGGY_ITENS (hoje só Açailândia). Casa por NOME (primeiro + último) + VALOR (sinal ou consulta, lidos do cadastro e das frases de consulta do texto de produtos; AGENDADOS_SEM_PIX_VALORES troca) + DATA. «Não achei Pix» é o último recurso: o que não é certeza vai para «a conferir» (nome parecido, valor ou data diferente, homônimo, Pix de parente em outro nome, marcado depois da leitura do banco, marcação já confirmada, banco que não atualizou hoje). Onde o paciente pode escolher PAGAR NO DIA (todas as unidades, menos as de taxa obrigatória) a agenda não diz quem escolheu: ninguém vira «não achei», só quem a conversa da Sofia marcou como «na clínica» sai da lista. Em Açailândia, medido em 26/11: 0 de 5 marcações casaram por nome (10 de 34 Pix em 30 dias são de pagador que não está na agenda): a lista hoje é quase toda «a conferir». Pix feito depois da sincronização não aparece até o dia seguinte. NASCE EM «SÓ NO PAPEL» e só passa para ligado quem já esteve nele: grava o texto que mandaria no rastro do dia e não manda nada. Ligado sem destino NÃO manda e avisa no log: o grupo vem de AGENDADOS_SEM_PIX_DESTINOS (JSON slug → id@g.us) e a Evolution da própria AGENDADOS_SEM_PIX_EVOLUTION_URL ou da dos avisos à recepção. Uma lista por unidade por dia; recusa certa da Evolution repete com 15 min de intervalo, no máximo 3 envios, sem reler o banco; erro 5xx ou sem resposta nunca repete.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/agendados-sem-pix.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
