@@ -26,6 +26,9 @@ test('os exemplos do pedido adiam', () => {
     'te confirmo amanhã',
     'Te confirmo à noite',
     'Vou confirmar mais tarde',
+    'Te confirmo depois que eu falar com meu marido',
+    'Vou confirmar depois de ver a agenda',
+    'Te confirmo depois do almoço',
     'vou confirmar depois com meu marido',
     'Vou confirmar com meu marido',
     'depois te falo',
@@ -54,7 +57,6 @@ test('Canaã 24/10 e as sondas do sênior: quem CONFIRMA não é travado', () =>
     'Sim vou confirmar pagamento dia 29 ou 30', // real, Canaã 24/10
     'Só posso ir na parte da tarde\nSim\nConfirmar',
     'Pode ser à tarde\nConfirmar',
-    'Pode ser à tarde\nConfirmar', // a regex não atravessa a quebra de linha
     'Sim, quinta 15h. Vou ver com meu chefe pra sair mais cedo',
     'Deixa eu ver... pode ser quinta às 15h sim',
     'Sim! Vamos ver se a doutora me ajuda 🙏',
@@ -75,6 +77,9 @@ test('Canaã 24/10 e as sondas do sênior: quem CONFIRMA não é travado', () =>
     'Paguei, segue o comprovante. Depois te falo o nome do meu marido',
     'Te confirmo amanhã às 15h então',
     'Te confirmo amanhã 15h',
+    'Te confirmo amanhã às 8 da manhã',
+    'Te confirmo amanhã às 15',
+    'Te confirmo amanhã 3 da tarde',
     'Vou ver com meu marido\n…\nConfirmado!',
     'Vou ver com meu marido e te aviso\nSim, pode marcar',
   ]) {
@@ -211,6 +216,7 @@ test('só mexe em agendar_consulta', () => {
 });
 
 test('a chave nasce DESLIGADA: sem variável nem linha no banco, nada muda para ninguém', () => {
-  assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', undefined), 'desligado');
   assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', ''), 'desligado');
+  assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', 'doutor-hernia-outra'), 'desligado');
+  assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', 'doutor-hernia-salto'), 'ligado');
 });

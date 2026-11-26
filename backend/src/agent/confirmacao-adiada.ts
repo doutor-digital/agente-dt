@@ -23,7 +23,9 @@
  *  - de uma mensagem para a outra vale a ÚLTIMA decisão: "Vou ver com meu marido" seguido de "Confirmado!" confirma;
  *  - "vou confirmar" SEM um quando não adia, nem "confirmar" + pagamento, Pix, sinal, comprovante ou endereço;
  *  - período seguido de hora ("te confirmo amanhã às 15h") é escolha de horário, não adiamento;
- *  - "te aviso se…", "te falo o nome…", "te respondo sobre o convênio" adiam um DETALHE, não a confirmação.
+ *  - "te aviso se…", "te falo o nome…", "te respondo sobre o convênio" adiam um DETALHE, não a confirmação;
+ *  - LIMITE CONHECIDO: "Sim, vou ver com meu marido e te aviso" (sim + adiar na MESMA mensagem) marca. É o preço de "Sim, quinta 15h. Vou
+ *    ver com meu chefe pra sair mais cedo" não perder a consulta; o seco mostra quantos são antes de ligar.
  */
 import type { DynamicStructuredTool } from '@langchain/core/tools';
 import type { TraceRecorder } from './trace-recorder.js';
@@ -40,7 +42,7 @@ const E = String.raw`(?<![\p{L}\p{N}_])`;
 const D = String.raw`(?![\p{L}\p{N}_])`;
 
 /** Uma HORA logo depois ("às 15h", "15:00", "por volta das 3 horas"): aí o período é a escolha do horário, não um adiamento. */
-const HORA_DEPOIS = String.raw`(?![ \t]+(?:[àa]s?[ \t]+|por[ \t]+volta[ \t]+d[ae]s?[ \t]+|pelas?[ \t]+)?\d{1,2}[ \t]*(?:h|:|horas?))`;
+const HORA_DEPOIS = String.raw`(?![ \t]+(?:(?:[àa]s?|por[ \t]+volta[ \t]+d[ae]s?|pelas?)[ \t]+\d{1,2}|\d{1,2}[ \t]*(?:h|:|horas?)|\d{1,2}[ \t]+da[ \t]+(?:manh[ãa]|tarde|noite)))`;
 
 /**
  * "Quando" do adiamento que não deixa dúvida: "mais tarde", "depois", "daqui a pouco", "em 2 horas", "quando puder".
@@ -50,8 +52,12 @@ const QUANDO = String.raw`(?:mais[ \t]+tarde|mais[ \t]+pra[ \t]+frente|depois|lo
 /** O mesmo, mais o dia/período — só quando é ELE avisando a ELA ("te confirmo na parte da tarde"): o "te" mostra que a resposta é uma promessa. */
 const QUANDO_PERIODO = String.raw`(?:${QUANDO}|amanh[ãa]|(?:nesta|nessa|na)[ \t]+semana|na[ \t]+parte[ \t]+d[ae][ \t]+(?:manh[ãa]|tarde|noite)|(?:[àa]|na|no|ao|pela)[ \t]+(?:tarde|noite|manh[ãa])|(?:no|ao)[ \t]+(?:fim|final)[ \t]+d[oae][ \t]+(?:dia|tarde|manh[ãa]))${HORA_DEPOIS}`;
 
-/** O que vem depois de "te aviso/falo…" e mostra que é um DETALHE que ele vai contar ("te aviso se meu filho vai", "te falo o nome"). */
-const DETALHE_DEPOIS = String.raw`(?![ \t]+(?:se|sobre|quanto|qual|quais|quem|como|onde|que|o|a|os|as|do|da|dos|das|de|pelo|pela)${D})`;
+/**
+ * O que vem depois de "te aviso/falo/respondo…" e mostra que é um DETALHE que ele vai contar ("te falo o nome", "te aviso se meu filho vai").
+ * Depois do "quando" ("depois QUE eu falar com meu marido", "depois DE ver a agenda", "depois DO almoço") a oração é só o quando: não bloqueia.
+ */
+const DETALHE_DEPOIS_DO_VERBO = String.raw`(?![ \t]+(?:se|sobre|quanto|qual|quais|quem|como|onde|que|o|a|os|as|do|da|dos|das|de|pelo|pela)${D})`;
+const DETALHE_DEPOIS_DO_QUANDO = String.raw`(?![ \t]+(?:se|sobre|quanto|qual|quais|quem|como|onde)${D})`;
 
 /** "ver/olhar/conferir/checar" + isto NÃO é adiar a confirmação: é olhar uma coisa concreta ("vou ver o caminho", "vou ver vocês quinta"). */
 const OBJETO_CONCRETO = String.raw`(?![ \t]+(?:(?:o|a|os|as|um|uma|meu|minha)[ \t]+)?(?:endere[çc]o|mapa|local|localiza|valor|pre[çc]o|pix|chave|link|exames?|rua|cl[ií]nica|fotos?|v[ií]deos?|site|instagram|whatsapp|n[uú]mero|pagamento|comprovante|caminho|[ôo]nibus|hor[áa]rio\s+d[oe]|voc[eê]s?|vcs?|sinal|boleto|dinheiro)${D})`;
@@ -60,11 +66,11 @@ const OBJETO_CONCRETO = String.raw`(?![ \t]+(?:(?:o|a|os|as|um|uma|meu|minha)[ \
 const ADIA = new RegExp(
   [
     // "te confirmo mais tarde", "te confirmo na parte da tarde", "te aviso amanhã", "te falo à noite" (não "te confirmo amanhã às 15h")
-    `${E}(?:te|lhe|vos)[ \\t]+(?:confirmo|aviso|falo|retorno|respondo|chamo)[ \\t]+(?:aqui[ \\t]+|de[ \\t]+novo[ \\t]+|ainda[ \\t]+)?${QUANDO_PERIODO}${DETALHE_DEPOIS}`,
+    `${E}(?:te|lhe|vos)[ \\t]+(?:confirmo|aviso|falo|retorno|respondo|chamo)[ \\t]+(?:aqui[ \\t]+|de[ \\t]+novo[ \\t]+|ainda[ \\t]+)?${QUANDO_PERIODO}${DETALHE_DEPOIS_DO_QUANDO}`,
     // "confirmo depois", "vou confirmar mais tarde", "posso confirmar depois?", "retorno mais tarde", "dou um retorno daqui a pouco"
-    `${E}(?:confirmo|confirmar|aviso|avisar|falo|retorno|respondo|responder|chamo|dou[ \\t]+(?:um[ \\t]+)?retorno)[ \\t]+(?:aqui[ \\t]+|de[ \\t]+novo[ \\t]+|ainda[ \\t]+)?${QUANDO}${DETALHE_DEPOIS}`,
+    `${E}(?:confirmo|confirmar|aviso|avisar|falo|retorno|respondo|responder|chamo|dou[ \\t]+(?:um[ \\t]+)?retorno)[ \\t]+(?:aqui[ \\t]+|de[ \\t]+novo[ \\t]+|ainda[ \\t]+)?${QUANDO}${DETALHE_DEPOIS_DO_QUANDO}`,
     // "depois te falo", "mais tarde te confirmo", "amanhã eu te aviso" (não "amanhã às 15h te aviso")
-    `${E}(?:${QUANDO}|amanh[ãa]${HORA_DEPOIS})[ \\t]+(?:eu[ \\t]+)?(?:te[ \\t]+|lhe[ \\t]+)?(?:confirmo|aviso|falo|retorno|respondo|chamo|confirmar|avisar)${DETALHE_DEPOIS}${D}`,
+    `${E}(?:${QUANDO}|amanh[ãa]${HORA_DEPOIS})[ \\t]+(?:eu[ \\t]+)?(?:te[ \\t]+|lhe[ \\t]+)?(?:confirmo|aviso|falo|retorno|respondo|chamo|confirmar|avisar)${DETALHE_DEPOIS_DO_VERBO}${D}`,
     // "vou confirmar com meu marido" (pessoa, não "com vocês")
     `${E}(?:vou|vamos|irei|preciso|tenho[ \\t]+que|tenho[ \\t]+de)[ \\t]+(?:s[oó][ \\t]+|antes[ \\t]+)?confirmar[ \\t]+com[ \\t]+(?:o|a|os|as|meu|minha|ele|ela)${D}`,
     // "vou ver e te aviso", "vou conferir", "vou ver com meu marido", "vou ver aqui", "preciso checar" (não "vou ver o endereço")
