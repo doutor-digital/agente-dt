@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { CofreDeArquivos } from './cofre-arquivos.js';
 import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import {
@@ -239,6 +240,81 @@ test('extrato de OUTRA conta que a já importada da unidade: recusado sem gravar
   assert.ok(t.importado);
   // a mesma conta de sempre nunca é recusada
   assert.ok(arm.importacoesGravadas.every((i) => i.contaFinal));
+});
+
+const SEGREDO = 'segredo-de-teste-da-conta';
+
+test('a MESMA conta em OUTRA unidade é recusada mesmo com bytes diferentes (novo export do período) e sem exceção; na mesma unidade segue normal', async () => {
+  const arm = relatoriosEmMemoria();
+  const base = { relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x', segredoDaConta: SEGREDO };
+  assert.ok((await importarRelatorio(arm, { ...base, unidade: UNI, conteudo: buf(OFX_V1) })).importado);
+  // o MESMO período exportado de novo: o app muda bytes (hora de geração, ordem), então o sha256 é outro, mas a conta é a mesma
+  const reexport = OFX_V1.replace('<DTSERVER>20261126120000[-3:BRT]', '<DTSERVER>20261127090000[-3:BRT]');
+  assert.notEqual(reexport, OFX_V1);
+  const r = await importarRelatorio(arm, { ...base, unidade: 'doutor-hernia-serra', conteudo: buf(reexport) });
+  assert.equal(r.importado, false);
+  if (r.importado || r.motivo !== 'conta_de_outra_unidade') throw new Error('esperava conta_de_outra_unidade');
+  assert.deepEqual(r.unidades, [UNI]);
+  assert.match(r.aviso, /dobro|duas vezes/);
+  assert.equal(JSON.stringify(r).includes('987654321'), false, 'o número da conta nunca sai');
+  assert.equal(arm.importacoesGravadas.length, 1);
+  assert.equal((await arm.movimentos({ unidade: 'doutor-hernia-serra', limite: 10 })).length, 0);
+  // aceitarOutraConta NÃO destrava isto (é outra regra: duas contas na MESMA unidade)
+  const insiste = await importarRelatorio(arm, { ...base, unidade: 'doutor-hernia-serra', conteudo: buf(reexport), aceitarOutraConta: true });
+  assert.equal(!insiste.importado && insiste.motivo, 'conta_de_outra_unidade');
+  // na mesma unidade, o novo export do mesmo período entra (e as linhas repetidas são reconhecidas)
+  const mesma = await importarRelatorio(arm, { ...base, unidade: UNI, conteudo: buf(reexport) });
+  assert.ok(mesma.importado);
+  if (mesma.importado) assert.equal(mesma.importacao.linhasNovas, 0);
+});
+
+test('o hash da conta é um HMAC com o segredo do servidor: muda com o segredo, é estável com o mesmo e não é o sha256 puro', () => {
+  const a = lerOfx(OFX_V1, 'segredo-A').conta!;
+  assert.equal(lerOfx(OFX_V1, 'segredo-A').conta!.hash, a.hash);
+  assert.notEqual(lerOfx(OFX_V1, 'segredo-B').conta!.hash, a.hash);
+  assert.notEqual(a.hash, createHash('sha256').update('0001|987654321').digest('hex').slice(0, 32), 'não é o sha256 do número');
+  assert.match(a.hash, /^[0-9a-f]{32}$/);
+});
+
+test('ACCTID só vem da conta DONA (BANKACCTFROM/CCACCTFROM): o destino de um TED (BANKACCTTO) não conta como "outra conta"', () => {
+  const ted = OFX_V1.replace('<MEMO>Venda cartao credito 3x\n</STMTTRN>', '<MEMO>TED enviado\n<BANKACCTTO><BANKID>0237<ACCTID>777788889</BANKACCTTO>\n</STMTTRN>');
+  assert.ok(ted.includes('BANKACCTTO'));
+  const r = lerOfx(ted, SEGREDO);
+  assert.equal(r.conta?.final, '4321', 'a conta é a dona do extrato, não a de destino do TED');
+  assert.equal(r.linhas.length, 3);
+  assert.equal(JSON.stringify(r).includes('777788889'), false);
+  // cartão de crédito
+  const cartao = OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '<CCACCTFROM><ACCTID>4111222233334444</CCACCTFROM>');
+  assert.equal(lerOfx(cartao, SEGREDO).conta?.final, '4444');
+  // OFX v1 sem a marca de fechamento do agregado
+  const semFecho = OFX_V1.replace('<BANKACCTFROM><BANKID>0001<ACCTID>987654321<ACCTTYPE>CHECKING</BANKACCTFROM>', '<BANKACCTFROM><BANKID>0001<ACCTID>987654321<ACCTTYPE>CHECKING');
+  assert.equal(lerOfx(semFecho, SEGREDO).conta?.final, '4321');
+  // duas contas DONAS continuam sendo recusadas
+  assert.throws(() => lerOfx(OFX_V1.replace('</BANKTRANLIST>', '</BANKTRANLIST><BANKACCTFROM><ACCTID>555555555</BANKACCTFROM>'), SEGREDO), /MAIS DE UMA conta/);
+});
+
+test('quem só lê não vê a conta do arquivo (nem hash, nem final) em infinitepay_importacoes', async () => {
+  const arm = relatoriosEmMemoria();
+  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
+  assert.ok(arm.importacoesGravadas[0]!.contaFinal, 'está guardada');
+  const r = await infinitepayImportacoes(ctxCom(), arm, {});
+  const tudo = JSON.stringify(r);
+  assert.equal(tudo.includes('4321'), false);
+  assert.equal(tudo.includes(arm.importacoesGravadas[0]!.contaHash!), false);
+  assert.equal(r.importacoes.length, 1);
+});
+
+test('descricaoSegura: espaços colapsados ANTES de cortar, e número cortado na borda não deixa pedaço sem máscara', () => {
+  // com o corte primeiro, os 1.000 espaços gastavam o limite; agora o número vem inteiro e é mascarado
+  assert.equal(descricaoSegura(`PIX ${' '.repeat(1000)}12345678901 fim`), 'PIX [número] fim');
+  // número na borda dos 600 caracteres: os dígitos que sobrariam são descartados, nunca ficam crus
+  for (const sobra of [3, 5, 7]) {
+    const t = descricaoSegura(`${'a'.repeat(596 - sobra)} ${'1'.repeat(40)}`);
+    assert.equal(/\d{2,}/.test(t), false, `sobra ${sobra}: ${t.slice(-12)}`);
+  }
+  const t0 = performance.now();
+  descricaoSegura(`${' '.repeat(50_000)}${'1 '.repeat(25_000)}`);
+  assert.ok(performance.now() - t0 < 50);
 });
 
 test('arquivo sem ACCTID: importa, mas avisa que não deu para conferir a conta', async () => {
@@ -503,7 +579,7 @@ async function cenario() {
   const dir = mkdtempSync(path.join(tmpdir(), 'ip-relatorio-'));
   const cofre = new CofreDeArquivos({ dir: path.join(dir, 'cofre') });
   const armazem = relatoriosEmMemoria();
-  const deps = { cofre, baseUrl: () => 'https://conector.exemplo.com/', armazem };
+  const deps = { segredoDaConta: 'segredo-de-teste-da-conta', cofre, baseUrl: () => 'https://conector.exemplo.com/', armazem };
   const enviar = async (token: string, nome: string, conteudo: Buffer) => {
     const r = cofre.reservar(token);
     return cofre.guardar(r, nome, conteudo);
@@ -647,7 +723,7 @@ test('portão: leitura vale para todos; pedir e importar só para quem escreve',
   const server = { registerTool: (n: string) => nomes.push(n) } as never;
   registrarLeituraRelatorios(server, ctxCom(), relatoriosEmMemoria());
   assert.deepEqual(nomes, ['infinitepay_extrato', 'infinitepay_vendas', 'infinitepay_importacoes']);
-  const deps = { cofre: {} as never, baseUrl: () => 'x', armazem: relatoriosEmMemoria() };
+  const deps = { segredoDaConta: 'x', cofre: {} as never, baseUrl: () => 'x', armazem: relatoriosEmMemoria() };
   assert.equal(registrarImportacaoRelatoriosSePermitido(server, ctxCom(), deps, 'u1', new Set(['outro']), (() => undefined) as never), false);
   assert.equal(nomes.length, 3);
   assert.equal(registrarImportacaoRelatoriosSePermitido(server, ctxCom(), deps, 'u1', new Set(['u1']), (() => undefined) as never), true);

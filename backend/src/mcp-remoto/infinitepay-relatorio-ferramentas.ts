@@ -68,6 +68,8 @@ export const COMO_EXPORTAR: Record<TipoDeRelatorio, { nome: string; passos: stri
 };
 
 export interface DepsRelatorio {
+  /** o segredo do servidor que faz do hash da conta um HMAC (em produção: INFINITEPAY_CONTA_SEGREDO ou derivado de SESSION_JWT_SECRET) */
+  segredoDaConta: string;
   cofre: CofreDeArquivos;
   baseUrl: () => string;
   armazem: ArmazemDeRelatorios;
@@ -163,8 +165,8 @@ export async function infinitepayImportacoes(ctx: ContextoInfinitepay, armazem: 
   const lista = await armazem.importacoes(conta.slug, a.relatorio);
   return {
     unidade: conta.slug,
-    // o hash da conta não sai daqui: só o final (os 4 últimos caracteres)
-    importacoes: lista.map(({ contaHash: _hash, ...resto }) => ({ ...resto })),
+    // a conta do arquivo (hash e final) NÃO sai para quem só lê: o final de uma conta bancária é dado financeiro; quem importa o vê na resposta da importação
+    importacoes: lista.map(({ contaHash: _hash, contaFinal: _final, ...resto }) => ({ ...resto })),
     cobertura: coberturaDoPeriodo(lista),
     leiautesDeCsv: 'nenhum cadastrado ainda: só o OFX do extrato é lido hoje',
   };
@@ -228,7 +230,7 @@ export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatori
   }
   let r;
   try {
-    r = await importarRelatorio(deps.armazem, { unidade: conta.slug, relatorio, tipoDoCofre: d.tipo, conteudo: d.conteudo, importadoPor: quem.email || `usuario:${quem.id}`, ...(a.aceitarOutraConta ? { aceitarOutraConta: true } : {}) });
+    r = await importarRelatorio(deps.armazem, { unidade: conta.slug, relatorio, tipoDoCofre: d.tipo, conteudo: d.conteudo, importadoPor: quem.email || `usuario:${quem.id}`, segredoDaConta: deps.segredoDaConta, ...(a.aceitarOutraConta ? { aceitarOutraConta: true } : {}) });
   } catch (e) {
     // falha de banco ou arquivo ilegível: o arquivo continua no cofre (até vencer) para tentar de novo depois de corrigir
     deps.cofre.soltar(quem.id, a.envio);

@@ -44,6 +44,10 @@ export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelat
       const linhas = await db.infinitepayImportacao.findMany({ where: { sha256 }, orderBy: { createdAt: 'asc' } });
       return [...new Set(linhas.map((l) => l.unitSlug))];
     },
+    async unidadesComConta(contaHash) {
+      const linhas = await db.infinitepayImportacao.findMany({ where: { contaHash }, orderBy: { createdAt: 'asc' } });
+      return [...new Set(linhas.map((l) => l.unitSlug))];
+    },
     async gravar(i: NovaImportacao) {
       try {
         return await db.$transaction(
@@ -133,6 +137,9 @@ export function relatoriosEmMemoria(): ArmazemDeRelatorios & { importacoesGravad
     },
     async unidadesComArquivo(sha) {
       return [...shas].filter((k) => k.endsWith(`|${sha}`)).map((k) => k.slice(0, k.length - sha.length - 1));
+    },
+    async unidadesComConta(hash) {
+      return [...new Set(importacoesGravadas.filter((i) => i.contaHash === hash).map((i) => unidadeDa.get(i.id)!))];
     },
     async gravar(i) {
       shas.add(`${i.unidade}|${i.sha256}`);

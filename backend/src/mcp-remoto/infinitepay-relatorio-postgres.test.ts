@@ -81,6 +81,13 @@ test('Postgres de verdade: migrations aplicam; importa, não duplica arquivo nem
     assert.match(gravada?.contaHash ?? '', /^[0-9a-f]{32}$/);
     assert.equal(JSON.stringify(gravada).includes('987654321'), false, 'o número da conta nunca é gravado');
 
+    // a MESMA conta em OUTRA unidade, com bytes diferentes (novo export do período): recusada pelo hash da conta
+    const mesmaConta = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', segredoDaConta: 'segredo-do-teste', conteudo: Buffer.from(OFX('', '20261116')) });
+    assert.notEqual(!mesmaConta.importado && mesmaConta.motivo, 'conta_de_outra_unidade', 'com OUTRO segredo o hash é outro: a conta é desconhecida (isso mostra que o segredo entra no hash)');
+    const dono = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', conteudo: Buffer.from(OFX('', '20261117')) });
+    assert.equal(!dono.importado && dono.motivo, 'conta_de_outra_unidade');
+    assert.equal(await db.infinitepayImportacao.count({ where: { unitSlug: 'doutor-hernia-serra' } }), mesmaConta.importado ? 1 : 0);
+
     // a leitura do conector contra o banco: datas como dia (sem deslocar de fuso), valores e cobertura
     const conta: ContaInfinitepay = { slug: UNI, nome: 'Açailândia', chaveFinal: '…x', temHandle: false, fonte: { consultar: async () => ({ sucesso: true, pago: true }), testar: async () => undefined } };
     const ctx = criarContextoInfinitepay(new Map([[UNI, conta]]), { async listar() { return []; }, async porOrderNsu() { return null; } });

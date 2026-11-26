@@ -658,6 +658,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
   // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
   const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
+  // o hash da conta do extrato é um HMAC com este segredo (INFINITEPAY_CONTA_SEGREDO, 32+ caracteres, SÓ do ambiente: sem ele a importação recusa)
+  const segredoDaContaInfinitepay = process.env.INFINITEPAY_CONTA_SEGREDO?.trim() ?? '';
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());
@@ -737,7 +739,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarEscritaInfinitepaySePermitido(server, infinitepay, escritaInfinitepay, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
       // a descrição do lançamento pode ter o nome de quem pagou: só quem escreve no conector a vê (os números saem para todos)
       registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar, { descricoes: escritores.has(quem.userId) });
-      registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
+      registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay, segredoDaConta: segredoDaContaInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.

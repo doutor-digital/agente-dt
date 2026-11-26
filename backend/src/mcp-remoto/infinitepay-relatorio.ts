@@ -14,7 +14,7 @@
  * Regras de honestidade do número: todo total sai com a COBERTURA (os períodos que de fato foram importados e as lacunas). Importar um mês não faz do
  * total do ano um total do ano. A descrição do lançamento vem do arquivo, com documento, telefone e e-mail mascarados (pode conter o nome de quem pagou).
  */
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { mascararDigitosSeguidos } from '../lib/pii.js';
 
@@ -88,7 +88,11 @@ const MAX_ANTES_DE_MASCARAR = 600;
  * `x+@y+.z+` que, em texto de 20 mil caracteres sem espaço, levava 3,3 s e travava o processo que a Sofia divide.
  */
 export function descricaoSegura(bruto: string): string {
-  const palavras = bruto.slice(0, MAX_ANTES_DE_MASCARAR).replace(/\s+/g, ' ').trim().split(' ');
+  // 1) colapsa os espaços (linear) ANTES de cortar: com o corte primeiro, uma sequência de espaços gastava o limite e o número depois dela escapava do mascaramento
+  let colapsado = bruto.replace(/\s+/g, ' ').trim();
+  // 2) corta; se o corte caiu no meio de um número (ou de um grupo de dígitos com separadores), esse resto de dígitos sai junto: nada de pedaço de documento sem máscara
+  if (colapsado.length > MAX_ANTES_DE_MASCARAR) colapsado = colapsado.slice(0, MAX_ANTES_DE_MASCARAR).replace(/[\d\s.\-/()]+$/, '');
+  const palavras = colapsado.split(' ');
   const t = palavras.map((p) => (p.includes('@') ? '[e-mail]' : p)).join(' ');
   return mascararDigitosSeguidos(t, 8, '[número]').slice(0, 200);
 }
@@ -150,7 +154,7 @@ export function dataDoOfx(v: string | undefined): string | undefined {
 }
 
 /** Lê um extrato OFX (v1 SGML ou v2 XML). Só as marcas conhecidas; nenhuma é interpretada como XML. A conta (ACCTID) só vira hash + final. */
-export function lerOfx(texto: string): ResultadoDoOfx {
+export function lerOfx(texto: string, segredoDaConta = ''): ResultadoDoOfx {
   if (!/<OFX>/i.test(texto)) throw new ErroDeEntrada('isto não parece um arquivo OFX (não achei a marca <OFX>)');
   const linhas: LinhaDeMovimento[] = [];
   let ignoradas = 0;
@@ -171,12 +175,19 @@ export function lerOfx(texto: string): ResultadoDoOfx {
   const periodoFim = dataDoOfx(campoOfx(texto, 'DTEND'));
   const datas = linhas.map((l) => l.data).sort();
   // a conta do arquivo: a identificação é lida só para CONFERIR se o arquivo é da mesma conta já importada da unidade; guarda-se o hash e o final
-  const contas = new Set([...texto.matchAll(/<ACCTID>\s*([^<\r\n]{1,64})/gi)].map((x) => x[1]!.trim()).filter(Boolean));
-  if (contas.size > 1) throw new ErroDeEntrada('o arquivo tem lançamentos de MAIS DE UMA conta (ACCTID diferentes). Peça o extrato de uma conta por arquivo. Nada foi gravado.');
-  const acct = [...contas][0];
-  const banco = campoOfx(texto, 'BANKID') ?? '';
+  // SÓ a conta DONA do extrato (BANKACCTFROM / CCACCTFROM, que vêm antes da lista de lançamentos): um TED traz a conta de destino em BANKACCTTO dentro do lançamento, e isso
+  // não é "outra conta" do arquivo. O bloco vai até a lista de lançamentos, com ou sem a marca de fechamento (OFX v1 pode omiti-la).
+  const donos = [...texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>([\s\S]{0,400}?)(?=<BANKTRANLIST>|<LEDGERBAL>|<STMTTRN>|<\/STMTRS>|<\/CCSTMTRS>|$)/gi)];
+  const contas = new Map<string, string>();
+  for (const d of donos) {
+    const acct = /<ACCTID>\s*([^<\r\n]{1,64})/i.exec(d[1]!)?.[1]?.trim();
+    if (acct) contas.set(`${/<BANKID>\s*([^<\r\n]{1,32})/i.exec(d[1]!)?.[1]?.trim() ?? ''}|${acct}`, acct);
+  }
+  if (contas.size > 1) throw new ErroDeEntrada('o arquivo tem lançamentos de MAIS DE UMA conta (BANKACCTFROM diferentes). Peça o extrato de uma conta por arquivo. Nada foi gravado.');
+  const [dono, acct] = [...contas.entries()][0] ?? [];
   return {
-    ...(acct ? { conta: { hash: createHash('sha256').update(`${banco}|${acct}`).digest('hex').slice(0, 32), final: acct.replace(/\W/g, '').slice(-4) } } : {}),
+    // HMAC com um segredo do SERVIDOR (não um sha256 puro): o número de uma conta tem pouca entropia e um hash simples se desfaria por tentativa; sem o segredo, não
+    ...(dono && acct ? { conta: { hash: createHmac('sha256', segredoDaConta).update(dono).digest('hex').slice(0, 32), final: acct.replace(/\W/g, '').slice(-4) } } : {}),
     linhas,
     ignoradas,
     // o período declarado pelo arquivo; sem ele, o das linhas
@@ -283,11 +294,11 @@ function cabecalhoParaMostrar(cel: string[]): { cabecalho: string[]; semCabecalh
  * Lê o arquivo que chegou. `esperado` é o relatório que a pessoa disse que é: um OFX só pode ser extrato; um CSV só é lido por um leiaute do MESMO
  * relatório. Formato que não se reconhece NÃO vira erro mudo: volta `reconhecido: false` com o cabeçalho.
  */
-export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esperado: TipoDeRelatorio): LeituraDoArquivo {
+export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esperado: TipoDeRelatorio, segredoDaConta = ''): LeituraDoArquivo {
   const texto = decodificar(conteudo);
   if (tipoDoCofre === 'ofx') {
     if (esperado !== 'extrato') throw new ErroDeEntrada(`para ${esperado} use o CSV: o OFX é uma lista de lançamentos (data e valor) e não traz forma de pagamento, parcelas nem taxa. Para o OFX, escolha relatorio="extrato".`);
-    const o = lerOfx(texto);
+    const o = lerOfx(texto, segredoDaConta);
     if (o.linhas.length === 0) throw new ErroDeEntrada(`o OFX não tem nenhum lançamento que eu entenda (${o.ignoradas} ignorados). Nada foi gravado.`);
     return { reconhecido: true, lido: { ...(o.conta ? { conta: o.conta } : {}), formato: 'ofx', leiaute: 'ofx', relatorio: 'extrato', movimentos: o.linhas, vendas: [], ignoradas: o.ignoradas, ...(o.periodoInicio ? { periodoInicio: o.periodoInicio } : {}), ...(o.periodoFim ? { periodoFim: o.periodoFim } : {}) } };
   }
@@ -386,6 +397,8 @@ export interface ArmazemDeRelatorios {
   jaImportado(unidade: string, sha256: string): Promise<boolean>;
   /** em que unidades este MESMO arquivo (sha256) já foi importado */
   unidadesComArquivo(sha256: string): Promise<string[]>;
+  /** em que unidades já foi importado um extrato desta CONTA (hash da conta) */
+  unidadesComConta(contaHash: string): Promise<string[]>;
   /** numa transação: cria a importação e as linhas que ainda não existem (a unicidade do banco manda). Devolve quantas eram novas. */
   gravar(i: NovaImportacao): Promise<{ id: string; novas: number }>;
   movimentos(f: { unidade: string; tipo?: 'extrato' | 'recebivel'; de?: string; ate?: string; limite: number }): Promise<MovimentoGuardado[]>;
@@ -396,6 +409,7 @@ export interface ArmazemDeRelatorios {
 export type ResultadoDaImportacao =
   | { importado: false; motivo: 'ja_importado'; aviso: string }
   | { importado: false; motivo: 'arquivo_de_outra_unidade'; aviso: string; unidades: string[] }
+  | { importado: false; motivo: 'conta_de_outra_unidade'; aviso: string; unidades: string[] }
   | { importado: false; motivo: 'outra_conta'; aviso: string; contaDoArquivo: string; contasJaImportadas: string[]; proximoPasso: string }
   | { importado: false; motivo: 'leiaute_desconhecido'; formato: 'csv'; delimitador: string; cabecalho: string[]; semCabecalho: boolean; linhasNoArquivo: number; aviso: string; proximoPasso: string }
   | { importado: true; aviso?: string; importacao: { id: string; relatorio: TipoDeRelatorio; formato: string; leiaute: string; periodoInicio: string | null; periodoFim: string | null; linhasLidas: number; linhasNovas: number; linhasRepetidas: number; linhasIgnoradas: number }; totais: Record<string, unknown> };
@@ -404,7 +418,7 @@ const reais = (c: number) => Math.round(c) / 100;
 
 export async function importarRelatorio(
   armazem: ArmazemDeRelatorios,
-  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string; aceitarOutraConta?: boolean },
+  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string; aceitarOutraConta?: boolean; /** o segredo do servidor que torna o hash da conta um HMAC */ segredoDaConta?: string },
 ): Promise<ResultadoDaImportacao> {
   const sha = sha256Do(a.conteudo);
   if (await armazem.jaImportado(a.unidade, sha)) {
@@ -415,7 +429,7 @@ export async function importarRelatorio(
   if (outras.length > 0) {
     return { importado: false, motivo: 'arquivo_de_outra_unidade', unidades: outras, aviso: `este mesmo arquivo (mesmo conteúdo) já foi importado em ${outras.join(', ')}. Importar o mesmo relatório em duas unidades dobra o dinheiro de uma delas: não importei nada. Confira de que clínica é o arquivo e peça o relatório certo.` };
   }
-  const leitura = lerRelatorio(a.conteudo, a.tipoDoCofre, a.relatorio);
+  const leitura = lerRelatorio(a.conteudo, a.tipoDoCofre, a.relatorio, a.segredoDaConta);
   if (!leitura.reconhecido) {
     return {
       importado: false,
@@ -432,6 +446,13 @@ export async function importarRelatorio(
     };
   }
   const l = leitura.lido;
+  // a MESMA conta em duas unidades dobraria o dinheiro de uma delas. Um novo export do mesmo período tem bytes diferentes, então o sha256 não pega: quem pega é o hash da conta. Sem exceção.
+  if (l.conta) {
+    const donas = (await armazem.unidadesComConta(l.conta.hash)).filter((u) => u !== a.unidade);
+    if (donas.length > 0) {
+      return { importado: false, motivo: 'conta_de_outra_unidade', unidades: donas, aviso: `esta conta (final ${l.conta.final}) já tem extrato importado em ${donas.join(', ')}. A mesma conta em duas unidades contaria o dinheiro duas vezes: não importei nada. Confira de que clínica é o extrato.` };
+    }
+  }
   const anteriores = await armazem.importacoes(a.unidade);
   // a conta do arquivo tem de ser a que a unidade já importou: extrato de outra conta somaria dinheiro de outro lugar no total da unidade
   const avisos: string[] = [];

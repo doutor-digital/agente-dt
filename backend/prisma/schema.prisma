@@ -3192,6 +3192,7 @@ model InfinitepayImportacao {
   @@unique([unitSlug, sha256])
   @@index([unitSlug, createdAt])
   @@index([sha256])
+  @@index([contaHash])
   @@map("infinitepay_importacoes")
 }
 
