@@ -13,6 +13,7 @@
  *  - `desligado` → nada roda: nem leitura, nem consulta.
  */
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { kommoCortado } from './kommo-cortado.js';
 
 export const ID_CONVITE_WHATSAPP = 'convite-whatsapp';
 
@@ -96,8 +97,13 @@ export interface RotaDeEnvioDaUnidade {
   kommoBypassSalesbot?: boolean | null;
 }
 
-/** A unidade tem rota de envio pelo Salesbot no Kommo (Salesbot + campo de resposta, sem bypass)? É o que separa o caminho do Kommo do do CRM. */
-export function temRotaDeEnvioNoKommo(u: RotaDeEnvioDaUnidade): boolean {
+/**
+ * O Kommo é o caminho de envio desta unidade? Salesbot + campo de resposta, sem bypass — E a unidade NÃO saiu do Kommo (`CHATWOOT_KOMMO_CORTADO_SLUGS`: ali o
+ * Salesbot continua cadastrado, mas ninguém mais escreve nele e quem convida é o CRM). Única definição: o robô do Kommo, a Sofia e o robô do CRM usam esta, para
+ * nunca haver dois caminhos convidando a mesma unidade.
+ */
+export function temRotaDeEnvioNoKommo(u: RotaDeEnvioDaUnidade & { slug?: string }): boolean {
+  if (u.slug && kommoCortado(u.slug)) return false;
   return !!u.kommoSalesbotId && !!u.kommoReplyFieldId && !u.kommoBypassSalesbot;
 }
 

@@ -34,6 +34,8 @@ import {
 import { cartaoDeRedeSocialCalado, decidirCanal, sofiaCaladaPeloConvite, sofiaSoWhatsappEstado, pacienteDeRedeSocialCalado, _esquecerOrigensParaTeste } from './sofia-so-whatsapp.js';
 import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
+import { ESPERA_MAXIMA_MS, esperarConvite, registrarEmAndamento } from './convite-whatsapp-marca.js';
+import { temRotaDeEnvioNoKommo } from './convite-whatsapp-estado.js';
 import { casarFala, lerListaDeTextos } from './origem-texto-pronto.js';
 
 const SLUG = 'doutor-hernia-salto';
@@ -85,7 +87,7 @@ const gate = (u: Unit, leadId = 777) => sofiaCaladaPeloConvite(u as never, leadI
 
 function portas(sobre: Partial<DepsDoConvite> & { leitura?: Partial<LeituraDoCartao> } = {}) {
   const { leitura, ...over } = sobre;
-  const w = { jaConvidado: 0, soltou: 0, reivindicou: [] as string[], cartao: 0, equipe: 0, franquia: 0, enviou: [] as string[], simulou: [] as Array<Record<string, unknown>> };
+  const w = { desde: [] as Date[], jaConvidado: 0, soltou: 0, reivindicou: [] as string[], cartao: 0, equipe: 0, franquia: 0, enviou: [] as string[], simulou: [] as Array<Record<string, unknown>> };
   const reivindicadas = new Set<string>();
   const enviados = (portasEnviados ??= new Set<string>());
   const deps: DepsDoConvite = {
@@ -97,6 +99,7 @@ function portas(sobre: Partial<DepsDoConvite> & { leitura?: Partial<LeituraDoCar
       return 'ganhou';
     },
     soltar: async (c) => void (w.soltou++, reivindicadas.delete(c)),
+    sofiaFalouDesde: async (_u, _l, desde) => (w.desde.push(desde), false),
     cartao: async () => (w.cartao++, { pausado: false, etapaPermite: true, temIdClient: false, telefone: null, ...(leitura ?? {}) }),
     equipeJaFalou: async () => (w.equipe++, false),
     pacienteNaFranquia: async () => (w.franquia++, 'nao' as const),
@@ -184,7 +187,7 @@ test('DESLIGADA: não lê o cartão, não consulta o banco, não envia, não gra
   const { w, deps } = portas();
   const r = await convidarParaWhatsapp(pedido(), deps);
   assert.deepEqual(r, { tipo: 'desligado' });
-  assert.deepEqual({ ...w, enviou: w.enviou.length, simulou: w.simulou.length }, { jaConvidado: 0, soltou: 0, reivindicou: [], cartao: 0, equipe: 0, franquia: 0, enviou: 0, simulou: 0 });
+  assert.deepEqual({ ...w, enviou: w.enviou.length, simulou: w.simulou.length }, { desde: [], jaConvidado: 0, soltou: 0, reivindicou: [], cartao: 0, equipe: 0, franquia: 0, enviou: 0, simulou: 0 });
 });
 
 test('DESLIGADA: a Sofia segue calada só pela chave própria (o robô não muda nada nela)', async () => {
@@ -645,4 +648,86 @@ test('o telefone do contato: getContactPhoneOuErro LANÇA no erro de rede, getCo
   assert.equal(await k2.getContactPhoneOuErro(5), '+5511988887777');
   const semTel = { get: async () => ({ data: { custom_fields_values: [] } }) };
   assert.equal(await new (KommoClient as unknown as new (c: unknown, h: unknown) => InstanceType<typeof KommoClient>)({ slug: 'x', subdomain: 'x', accessToken: 'x' }, semTel).getContactPhoneOuErro(5), null, 'sem telefone de verdade = null, sem erro');
+});
+
+// ── rodada 2 do sênior ────────────────────────────────────────────────────────────────────────
+
+test('RAJADA de 3 mensagens: a Sofia espera os 3 robôs (o registro encadeia, não sobrescreve) — nenhum convite sai depois de ela já ter respondido', async () => {
+  ligar('ligado');
+  const soltar: Array<() => void> = [];
+  const { deps } = portas({ enviar: () => new Promise((ok) => soltar.push(() => ok('entregue'))) });
+  const r1 = convidarParaWhatsapp(pedido(), deps); // mensagem 1: ganha a marca e fica enviando
+  await new Promise((ok) => setTimeout(ok, 5));
+  // mensagens 2 e 3 (o robô delas termina rápido: «já convidado»)
+  const r2 = convidarParaWhatsapp(pedido(), deps);
+  const r3 = convidarParaWhatsapp(pedido(), deps);
+  let sofiaSoltou = false;
+  const sofia = gate(unidade()).then((v) => ((sofiaSoltou = true), v));
+  await Promise.all([r2, r3]);
+  await new Promise((ok) => setTimeout(ok, 20));
+  assert.equal(sofiaSoltou, false, 'o robô da mensagem 1 ainda está enviando: a Sofia continua esperando (antes só esperava o da última mensagem)');
+  soltar[0]!();
+  await r1;
+  assert.equal(await sofia, true, 'convite entregue: a Sofia se cala');
+});
+
+test('esperarConvite: acompanha o robô enquanto ele trabalha (teto de 2 min, documentado) e desiste no teto sem lançar', async () => {
+  assert.equal(ESPERA_MAXIMA_MS, 120_000);
+  const preso = new Promise<void>(() => undefined);
+  registrarEmAndamento('convite-whatsapp:teste-preso:1', preso);
+  const t0 = Date.now();
+  await esperarConvite('convite-whatsapp:teste-preso:1', 40);
+  assert.ok(Date.now() - t0 >= 35 && Date.now() - t0 < 1000, 'desistiu no teto passado');
+  let fim!: () => void;
+  registrarEmAndamento('convite-whatsapp:teste-lento:1', new Promise<void>((ok) => (fim = ok)));
+  const esperou = esperarConvite('convite-whatsapp:teste-lento:1', 5_000);
+  setTimeout(fim, 60);
+  const t1 = Date.now();
+  await esperou;
+  assert.ok(Date.now() - t1 >= 50, 'um robô lento (mais que o tempo de um turno) é esperado até terminar');
+});
+
+test('SEGURANÇA: lead que JÁ conversa com a Sofia (respondeu nos últimos 7 dias) NÃO é convidado — ligar a chave no meio da conversa não cala a Sofia', async () => {
+  ligar('ligado');
+  _esquecerDecisoesParaTeste();
+  const agora = 1_800_000_000_000;
+  const { w, deps } = portas({ agora: () => new Date(agora), sofiaFalouDesde: async (_u, _l, desde) => (w2.push(desde), true) });
+  const w2: Date[] = [];
+  const r = await convidarParaWhatsapp(pedido(), deps);
+  assert.deepEqual(r, { tipo: 'ignorou', motivo: 'sofia-ja-conversa', detalhe: undefined });
+  assert.equal(w.enviou.length, 0);
+  assert.deepEqual(w.reivindicou, [], 'não gasta a marca de «uma vez»');
+  assert.equal(w.cartao, 0, 'e nem lê o cartão no Kommo');
+  assert.equal(w2[0]!.getTime(), agora - 7 * 86_400_000, 'a janela é a validade do convite: 7 dias');
+  assert.equal(await gate(unidade()), false, 'sem marca de «recebeu»: a Sofia segue conversando');
+});
+
+test('SEGURANÇA: leitura do histórico da Sofia que falha = não convida; lead que a Sofia nunca atendeu é convidado', async () => {
+  ligar('ligado');
+  const { w, deps } = portas({ sofiaFalouDesde: async () => Promise.reject(new Error('banco fora')) });
+  assert.equal(((await convidarParaWhatsapp(pedido(), deps)) as { motivo: string }).motivo, 'nao-consegui-conferir');
+  assert.equal(w.enviou.length, 0);
+  _esquecerDecisoesParaTeste();
+  const b = portas();
+  assert.equal((await convidarParaWhatsapp(pedido(), b.deps)).tipo, 'enviou');
+  assert.equal(b.w.desde.length, 1);
+});
+
+test('unidade FORA DA KOMMO (CHATWOOT_KOMMO_CORTADO_SLUGS) com Salesbot ainda cadastrado: o robô do Kommo NÃO convida (quem convida é o CRM) e a Sofia não é calada', async () => {
+  const antes = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+  process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = SLUG;
+  try {
+    assert.equal(temRotaDeEnvioNoKommo({ slug: SLUG, ...ROTA }), false);
+    assert.equal(temRotaDeEnvioNoKommo({ slug: 'doutor-hernia-outra', ...ROTA }), true);
+    ligar('ligado');
+    const { w, deps } = portas();
+    const r = await convidarParaWhatsapp(pedido(), deps);
+    assert.deepEqual(r, { tipo: 'ignorou', motivo: 'sem-rota-de-envio', detalhe: 'unidade fora da Kommo: quem convida é o CRM' });
+    assert.equal(w.enviou.length, 0);
+    portasEnviados = new Set([chaveDoConvite(unidade(), 777)]);
+    assert.equal(await gate(unidade()), false);
+  } finally {
+    if (antes === undefined) delete process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+    else process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = antes;
+  }
 });

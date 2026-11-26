@@ -55,24 +55,34 @@ export async function gravarEnviado(chave: string): Promise<boolean> {
 
 // ── o robô em andamento: a Sofia espera o desfecho antes de decidir se responde ──────────────────────────
 
-const ESPERA_MAXIMA_MS = 25_000;
-const emAndamento = new Map<string, Promise<unknown>>();
+/**
+ * Teto da espera da Sofia pelo robô. Cada leitura do Kommo tem prazo próprio e o robô normalmente leva poucos segundos; a espera acompanha o robô enquanto ele
+ * trabalha e só desiste daqui. RISCO MEDIDO/ASSUMIDO: um robô preso por mais de 2 min (Kommo fora do ar) deixa a Sofia seguir sozinha — e então, se o convite sair
+ * depois, falam as duas naquela mensagem. O contrário (esperar sem teto) pararia a Sofia do lead inteiro por causa de um Kommo travado.
+ */
+export const ESPERA_MAXIMA_MS = 120_000;
+const emAndamento = new Map<string, Promise<void>>();
 
+/**
+ * Registra o robô que decide este lead. Numa RAJADA (3 mensagens seguidas) cada mensagem chama o robô: o registro ENCADEIA o trabalho anterior com o novo
+ * (`allSettled`), senão a Sofia esperaria só o da ÚLTIMA mensagem e falaria por cima do convite que a primeira ainda está enviando.
+ */
 export function registrarEmAndamento(chave: string, trabalho: Promise<unknown>): void {
-  emAndamento.set(chave, trabalho);
-  const solta = () => {
-    if (emAndamento.get(chave) === trabalho) emAndamento.delete(chave);
-  };
-  void trabalho.then(solta, solta);
+  const anterior = emAndamento.get(chave);
+  const junto: Promise<void> = (anterior ? Promise.allSettled([anterior, trabalho]) : Promise.allSettled([trabalho])).then(() => undefined);
+  emAndamento.set(chave, junto);
+  void junto.then(() => {
+    if (emAndamento.get(chave) === junto) emAndamento.delete(chave);
+  });
 }
 
-/** Espera (no máximo 25 s) o robô que está decidindo este lead agora; sem robô em andamento volta na hora. Nunca lança. */
+/** Espera (no máximo `ms`, padrão 2 min) TODOS os robôs que estão decidindo este lead agora; sem robô em andamento volta na hora. Nunca lança. */
 export async function esperarConvite(chave: string, ms = ESPERA_MAXIMA_MS): Promise<void> {
   const t = emAndamento.get(chave);
   if (!t) return;
   let timer: NodeJS.Timeout | undefined;
   try {
-    await Promise.race([t.catch(() => undefined), new Promise<void>((ok) => (timer = setTimeout(ok, ms)))]);
+    await Promise.race([t, new Promise<void>((ok) => (timer = setTimeout(ok, ms)))]);
   } finally {
     if (timer) clearTimeout(timer);
   }

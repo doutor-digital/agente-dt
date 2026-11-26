@@ -33,6 +33,7 @@ import { prisma } from './prisma.js';
 import { emPausa } from './pausa-unidade.js';
 import { liberarClaim, reivindicarComCerteza } from './dedup-cache.js';
 import { chaveDoConvite, gravarEnviado, jaConvidado, registrarEmAndamento } from './convite-whatsapp-marca.js';
+import { kommoCortado } from './kommo-cortado.js';
 import { pausaDoLeadAtiva } from './pausa-lead-regras.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
 import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
@@ -41,7 +42,7 @@ import { etapaCalada } from './sofia-calada.js';
 import { esquemaDaUnidade, type EsquemaKommo } from './kommo-schema.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { falasHumanasDaEquipe } from './pausa-equipe.js';
-import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
+import { enviosDaSofia, mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { consultarFranquia, type SinalDaFranquia } from './paciente-em-tratamento.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
 import { cidadeDaUnidade, unidadeDona } from '../agent/rede-doutor-hernia.js';
@@ -54,6 +55,7 @@ import {
   lembrarDecisao,
   nomeDaClinica,
   numeroDaUnidade,
+  temRotaDeEnvioNoKommo,
   textoDoConvite,
   type CanalDoConvite,
 } from './convite-whatsapp-estado.js';
@@ -64,6 +66,7 @@ export type MotivoDoConvite =
   | 'unidade-pausada'
   | 'sem-numero'
   | 'sem-rota-de-envio'
+  | 'sofia-ja-conversa'
   | 'ja-convidado'
   | 'cartao-pausado'
   | 'etapa-sem-sofia'
@@ -112,6 +115,8 @@ export interface DepsDoConvite {
   reivindicar(chave: string): Promise<'ganhou' | 'perdeu' | 'incerto'>;
   /** devolve a marca (só quando SABEMOS que nada saiu) */
   soltar(chave: string): Promise<void>;
+  /** a Sofia (conversando: resposta de turno) falou com este lead desde `desde`? Lança se não leu. */
+  sofiaFalouDesde(unit: Unit, leadId: number, desde: Date): Promise<boolean>;
   cartao(unit: Unit, leadId: number, contactId: string | null): Promise<LeituraDoCartao>;
   /** a EQUIPE (gente) já falou nesta conversa? Lança se não leu. */
   equipeJaFalou(unit: Unit, leadId: number): Promise<boolean>;
@@ -152,14 +157,15 @@ export function sinalDePaciente(s: SinalDaFranquia): boolean {
 }
 
 /** Os «não» que custaram leituras do Kommo e não mudam logo: lembrados por 1 h. Falha passageira e o que se decide de graça não entram. */
-const DEFINITIVOS_DEPOIS_DAS_LEITURAS: ReadonlySet<MotivoDoConvite> = new Set(['cartao-pausado', 'etapa-sem-sofia', 'equipe-ja-falou', 'paciente']);
+const DEFINITIVOS_DEPOIS_DAS_LEITURAS: ReadonlySet<MotivoDoConvite> = new Set(['sofia-ja-conversa', 'cartao-pausado', 'etapa-sem-sofia', 'equipe-ja-falou', 'paciente']);
 
 const ROTULO: Record<MotivoDoConvite, string> = {
   'nao-e-rede-social': 'não é Instagram/Facebook',
   comentario: 'é comentário em post, não mensagem direta',
   'unidade-pausada': 'a unidade está em pausa',
   'sem-numero': 'a unidade não tem o número do WhatsApp cadastrado',
-  'sem-rota-de-envio': 'a unidade não tem Salesbot + campo de resposta (o envio viraria nota no cartão)',
+  'sem-rota-de-envio': 'o Kommo não é o caminho de envio desta unidade (sem Salesbot + campo de resposta, em bypass, ou fora da Kommo)',
+  'sofia-ja-conversa': 'a Sofia já está conversando com este lead (respondeu nos últimos 7 dias)',
   'ja-convidado': 'esta conversa já foi convidada há menos de 7 dias',
   'cartao-pausado': '«Pausar IA»/pausa do lead: alguém já cuida',
   'etapa-sem-sofia': 'o cartão está em etapa em que a Sofia não fala (paciente já em tratamento/alta)',
@@ -204,12 +210,16 @@ async function decidir(p: PedidoDoConvite, deps: DepsDoConvite): Promise<Desfech
     if (emPausa(unit)) return nao('unidade-pausada');
     const numero = numeroDaUnidade(unit, canal);
     if (!numero) return nao('sem-numero');
-    // a MESMA rota que cala a Sofia (conviteFalaNaUnidade): Salesbot + campo de resposta, e nunca o modo «bypass» (o texto iria em pedaços de 240
-    // caracteres e o link seria cortado). Todo webhook de chat traz `chatId`, então ele não serve de rota: sem Salesbot o envio cairia em nota.
-    if (!unit.kommoSalesbotId || !unit.kommoReplyFieldId || unit.kommoBypassSalesbot) return nao('sem-rota-de-envio');
+    // a MESMA definição de caminho que cala a Sofia e que o CRM usa (temRotaDeEnvioNoKommo): Salesbot + campo de resposta, nunca bypass (o texto iria em pedaços de 240
+    // caracteres e o link seria cortado) e nunca unidade fora da Kommo (ali convida o CRM). O chatId do webhook não é rota: sem Salesbot o envio cairia em nota.
+    if (!temRotaDeEnvioNoKommo(unit)) return nao('sem-rota-de-envio', kommoCortado(unit.slug) ? 'unidade fora da Kommo: quem convida é o CRM' : undefined);
     // o barato primeiro: quem já foi convidado não custa nenhuma leitura do Kommo
     if (!seco && (await deps.jaConvidado(chave))) return nao('ja-convidado');
     if (!seco && freado(chave, agoraMs())) return nao('nao-consegui-conferir', 'o envio anterior falhou há menos de 30 min');
+
+    // SEGURANÇA: lead que JÁ conversa com a Sofia não é convidado. Ligar a chave no meio de uma conversa não pode mandar o convite (e calar a Sofia) a quem
+    // está em atendimento. A janela é a da validade do convite (7 dias): a Sofia respondeu a este lead nesse prazo = conversa em andamento. Leitura que falha = não convida.
+    if (await deps.sofiaFalouDesde(unit, leadId, new Date(agoraMs() - VALIDADE_DO_CONVITE_MS))) return nao('sofia-ja-conversa');
 
     const cartao = await deps.cartao(unit, leadId, p.contactId);
     if (cartao.pausado) return nao('cartao-pausado');
@@ -353,6 +363,7 @@ export const DEPS_PADRAO: DepsDoConvite = {
   reivindicar: (chave) => reivindicarComCerteza('convite-whatsapp', chave.slice('convite-whatsapp:'.length), VALIDADE_DO_CONVITE_MS),
   gravarEnviado,
   soltar: (chave) => liberarClaim('convite-whatsapp', chave.slice('convite-whatsapp:'.length)),
+  sofiaFalouDesde: async (unit, leadId, desde) => (await enviosDaSofia(unit, leadId, desde, { soRespostaDeTurno: true })).length > 0,
   cartao: lerCartao,
   async equipeJaFalou(unit, leadId) {
     const msgs = await mensagensOficiaisDaUnidade(unit, createKommoClient(unit) as KommoClient, leadId, 200);
