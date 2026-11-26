@@ -147,7 +147,8 @@ export interface EventoDaSofia {
    * decisao = rodada em que ela NÃO respondeu ao paciente (nome = desfecho, detalhe = motivo) — só para a aba Registro, o painel
    * não conta
    */
-  tipo: 'marcou' | 'equipe' | 'pix' | 'decisao';
+  /** `alerta-parou`: o aviso «Sofia parou» saiu (a retomada do boot não o repete); a tela do Registro ignora este tipo */
+  tipo: 'marcou' | 'equipe' | 'pix' | 'decisao' | 'alerta-parou';
   /** marcou: o nome do contato no Chatwoot */
   nome?: string | null;
   /** marcou: "AAAA-MM-DDTHH:mm" da consulta, no fuso da clínica */
