@@ -8,7 +8,7 @@ const comoData = (d: string) => new Date(`${d}T00:00:00.000Z`);
 export const FALHA_DO_BANCO_RELATORIO = 'não consegui gravar nem ler os relatórios no banco; nada foi gravado, tente em instantes';
 
 interface LinhaImportacao {
-  id: string; relatorio: string; formato: string; leiaute: string | null; periodoInicio: Date | null; periodoFim: Date | null;
+  id: string; unitSlug: string; contaHash: string | null; contaFinal: string | null; relatorio: string; formato: string; leiaute: string | null; periodoInicio: Date | null; periodoFim: Date | null;
   linhasLidas: number; linhasNovas: number; importadoPor: string; createdAt: Date;
 }
 interface LinhaMovimento { tipo: string; data: Date; dataPrevista: Date | null; valorCentavos: number; descricao: string }
@@ -40,6 +40,10 @@ export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelat
     async jaImportado(unidade, sha256) {
       return Boolean(await db.infinitepayImportacao.findUnique({ where: { unitSlug_sha256: { unitSlug: unidade, sha256 } }, select: { id: true } }));
     },
+    async unidadesComArquivo(sha256) {
+      const linhas = await db.infinitepayImportacao.findMany({ where: { sha256 }, orderBy: { createdAt: 'asc' } });
+      return [...new Set(linhas.map((l) => l.unitSlug))];
+    },
     async gravar(i: NovaImportacao) {
       try {
         return await db.$transaction(
@@ -48,6 +52,7 @@ export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelat
               data: {
                 unitSlug: i.unidade, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, sha256: i.sha256, bytes: i.bytes,
                 periodoInicio: i.periodoInicio ? comoData(i.periodoInicio) : null, periodoFim: i.periodoFim ? comoData(i.periodoFim) : null,
+                contaHash: i.contaHash ?? null, contaFinal: i.contaFinal ?? null,
                 linhasLidas: i.movimentos.length + i.vendas.length, linhasNovas: 0, importadoPor: i.importadoPor,
               },
               select: { id: true },
@@ -106,7 +111,7 @@ export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelat
       const linhas = await db.infinitepayImportacao.findMany({ where: { unitSlug: unidade, ...(relatorio ? { relatorio } : {}) }, orderBy: { createdAt: 'asc' } });
       return linhas.map((l): ImportacaoGuardada => ({
         id: l.id, relatorio: l.relatorio, formato: l.formato, leiaute: l.leiaute, periodoInicio: l.periodoInicio ? dia(l.periodoInicio) : null, periodoFim: l.periodoFim ? dia(l.periodoFim) : null,
-        linhasLidas: l.linhasLidas, linhasNovas: l.linhasNovas, importadoPor: l.importadoPor, importadoEm: l.createdAt.toISOString(),
+        linhasLidas: l.linhasLidas, linhasNovas: l.linhasNovas, importadoPor: l.importadoPor, importadoEm: l.createdAt.toISOString(), contaHash: l.contaHash, contaFinal: l.contaFinal,
       }));
     },
   };
@@ -126,6 +131,9 @@ export function relatoriosEmMemoria(): ArmazemDeRelatorios & { importacoesGravad
     async jaImportado(u, sha) {
       return shas.has(`${u}|${sha}`);
     },
+    async unidadesComArquivo(sha) {
+      return [...shas].filter((k) => k.endsWith(`|${sha}`)).map((k) => k.slice(0, k.length - sha.length - 1));
+    },
     async gravar(i) {
       shas.add(`${i.unidade}|${i.sha256}`);
       let novas = 0;
@@ -141,7 +149,7 @@ export function relatoriosEmMemoria(): ArmazemDeRelatorios & { importacoesGravad
       }
       const id = `imp-${++n}`;
       unidadeDa.set(id, i.unidade);
-      importacoesGravadas.push({ id, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, periodoInicio: i.periodoInicio ?? null, periodoFim: i.periodoFim ?? null, linhasLidas: i.movimentos.length + i.vendas.length, linhasNovas: novas, importadoPor: i.importadoPor, importadoEm: '2026-11-26T12:00:00.000Z' });
+      importacoesGravadas.push({ id, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, periodoInicio: i.periodoInicio ?? null, periodoFim: i.periodoFim ?? null, linhasLidas: i.movimentos.length + i.vendas.length, linhasNovas: novas, importadoPor: i.importadoPor, importadoEm: '2026-11-26T12:00:00.000Z', contaHash: i.contaHash ?? null, contaFinal: i.contaFinal ?? null });
       return { id, novas };
     },
     async movimentos(f) {

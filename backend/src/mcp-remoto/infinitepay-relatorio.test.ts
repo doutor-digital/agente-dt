@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CofreDeArquivos } from './cofre-arquivos.js';
 import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import {
-  LEIAUTES_CSV, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, decodificar, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
+  LEIAUTES_CSV, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, dataDoOfx, decodificar, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
   type ImportacaoGuardada, type LeiauteCsv,
 } from './infinitepay-relatorio.js';
 import { relatoriosEmMemoria } from './infinitepay-relatorio-armazem.js';
@@ -188,13 +188,140 @@ test('arquivos que se sobrepõem: o lançamento que repete (mesmo FITID) não en
   assert.equal((await arm.movimentos({ unidade: UNI, limite: 100 })).length, 4);
 });
 
-test('unidades diferentes não se misturam, nem o mesmo arquivo em duas unidades', async () => {
+test('o MESMO arquivo já importado em OUTRA unidade é recusado (relatório de uma clínica na conta de outra dobraria o dinheiro)', async () => {
   const arm = relatoriosEmMemoria();
   await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
   const outra = await importarRelatorio(arm, { unidade: 'doutor-hernia-serra', relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
-  assert.ok(outra.importado);
-  assert.equal((await arm.movimentos({ unidade: 'doutor-hernia-serra', limite: 100 })).length, 3);
+  assert.equal(outra.importado, false);
+  if (outra.importado || outra.motivo !== 'arquivo_de_outra_unidade') throw new Error('esperava arquivo_de_outra_unidade');
+  assert.deepEqual(outra.unidades, [UNI]);
+  assert.match(outra.aviso, /dobra o dinheiro/);
+  assert.equal((await arm.movimentos({ unidade: 'doutor-hernia-serra', limite: 100 })).length, 0, 'nada entrou na segunda unidade');
+  assert.equal((await arm.importacoes('doutor-hernia-serra')).length, 0);
   assert.equal((await arm.importacoes(UNI)).length, 1);
+  // na MESMA unidade continua sendo "já importado", não "outra unidade"
+  const mesma = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  assert.equal(!mesma.importado && mesma.motivo, 'ja_importado');
+});
+
+// ----------------------------------------------------------------- conta (ACCTID)
+
+const COM_CONTA = (acct: string, extra = '') => OFX_V1.replace('<ACCTID>987654321', `<ACCTID>${acct}`).replace('<FITID>A1', `<FITID>A1${extra}`);
+
+test('ACCTID é lido só como hash + final: o número da conta não aparece em lugar nenhum do resultado', () => {
+  const r = lerOfx(OFX_V1);
+  assert.equal(r.conta?.final, '4321');
+  assert.match(r.conta!.hash, /^[0-9a-f]{32}$/);
+  assert.equal(JSON.stringify(r).includes('987654321'), false);
+  assert.notEqual(lerOfx(COM_CONTA('111111111')).conta!.hash, r.conta!.hash);
+  assert.equal(lerOfx(OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '')).conta, undefined, 'sem ACCTID, sem conta');
+  assert.throws(() => lerOfx(OFX_V1.replace('</BANKTRANLIST>', '</BANKTRANLIST><BANKACCTFROM><ACCTID>555555555</BANKACCTFROM>')), /MAIS DE UMA conta/);
+});
+
+test('extrato de OUTRA conta que a já importada da unidade: recusado sem gravar; com aceitarOutraConta passa, avisa e registra as duas contas', async () => {
+  const arm = relatoriosEmMemoria();
+  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x' };
+  assert.ok((await importarRelatorio(arm, { ...base, conteudo: buf(OFX_V1) })).importado);
+  const outra = buf(COM_CONTA('111112222', 'z').replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215'));
+  const r = await importarRelatorio(arm, { ...base, conteudo: outra });
+  assert.equal(r.importado, false);
+  if (r.importado || r.motivo !== 'outra_conta') throw new Error('esperava outra_conta');
+  assert.match(r.aviso, /OUTRA conta \(final 2222\).*final 4321/);
+  assert.match(r.proximoPasso, /aceitarOutraConta=true/);
+  assert.equal(JSON.stringify(r).includes('111112222'), false, 'o número da conta nunca sai');
+  assert.equal(arm.importacoesGravadas.length, 1, 'nada foi gravado');
+  const aceita = await importarRelatorio(arm, { ...base, conteudo: outra, aceitarOutraConta: true });
+  assert.ok(aceita.importado);
+  if (aceita.importado) assert.match(String(aceita.aviso), /conta nova para esta unidade \(final 2222\).*DUAS contas/);
+  // depois de aceita, a conta passa a ser conhecida: o próximo arquivo dela entra sem pedir nada
+  const terceira = buf(COM_CONTA('111112222', 'y').replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261216<DTEND>20261231'));
+  const t = await importarRelatorio(arm, { ...base, conteudo: terceira });
+  assert.ok(t.importado);
+  // a mesma conta de sempre nunca é recusada
+  assert.ok(arm.importacoesGravadas.every((i) => i.contaFinal));
+});
+
+test('arquivo sem ACCTID: importa, mas avisa que não deu para conferir a conta', async () => {
+  const arm = relatoriosEmMemoria();
+  const sem = OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '');
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(sem), importadoPor: 'x' });
+  assert.ok(r.importado);
+  if (r.importado) assert.match(String(r.aviso), /não declara a conta/);
+});
+
+test('período que se SOBREPÕE com lançamentos novos de outro identificador: avisa (risco de contar em dobro); sem sobreposição, não', async () => {
+  const arm = relatoriosEmMemoria();
+  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x' };
+  await importarRelatorio(arm, { ...base, conteudo: buf(OFX_V1) });
+  // os MESMOS 3 lançamentos com FITID diferentes, período que se sobrepõe: entram como novos e é exatamente o risco
+  const refeito = OFX_V1.replace(/<FITID>A(\d)/g, '<FITID>B$1').replace('<DTEND>20261115235959[-3:BRT]', '<DTEND>20261118');
+  const r = await importarRelatorio(arm, { ...base, conteudo: buf(refeito) });
+  assert.ok(r.importado);
+  if (!r.importado) return;
+  assert.equal(r.importacao.linhasNovas, 3);
+  assert.match(String(r.aviso), /SE SOBREPÕE a um já importado e 3 linha\(s\) entraram como novas.*contados em dobro/);
+  // período seguinte, sem encostar: sem esse aviso
+  const dezembro = OFX_V1.replace(/<FITID>A(\d)/g, '<FITID>C$1').replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215').replace(/20261103|20261104|20261110/g, '20261205');
+  const d = await importarRelatorio(arm, { ...base, conteudo: buf(dezembro) });
+  assert.ok(d.importado);
+  if (d.importado) assert.doesNotMatch(String(d.aviso ?? ''), /SOBREPÕE/);
+});
+
+// ----------------------------------------------------------------- fuso do DTPOSTED
+
+test('DTPOSTED: o deslocamento entre colchetes é respeitado e o dia é o de Brasília; sem ele a data vale como está', () => {
+  assert.equal(dataDoOfx('20261103'), '2026-11-03');
+  assert.equal(dataDoOfx('20261103120000'), '2026-11-03', 'hora sem fuso: o dia como está');
+  assert.equal(dataDoOfx('20261103235900[-3:BRT]'), '2026-11-03', 'já é Brasília');
+  assert.equal(dataDoOfx('20261104010000[0:GMT]'), '2026-11-03', '01h00 GMT de 04/11 = 22h00 de 03/11 em Brasília');
+  assert.equal(dataDoOfx('20261104020000[0:GMT]'), '2026-11-03', '23h00 de 03/11 em Brasília');
+  assert.equal(dataDoOfx('20261104030000[0:GMT]'), '2026-11-04', '00h00 de 04/11 em Brasília');
+  assert.equal(dataDoOfx('20261103120000[0:GMT]'), '2026-11-03', 'o meio-dia GMT que os bancos usam para "só a data" fica no mesmo dia');
+  assert.equal(dataDoOfx('20261103230000[-5:EST]'), '2026-11-04', '23h EST = 01h do dia seguinte em Brasília');
+  assert.equal(dataDoOfx('20261103120000.000[-3:BRT]'), '2026-11-03', 'milésimos');
+  assert.equal(dataDoOfx('20261103120000[5.5:IST]'), '2026-11-03', 'deslocamento fracionário');
+  assert.equal(dataDoOfx('20261103250000[0:GMT]'), '2026-11-03', 'hora impossível: cai no dia escrito, sem inventar');
+  assert.equal(dataDoOfx('20261103120000[99:XXX]'), '2026-11-03', 'deslocamento impossível: idem');
+  assert.equal(dataDoOfx('20269999'), undefined);
+  assert.equal(dataDoOfx(undefined), undefined);
+});
+
+test('OFX com DTPOSTED em GMT: o lançamento da noite de Brasília fica no dia certo', () => {
+  const r = lerOfx(OFX_V1.replace('<DTPOSTED>20261104<TRNAMT>200.00', '<DTPOSTED>20261104010000[0:GMT]<TRNAMT>200.00'));
+  assert.equal(r.linhas[1]!.data, '2026-11-03');
+});
+
+// ----------------------------------------------------------------- tempo linear (o arquivo vem de fora)
+
+test('descricaoSegura é LINEAR: 100 mil caracteres, de qualquer forma, em menos de 50 ms (a regex de e-mail antiga levava 3,3 s com 20 mil)', () => {
+  const casos: Record<string, string> = {
+    'a sem espaço': 'a'.repeat(100_000),
+    'arrobas': '@'.repeat(100_000),
+    'a@ alternado': 'a@'.repeat(50_000),
+    'a. alternado': 'a.'.repeat(50_000),
+    'x@y. sem fim': `x@${'y.'.repeat(50_000)}`,
+    'dígitos': '1'.repeat(100_000),
+    'dígitos e separadores': '1 '.repeat(50_000),
+    'espaços': ' '.repeat(100_000),
+    'palavras': 'maria souza '.repeat(8_000),
+  };
+  for (const [nome, texto] of Object.entries(casos)) {
+    const t0 = performance.now();
+    const saida = descricaoSegura(texto);
+    const ms = performance.now() - t0;
+    assert.ok(ms < 50, `${nome}: ${ms.toFixed(1)} ms`);
+    assert.ok(saida.length <= 200, nome);
+  }
+  assert.equal(descricaoSegura('PIX maria@exemplo.com.br pago'), 'PIX [e-mail] pago');
+  assert.equal(descricaoSegura('a@@b.c'), '[e-mail]');
+});
+
+test('um OFX com 20 mil caracteres no NAME e no MEMO é lido em tempo curto, sem travar', () => {
+  const grande = OFX_V1.replace('<NAME>PIX RECEBIDO<MEMO>MARIA SOUZA CPF 52998224725', `<NAME>${'a@'.repeat(10_000)}<MEMO>${'b.'.repeat(10_000)}`);
+  const t0 = performance.now();
+  const r = lerOfx(grande);
+  assert.ok(performance.now() - t0 < 200);
+  assert.ok(r.linhas.every((l) => l.descricao.length <= 200));
 });
 
 test('OFX só vale para extrato: para vendas manda usar o CSV (nada é gravado)', async () => {
@@ -336,7 +463,7 @@ test('o registro de leiautes de CSV nasce VAZIO: nenhum leiaute da InfinitePay �
 
 // ----------------------------------------------------------------- cobertura e totais
 
-const imp = (de: string, ate: string): ImportacaoGuardada => ({ id: de, relatorio: 'extrato', formato: 'ofx', leiaute: 'ofx', periodoInicio: de, periodoFim: ate, linhasLidas: 1, linhasNovas: 1, importadoPor: 'x', importadoEm: '' });
+const imp = (de: string, ate: string): ImportacaoGuardada => ({ id: de, relatorio: 'extrato', formato: 'ofx', leiaute: 'ofx', periodoInicio: de, periodoFim: ate, linhasLidas: 1, linhasNovas: 1, importadoPor: 'x', importadoEm: '', contaHash: null, contaFinal: null });
 
 test('cobertura: sem importação diz que zero é falta de dado; junta períodos vizinhos; lista as lacunas do período pedido', () => {
   assert.match(coberturaDoPeriodo([], '2026-11-01', '2026-11-30').aviso, /ZERO por falta de dado/);
@@ -455,6 +582,47 @@ test('importar CSV desconhecido pelo fluxo: devolve o cabeçalho, apaga o arquiv
     assert.equal('cabecalho' in r ? r.cabecalho.join(',') : '', 'Data,Valor');
     assert.equal(c.armazem.importacoesGravadas.length, 0);
     assert.equal(c.cofre.ver(QUEM.id, p.envio).estado, 'apagado');
+  } finally {
+    c.limpar();
+  }
+});
+
+test('fluxo: extrato de OUTRA conta é recusado e o arquivo FICA no cofre; com aceitarOutraConta=true entra sem a clínica enviar de novo', async () => {
+  const c = await cenario();
+  try {
+    const ctx = ctxCom();
+    const p1 = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'extrato' });
+    await c.enviar(p1.linkDeEnvio.split('/').pop()!, 'a.ofx', buf(OFX_V1));
+    assert.ok((await importarEnvio(ctx, c.deps, QUEM, { envio: p1.envio })).importado);
+    const outra = OFX_V1.replace('<ACCTID>987654321', '<ACCTID>555566667').replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215');
+    const p2 = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'extrato' });
+    await c.enviar(p2.linkDeEnvio.split('/').pop()!, 'b.ofx', buf(outra));
+    const r = await importarEnvio(ctx, c.deps, QUEM, { envio: p2.envio });
+    assert.equal(r.importado, false);
+    assert.equal(r.arquivoApagadoDoCofre, false);
+    assert.equal(c.cofre.ver(QUEM.id, p2.envio).estado, 'recebido', 'o arquivo continua guardado para a confirmação');
+    const ok = await importarEnvio(ctx, c.deps, QUEM, { envio: p2.envio, aceitarOutraConta: true });
+    assert.ok(ok.importado);
+    assert.equal(c.cofre.ver(QUEM.id, p2.envio).estado, 'apagado');
+  } finally {
+    c.limpar();
+  }
+});
+
+test('fluxo: o mesmo arquivo de OUTRA unidade é recusado e sai do cofre', async () => {
+  const c = await cenario();
+  try {
+    const conta = (slug: string): ContaInfinitepay => ({ slug, nome: slug, chaveFinal: '…x', temHandle: false, fonte: { consultar: async () => ({ sucesso: true, pago: true }), testar: async () => undefined } });
+    const ctx = criarContextoInfinitepay(new Map([[UNI, conta(UNI)], ['doutor-hernia-serra', conta('doutor-hernia-serra')]]), { async listar() { return []; }, async porOrderNsu() { return null; } });
+    const p1 = await pedirRelatorio(ctx, c.deps, QUEM, { unidade: UNI, relatorio: 'extrato' });
+    await c.enviar(p1.linkDeEnvio.split('/').pop()!, 'a.ofx', buf(OFX_V1));
+    assert.ok((await importarEnvio(ctx, c.deps, QUEM, { envio: p1.envio })).importado);
+    const p2 = await pedirRelatorio(ctx, c.deps, QUEM, { unidade: 'serra', relatorio: 'extrato' });
+    await c.enviar(p2.linkDeEnvio.split('/').pop()!, 'a.ofx', buf(OFX_V1));
+    const r = await importarEnvio(ctx, c.deps, QUEM, { envio: p2.envio });
+    assert.equal(!r.importado && r.motivo, 'arquivo_de_outra_unidade');
+    assert.equal(c.cofre.ver(QUEM.id, p2.envio).estado, 'apagado');
+    assert.equal((await c.armazem.importacoes('doutor-hernia-serra')).length, 0);
   } finally {
     c.limpar();
   }

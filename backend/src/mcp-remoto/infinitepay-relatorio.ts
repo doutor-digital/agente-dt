@@ -79,15 +79,31 @@ function diaValido(a: string, m: string, d: string): string | undefined {
   return t.getUTCMonth() === mes - 1 ? `${a}-${m}-${d}` : undefined;
 }
 
-/** O que sai do texto do arquivo e vai para o banco: sem documento, telefone nem e-mail, sem quebra de linha, até 200 caracteres. */
+/** O limite do texto que as regras de mascaramento chegam a ver. Cortar ANTES de qualquer expressão regular: o arquivo vem de fora e pode ter um campo de megabytes. */
+const MAX_ANTES_DE_MASCARAR = 600;
+
+/**
+ * O que sai do texto do arquivo e vai para o banco: sem documento, telefone nem e-mail, sem quebra de linha, até 200 caracteres.
+ * Tempo LINEAR: o texto é cortado antes das expressões regulares e o e-mail é achado por palavra (toda palavra com "@" vira "[e-mail]"), sem a regex
+ * `x+@y+.z+` que, em texto de 20 mil caracteres sem espaço, levava 3,3 s e travava o processo que a Sofia divide.
+ */
 export function descricaoSegura(bruto: string): string {
-  const t = bruto.replace(/\s+/g, ' ').trim().replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
+  const palavras = bruto.slice(0, MAX_ANTES_DE_MASCARAR).replace(/\s+/g, ' ').trim().split(' ');
+  const t = palavras.map((p) => (p.includes('@') ? '[e-mail]' : p)).join(' ');
   return mascararDigitosSeguidos(t, 8, '[número]').slice(0, 200);
 }
 
 // ----------------------------------------------------------------- OFX
 
+/** A conta do arquivo: só um hash (irreversível) e os 4 últimos caracteres. O número da conta nunca é guardado nem mostrado. */
+export interface ContaDoArquivo {
+  hash: string;
+  final: string;
+}
+
 export interface ResultadoDoOfx {
+  /** a conta que o arquivo declara (ACCTID + BANKID), se declara */
+  conta?: ContaDoArquivo;
   linhas: LinhaDeMovimento[];
   periodoInicio?: string;
   periodoFim?: string;
@@ -110,12 +126,30 @@ const campoOfx = (bloco: string, tag: string): string | undefined => {
   return v ? v : undefined;
 };
 
-const dataDoOfx = (v: string | undefined): string | undefined => {
-  const m = v ? /^(\d{4})(\d{2})(\d{2})/.exec(v) : null;
-  return m ? diaValido(m[1]!, m[2]!, m[3]!) : undefined;
-};
+/** O fuso da clínica (Brasília, UTC-3 fixo desde 2019): o dia de um lançamento é o dia LÁ. */
+const FUSO_DA_CLINICA_H = -3;
 
-/** Lê um extrato OFX (v1 SGML ou v2 XML). Só as marcas conhecidas; nenhuma é interpretada como XML. Número de conta e agência não são lidos. */
+/**
+ * A data de um campo OFX (`YYYYMMDD[HHMM[SS[.XXX]]][deslocamento[:NOME]]`) como dia de Brasília. Só data, ou hora SEM o deslocamento entre colchetes, vale como está
+ * (o banco que manda hora local sem fuso quase sempre quer dizer o dia daquela hora). Com o deslocamento (`[-3:BRT]`, `[0:GMT]`, `[-5:EST]`) a hora é levada ao
+ * instante real e daí ao dia de Brasília: `20261104010000[0:GMT]` é 22h00 de 03/11 em Brasília, e `20261103235900[-3:BRT]` continua dia 03.
+ */
+export function dataDoOfx(v: string | undefined): string | undefined {
+  const m = v ? /^(\d{4})(\d{2})(\d{2})(?:(\d{2})(\d{2})(\d{2})?(?:\.\d+)?)?\s*(?:\[\s*([+-]?\d+(?:[.,]\d+)?)\s*(?::[^\]]*)?\])?/.exec(v) : null;
+  if (!m) return undefined;
+  const dia = diaValido(m[1]!, m[2]!, m[3]!);
+  if (!dia) return undefined;
+  if (m[4] === undefined || m[7] === undefined) return dia;
+  const hh = Number(m[4]);
+  const mm = Number(m[5]);
+  const ss = Number(m[6] ?? 0);
+  const deslocamento = Number(m[7].replace(',', '.'));
+  if (hh > 23 || mm > 59 || ss > 60 || !Number.isFinite(deslocamento) || Math.abs(deslocamento) > 14) return dia;
+  const utc = Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]), hh, mm, ss) - deslocamento * 3_600_000;
+  return new Date(utc + FUSO_DA_CLINICA_H * 3_600_000).toISOString().slice(0, 10);
+}
+
+/** Lê um extrato OFX (v1 SGML ou v2 XML). Só as marcas conhecidas; nenhuma é interpretada como XML. A conta (ACCTID) só vira hash + final. */
 export function lerOfx(texto: string): ResultadoDoOfx {
   if (!/<OFX>/i.test(texto)) throw new ErroDeEntrada('isto não parece um arquivo OFX (não achei a marca <OFX>)');
   const linhas: LinhaDeMovimento[] = [];
@@ -136,7 +170,13 @@ export function lerOfx(texto: string): ResultadoDoOfx {
   const periodoInicio = dataDoOfx(campoOfx(texto, 'DTSTART'));
   const periodoFim = dataDoOfx(campoOfx(texto, 'DTEND'));
   const datas = linhas.map((l) => l.data).sort();
+  // a conta do arquivo: a identificação é lida só para CONFERIR se o arquivo é da mesma conta já importada da unidade; guarda-se o hash e o final
+  const contas = new Set([...texto.matchAll(/<ACCTID>\s*([^<\r\n]{1,64})/gi)].map((x) => x[1]!.trim()).filter(Boolean));
+  if (contas.size > 1) throw new ErroDeEntrada('o arquivo tem lançamentos de MAIS DE UMA conta (ACCTID diferentes). Peça o extrato de uma conta por arquivo. Nada foi gravado.');
+  const acct = [...contas][0];
+  const banco = campoOfx(texto, 'BANKID') ?? '';
   return {
+    ...(acct ? { conta: { hash: createHash('sha256').update(`${banco}|${acct}`).digest('hex').slice(0, 32), final: acct.replace(/\W/g, '').slice(-4) } } : {}),
     linhas,
     ignoradas,
     // o período declarado pelo arquivo; sem ele, o das linhas
@@ -212,6 +252,7 @@ export const LEIAUTES_CSV: LeiauteCsv[] = [];
 // ----------------------------------------------------------------- importar
 
 export interface RelatorioLido {
+  conta?: ContaDoArquivo;
   formato: 'ofx' | 'csv';
   leiaute: string;
   relatorio: TipoDeRelatorio;
@@ -248,7 +289,7 @@ export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esper
     if (esperado !== 'extrato') throw new ErroDeEntrada(`para ${esperado} use o CSV: o OFX é uma lista de lançamentos (data e valor) e não traz forma de pagamento, parcelas nem taxa. Para o OFX, escolha relatorio="extrato".`);
     const o = lerOfx(texto);
     if (o.linhas.length === 0) throw new ErroDeEntrada(`o OFX não tem nenhum lançamento que eu entenda (${o.ignoradas} ignorados). Nada foi gravado.`);
-    return { reconhecido: true, lido: { formato: 'ofx', leiaute: 'ofx', relatorio: 'extrato', movimentos: o.linhas, vendas: [], ignoradas: o.ignoradas, ...(o.periodoInicio ? { periodoInicio: o.periodoInicio } : {}), ...(o.periodoFim ? { periodoFim: o.periodoFim } : {}) } };
+    return { reconhecido: true, lido: { ...(o.conta ? { conta: o.conta } : {}), formato: 'ofx', leiaute: 'ofx', relatorio: 'extrato', movimentos: o.linhas, vendas: [], ignoradas: o.ignoradas, ...(o.periodoInicio ? { periodoInicio: o.periodoInicio } : {}), ...(o.periodoFim ? { periodoFim: o.periodoFim } : {}) } };
   }
   const csv = lerCsv(texto);
   const cab = csv.cabecalho.map(semAcento);
@@ -320,6 +361,9 @@ export interface ImportacaoGuardada {
   linhasNovas: number;
   importadoPor: string;
   importadoEm: string;
+  /** hash da conta do arquivo (nunca o número) e os 4 últimos caracteres; nulos quando o arquivo não declara conta */
+  contaHash: string | null;
+  contaFinal: string | null;
 }
 
 export interface NovaImportacao {
@@ -332,12 +376,16 @@ export interface NovaImportacao {
   periodoInicio?: string;
   periodoFim?: string;
   importadoPor: string;
+  contaHash?: string;
+  contaFinal?: string;
   movimentos: Array<LinhaDeMovimento & { tipo: 'extrato' | 'recebivel'; chave: string }>;
   vendas: Array<LinhaDeVenda & { chave: string }>;
 }
 
 export interface ArmazemDeRelatorios {
   jaImportado(unidade: string, sha256: string): Promise<boolean>;
+  /** em que unidades este MESMO arquivo (sha256) já foi importado */
+  unidadesComArquivo(sha256: string): Promise<string[]>;
   /** numa transação: cria a importação e as linhas que ainda não existem (a unicidade do banco manda). Devolve quantas eram novas. */
   gravar(i: NovaImportacao): Promise<{ id: string; novas: number }>;
   movimentos(f: { unidade: string; tipo?: 'extrato' | 'recebivel'; de?: string; ate?: string; limite: number }): Promise<MovimentoGuardado[]>;
@@ -347,6 +395,8 @@ export interface ArmazemDeRelatorios {
 
 export type ResultadoDaImportacao =
   | { importado: false; motivo: 'ja_importado'; aviso: string }
+  | { importado: false; motivo: 'arquivo_de_outra_unidade'; aviso: string; unidades: string[] }
+  | { importado: false; motivo: 'outra_conta'; aviso: string; contaDoArquivo: string; contasJaImportadas: string[]; proximoPasso: string }
   | { importado: false; motivo: 'leiaute_desconhecido'; formato: 'csv'; delimitador: string; cabecalho: string[]; semCabecalho: boolean; linhasNoArquivo: number; aviso: string; proximoPasso: string }
   | { importado: true; aviso?: string; importacao: { id: string; relatorio: TipoDeRelatorio; formato: string; leiaute: string; periodoInicio: string | null; periodoFim: string | null; linhasLidas: number; linhasNovas: number; linhasRepetidas: number; linhasIgnoradas: number }; totais: Record<string, unknown> };
 
@@ -354,11 +404,16 @@ const reais = (c: number) => Math.round(c) / 100;
 
 export async function importarRelatorio(
   armazem: ArmazemDeRelatorios,
-  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string },
+  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string; aceitarOutraConta?: boolean },
 ): Promise<ResultadoDaImportacao> {
   const sha = sha256Do(a.conteudo);
   if (await armazem.jaImportado(a.unidade, sha)) {
     return { importado: false, motivo: 'ja_importado', aviso: 'este mesmo arquivo já foi importado nesta unidade; nada mudou' };
+  }
+  // o MESMO arquivo em OUTRA unidade é quase certamente um engano (relatório de uma clínica indo para a conta de outra): recusa, sem exceção
+  const outras = (await armazem.unidadesComArquivo(sha)).filter((u) => u !== a.unidade);
+  if (outras.length > 0) {
+    return { importado: false, motivo: 'arquivo_de_outra_unidade', unidades: outras, aviso: `este mesmo arquivo (mesmo conteúdo) já foi importado em ${outras.join(', ')}. Importar o mesmo relatório em duas unidades dobra o dinheiro de uma delas: não importei nada. Confira de que clínica é o arquivo e peça o relatório certo.` };
   }
   const leitura = lerRelatorio(a.conteudo, a.tipoDoCofre, a.relatorio);
   if (!leitura.reconhecido) {
@@ -377,6 +432,24 @@ export async function importarRelatorio(
     };
   }
   const l = leitura.lido;
+  const anteriores = await armazem.importacoes(a.unidade);
+  // a conta do arquivo tem de ser a que a unidade já importou: extrato de outra conta somaria dinheiro de outro lugar no total da unidade
+  const avisos: string[] = [];
+  if (l.conta) {
+    const conhecidas = [...new Map(anteriores.filter((i) => i.contaHash).map((i) => [i.contaHash!, i.contaFinal ?? '????'])).entries()];
+    if (conhecidas.length > 0 && !conhecidas.some(([h]) => h === l.conta!.hash)) {
+      if (!a.aceitarOutraConta) {
+        return {
+          importado: false, motivo: 'outra_conta', contaDoArquivo: `final ${l.conta.final}`, contasJaImportadas: conhecidas.map(([, f]) => `final ${f}`),
+          aviso: `este arquivo é de OUTRA conta (final ${l.conta.final}) que a já importada nesta unidade (${conhecidas.map(([, f]) => `final ${f}`).join(', ')}). Nada foi gravado: misturar contas dobra ou esconde dinheiro no total da unidade.`,
+          proximoPasso: 'Se a unidade tem mesmo duas contas e é isso que você quer, chame infinitepay_importar_relatorio de novo com aceitarOutraConta=true (o arquivo continua guardado por alguns minutos). Senão, peça o extrato da conta certa.',
+        };
+      }
+      avisos.push(`conta nova para esta unidade (final ${l.conta.final}), aceita por você: os totais da unidade passam a somar as DUAS contas (${conhecidas.map(([, f]) => `final ${f}`).join(', ')}).`);
+    }
+  } else if (a.relatorio === 'extrato') {
+    avisos.push('o arquivo não declara a conta (ACCTID): não consegui conferir se é a mesma conta já importada desta unidade.');
+  }
   const tipoMov = a.relatorio === 'recebiveis' ? 'recebivel' : 'extrato';
   const chavesM = chavesDosMovimentos(l.movimentos);
   const chavesV = chavesDasVendas(l.vendas);
@@ -385,16 +458,17 @@ export async function importarRelatorio(
   const r = await armazem.gravar({
     unidade: a.unidade, relatorio: a.relatorio, formato: l.formato, leiaute: l.leiaute, sha256: sha, bytes: a.conteudo.length,
     ...(l.periodoInicio ? { periodoInicio: l.periodoInicio } : {}), ...(l.periodoFim ? { periodoFim: l.periodoFim } : {}), importadoPor: a.importadoPor,
+    ...(l.conta ? { contaHash: l.conta.hash, contaFinal: l.conta.final } : {}),
     movimentos: l.movimentos.map((m, i) => ({ ...m, tipo: tipoMov as 'extrato' | 'recebivel', chave: chavesM[i]! })),
     vendas: l.vendas.map((v, i) => ({ ...v, chave: chavesV[i]! })),
   });
   const repetidas = total - r.novas;
-  let avisoRepetidas: string | undefined;
-  if (repetidas > 0) {
-    const antes = (await armazem.importacoes(a.unidade, a.relatorio)).filter((i) => i.id !== r.id);
-    const sobrepoe = antes.some((i) => i.periodoInicio && i.periodoFim && l.periodoInicio && l.periodoFim && i.periodoInicio <= l.periodoFim && i.periodoFim >= l.periodoInicio);
-    if (!sobrepoe) avisoRepetidas = `${repetidas} linha(s) foram tratadas como repetidas SEM que o período do arquivo encontre outro já importado: pode ser um identificador de lançamento reaproveitado pelo emissor. Confira o total com o app antes de confiar.`;
-  }
+  const antes = anteriores.filter((i) => i.relatorio === a.relatorio && i.id !== r.id);
+  const sobrepoe = antes.some((i) => i.periodoInicio && i.periodoFim && l.periodoInicio && l.periodoFim && i.periodoInicio <= l.periodoFim && i.periodoFim >= l.periodoInicio);
+  if (repetidas > 0 && !sobrepoe) avisos.push(`${repetidas} linha(s) foram tratadas como repetidas SEM que o período do arquivo encontre outro já importado: pode ser um identificador de lançamento reaproveitado pelo emissor. Confira o total com o app antes de confiar.`);
+  // período que se sobrepõe a um arquivo já importado E linhas novas dentro dele: se forem os mesmos lançamentos com outro identificador, estão contados em dobro
+  if (sobrepoe && r.novas > 0) avisos.push(`o período deste arquivo SE SOBREPÕE a um já importado e ${r.novas} linha(s) entraram como novas: se forem os MESMOS lançamentos com outro identificador (FITID) eles estão contados em dobro. Compare o total do período com o app antes de confiar.`);
+  if (!l.periodoInicio || !l.periodoFim) avisos.push('o arquivo não declara o período: não dá para checar sobreposição com outros arquivos.');
   const entradas = l.movimentos.filter((m) => m.valorCentavos > 0).reduce((s, m) => s + m.valorCentavos, 0);
   const saidas = l.movimentos.filter((m) => m.valorCentavos < 0).reduce((s, m) => s + m.valorCentavos, 0);
   const bruto = l.vendas.reduce((s, v) => s + v.valorBrutoCentavos, 0);
@@ -405,7 +479,7 @@ export async function importarRelatorio(
       linhasLidas: total, linhasNovas: r.novas, linhasRepetidas: total - r.novas, linhasIgnoradas: l.ignoradas,
     },
     totais: l.movimentos.length ? { entradas: reais(entradas), saidas: reais(saidas), liquido: reais(entradas + saidas) } : { vendas: l.vendas.length, bruto: reais(bruto) },
-    ...(avisoRepetidas ? { aviso: avisoRepetidas } : {}),
+    ...(avisos.length ? { aviso: avisos.join(' ') } : {}),
   };
 }
 

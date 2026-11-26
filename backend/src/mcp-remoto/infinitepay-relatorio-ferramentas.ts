@@ -163,7 +163,8 @@ export async function infinitepayImportacoes(ctx: ContextoInfinitepay, armazem: 
   const lista = await armazem.importacoes(conta.slug, a.relatorio);
   return {
     unidade: conta.slug,
-    importacoes: lista.map((i) => ({ ...i })),
+    // o hash da conta não sai daqui: só o final (os 4 últimos caracteres)
+    importacoes: lista.map(({ contaHash: _hash, ...resto }) => ({ ...resto })),
     cobertura: coberturaDoPeriodo(lista),
     leiautesDeCsv: 'nenhum cadastrado ainda: só o OFX do extrato é lido hoje',
   };
@@ -205,7 +206,7 @@ export async function pedirRelatorio(ctx: ContextoInfinitepay, deps: DepsRelator
   };
 }
 
-export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatorio, quem: { id: string; email?: string }, a: { envio: string }) {
+export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatorio, quem: { id: string; email?: string }, a: { envio: string; aceitarOutraConta?: boolean }) {
   let guardado;
   let d;
   try {
@@ -227,13 +228,18 @@ export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatori
   }
   let r;
   try {
-    r = await importarRelatorio(deps.armazem, { unidade: conta.slug, relatorio, tipoDoCofre: d.tipo, conteudo: d.conteudo, importadoPor: quem.email || `usuario:${quem.id}` });
+    r = await importarRelatorio(deps.armazem, { unidade: conta.slug, relatorio, tipoDoCofre: d.tipo, conteudo: d.conteudo, importadoPor: quem.email || `usuario:${quem.id}`, ...(a.aceitarOutraConta ? { aceitarOutraConta: true } : {}) });
   } catch (e) {
     // falha de banco ou arquivo ilegível: o arquivo continua no cofre (até vencer) para tentar de novo depois de corrigir
     deps.cofre.soltar(quem.id, a.envio);
     throw e;
   }
-  // o conector já decidiu (importou, repetido ou leiaute desconhecido): o arquivo não tem mais o que fazer no cofre
+  // outra conta: o arquivo FICA no cofre (até vencer) para a pessoa confirmar com aceitarOutraConta=true sem pedir de novo à clínica
+  if (!r.importado && r.motivo === 'outra_conta') {
+    deps.cofre.soltar(quem.id, a.envio);
+    return { unidade: conta.slug, ...r, arquivoApagadoDoCofre: false };
+  }
+  // o conector já decidiu (importou, repetido, de outra unidade ou leiaute desconhecido): o arquivo não tem mais o que fazer no cofre
   deps.cofre.apagar(quem.id, a.envio);
   return { unidade: conta.slug, ...r, arquivoApagadoDoCofre: true };
 }
@@ -313,8 +319,11 @@ export function registrarImportacaoRelatorios(server: McpServer, ctx: ContextoIn
       description:
         'PASSO 2 de 2. Lê o arquivo que chegou pelo link de infinitepay_pedir_relatorio e grava as linhas (o mesmo arquivo duas vezes não entra de novo; linhas repetidas de ' +
         'arquivos que se sobrepõem também não). OFX de extrato é lido; CSV só se o leiaute já estiver cadastrado: CSV desconhecido NÃO grava nada e devolve só o ' +
-        'cabeçalho para o João cadastrar o leiaute. Depois apaga o arquivo do cofre. Mostra períodos, linhas novas e totais do arquivo; confira com o app antes de confiar nos números.',
-      inputSchema: { envio: z.string().trim().min(8).max(64).describe('o "envio" devolvido por infinitepay_pedir_relatorio') },
+        'cabeçalho para o João cadastrar o leiaute. Recusa (sem gravar) o mesmo arquivo já importado em OUTRA unidade e o extrato de OUTRA conta que a já importada da unidade. Depois apaga o arquivo do cofre. Mostra períodos, linhas novas e totais do arquivo; confira com o app antes de confiar nos números.',
+      inputSchema: {
+        envio: z.string().trim().min(8).max(64).describe('o "envio" devolvido por infinitepay_pedir_relatorio'),
+        aceitarOutraConta: z.boolean().optional().describe('só depois de a importação recusar por ser de OUTRA conta que a já importada: true confirma que a unidade tem mesmo duas contas'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },
     (args) => executar('infinitepay_importar_relatorio', args, auditar, () => importarEnvio(ctx, deps, quem, args)),

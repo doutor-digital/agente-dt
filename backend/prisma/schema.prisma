@@ -3181,6 +3181,9 @@ model InfinitepayImportacao {
   linhasLidas   Int       @map("linhas_lidas")
   linhasNovas   Int       @map("linhas_novas")
   importadoPor  String    @map("importado_por")
+  /// hash (irreversível) da conta que o arquivo declara (ACCTID + BANKID) e os 4 últimos caracteres; nulos se o arquivo não declara. O número nunca é guardado.
+  contaHash     String?   @map("conta_hash")
+  contaFinal    String?   @map("conta_final")
   createdAt     DateTime  @default(now()) @map("created_at")
 
   movimentos InfinitepayMovimento[]
@@ -3188,6 +3191,7 @@ model InfinitepayImportacao {
 
   @@unique([unitSlug, sha256])
   @@index([unitSlug, createdAt])
+  @@index([sha256])
   @@map("infinitepay_importacoes")
 }
 

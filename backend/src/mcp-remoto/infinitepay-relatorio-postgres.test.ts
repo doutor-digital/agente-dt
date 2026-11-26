@@ -21,7 +21,7 @@ const UNI = 'doutor-hernia-acailandia';
 const OFX = (extra = '', fim = '20261115') => `OFXHEADER:100
 DATA:OFXSGML
 
-<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKTRANLIST><DTSTART>20261101<DTEND>${fim}
+<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS><BANKACCTFROM><BANKID>0001<ACCTID>987654321</BANKACCTFROM><BANKTRANLIST><DTSTART>20261101<DTEND>${fim}
 <STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20261103<TRNAMT>1500.50<FITID>A1<MEMO>Venda
 </STMTTRN>
 <STMTTRN><TRNTYPE>DEBIT<DTPOSTED>20261110<TRNAMT>-350.25<FITID>A3<MEMO>Transferencia
@@ -38,8 +38,10 @@ test('Postgres de verdade: migrations aplicam; importa, não duplica arquivo nem
   const db2 = new PrismaClient({ datasourceUrl: BANCO });
   try {
     for (const t of ['infinitepay_vendas', 'infinitepay_movimentos', 'infinitepay_importacoes']) await db.$executeRawUnsafe(`DROP TABLE IF EXISTS "${t}" CASCADE`);
-    const sql = readFileSync(path.resolve(process.cwd(), 'prisma/migrations/20261126130000_infinitepay_relatorios/migration.sql'), 'utf8');
-    for (const c of aplicar(sql)) await db.$executeRawUnsafe(c);
+    for (const m of ['20261126130000_infinitepay_relatorios', '20261126150000_infinitepay_importacoes_conta']) {
+      const sql = readFileSync(path.resolve(process.cwd(), `prisma/migrations/${m}/migration.sql`), 'utf8');
+      for (const c of aplicar(sql)) await db.$executeRawUnsafe(c);
+    }
 
     const arm = armazemDeRelatoriosPrisma(db as never);
     const arm2 = armazemDeRelatoriosPrisma(db2 as never);
@@ -67,6 +69,17 @@ test('Postgres de verdade: migrations aplicam; importa, não duplica arquivo nem
     assert.equal(importou, 1, 'só uma das duas importa');
     assert.equal(await db.infinitepayImportacao.count({ where: { unitSlug: UNI } }), 3);
     assert.equal(await db.infinitepayMovimento.count({ where: { unitSlug: UNI } }), 4, 'a linha Z1 entrou uma vez');
+
+    // o mesmo arquivo em OUTRA unidade é recusado (índice por sha256) e o extrato de OUTRA conta também; a conta fica gravada só como hash + final
+    const outraUnidade = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', conteudo: Buffer.from(OFX()) });
+    assert.equal(!outraUnidade.importado && outraUnidade.motivo, 'arquivo_de_outra_unidade');
+    assert.equal(await db.infinitepayImportacao.count({ where: { unitSlug: 'doutor-hernia-serra' } }), 0);
+    const outraConta = await importarRelatorio(arm, { ...a, conteudo: Buffer.from(OFX('', '20261125').replace('<ACCTID>987654321', '<ACCTID>111122223').replace('<FITID>A1', '<FITID>Q1')) });
+    assert.equal(!outraConta.importado && outraConta.motivo, 'outra_conta');
+    const gravada = await db.infinitepayImportacao.findFirst({ where: { unitSlug: UNI }, orderBy: { createdAt: 'asc' } });
+    assert.equal(gravada?.contaFinal, '4321');
+    assert.match(gravada?.contaHash ?? '', /^[0-9a-f]{32}$/);
+    assert.equal(JSON.stringify(gravada).includes('987654321'), false, 'o número da conta nunca é gravado');
 
     // a leitura do conector contra o banco: datas como dia (sem deslocar de fuso), valores e cobertura
     const conta: ContaInfinitepay = { slug: UNI, nome: 'Açailândia', chaveFinal: '…x', temHandle: false, fonte: { consultar: async () => ({ sucesso: true, pago: true }), testar: async () => undefined } };
