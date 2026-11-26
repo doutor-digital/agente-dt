@@ -44,15 +44,26 @@ import { confereCartaoNoKommo, kommoCortado, tratamentoNaFranquia } from './komm
 import { consultarFranquia } from './paciente-em-tratamento.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
 import { foraDoHorarioDaIa } from './chatwoot-horario-da-ia.js';
+import { AVISO_DE_PRECO_SEGURADO, textoDosValores } from './chatwoot-preco-unico.js';
+import { dataPorExtenso } from './feriados.js';
 import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
 import { fusoDaUnidade } from './fuso.js';
 import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
-import { motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
+import { ETAPAS_PROTEGIDAS, motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
 export type { Fala };
+
+/**
+ * A etapa em que a conversa está AGORA, para quem passa para a equipe: entre a que a rodada terminou (`r.etapa`), a relida e a lida antes, a PROTEGIDA vence
+ * (quem tem consulta de pé não vira «Esperando humano»); sem protegida, a mais nova que não está vazia (relida, depois a da rodada, depois a lida antes).
+ */
+export function etapaParaPassagem(candidatas: ReadonlyArray<unknown>): string {
+  const limpas = candidatas.map((c) => (typeof c === 'string' ? c.trim() : ''));
+  return limpas.find((e) => ETAPAS_PROTEGIDAS.has(e)) ?? [limpas[1], limpas[0], limpas[2]].find((e) => !!e) ?? '';
+}
 
 export const ID_IA = 'chatwoot-ia';
 export const ESPERA_SOFIA_MS = 60_000;
@@ -467,7 +478,8 @@ export type Desfecho =
   | 'cartao-no-kommo'
   | 'kommo-indisponivel'
   | 'pausada-pela-unidade'
-  | 'fora-do-horario';
+  | 'fora-do-horario'
+  | 'preco-segurado';
 
 /**
  * A «assinatura» das mensagens PÚBLICAS da conversa: quantas são e qual é a última (pelo id do Chatwoot; sem id, pelo texto).
@@ -532,6 +544,8 @@ export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'pausada-pela-unidade',
   // fora do horário da IA (expediente da clínica, feriado): a equipe atende, a etiqueta «Sofia atendendo» não pode ficar
   'fora-do-horario',
+  // a mensagem foi segurada (valor fora da tabela) e a conversa foi para a equipe
+  'preco-segurado',
   // a última fala pública é nossa: a equipe respondeu (a pausa já teria tirado a etiqueta; se ela falhou, é aqui que sai) — se fosse a Sofia
   // mesma de outra cópia do servidor, a próxima mensagem do paciente repõe
   'equipe-respondeu',
@@ -556,6 +570,7 @@ export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'cartao-no-kommo',
   'kommo-indisponivel',
   'pausada-pela-unidade',
+  'preco-segurado',
 ]);
 
 async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
@@ -691,7 +706,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   }
 
   if (modo === 'seco') {
-    await p.nota(m.conversa, notaDaSofia(r.resposta, r.acoes));
+    await p.nota(m.conversa, notaDaSofia(r.resposta, r.acoes) + (r.precoSegurado ? `\n\n🛑 Valor fora da tabela (${textoDosValores(r.precoSegurado.valores)}): no ligado esta mensagem seria SEGURADA e a conversa iria para a equipe.` : ''));
     return 'nota';
   }
   // o que ela FEZ conta agora (a resposta pode ser descartada logo abaixo): consulta marcada na franquia, passagem para a equipe
@@ -733,6 +748,51 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     logger.info({ conversa: m.conversa, gravou }, `${ID_IA}: o horário da IA acabou enquanto a Sofia pensava — resposta descartada`);
     if (gravou) await p.nota(m.conversa, alerta('o horário da Sofia acabou enquanto ela pensava')).catch(() => undefined);
     return 'fora-do-horario';
+  }
+  // PREÇO ÚNICO (ligado): a fala trazia valor que não é da unidade. NÃO sai: o paciente recebe só o aviso de que a equipe confere, a conversa vai
+  // para a equipe e a nota privada traz o que a Sofia ia dizer (e o que ela já fez, se gravou algo). O Pix e o endereço, que vêm das ferramentas e
+  // não do texto do modelo, saem como sempre: a consulta e a cobrança já existem e o paciente precisa delas.
+  if (r.precoSegurado) {
+    const valores = textoDosValores(r.precoSegurado.valores);
+    info.motivo = `valor fora da tabela (${valores})`;
+    logger.warn({ conversa: m.conversa, valores }, `${ID_IA}: preço fora da tabela — mensagem da Sofia segurada, conversa para a equipe`);
+    // marcou nesta rodada e a fala (que trazia a confirmação) foi segurada: o paciente recebe a confirmação com dia e hora, montada aqui (nunca pelo
+    // modelo, que erra o dia da semana), junto do aviso — sem o valor. Sem consulta marcada, só o aviso, como antes.
+    const confirmacao = r.agendou ? `Sua consulta está marcada para ${dataPorExtenso(r.agendou.data)} às ${r.agendou.hora} ✅` : null;
+    const avisou = await p
+      .publica(m.conversa, confirmacao ? `${confirmacao}\n\n${AVISO_DE_PRECO_SEGURADO}` : AVISO_DE_PRECO_SEGURADO)
+      .then(() => true)
+      .catch((err) => {
+        logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui mandar o aviso de preço segurado`);
+        return false;
+      });
+    let passou = r.passouParaEquipe; // já passada nesta rodada (pausar_ia): não passa de novo nem conta duas vezes
+    if (!passou) {
+      try {
+        // a etapa de AGORA (no fim da rodada), não a lida antes dela: se a Sofia marcou, ela já é «Agendado» e a passagem não a desfaz em «Esperando humano»
+        const etapaAtual = etapaParaPassagem([r.etapa, agoraLida?.attrs.etapa, lida.attrs.etapa]);
+        await p.passarParaEquipe(m.conversa, { ...lida, attrs: { ...lida.attrs, etapa: etapaAtual } }, `a Sofia ia citar ${valores}, valor fora da tabela da unidade: mensagem segurada`, falas, unit);
+        passou = true;
+        await evento('equipe', { detalhe: 'valor-pagamento' });
+      } catch (err) {
+        logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: preço fora da tabela, mas não consegui passar para a equipe`);
+      }
+    }
+    const acoes = r.acoes.length ? `\n${(notaDoLigado(r.acoes) ?? '').split('\n').slice(1).join('\n')}` : '';
+    await p
+      .nota(
+        m.conversa,
+        `🛑 Mensagem da Sofia SEGURADA: ela citou ${valores}, que não é da tabela desta unidade. ` +
+          `${avisou ? (confirmacao ? 'O paciente recebeu a confirmação do dia e horário e um aviso de que a equipe confere o valor.' : 'O paciente recebeu só um aviso de que a equipe confere o valor.') : 'O paciente NÃO recebeu nada (o aviso não saiu).'} ` +
+          `${passou ? '' : 'NÃO consegui passar a conversa para a equipe: pegue esta conversa. '}Responda por aqui.\nO que ela ia dizer: «${r.precoSegurado.texto.slice(0, 600)}»${acoes}`,
+      )
+      .catch(() => undefined);
+    for (const extra of [r.pix, r.cartao]) {
+      if (!extra) continue;
+      const saiu = await p.publica(m.conversa, extra).then(() => true, () => false);
+      if (saiu && extra === r.pix) await evento('pix');
+    }
+    return passou ? 'preco-segurado' : 'falhou';
   }
   if (!r.resposta || r.semResposta) {
     if (gravou) await p.nota(m.conversa, alerta('o modelo não escreveu a resposta')).catch(() => undefined);

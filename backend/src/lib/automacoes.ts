@@ -1250,6 +1250,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/chatwoot-agenda-so-com-sim.ts',
   },
   {
+    id: 'chatwoot-preco-unico',
+    chave: 'CHATWOOT_PRECO_UNICO_SLUGS',
+    nome: 'Sofia do CRM não cita valor fora da tabela da clínica',
+    oQueFaz:
+      'Confere os R$ da fala do modelo com os preços da unidade (os das fontes: produtos, papel e negócio; o antecipado e o do dia; o sinal). Se sobrar qualquer R$ que não é da clínica (nem parcela de um valor dela, nem valor do próprio paciente), a mensagem é SEGURADA: o paciente recebe só «deixa eu confirmar direito com a nossa equipe», a conversa vai para a equipe e a nota privada traz o que a Sofia ia dizer.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL»: anota na tela o que seguraria e a mensagem sai como hoje (o guardrail de saída continua trocando o valor errado pelo mais próximo da ficha; esta chave é a segunda linha, que olha a fala do modelo ANTES dele). Unidade sem nenhum R$ nas fontes não tem com o que comparar: nada é segurado. Só vale na Sofia do CRM (Chatwoot); a do Kommo não passa por aqui.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-preco-unico.ts',
+  },
+  {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
     nome: 'Agenda da franquia no CRM',
