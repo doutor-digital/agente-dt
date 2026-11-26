@@ -1251,6 +1251,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/chatwoot-duplicados.ts',
   },
   {
+    id: 'chatwoot-vigia',
+    chave: 'CHATWOOT_VIGIA_SLUGS',
+    nome: 'Vigia de caixa parada (lead que não entra no CRM)',
+    oQueFaz:
+      'A cada 15 min compara, em cada caixa do CRM, o que era esperado com o que entrou. Avisa no WhatsApp do João (e, se configurado, no grupo da clínica) quando há ZERO mensagem de paciente nas últimas 3 h dentro do horário comercial e a média das últimas 2 semanas diz que deveriam ter entrado pelo menos 4; quando o Kapso tem entrega ao CRM com erro; ou quando o número está desconectado ou com o webhook falhando. Diz se o Kapso recebeu e o CRM não (entrega quebrada) ou se nem o Kapso recebeu. Um aviso por caixa a cada 3 h. «Só no papel» não manda nada e não grava nada: loga «[SECO] avisaria…».',
+    pegadinha:
+      'Só LÊ (relatórios do Chatwoot e a API do Kapso); a única escrita é a marca do aviso, e só ligado. Sem 5 dias de histórico comparável a caixa não é cobrada, e caixa que costuma ter menos de 4 mensagens nessas 3 h nunca avisa por silêncio (fim de semana e feriado não contam). A «saúde de envio» do Kapso (nome de exibição em análise, por exemplo) não gera aviso: não impede de receber. O grupo da clínica vem de CAIXA_VIGIA_DESTINOS (JSON slug → grupo); CAIXA_VIGIA=0 desliga o worker.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/caixa-vigia.ts',
+  },
+  {
     id: 'chatwoot-capi',
     chave: 'CHATWOOT_CAPI_SLUGS',
     nome: 'Conversões do CRM para a Meta (CAPI)',
