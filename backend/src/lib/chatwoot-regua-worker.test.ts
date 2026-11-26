@@ -10,8 +10,11 @@ import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { chaveDoTelefone, mesmoTelefone } from './chatwoot-lida.js';
 import { cicloDaCaixa, finalDoTelefone, paramsDoTemplate, SUFIXO_SEM_TEMPLATE, type EnvioTemplate, numeroDaGerente, avisoDaGerenteDoBanco, MAX_ETIQUETAS_POR_CICLO, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type DepsDoCiclo, type LinhaVista } from './chatwoot-regua-worker.js';
 import type { DadosDaUnidade, MensagemResumo, Mudanca } from './chatwoot-regua.js';
+import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
 
 const U: DadosDaUnidade = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
+/** unidade sem nome cujo texto da véspera pede o nome da unidade: o jeito de fazer «faltar campo» (o contato sem nome já não falta: a régua o cumprimenta sem nome) */
+const U_FALTA: DadosDaUnidade = { ...U, nome: '', textos: { ...TEXTOS_PARAU, parau_consulta_lembrete_vespera: `${TEXTOS_PARAU.parau_consulta_lembrete_vespera}\n{{lead.cf.2450798}}` } };
 const unix = (s: string) => Math.floor(new Date(s).getTime() / 1000);
 
 function bruta(id: number, o: { attrs?: Record<string, unknown>; labels?: string[]; ultima?: { tipo: number; autor: number; privada?: boolean; quando?: string }; nome?: string; telefone?: string } = {}) {
@@ -251,21 +254,21 @@ test('ligado: recusa do Chatwoot (4xx) desfaz; erro sem resposta (pode ter ido) 
 });
 
 test('campo faltando: o seco deixa UMA nota dizendo o que falta; o ligado não manda nem registra', async () => {
-  const semNome = { attrs: CONSULTA, nome: '+5594999990000' }; // contato sem nome: o texto pede o primeiro nome
+  const semNome = { attrs: CONSULTA }; // o texto pede o nome da unidade e a unidade não tem nome (U_FALTA)
   const antes = new Date(VESPERA.getTime() - 600_000);
   const seco = armazemFalso();
   const c1 = chatFalso(() => [bruta(1, semNome)]);
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, antes);
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, VESPERA);
-  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U, new Date(VESPERA.getTime() + 600_000));
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U_FALTA, antes);
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U_FALTA, VESPERA);
+  await cicloDaCaixa(deps(seco.armazem, c1.chat), 2, 'x', 'seco', U_FALTA, new Date(VESPERA.getTime() + 600_000));
   assert.equal(c1.mensagens.length, 1);
-  assert.equal(c1.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome do contato.');
+  assert.equal(c1.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome da unidade.');
   assert.equal(seco.disparos[0]!.regra, 'consulta-vespera!falta');
 
   const lig = armazemFalso();
   const c2 = chatFalso(() => [bruta(1, semNome)]);
-  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, antes);
-  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U, VESPERA);
+  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U_FALTA, antes);
+  await cicloDaCaixa(deps(lig.armazem, c2.chat), 2, 'x', 'ligado', U_FALTA, VESPERA);
   assert.equal(c2.mensagens.length, 0);
   assert.equal(lig.disparos.length, 0);
 });
@@ -441,11 +444,11 @@ const PACIENTE_HOJE = { tipo: 0, autor: 55 };
 /** a última mensagem da listagem é da clínica: a janela depende do histórico (`ultimaDoPaciente`) */
 const CLINICA = { tipo: 1, autor: 2 };
 
-async function doisCiclos(modo: 'seco' | 'ligado', caixa: number, chatO: Parameters<typeof chatFalso>[1], conversa: Parameters<typeof bruta>[1] = { attrs: CONSULTA, ultima: CLINICA }) {
+async function doisCiclos(modo: 'seco' | 'ligado', caixa: number, chatO: Parameters<typeof chatFalso>[1], conversa: Parameters<typeof bruta>[1] = { attrs: CONSULTA, ultima: CLINICA }, unidade: DadosDaUnidade = U) {
   const arm = armazemFalso();
   const c = chatFalso(() => [bruta(1, conversa)], chatO);
-  await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, U, ANTES_DA_VESPERA);
-  const resumo = await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, U, VESPERA);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, unidade, ANTES_DA_VESPERA);
+  const resumo = await cicloDaCaixa(deps(arm.armazem, c.chat), caixa, SLUG, modo, unidade, VESPERA);
   return { ...arm, ...c, resumo };
 }
 
@@ -542,15 +545,15 @@ test('cloud, janela fechada: nota que falha desfaz o registro (a nota sai no cic
 });
 
 test('cloud, campo faltando: ligado não manda nada (nem texto nem template) e nem consulta janela ou template', async () => {
-  const semNome = { attrs: CONSULTA, nome: '+5594999990000', ultima: CLINICA };
-  const { mensagens, disparos, leituras, buscasDoPaciente } = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome);
+  const semNome = { attrs: CONSULTA, ultima: CLINICA };
+  const { mensagens, disparos, leituras, buscasDoPaciente } = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome, U_FALTA);
   assert.equal(mensagens.length, 0);
   assert.equal(disparos.length, 0);
   assert.equal(leituras(), 0);
   assert.deepEqual(buscasDoPaciente, []);
   // seco: a nota de sempre dizendo o que falta
-  const seco = await doisCiclos('seco', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome);
-  assert.equal(seco.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome do contato.');
+  const seco = await doisCiclos('seco', 3, { aprovados: [VESP], ultimaDoPaciente: null }, semNome, U_FALTA);
+  assert.equal(seco.mensagens[0]!.texto, '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome da unidade.');
 });
 
 test('cloud, SECO: a nota diz se iria como TEXTO ou como TEMPLATE (com {{1}}=…), e avisa se o template não está aprovado', async () => {
