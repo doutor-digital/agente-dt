@@ -65,7 +65,9 @@ import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-a
 import { podeSerDuvidaDoLembrete, tratarDuvidaDoLembrete } from '../lib/duvida-no-lembrete.js';
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
-import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
+import { blocoDaConversaOficial, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { avisarComprovanteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno } from '../lib/anexos-do-turno.js';
+import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
 import { agendaMexidaNoTurno, consultaMarcadaNoTurno, enviarCartaoDeChegada } from '../lib/cartao-de-chegada.js';
@@ -1533,6 +1535,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   // repetido em seguida (Bebedouro, 22/10/2026: cinco PDFs em um minuto).
   const anexos = (args.imageUrls?.length ? args.imageUrls : imageUrl ? [imageUrl] : []).slice(0, 3);
   let algumAnexoLido = false;
+  // Unidade com taxa de reserva: comprovante que chegou neste turno (para avisar a equipe se a IA estiver pausada e ninguém o vir)
+  let comprovanteDoTurno: { id: string | null; resumo: string } | null = null;
   // Chave `exame-de-imagem-pausa-alerta` (Timbó, 11/11/2026): as leituras de exame de imagem deste turno.
   const comExame = exameDeImagemLigado(unit);
   const exames: string[] = [];
@@ -1561,6 +1565,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
             modelo: d.comprovante?.modelo ?? null,
           });
           naConversa = descricaoComReferencia(desc, g.id, g.criadoEm);
+          comprovanteDoTurno = { id: g.id, resumo: d.comprovante?.dados ? resumoDaLeitura(d.comprovante.dados) : 'a leitura em campos falhou' };
         } catch (err) {
           logger.error({ err: String(err), leadId, unit: unit.slug }, 'comprovante: não consegui guardar a leitura — este comprovante vai para a equipe');
         }
@@ -1691,6 +1696,10 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         logger.warn({ err: String(err), leadId, unit: unit.slug }, 'falha ao anotar que o paciente insistiu — segue');
       }
     }
+
+    // Comprovante da taxa que chega com a IA pausada: a nota acima é de 1 por dia e só cita o texto; a equipe precisa de uma TAREFA, senão o
+    // pagamento fica parado até alguém abrir a conversa (Boa Vista, 23/11/2026: o comprovante certo chegou 3 min depois da pausa e ninguém soube).
+    if (comprovanteDoTurno && unit.spineBookingRequiresPayment) await avisarComprovanteComIaPausada(unit, leadId, recorder, comprovanteDoTurno);
 
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({
@@ -1960,13 +1969,29 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
     // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
+    const conversaLida: { msgs: MensagemOficial[] | null } = { msgs: porta.msgs };
     const blocoOficial = isChatMessage
-      ? await blocoDaConversaOficial({ unit, leadId, humanMessage, recorder, msgs: porta.msgs, nenhumAudioNoWebhook: audios.length === 0 }).catch((err) => {
+      ? await blocoDaConversaOficial({
+          unit,
+          leadId,
+          humanMessage,
+          recorder,
+          msgs: porta.msgs,
+          nenhumAudioNoWebhook: audios.length === 0,
+          // Boa Vista (taxa de reserva): o aviso de mídia do Lite pode ser a FOTO do comprovante, não só áudio
+          esperarImagem: Boolean(unit.spineBookingRequiresPayment),
+          saida: conversaLida,
+        }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: falha ao ler (segue sem)');
           return '';
         })
       : '';
-    const entradaDoModelo = blocoOficial ? `${blocoOficial}\n\n${mensagemParaIa}` : mensagemParaIa;
+    // Unidade com taxa de reserva: a foto/PDF que o Lite deixou só na rota oficial (o webhook trouxe apenas o aviso de mídia) é lida pelo
+    // servidor e guardada no banco, como no salesbot — sem isto o comprovante do Lite nunca chegava à trava (lib/anexos-do-turno.ts).
+    const anexosDaRotaOficial = isChatMessage && temMidiaSemArquivo(humanMessage)
+      ? await lerAnexosDoTurno(unit, leadId, conversaLida.msgs, recorder)
+      : { texto: '', paraEntregar: [] as string[], msgs: conversaLida.msgs };
+    const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa].filter(Boolean).join('\n\n');
 
     const result = await comTurnoEmAndamento(() => graph.invoke(
       {
@@ -1979,6 +2004,9 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         recursionLimit: 24,
       },
     ));
+
+    // O turno deu certo: os comprovantes lidos da rota oficial já estão na conversa e não precisam ser entregues de novo.
+    await entregarAnexosDoTurno(anexosDaRotaOficial.paraEntregar, leadId);
 
     // A linha [[botoes: A | B]] sai do texto e vira botões na entrega (ou nada, se o
     // canal não permitir). Daqui em diante `reply` é o texto limpo que o paciente vê.

@@ -17,10 +17,8 @@ import { agendaMexidaNoTurno, consultaMarcadaNoTurno } from '../lib/cartao-de-ch
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
-import { lerAnexosDoPaciente, marcarEntregues } from '../lib/comprovante-lido.js';
+import { entregarAnexosDoTurno, lerAnexosDoTurno } from '../lib/anexos-do-turno.js';
 import { neutralizarMarcasDoSistema } from '../lib/comprovante-pix.js';
-import { abrirTarefaParaEquipe } from '../agent/confirmacao-so-com-crm.js';
-import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
 import { detectarVazamento, explicarVazamento } from '../services/vazamento.js';
 
 const payloadSchema = z
@@ -164,38 +162,10 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
   // Unidade com taxa de reserva (Boa Vista): este caminho só traz TEXTO, e texto digitado não pode se passar por comprovante lido. A fala do
   // paciente perde as marcas que só nós gravamos, e as imagens/PDFs que ele mandou (rota oficial do Kommo) são lidas AQUI, pelo
   // servidor, e guardadas no banco — é só assim que um comprovante conta (lib/comprovante-lido.ts).
-  let anexosLidos = '';
-  let leiturasParaEntregar: string[] = [];
-  let msgsOficiais = porta.msgs;
-  if (unit.spineBookingRequiresPayment && Number.isFinite(Number(leadId))) {
-    try {
-      msgsOficiais = porta.msgs ?? (await mensagensOficiaisDaUnidade(unit, createKommoClient(unit), Number(leadId), 40));
-      const lidos = await lerAnexosDoPaciente(unit, Number(leadId), msgsOficiais);
-      anexosLidos = lidos.texto;
-      leiturasParaEntregar = lidos.paraEntregar;
-      if (lidos.naoLidos > 0) {
-        // como no webhook: o modelo sabe que chegou algo que não foi possível ler (não pede o comprovante como se nada tivesse chegado), e a equipe é avisada
-        anexosLidos = `${anexosLidos ? `${anexosLidos}\n\n` : ''}[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]`;
-        await abrirTarefaParaEquipe({
-          slug: unit.slug,
-          unitId: unit.id,
-          leadId: Number(leadId),
-          kommo: createKommoClient(unit),
-          recorder,
-          motivo: 'anexo_nao_lido',
-        }).catch(() => undefined);
-      }
-      if (lidos.lidos > 0) {
-        await recorder.step({
-          kind: 'THINKING',
-          title: `🧾 Anexos do paciente lidos pela conversa oficial: ${lidos.lidos} lido(s), ${lidos.comprovantes} comprovante(s)`,
-          payload: { lidos: lidos.lidos, comprovantes: lidos.comprovantes },
-        });
-      }
-    } catch (err) {
-      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'salesbot: não consegui ler os anexos do paciente (segue sem)');
-    }
-  }
+  const anexos = await lerAnexosDoTurno(unit, Number(leadId), porta.msgs, recorder);
+  const anexosLidos = anexos.texto;
+  const leiturasParaEntregar = anexos.paraEntregar;
+  const msgsOficiais = anexos.msgs;
   const textoDoPaciente = unit.spineBookingRequiresPayment ? neutralizarMarcasDoSistema(message) : message;
   const humanMessage = `${anexosLidos ? `${anexosLidos}\n\n` : ''}${currentTimeTag()} ${textoDoPaciente}`;
 
@@ -251,7 +221,7 @@ export async function handleSalesbotWebhook(req: Request, res: Response): Promis
     ));
 
     // O turno deu certo: os comprovantes que ele carregava já estão na conversa e não precisam ser entregues de novo.
-    await marcarEntregues(prisma, leiturasParaEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
+    await entregarAnexosDoTurno(leiturasParaEntregar, Number(leadId));
 
     // Sem travessão na origem (#397): o mesmo texto vai ao paciente, à trava e ao registro de entrega.
     const decisao = semTravessao((result.decision ?? '').trim());

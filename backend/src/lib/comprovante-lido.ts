@@ -115,6 +115,9 @@ const MAX_ANEXOS_POR_TURNO = 3;
 /** Tentativas por turno (as que falham não ocupam as vagas das lidas, mas também não podem custar chamadas sem fim). */
 const MAX_TENTATIVAS_POR_TURNO = 6;
 
+/** Foto ou PDF que já tem link na rota oficial: o servidor sabe baixar e ler. Sem link, o WhatsApp Lite ainda não o carregou no Kommo. */
+export const anexoLegivel = (m: Pick<MensagemOficial, 'anexo'>): boolean => Boolean(m.anexo?.link) && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '');
+
 export interface DepsDosAnexos {
   db: BancoDeLeituras;
   descrever: typeof describeImage;
@@ -151,7 +154,7 @@ export async function lerAnexosDoPaciente(
   // Só o que chegou DEPOIS da última fala da Sofia (como a conversa oficial do turno): anexo velho que nunca foi lido não entra na fala de
   // hoje como se fosse deste turno — o comprovante de uma consulta que já passou não paga a próxima.
   const doPaciente = desdeUltimaFalaDaSofia([...msgs]).filter((m) => m.direcao === 'entrada' && m.autor === 'paciente' && m.anexo && d.agora() - m.em.getTime() <= JANELA_DOS_ANEXOS_MS);
-  const legivel = (m: MensagemOficial) => Boolean(m.anexo?.link) && ANEXO_DE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '');
+  const legivel = anexoLegivel;
   // anexo que não é áudio/vídeo/figurinha e que o servidor não sabe ler (tipo desconhecido, sem link): não pode sumir em silêncio — o modelo é avisado
   // e a equipe ganha a tarefa (o comprovante pode estar ali)
   const semComoLer = doPaciente.filter((m) => !legivel(m) && !ANEXO_QUE_NAO_E_COMPROVANTE.test(m.anexo?.tipo ?? '') && ANEXO_QUE_PARECE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '')).length;

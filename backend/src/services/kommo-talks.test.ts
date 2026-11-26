@@ -291,3 +291,48 @@ test('envios da Sofia no modo estrito: só mensagem da IA COM traceId (resposta 
   assert.equal(contaComoEnvioDaSofia({ via: 'chat_cartao' }, true), false);
   assert.equal(contaComoEnvioDaSofia({ origem: 'confirmacao_d1' }, true), false);
 });
+
+// ---------------------------------------------------------------- WhatsApp Lite: o aviso de mídia pode ser a FOTO do comprovante (Boa Vista, 21/11/2026)
+
+const foto = (id: string, s: number, link: string | null = 'https://x/comprovante.jpg') => raw({ id, created_at: s, attachment: link ? { type: 'picture', link } : { type: 'picture' } });
+
+test('Lite + unidade com taxa: a foto ganha link — para de esperar e devolve a conversa relida para o servidor ler a imagem', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const semLink = normalizar([foto('f', s - 2, null)]);
+  const comLink = normalizar([foto('f', s - 2)]);
+  const c = cenario({ leituras: [semLink, semLink, comLink] });
+  const saida: { msgs: ReturnType<typeof normalizar> | null } = { msgs: null };
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true, saida });
+  assert.deepEqual(c.esperas, [4_000, 6_000], 'esperou a foto aparecer, e parou');
+  assert.equal(saida.msgs?.[0]?.anexo?.link, 'https://x/comprovante.jpg', 'a conversa relida depois da espera, com o link');
+  assert.ok(c.passos.some((p) => /carregou no Kommo depois de 10 s/.test(p.title)));
+});
+
+test('Lite + unidade com taxa: a foto não carrega — espera as 3 vezes e registra o motivo (como o áudio)', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const c = cenario({ leituras: [normalizar([foto('f', s - 2, null)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000, 8_000]);
+  assert.ok(c.passos.some((p) => p.kind === 'ERROR' && /não carregou no Kommo em 18 s/.test(p.title)));
+});
+
+test('foto já pronta no primeiro olhar: não espera nada', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const c = cenario({ leituras: [normalizar([foto('f', s - 2)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, []);
+});
+
+test('unidade SEM taxa (esperarImagem desligado): a foto não encurta a espera do áudio', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const c = cenario({ leituras: [normalizar([foto('f', s - 2)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000, 8_000]);
+});
+
+test('foto antiga (fora do turno) não encurta a espera do áudio que acabou de chegar', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const c = cenario({ leituras: [normalizar([foto('velha', s - 600), voz('v', s - 2, null)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000, 8_000]);
+});
