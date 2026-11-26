@@ -10,16 +10,17 @@
  *  - janela invertida (18h→06h) ou expediente (`business_hours_expediente`: Caxias, Petrópolis, Taubaté): é o modo «só fora do expediente» —
  *    a IA atende quando a clínica está FECHADA (noite, fim de semana e feriado emendados) e fica calada enquanto a equipe atende.
  *
- * Fora da janela a Sofia NÃO responde e NÃO manda a mensagem de «fora do horário» (a equipe atende quando a clínica abre; a conversa vai
- * para «Abertas»). A exceção é a mesma do Kommo: «Sofia atende todos» (Ponte, `ia_todos_ate`) vale até o prazo.
+ * Fora da janela a Sofia NÃO responde e NÃO manda a mensagem de «fora do horário» (`out_of_hours_message`) — o CRM nunca mandou essa mensagem e a
+ * equipe atende quando a clínica abre; a conversa vai para «Abertas». A exceção é «Sofia atende todos» (Ponte, `ia_todos_ate`): vale até o prazo.
+ * O «Passar para a Sofia» POR CONVERSA (Ponte do Kommo) não existe no CRM e não é replicado aqui.
  */
 import type { Unit } from '@prisma/client';
 import { checkBusinessHours } from '../agent/prompt-composer.js';
 
 /** A IA deve ficar calada agora nesta unidade por causa do horário (janela, expediente ou feriado)? Sem configuração: nunca. */
-export function foraDoHorarioDaIa(unit: Pick<Unit, 'businessHoursEnabled' | 'iaTodosAte'> & Partial<Unit>, agora: Date = new Date()): boolean {
+export function foraDoHorarioDaIa(unit: Unit, agora: Date = new Date()): boolean {
   if (!unit.businessHoursEnabled) return false;
   if (unit.iaTodosAte && unit.iaTodosAte.getTime() > agora.getTime()) return false;
-  const h = checkBusinessHours(unit as Unit, agora);
+  const h = checkBusinessHours(unit, agora);
   return h.enabled && !h.isOpen;
 }

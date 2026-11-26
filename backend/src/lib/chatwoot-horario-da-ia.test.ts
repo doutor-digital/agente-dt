@@ -123,3 +123,22 @@ test('rodada: unidade SEM configuração responde a qualquer hora (Parauapebas, 
     assert.equal(a.sofias(), 1);
   }
 });
+
+test('o horário acaba enquanto a Sofia pensa: a resposta NÃO sai por cima da equipe (e, se ela já gravou, a nota avisa)', async () => {
+  const u = comExpediente();
+  // 1ª leitura do relógio (início da rodada) = 06:29, as seguintes (na hora de mandar) = 06:30: a equipe abriu
+  const relogio = [emSP('2026-11-25', '06:29'), emSP('2026-11-25', '06:30'), emSP('2026-11-25', '06:30')];
+  const a = portas(u, relogio[0]!);
+  let leituras = 0;
+  a.p.agora = () => relogio[Math.min(leituras++, relogio.length - 1)]!;
+  assert.equal(await rodarSofia(M, a.p, novaMemoriaDaIa()), 'fora-do-horario');
+  assert.deepEqual(a.publicas, []);
+});
+
+test('Registro: uma linha por conversa por hora, não uma por mensagem do expediente', async () => {
+  const u = comExpediente();
+  const a = portas(u, emSP('2026-11-25', '10:00'));
+  const mem = novaMemoriaDaIa();
+  for (let i = 0; i < 5; i++) await rodarSofia(M, a.p, mem);
+  assert.equal(a.registros.length, 1);
+});

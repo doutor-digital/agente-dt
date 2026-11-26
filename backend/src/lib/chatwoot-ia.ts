@@ -346,6 +346,8 @@ export interface MemoriaDaIa {
   usuariosDaIntegracao: Set<number>;
   /** conversa → quando o Registro anotou «Sofia desligada nesta unidade» (uma vez por hora por conversa) */
   registrosDeDesligada: Map<number, number>;
+  /** conversa → quando o Registro anotou «fora do horário da IA» (uma vez por hora por conversa: no modo «só fora do expediente» são todas as mensagens do expediente) */
+  registrosDeForaDoHorario: Map<number, number>;
   /** conversa → resposta recente de «a rodada vai atender?» (cartão no Kommo é uma ida à API por mensagem; vale ATENDIMENTO_CONFERIDO_MS) */
   atendimentoConferido: Map<number, { em: number; vai: Promise<boolean> }>;
 }
@@ -357,6 +359,7 @@ export const novaMemoriaDaIa = (): MemoriaDaIa => ({
   avisosDeHorario: new Set(),
   usuariosDaIntegracao: new Set(),
   registrosDeDesligada: new Map(),
+  registrosDeForaDoHorario: new Map(),
   atendimentoConferido: new Map(),
 });
 /** Se a rodada anterior da mesma conversa ainda não acabou, tenta de novo depois disto. */
@@ -549,7 +552,6 @@ export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'cartao-no-kommo',
   'kommo-indisponivel',
   'pausada-pela-unidade',
-  'fora-do-horario',
 ]);
 
 async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
@@ -584,6 +586,13 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
   if (foraDoHorarioDaIa(unit, p.agora?.())) {
     info.motivo = 'fora do horário da IA';
     logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: fora do horário da IA nesta unidade — a Sofia não responde`);
+    // aba Registro: uma linha por conversa por hora (no modo «só fora do expediente» seriam todas as mensagens do expediente); por isso não está em DESFECHOS_DO_REGISTRO
+    const antes = mem.registrosDeForaDoHorario.get(m.conversa) ?? 0;
+    if (Date.now() - antes >= 3_600_000 && p.registrarEvento) {
+      mem.registrosDeForaDoHorario.set(m.conversa, Date.now());
+      if (mem.registrosDeForaDoHorario.size > 5000) mem.registrosDeForaDoHorario.clear();
+      await p.registrarEvento({ slug: m.slug, conversa: m.conversa, tipo: 'decisao', nome: 'fora-do-horario', detalhe: info.motivo }).catch(() => undefined);
+    }
     return 'fora-do-horario';
   }
 
@@ -713,6 +722,13 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     const nota = gravou ? alerta(`a conversa passou para a equipe (${calou}) enquanto ela pensava`) : null;
     if (nota) await p.nota(m.conversa, nota).catch(() => undefined);
     return 'mudou';
+  }
+  // a clínica pode ter aberto (modo «só fora do expediente») ou fechado enquanto a Sofia pensava: a resposta não sai por cima da equipe
+  if (foraDoHorarioDaIa(unit, p.agora?.())) {
+    info.motivo = 'fora do horário da IA';
+    logger.info({ conversa: m.conversa, gravou }, `${ID_IA}: o horário da IA acabou enquanto a Sofia pensava — resposta descartada`);
+    if (gravou) await p.nota(m.conversa, alerta('o horário da Sofia acabou enquanto ela pensava')).catch(() => undefined);
+    return 'fora-do-horario';
   }
   if (!r.resposta || r.semResposta) {
     if (gravou) await p.nota(m.conversa, alerta('o modelo não escreveu a resposta')).catch(() => undefined);
