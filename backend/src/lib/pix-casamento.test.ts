@@ -91,18 +91,22 @@ test('É PIX pelo método de pagamento que a Pluggy manda (PIX); a descrição s
     lanc('a', 'MARIA SILVA', 250, { metodoDePagamento: 'PIX' }), // descrição SEM o prefixo «Pix»
     lanc('b', 'Transferência recebida JOANA LIMA', 150, { metodoDePagamento: 'PIX', pagador: 'Joana Lima' }),
     lanc('c', 'Pix FULANO TESTE', 99, { metodoDePagamento: 'TED' }), // a descrição diz Pix mas o método é TED: não é Pix
+    lanc('g', 'Pix BEATRIZ TESTE', 60, { metodoDePagamento: 'OTHER' }), // método genérico: vale o «Pix NOME» da descrição
     lanc('d', 'Pix ANA COSTA', 80), // sem método: vale a descrição
     lanc('e', 'Vendas Visa Débito', 500, { metodoDePagamento: 'OTHER' }),
     lanc('f', 'Pix 12.345.678 CLINICA TESTE LTDA', 70, { metodoDePagamento: 'PIX', pagadorTipoDocumento: 'PJ' }),
   ]);
-  assert.deepEqual(r.pix.map((p) => p.id), ['a', 'b', 'd', 'f']);
+  assert.deepEqual(r.pix.map((p) => p.id), ['a', 'b', 'g', 'd', 'f']);
   assert.deepEqual(r.pix[0]!.nomes, ['MARIA SILVA'], 'sem prefixo, o texto inteiro da descrição é o nome');
   assert.equal(r.pix[1]!.nomes[0], 'Joana Lima', 'o campo do pagador vem primeiro; o resto da descrição é só mais um candidato (e não casa com ninguém)');
-  assert.equal(r.pix[3]!.empresa, true);
+  assert.equal(r.pix[4]!.empresa, true);
   assert.deepEqual(r.outras, { lancamentos: 1, centavos: 9900 }, 'o TED com descrição «Pix» não é Pix');
   assert.deepEqual(r.cartaoVendas, { lancamentos: 1, centavos: 50000 });
   assert.equal(ehPix({ descricao: 'qualquer', metodoDePagamento: 'PIX' }), true);
-  assert.equal(ehPix({ descricao: 'Pix X', metodoDePagamento: 'OTHER' }), false);
+  assert.equal(ehPix({ descricao: 'Pix X', metodoDePagamento: 'OTHER' }), true, 'método genérico: vale a descrição «Pix NOME»');
+  assert.equal(ehPix({ descricao: 'Pix X', metodoDePagamento: 'TRANSFER' }), true);
+  assert.equal(ehPix({ descricao: 'Vendas Visa', metodoDePagamento: 'OTHER' }), false);
+  assert.equal(ehPix({ descricao: 'Pix X', metodoDePagamento: 'BOLETO' }), false);
   assert.equal(ehPix({ descricao: 'Pix X' }), true);
   assert.equal(ehPix({ descricao: 'Boleto X' }), false);
 });

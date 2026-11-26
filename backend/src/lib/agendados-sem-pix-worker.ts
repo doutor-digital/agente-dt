@@ -122,6 +122,14 @@ function avisarUmaVez(chave: string, msg: string): void {
   logger.warn(msg);
 }
 
+/**
+ * O grupo da recepção desta lista, SÓ de `AGENDADOS_SEM_PIX_DESTINOS`. Vazia ou ausente = sem destino (a lista para em `sem_destino`). O `?? ''` é de propósito:
+ * `destinoDoAvisoClinica(slug, undefined)` cai no padrão do aviso de agendamento (`AVISO_CLINICA_AGENDAMENTO_DESTINOS`) e a lista iria para o grupo de OUTRA automação.
+ */
+export function destinoDaLista(slug: string, env: NodeJS.ProcessEnv = process.env): string | null {
+  return destinoDoAvisoClinica(slug, env.AGENDADOS_SEM_PIX_DESTINOS ?? '');
+}
+
 /** Evolution que manda para o grupo: a própria desta lista ou a dos avisos à recepção (mesma instância); null = sem configuração. */
 export function evolutionDaLista(env: NodeJS.ProcessEnv = process.env): { url: string; header: string; valor: string } | null {
   const url = env.AGENDADOS_SEM_PIX_EVOLUTION_URL || env.AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL;
@@ -286,7 +294,7 @@ export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: numb
             return r;
           },
           banco: (x, desde, lerMesmo) => lerBancoDaUnidade(ctx, x, desde, lerMesmo, agora).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li o banco`), null)),
-          destino: (slug) => destinoDoAvisoClinica(slug, env.AGENDADOS_SEM_PIX_DESTINOS),
+          destino: (slug) => destinoDaLista(slug, env),
           evolution: () => evolutionDaLista(env),
           pagamNaClinica: (x, ids) => pagamNaClinica(x, ids),
           enviar: (a) => enviarAoGrupo(a),

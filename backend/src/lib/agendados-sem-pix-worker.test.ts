@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { logger } from './logger.js';
 import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import { ID_DA_AUTOMACAO, type UnidadeDaLista } from './agendados-sem-pix.js';
-import { agendadosRecentes, classificarFalhaDeEnvio, contextoPluggyDoAmbiente, diaUtilAnterior, enviarAoGrupo, evolutionDaLista, lerBancoDaUnidade, varrer } from './agendados-sem-pix-worker.js';
+import { agendadosRecentes, classificarFalhaDeEnvio, contextoPluggyDoAmbiente, destinoDaLista, diaUtilAnterior, enviarAoGrupo, evolutionDaLista, lerBancoDaUnidade, varrer } from './agendados-sem-pix-worker.js';
 import { criarContextoPluggy } from '../mcp-remoto/pluggy.js';
 import type { ContaPluggy, FontePluggy, ItemConfigurado, ItemPluggy, LancamentoPluggy } from './integracoes/pluggy.js';
 
@@ -230,4 +230,19 @@ test('Evolution: a própria da lista ou a dos avisos à recepção; sem URL ou s
   assert.deepEqual(evolutionDaLista({ AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL: 'http://a', EVOLUTION_ALERT_HEADER: 'apikey', EVOLUTION_ALERT_VALUE: 'k' }), { url: 'http://a', header: 'apikey', valor: 'k' });
   assert.deepEqual(evolutionDaLista({ AGENDADOS_SEM_PIX_EVOLUTION_URL: 'http://b', AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL: 'http://a', EVOLUTION_ALERT_HEADER: 'apikey', EVOLUTION_ALERT_VALUE: 'k' })?.url, 'http://b');
   assert.equal(evolutionDaLista({ AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL: 'http://a' }), null);
+});
+
+test('DESTINO: só vale AGENDADOS_SEM_PIX_DESTINOS; vazio ou ausente = sem destino, NUNCA o grupo do aviso de agendamento (que é o padrão de destinoDoAvisoClinica quando recebe undefined)', () => {
+  const antes = process.env.AVISO_CLINICA_AGENDAMENTO_DESTINOS;
+  process.env.AVISO_CLINICA_AGENDAMENTO_DESTINOS = JSON.stringify({ [SLUG]: '120363111111111111@g.us' });
+  try {
+    assert.equal(destinoDaLista(SLUG, {}), null, 'variável ausente: não herda o grupo do aviso de agendamento');
+    assert.equal(destinoDaLista(SLUG, { AGENDADOS_SEM_PIX_DESTINOS: '' }), null);
+    assert.equal(destinoDaLista(SLUG, { AGENDADOS_SEM_PIX_DESTINOS: '   ' }), null);
+    assert.equal(destinoDaLista(SLUG, { AGENDADOS_SEM_PIX_DESTINOS: JSON.stringify({ outra: '1@g.us' }) }), null);
+    assert.equal(destinoDaLista(SLUG, { AGENDADOS_SEM_PIX_DESTINOS: JSON.stringify({ [SLUG]: '120363222222222222@g.us' }) }), '120363222222222222@g.us');
+  } finally {
+    if (antes === undefined) delete process.env.AVISO_CLINICA_AGENDAMENTO_DESTINOS;
+    else process.env.AVISO_CLINICA_AGENDAMENTO_DESTINOS = antes;
+  }
 });

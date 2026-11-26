@@ -94,9 +94,14 @@ export function nomeDaDescricao(descricao: string | null | undefined, jaEPix = f
   return resto;
 }
 
-/** É Pix? O método de pagamento que a Pluggy manda (`paymentMethod` = PIX) manda; sem ele (banco que não informa), vale o prefixo «Pix» da descrição. */
+/**
+ * É Pix? O método de pagamento que a Pluggy manda (`paymentMethod`) manda: PIX é Pix; TED, boleto e afins não são, mesmo que a descrição diga «Pix». Com método genérico (OTHER, TRANSFER)
+ * ou sem método (banco que não informa), vale o prefixo «Pix» da descrição («Pix NOME»).
+ */
+const METODOS_GENERICOS = new Set(['OTHER', 'TRANSFER']);
 export function ehPix(l: Pick<LancamentoPluggy, 'metodoDePagamento' | 'descricao'>): boolean {
-  if (l.metodoDePagamento) return l.metodoDePagamento === 'PIX';
+  if (l.metodoDePagamento === 'PIX') return true;
+  if (l.metodoDePagamento && !METODOS_GENERICOS.has(l.metodoDePagamento)) return false;
   return /^\s*pix\b/i.test(l.descricao);
 }
 
