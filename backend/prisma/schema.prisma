@@ -3111,3 +3111,45 @@ model RevisaoDeSaida {
   @@index([leadId])
   @@map("revisoes_de_saida")
 }
+
+// ============================================================================
+// INFINITEPAY NO CONECTOR (26/11/2026)
+// ============================================================================
+//
+// Os links de pagamento (Checkout Integrado) que o conector cria e o que o webhook da InfinitePay contou deles. A API da InfinitePay NÃO lista
+// vendas, saldo nem links: esta tabela é a única memória do que foi criado, então ela só enxerga os links do conector (nunca o total da conta).
+// Também é o LIVRO dos tetos: a soma dos links do dia da unidade (sem os que a InfinitePay recusou) é o que conta para o teto do dia.
+// `unitSlug` sem chave estrangeira de propósito (como a auditoria do conector): a unidade pode sair do ar sem apagar o histórico.
+model InfinitepayLink {
+  id                String    @id @default(cuid())
+  unitSlug          String    @map("unit_slug")
+  /// a referência do pedido na InfinitePay (order_nsu); única por unidade
+  orderNsu          String    @map("order_nsu")
+  /// intencao (gravada ANTES de chamar a InfinitePay) | criado | falhou | pago | estornado | cancelado
+  status            String    @default("intencao")
+  url               String?
+  valorCentavos     Int       @map("valor_centavos")
+  descricao         String
+  validoAte         DateTime? @map("valido_ate")
+  criadoPor         String    @map("criado_por")
+  /// hash do conteúdo (valor + descrição + unidade), para achar link igual feito há pouco
+  chaveDuplicata    String?   @map("chave_duplicata")
+  invoiceSlug       String?   @map("invoice_slug")
+  transactionNsu    String?   @map("transaction_nsu")
+  formaPagamento    String?   @map("forma_pagamento")
+  parcelas          Int?
+  valorPagoCentavos Int?      @map("valor_pago_centavos")
+  reciboUrl         String?   @map("recibo_url")
+  pagoEm            DateTime? @map("pago_em")
+  liquidadoEm       DateTime? @map("liquidado_em")
+  ultimoEvento      String?   @map("ultimo_evento")
+  ultimoEventoEm    DateTime? @map("ultimo_evento_em")
+  erro              String?
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  @@unique([unitSlug, orderNsu])
+  @@index([unitSlug, createdAt])
+  @@index([chaveDuplicata])
+  @@map("infinitepay_links")
+}

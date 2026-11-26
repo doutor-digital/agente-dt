@@ -53,6 +53,9 @@ import { criarContextoTiquetaque, registrarFerramentasTiquetaque, type ContaTiqu
 import { tiquetaqueGet } from '../lib/integracoes/tiquetaque.js';
 import { criarContextoZenfisio, registrarFerramentasZenfisio, type ContaZenfisio } from './zenfisio.js';
 import { entityIdDaConta, lerConfigZenfisio, zenfisioGet } from '../lib/integracoes/zenfisio.js';
+import { lerContasDoAmbiente as lerContasInfinitepay } from '../lib/integracoes/infinitepay.js';
+import { contaInfinitepayDaConfig, criarContextoInfinitepay, registrarFerramentasInfinitepay, type ContaInfinitepay } from './infinitepay.js';
+import { armazemDeLinksPrisma } from './infinitepay-armazem.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -255,6 +258,27 @@ async function contasZenfisioDoBanco(): Promise<Map<string, ContaZenfisio>> {
     });
   }
   logger.info({ contas: contas.size }, 'mcp-remoto: contas do ZenFisio carregadas');
+  return contas;
+}
+
+/**
+ * Unidades com a chave da InfinitePay no AMBIENTE do servidor (INFINITEPAY_CHAVE_<UNIDADE>). A chave fica só em memória; variável que não acha unidade
+ * (ou acha mais de uma) é pulada com aviso no log, sem o valor.
+ */
+const infinitepayAvisadas = new Set<string>();
+async function contasInfinitepayDoAmbiente(): Promise<Map<string, ContaInfinitepay>> {
+  // TODAS as unidades, ativas e inativas: a chave de uma unidade desativada não pode cair em outra que termine com o mesmo nome (ver lerContasDoAmbiente)
+  const unidades = await prisma.unit.findMany({ select: { slug: true, name: true, isActive: true } });
+  const lido = lerContasInfinitepay(unidades.map((u) => ({ slug: u.slug, nome: u.name, ativa: u.isActive })));
+  // o ambiente não muda com o processo no ar: cada variável ignorada é avisada UMA vez, não a cada renovação da lista
+  for (const i of lido.ignoradas) {
+    if (infinitepayAvisadas.has(i.variavel)) continue;
+    infinitepayAvisadas.add(i.variavel);
+    logger.warn({ variavel: i.variavel, motivo: i.motivo }, 'mcp-remoto: variável da InfinitePay ignorada');
+  }
+  const contas = new Map<string, ContaInfinitepay>();
+  for (const c of lido.contas.values()) contas.set(c.slug, contaInfinitepayDaConfig(c));
+  logger.debug({ contas: contas.size }, 'mcp-remoto: contas da InfinitePay carregadas');
   return contas;
 }
 
@@ -585,6 +609,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
   const zenfisio = criarContextoZenfisio(new Map());
   manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
+  const infinitepay = criarContextoInfinitepay(new Map(), armazemDeLinksPrisma(prisma));
+  manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   const tramitacao = criarContextoTramitacao(new Map());
   manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
@@ -654,6 +680,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasConvenia(server, convenia, auditar);
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarFerramentasZenfisio(server, zenfisio, auditar);
+      registrarFerramentasInfinitepay(server, infinitepay, auditar);
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
@@ -687,7 +714,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, () => escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, infinitepay: infinitepay.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };
