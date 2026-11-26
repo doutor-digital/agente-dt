@@ -919,3 +919,17 @@ test('lead quente parado: sem CHATWOOT_GERENTE_WHATSAPP, o número da gerente ve
   assert.equal(avisoDaGerenteDoBanco('x', 3, 1, { env: {} }), undefined);
   assert.equal(avisoDaGerenteDoBanco('x', 3, undefined, { env }), undefined);
 });
+
+test('paciente já CONFIRMADO: o worker manda a véspera sem a pergunta (data, endereço e mapa), uma vez só, e registra a regra de véspera como feita', async () => {
+  const confirmada = { etapa: 'Confirmado', situacao_consulta: 'Confirmado', categoria_consulta: 'Avaliação', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: confirmada })]);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() - 600_000));
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, false);
+  assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. Passando para lembrar: a sua consulta é amanhã\.\nData e horário: 17\/11 às 14:30\nEndereço: /);
+  assert.doesNotMatch(c.mensagens[0]!.texto, /\?/);
+  assert.deepEqual(arm.disparos.map((d) => `${d.regra}|${d.modo}`), ['consulta-vespera|ligado']);
+});

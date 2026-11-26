@@ -12,6 +12,12 @@ export const TEXTOS_PARAU: Readonly<Record<string, string>> = {
   parau_consulta_prepagamento_pendente: "Olá, {{contact.name}}. O seu horário de {{lead.cf.2450736}} ainda está reservado, mas o pagamento não foi identificado.\nConsigo segurar a vaga até amanhã. Depois disso ela volta para a agenda.\nPrecisa de ajuda com o pagamento?",
   parau_consulta_lembrete_vespera: "Olá, {{contact.name}}. A sua consulta é amanhã.\nData e horário: {{lead.cf.2450736}}\nEndereço: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000\nEstá tudo certo para o seu comparecimento?\n📍 Como chegar: https://share.google/LzWt0AQhG4HWTpWOq",
   parau_consulta_confirmacao_dia: "Bom dia, {{contact.name}}. A sua consulta de hoje está marcada para {{lead.cf.2450736}}.\nEstá tudo certo para o seu comparecimento?",
+  // Os 4 «já confirmou» (26/11/2026): o mesmo lembrete SEM a pergunta «está tudo certo?», para quem já está Confirmado. PRECISAM DE APROVAÇÃO NA META como
+  // template (parau_*) para sair fora da janela de 24 h; sem ela, na caixa de WhatsApp oficial a régua deixa uma nota («template não aprovado») e não manda.
+  parau_consulta_lembrete_vespera_confirmada: "Olá, {{contact.name}}. Passando para lembrar: a sua consulta é amanhã.\nData e horário: {{lead.cf.2450736}}\nEndereço: Rua C, 455-A, Sala 101 e 103 — Cidade Nova, Parauapebas/PA, 68515-000\n📍 Como chegar: https://share.google/LzWt0AQhG4HWTpWOq",
+  parau_consulta_dia_confirmada: "Bom dia, {{contact.name}}. Hoje é a sua consulta: {{lead.cf.2450736}}.\nTe esperamos!",
+  parau_sessao_lembrete_vespera_confirmada: "Olá, {{contact.name}}. Passando para lembrar: a sua sessão é amanhã.\nData e horário: {{lead.cf.2450928}}",
+  parau_sessao_dia_confirmada: "Bom dia, {{contact.name}}. Hoje é a sua sessão: {{lead.cf.2450928}}.\nTe esperamos!",
   parau_consulta_preparo: "Olá, {{contact.name}}. Para a sua consulta, leve:\n- documento com foto;\n- exames de imagem da coluna, se tiver (raio-X, tomografia ou ressonância);\n- roupa confortável.\nFicou alguma dúvida?",
   parau_consulta_falta_mesmo_dia: "Olá, {{contact.name}}. Você não conseguiu comparecer à consulta de hoje.\nImprevistos acontecem. Quer que eu verifique um novo horário para você?",
   parau_consulta_falta_48h: "Olá, {{contact.name}}. O seu horário de consulta segue disponível para remarcação.\nMe avisa que eu verifico as vagas desta semana.",
