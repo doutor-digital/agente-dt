@@ -19,6 +19,7 @@ import {
 } from '../services/kommo-talks.service.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { neutralizarMarcasDoSistema } from './comprovante-pix.js';
+import { anexoLegivel } from './comprovante-lido.js';
 import { ehFalaAutomaticaDoLite } from './fala-automatica.js';
 
 /** Mensagem mais nova que isto é o turno atual, que já chegou pelo webhook. */
@@ -42,6 +43,25 @@ const MARCA_TRANSCRITO = '[áudio do cliente]';
 
 const ehAudioPronto = (m: MensagemOficial) => m.autor === 'paciente' && m.anexo?.tipo === 'voice' && !!m.anexo.link;
 const dormirPadrao = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms));
+/** Áudio, foto ou PDF do paciente, recente, que o Kommo ainda NÃO carregou (sem link): o aviso de mídia do Lite deste turno pode ser dele. */
+export const ehMidiaDoTurnoCarregando = (m: MensagemOficial, agora: number) =>
+  m.autor === 'paciente' && m.direcao === 'entrada' && !!m.anexo && !m.anexo.link && /voice|pic|image|file|doc|pdf/i.test(m.anexo.tipo) && agora - m.em.getTime() < JANELA_DO_TURNO_MS;
+
+/** Quantos avisos de mídia do Lite o texto do turno traz (cada um é um áudio, uma foto ou um PDF a caminho). */
+export const contarAvisosDeMidia = (humanMessage: string): number => humanMessage.match(/Você recebeu uma mensagem de mídia|'messageContextInfo' is not yet supported/gi)?.length ?? 0;
+
+/**
+ * Unidade que lê comprovante de foto/PDF: a mídia do turno já está TODA na rota oficial, com link? Cada aviso de mídia do texto é uma mídia a
+ * caminho; as que já carregaram (áudio, foto ou PDF recentes, depois da última fala da Sofia) cobrem um aviso cada — menos as que o webhook já
+ * trouxe e leu (`jaLidasNoWebhook`). Sobrou aviso sem mídia pronta, ou mídia ainda sem link: espera. Assim uma foto já carregada não encerra a
+ * espera de um áudio que o Kommo ainda nem listou, nem o contrário.
+ */
+export function midiaDoTurnoPronta(msgs: MensagemOficial[], humanMessage: string, agora: number, jaLidasNoWebhook = 0): boolean {
+  const recentes = desdeUltimaFalaDaSofia(msgs);
+  if (recentes.some((m) => ehMidiaDoTurnoCarregando(m, agora))) return false;
+  const prontas = recentes.filter((m) => m.autor === 'paciente' && m.direcao === 'entrada' && (ehAudioPronto(m) || anexoLegivel(m)) && agora - m.em.getTime() < JANELA_DO_TURNO_MS).length;
+  return prontas - jaLidasNoWebhook >= Math.max(1, contarAvisosDeMidia(humanMessage));
+}
 
 export type ItemOficial = MensagemOficial & { transcricao?: string | null };
 
@@ -170,6 +190,15 @@ export async function blocoDaConversaOficial(args: {
   msgs?: MensagemOficial[] | null;
   /** Nenhum áudio chegou pelo webhook neste turno (quem chama sabe). Junto com o aviso de mídia no texto, liga a busca do áudio na rota oficial. */
   nenhumAudioNoWebhook?: boolean;
+  /**
+   * Unidade que lê comprovante de foto/PDF (`spineBookingRequiresPayment`): o aviso de mídia do Lite também pode ser uma FOTO, não só áudio.
+   * A espera pelo carregamento para quando uma foto/PDF do turno ganha link, e `saida.msgs` devolve a conversa relida DEPOIS da espera
+   * (quem chama a usa para ler a imagem — `lerAnexosDoPaciente` — sem ir ao Kommo outra vez).
+   */
+  esperarImagem?: boolean;
+  /** Fotos/PDFs que o webhook já trouxe e leu neste turno (aparecem também na rota oficial): não contam como a mídia do aviso. */
+  midiaJaLidaNoWebhook?: number;
+  saida?: { msgs: MensagemOficial[] | null };
   /** Testes: leitura da rota oficial, espera e o histórico local trocáveis. */
   ler?: () => Promise<MensagemOficial[]>;
   dormir?: (ms: number) => Promise<void>;
@@ -186,7 +215,9 @@ export async function blocoDaConversaOficial(args: {
   let selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now(), audioDoTurnoSemArquivo);
 
   // o aviso de mídia chegou e o áudio ainda não tem link na rota oficial: espera o Kommo carregar e relê
-  if (audioDoTurnoSemArquivo && !selecionados.some(ehAudioPronto)) {
+  // Sem `esperarImagem`: pronto = o áudio do turno já tem link (como sempre). Com ele: toda a mídia do turno já carregou (`midiaDoTurnoPronta`).
+  const pronto = () => (args.esperarImagem ? midiaDoTurnoPronta(msgs, humanMessage, Date.now(), args.midiaJaLidaNoWebhook ?? 0) : selecionados.some(ehAudioPronto));
+  if (audioDoTurnoSemArquivo && !pronto()) {
     const esperas = args.esperas ?? ESPERAS_DO_AUDIO_MS;
     let esperado = 0;
     for (const ms of esperas) {
@@ -194,9 +225,9 @@ export async function blocoDaConversaOficial(args: {
       esperado += ms;
       msgs = await ler();
       selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now(), true);
-      if (selecionados.some(ehAudioPronto)) break;
+      if (pronto()) break;
     }
-    const achou = selecionados.some(ehAudioPronto);
+    const achou = pronto();
     await recorder.step({
       kind: achou ? 'THINKING' : 'ERROR',
       title: achou
@@ -205,6 +236,8 @@ export async function blocoDaConversaOficial(args: {
       payload: { leadId, esperadoMs: esperado },
     });
   }
+
+  if (args.saida) args.saida.msgs = msgs;
 
   // áudio de um turno anterior que a Sofia respondeu sem ouvir (estava antes da última fala dela)
   let perdidos: MensagemOficial[] = [];

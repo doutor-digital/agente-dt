@@ -538,13 +538,15 @@ export async function abrirTarefaParaEquipe(args: {
    * (falta o nome, por exemplo). O texto de sempre manda a equipe «confirmá-la em até 1 h», o que lançaria a consulta em dobro.
    */
   semLancar?: boolean;
+  /** Janela da deduplicação, no lugar da padrão do motivo (comprovante: 15 min). Quem avisa de um fato que não muda (o mesmo comprovante parado) usa uma longa. */
+  janelaMs?: number;
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
   const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido', sinal_pix_falhou: 'sinal_pix_falhou', sinal_pix_sem_registro: 'sinal_pix_sem_registro' }[motivo];
   const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
-    if (await dedupe.avisoRecente(unitId, leadId, chave, motivo === 'comprovante' || motivo === 'comprovante_recusado' || motivo === 'anexo_nao_lido' ? JANELA_COMPROVANTE_MS : undefined)) return 'repetida';
+    if (await dedupe.avisoRecente(unitId, leadId, chave, args.janelaMs ?? (motivo === 'comprovante' || motivo === 'comprovante_recusado' || motivo === 'anexo_nao_lido' ? JANELA_COMPROVANTE_MS : undefined))) return 'repetida';
     let nome: string | null = null;
     let responsavel: number | undefined;
     try {
