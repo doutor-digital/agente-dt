@@ -51,7 +51,7 @@ test('"confirmo" sozinho, "pode confirmar" e as respostas reais de quem marcou N
     'Confirmado',
     'Sim,confirmado',
     'Pode confirmar!',
-    'Pode confirmar a consulta para amanhã Fernanda Hoepers Aguiar',
+    'Pode confirmar a consulta para amanhã Maria da Silva',
     'Pode marcar',
     'Sim',
     'Sim sim',

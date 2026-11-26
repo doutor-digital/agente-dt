@@ -4,7 +4,9 @@
  *   "Essa chamada de horários foi precipitada, ainda não entendi a queixa. Vou responder corretamente primeiro.\n\nClaro, já te
  *    explico tudo! Antes, me conta: onde é a sua dor e há quanto tempo ela começou? …"
  *
- * Varredura de 28/08 a 26/11 (107.665 respostas da Sofia, main × este PR): SÓ_PREENCHER
+ * Varredura de 28/08 a 26/11 (107.665 respostas da Sofia, main × este PR):  2 respostas mudam de veredito no detector e as 2 são
+ * vazamento verdadeiro (esta e a de 01/10, "essa chamada foi um engano meu"); o corte muda 1 (a de Salto). As outras 107.663
+ * ficam IGUAIS no detector e no corte.
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
