@@ -30,7 +30,6 @@ import { claimMessageId, liberarClaim, reivindicarComCerteza } from './dedup-cac
 import { emPausa } from './pausa-unidade.js';
 import { conectoresDoRotulo } from './chatwoot-rotulo-robo.js';
 import { nomeDaClinicaDaUnidade, telefoneNaFranquia } from './convite-whatsapp.js';
-import { kommoCortado } from './kommo-cortado.js';
 import { normalizarFrase } from './origem-texto-pronto.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import {
@@ -190,6 +189,8 @@ export interface PortasDoConviteCrm {
   reivindicar(chave: string): Promise<'ganhou' | 'perdeu' | 'incerto'>;
   /** em «seco»: primeira vez que registro este convite? (a nota privada só sai uma vez) */
   primeiraNotaDoSeco(chave: string): Promise<boolean>;
+  /** devolve a marca da nota do seco (a nota não saiu) */
+  soltarNotaDoSeco(chave: string): Promise<void>;
   /** a franquia diz que este telefone é de paciente? `nao-sei` = a franquia não respondeu. Nunca lança. */
   pacienteNaFranquia(unit: Unit, telefone: string): Promise<'sim' | 'nao' | 'nao-sei'>;
   /** devolve a marca (só quando SABEMOS que nada saiu: erro 4xx do Chatwoot) */
@@ -236,9 +237,9 @@ export async function convidarNoCrm(
     const unit = await p.unidade(slug);
     if (!unit) return nao('sem-unidade', 'a unidade não está no banco');
     // UM caminho por unidade: o mesmo Instagram chega ao Kommo e ao Chatwoot, e as duas pontas leem a mesma chave e o mesmo número. Onde o Kommo tem rota de envio
-    // (Salesbot + campo de resposta) e a unidade não saiu dele, quem convida é o Kommo (`convite-whatsapp.ts`); o CRM só convida onde o Kommo não pode (unidade
+    // (Salesbot + campo de resposta) e a unidade não saiu dele (`temRotaDeEnvioNoKommo` já leva em conta CHATWOOT_KOMMO_CORTADO_SLUGS — a MESMA definição do robô do Kommo), quem convida é o Kommo (`convite-whatsapp.ts`); o CRM só convida onde o Kommo não pode (unidade
     // sem Salesbot, ou fora da Kommo: CHATWOOT_KOMMO_CORTADO_SLUGS). A decisão não depende do estado da chave: seco e ligado escolhem o mesmo caminho.
-    if (temRotaDeEnvioNoKommo(unit) && !kommoCortado(slug)) return nao('outro-caminho', 'esta unidade convida pelo Kommo');
+    if (temRotaDeEnvioNoKommo(unit)) return nao('outro-caminho', 'esta unidade convida pelo Kommo');
     if (emPausa(unit)) return nao('unidade-pausada');
     const wa = numeroDaUnidade(unit, ev.canal);
     if (!wa) return nao('sem-numero');
@@ -260,7 +261,15 @@ export async function convidarNoCrm(
 
     const texto = textoDoConvite({ clinica: nomeDaClinicaDaUnidade(unit), numero: wa, canal: ev.canal });
     if (seco) {
-      if (await p.primeiraNotaDoSeco(chave)) await p.nota(ev.conversa, notaDoSeco(ev.canal, texto, !!lida.telefone));
+      if (await p.primeiraNotaDoSeco(chave)) {
+        try {
+          await p.nota(ev.conversa, notaDoSeco(ev.canal, texto, !!lida.telefone));
+        } catch (err) {
+          // a nota NÃO saiu: devolve a marca do seco (senão o seco ficaria 7 dias sem registrar este convite) e deixa o erro cair no «não consegui conferir»
+          await p.soltarNotaDoSeco(chave).catch(() => undefined);
+          throw err;
+        }
+      }
       logger.info({ slug, conversa: ev.conversa, canal: ev.canal, texto }, 'convite-whatsapp (CRM, seco): mandaria o convite — nada foi enviado ao lead');
       lembrarDecisao(memoria, agoraMs());
       return { tipo: 'seco', texto };
@@ -368,9 +377,14 @@ export function portasReaisDoConvite(ctx: ContextoChatwoot): PortasDoConviteCrm 
       // LANÇA (falha fechada): não dá para afirmar que a equipe nunca respondeu.
       const todas: Array<MensagemDaApi & { id?: unknown }> = [];
       let antes: number | null = null;
-      for (let pagina = 0; pagina < PAGINAS_LIDAS; pagina++) {
+      // PAGINAS_LIDAS páginas cheias = o limite (120 mensagens): a página seguinte só serve para saber se há MAIS (vazia = a conversa tem exatamente 120: cabe)
+      for (let pagina = 0; pagina <= PAGINAS_LIDAS; pagina++) {
         const r = (await chamar(ctx, 'GET', `conversations/${id}/messages`, antes ? { query: { before: String(antes) } } : {})) as { payload?: unknown[] } | null;
         const lote = (Array.isArray(r?.payload) ? r!.payload : []) as Array<MensagemDaApi & { id?: unknown }>;
+        if (pagina === PAGINAS_LIDAS) {
+          if (lote.length > 0) break; // tem mais que 120: longa demais
+          return todas;
+        }
         todas.push(...lote);
         if (lote.length < MENSAGENS_POR_PAGINA) return todas;
         antes = Math.min(...lote.map((m) => numero(m.id) ?? Infinity));
@@ -387,6 +401,7 @@ export function portasReaisDoConvite(ctx: ContextoChatwoot): PortasDoConviteCrm 
       return !!linha && linha.expiresAt.getTime() > Date.now();
     },
     reivindicar: (chave) => reivindicarComCerteza('convite-whatsapp-crm', chave.slice('convite-whatsapp-crm:'.length), VALIDADE_DO_CONVITE_MS),
+    soltarNotaDoSeco: (chave) => liberarClaim('convite-whatsapp-crm-seco', chave.slice('convite-whatsapp-crm:'.length)),
     primeiraNotaDoSeco: (chave) => claimMessageId('convite-whatsapp-crm-seco', chave.slice('convite-whatsapp-crm:'.length), VALIDADE_DO_CONVITE_MS),
     pacienteNaFranquia: telefoneNaFranquia,
     soltar: (chave) => liberarClaim('convite-whatsapp-crm', chave.slice('convite-whatsapp-crm:'.length)),

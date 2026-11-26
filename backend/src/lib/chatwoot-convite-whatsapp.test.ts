@@ -65,7 +65,7 @@ const entrada = (t = T0) => ({ message_type: 0, private: false, created_at: t, s
 const saida = (extra: Record<string, unknown> = {}) => ({ message_type: 1, private: false, created_at: T0 + 600, ...extra });
 
 function portas(sobre: Partial<PortasDoConviteCrm> = {}) {
-  const w = { publicou: [] as Array<{ texto: string; marca: Record<string, unknown> }>, notas: [] as string[], reivindicou: [] as string[], soltou: 0 };
+  const w = { publicou: [] as Array<{ texto: string; marca: Record<string, unknown> }>, notas: [] as string[], reivindicou: [] as string[], soltou: 0, soltouNota: 0 as number | undefined };
   const vivas = new Set<string>();
   const p: PortasDoConviteCrm = {
     unidade: async () => unidade(),
@@ -81,6 +81,7 @@ function portas(sobre: Partial<PortasDoConviteCrm> = {}) {
       return 'ganhou';
     },
     primeiraNotaDoSeco: async () => true,
+    soltarNotaDoSeco: async () => void (w.soltouNota = (w.soltouNota ?? 0) + 1),
     pacienteNaFranquia: async () => 'nao' as const,
     soltar: async (c) => void (w.soltou++, vivas.delete(c)),
     conectores: () => [2, 14],
@@ -456,6 +457,7 @@ function kommoDeMentira() {
     reivindicar: async (c) => (marcas.has(c) ? 'perdeu' : (marcas.add(c), 'ganhou')),
     soltar: async () => undefined,
     gravarEnviado: async () => true,
+    sofiaFalouDesde: async () => false,
     cartao: async () => ({ pausado: false, etapaPermite: true, temIdClient: false, telefone: null }),
     equipeJaFalou: async () => false,
     pacienteNaFranquia: async () => 'nao',
@@ -493,8 +495,16 @@ test('UM caminho por unidade: o CRM convida onde o Kommo NÃO pode — unidade s
   const antes = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
   process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = SLUG;
   try {
-    const c = portas({ unidade: async () => unidade(ROTA_KOMMO) });
-    assert.equal((await convidarNoCrm(evento({ contato: 920 }), CONTA, c.p, CONTA)).tipo, 'enviou', 'saiu da Kommo: quem convida é o CRM');
+    const u = unidade(ROTA_KOMMO);
+    const k = kommoDeMentira();
+    const c = portas({ unidade: async () => u });
+    const [kr, cr] = await Promise.all([
+      convidarParaWhatsapp({ unit: u, leadId: 777, origem: 'instagram_business', isChatMessage: true, chatId: 'c', talkId: '1', contactId: '5' }, k.deps),
+      convidarNoCrm(evento({ contato: 920 }), CONTA, c.p, CONTA),
+    ]);
+    assert.equal(cr.tipo, 'enviou', 'saiu da Kommo: quem convida é o CRM');
+    assert.equal((kr as { motivo: string }).motivo, 'sem-rota-de-envio', 'e o robô do Kommo, com o Salesbot ainda cadastrado, NÃO convida');
+    assert.equal(k.enviou.length + c.w.publicou.length, 1, 'exatamente um convite no total (antes: dois)');
   } finally {
     if (antes === undefined) delete process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
     else process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = antes;
@@ -528,4 +538,30 @@ test('conversa LONGA demais: o robô não repete as páginas a cada mensagem do 
   await convidarNoCrm(evento(), CONTA, p, CONTA, () => agora + 61 * 60_000);
   assert.equal(leituras, 2);
   assert.deepEqual(w.publicou, []);
+});
+
+test('SECO: se a nota privada NÃO saiu (POST falhou), a marca do seco é devolvida — o convite não fica 7 dias sem registro', async () => {
+  ligar('seco');
+  const { w, p } = portas({ nota: async () => Promise.reject(new Error('Chatwoot 500')) });
+  const r = await convidarNoCrm(evento(), CONTA, p, CONTA);
+  assert.equal((r as { motivo: string }).motivo, 'nao-consegui-conferir');
+  assert.equal(w.soltouNota, 1);
+  const ok = portas();
+  assert.equal((await convidarNoCrm(evento({ contato: 930 }), CONTA, ok.p, CONTA)).tipo, 'seco');
+  assert.equal(ok.w.soltouNota, 0, 'nota que saiu: a marca fica (uma nota por contato)');
+});
+
+test('conversa com EXATAMENTE 120 mensagens cabe (6 páginas cheias + a 7ª vazia); com 121 é longa demais', async () => {
+  const pagina = (de: number, ate: number) => ({ payload: Array.from({ length: Math.max(0, ate - de + 1) }, (_, i) => ({ id: de + i, message_type: 0, private: false, created_at: T0 + de + i, sender: { id: 910, type: 'contact' } })) });
+  const ctxCom = (paginas: Array<{ payload: unknown[] }>) => ({
+    conta: { url: 'https://crm.exemplo', conta: 1, token: 'tok' },
+    agora: Date.now,
+    pendentes: new Map(),
+    avisar: () => undefined,
+    fetch: (async () => new Response(JSON.stringify(paginas.shift() ?? { payload: [] }), { status: 200 })) as unknown as typeof fetch,
+  });
+  const cheias = () => [pagina(101, 120), pagina(81, 100), pagina(61, 80), pagina(41, 60), pagina(21, 40), pagina(1, 20)];
+  const msgs = await portasReaisDoConvite(ctxCom([...cheias(), { payload: [] }]) as never).mensagens(50);
+  assert.equal(msgs.length, 120);
+  await assert.rejects(() => portasReaisDoConvite(ctxCom([...cheias(), pagina(0, 0)]) as never).mensagens(50), (e: unknown) => e instanceof ConversaLongaDemais);
 });
