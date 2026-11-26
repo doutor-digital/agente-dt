@@ -174,7 +174,11 @@ test('canceled: antes do pagamento vale como cancelado (e marcado como não conf
   const cancelado = montar({ status: 'criado' });
   assert.equal((await processarAviso(cancelado.deps, cancelado.p, { order_nsu: REF, event: 'canceled' })).resultado, 'cancelado');
   assert.equal(cancelado.armazem.linhas[0]!.status, 'cancelado');
-  assert.match(cancelado.armazem.linhas[0]!.revisao ?? '', /NÃO confirmado pela API/);
+  assert.equal(cancelado.armazem.linhas[0]!.revisao, null, 'link que nunca foi pago não precisa de revisão de dinheiro');
+  assert.match(cancelado.avisos[0]!, /NÃO confirmado pela API.*Marquei como cancelado/);
+  // o status vindo de aviso diz que não é confirmado
+  const lista = await infinitepayLinks(cancelado.deps.ctx, {});
+  assert.match(String(lista.itens[0]!.avisoDoStatus), /não confirmado pela API/);
   const jaPago = montar({ status: 'pago' });
   const r = await processarAviso(jaPago.deps, jaPago.p, { order_nsu: REF, event: 'canceled' });
   assert.equal(r.resultado, 'cancelamento marcado para revisão');
@@ -271,8 +275,44 @@ test('estorno que FALHOU ou está pendente não é estorno: não muda o link e a
   assert.equal(r.resultado, 'pago', 'o corpo do pago com type=pix continua sendo o pagamento');
 });
 
-test('pagamento confirmado com o link já CANCELADO/ESTORNADO (avisos fora de ordem): não muda o status e avisa o João', async () => {
-  for (const status of ['cancelado', 'estornado']) {
+test('pagamento confirmado pela API depois de um cancelamento NÃO confirmado: o link vira pago e o João é avisado', async () => {
+  const m = montar({ status: 'cancelado' });
+  const r = await processarAviso(m.deps, m.p, PAGO);
+  assert.equal(r.resultado, 'pago');
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
+  assert.equal(m.armazem.linhas[0]!.valorPagoCentavos, 15150);
+  assert.equal(m.avisos.length, 1);
+  assert.match(m.avisos[0]!, /CONFIRMOU o pagamento.*depois de um cancelamento avisado e NÃO confirmado.*Marquei o link como pago/);
+});
+
+test('cancelamento sem efeito (o link já estava cancelado): o alerta diz que nada mudou, não que marcou', async () => {
+  const m = montar({ status: 'criado' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  assert.match(m.avisos[0]!, /Marquei como cancelado/);
+  assert.match(m.avisos[1]!, /Nada mudou/);
+  assert.doesNotMatch(m.avisos[1]!, /Marquei como cancelado/);
+});
+
+test('valorPago não soma o link com estorno em revisão; valorEstornado reflete a revisão (separada em valorEstornadoNaoConfirmado)', async () => {
+  const m = montar({ status: 'pago' });
+  m.armazem.linhas.push({ ...m.armazem.linhas[0]!, orderNsu: 'outro', valorCentavos: 5000, valorPagoCentavos: 5000, revisao: null });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'refunded' });
+  const r = await infinitepayLinks(m.deps.ctx, {});
+  assert.equal(r.resumo.valorPago, 50, 'só o link sem estorno em revisão');
+  assert.equal(r.resumo.valorEstornado, 150);
+  assert.equal(r.resumo.valorEstornadoNaoConfirmado, 150);
+  assert.equal(r.resumo.emRevisao, 1);
+  // cancelamento em revisão num pago NÃO tira dinheiro do pago
+  const c = montar({ status: 'pago' });
+  await processarAviso(c.deps, c.p, { order_nsu: REF, event: 'canceled' });
+  const rc = await infinitepayLinks(c.deps.ctx, {});
+  assert.equal(rc.resumo.valorPago, 150);
+  assert.equal(rc.resumo.valorEstornadoNaoConfirmado, 0);
+});
+
+test('pagamento confirmado com o link já ESTORNADO (legado): não muda o status e avisa o João', async () => {
+  for (const status of ['estornado']) {
     const m = montar({ status });
     const r = await processarAviso(m.deps, m.p, PAGO);
     assert.equal(r.resultado, `pagamento confirmado com o link em ${status}`);

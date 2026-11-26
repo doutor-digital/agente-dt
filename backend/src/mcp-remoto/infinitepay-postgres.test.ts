@@ -37,7 +37,7 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
   const B = clientes[1]!;
   try {
     await A.$executeRawUnsafe('DROP TABLE IF EXISTS "infinitepay_links"');
-    for (const m of ['20261126120000_infinitepay_links', '20261126140000_infinitepay_links_revisao']) {
+    for (const m of ['20261126120000_infinitepay_links', '20261126125000_infinitepay_links_revisao']) {
       const sql = readFileSync(path.resolve(process.cwd(), `prisma/migrations/${m}/migration.sql`), 'utf8');
       for (const comando of sql.split(/;\s*\n/).map((c) => c.replace(/^(--.*\n)+/gm, '').trim()).filter(Boolean)) await A.$executeRawUnsafe(comando);
     }
@@ -64,8 +64,12 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     await A.infinitepayLink.create({ data: { unitSlug: UNI, orderNsu: 'recusado-1', status: 'falhou', valorCentavos: 100, descricao: 'x', criadoPor: 'j', erro: '422' } });
     const reuso = await criarLink(b.ctx, b.esc, Q, { valor: 20, descricao: 'Corrigido', referencia: 'recusado-1' });
     assert.equal(reuso.criado, true);
-    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, orderNsu: 'recusado-1' } }), 1, 'a mesma linha, sem duplicar');
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, orderNsu: 'recusado-1' } }), 1, 'a referência volta a ter UMA linha ativa');
     assert.equal((await A.infinitepayLink.findFirst({ where: { unitSlug: UNI, orderNsu: 'recusado-1' } }))?.status, 'criado');
+    // a tentativa recusada FICA como histórico (referência trocada) e continua contando no limite por hora
+    const historico = await A.infinitepayLink.findMany({ where: { unitSlug: UNI, orderNsu: { startsWith: 'recusado-1~f' } } });
+    assert.equal(historico.length, 1);
+    assert.equal(historico[0]!.status, 'falhou');
 
     // eventos do webhook: pago uma vez só; liquidação; estorno
     const e1 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado'], pagamento: { invoiceSlug: 's1', transactionNsu: 't1', forma: 'pix', parcelas: 1, valorPagoCentavos: 1000, reciboUrl: 'https://r' } });

@@ -118,10 +118,16 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
   }
   if (evento === 'canceled') {
     // cancelamento de um link que ainda não foi pago vale como cancelado (sem pagamento a proteger); sobre um `pago` só marca para revisão
-    const antesDoPagamento = link.status === 'intencao' || link.status === 'criado';
-    await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, revisao: marca('cancelamento'), ...(antesDoPagamento ? { paraStatus: 'cancelado' as const, deStatus: ['intencao', 'criado'] } : {}) });
-    void deps.alertar(`🚫 InfinitePay avisou um link CANCELADO (${quem}). NÃO confirmado pela API. ${antesDoPagamento ? 'Marquei como cancelado (ainda não estava pago).' : `NÃO sobrescrevi o status (${link.status}): o link ficou marcado para revisão.`} Confira no app.`).catch(() => false);
-    return { http: 200, resultado: antesDoPagamento ? 'cancelado' : 'cancelamento marcado para revisão' };
+    const antesDoPagamento = link.status === 'intencao' || link.status === 'criado' || link.status === 'cancelado';
+    // link que nunca foi pago e foi cancelado: não há dinheiro a conferir, então NÃO ganha marca de revisão (o status `cancelado` já diz que veio de aviso). Sobre um `pago`, marca.
+    const r = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, antesDoPagamento ? { evento, paraStatus: 'cancelado', deStatus: ['intencao', 'criado'] } : { evento, revisao: marca('cancelamento') });
+    const texto = antesDoPagamento
+      ? r.mudou
+        ? 'Marquei como cancelado (ainda não estava pago).'
+        : 'Nada mudou (o link já não estava mais assim quando o aviso chegou).'
+      : `NÃO sobrescrevi o status (${link.status}): o link ficou marcado para revisão.`;
+    void deps.alertar(`🚫 InfinitePay avisou um link CANCELADO (${quem}). NÃO confirmado pela API. ${texto} Confira no app.`).catch(() => false);
+    return { http: 200, resultado: antesDoPagamento ? (r.mudou ? 'cancelado' : 'cancelamento sem efeito') : 'cancelamento marcado para revisão' };
   }
   if (evento !== 'paid' && evento !== 'settled') {
     // created e payment_failed só ficam registrados; evento que não conhecemos também, mas avisa o João (pode ser um pagamento ou estorno com outro nome)
@@ -172,10 +178,14 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
     ...(recibo && /^https:\/\//.test(recibo) ? { reciboUrl: recibo } : {}),
   };
   // o pagamento primeiro (settled sem paid anterior também confirma e marca); a liquidação só se acrescenta ao que já está pago
-  const pago = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado'], pagamento });
+  // `cancelado` entra: um cancelamento avisado NÃO foi confirmado pela API e o pagamento foi (valor conferido), então o pagamento vence
+  const pago = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado', 'cancelado'], pagamento });
+  if (pago.mudou && link.status === 'cancelado') {
+    void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem} depois de um cancelamento avisado e NÃO confirmado. Marquei o link como pago (o pagamento foi confirmado e o valor conferido). Confira no app.`).catch(() => false);
+  }
   if (pago.mudou) deps.log?.info({ unidade: p.unidade, orderNsu: p.orderNsu, valor: reais(link.valorCentavos) }, 'infinitepay: pagamento confirmado');
   // o dinheiro entrou mas o link está em outro estado (cancelado ou estornado por um aviso que chegou antes, fora de ordem): ninguém pode ficar sem saber
-  if (!pago.mudou && link.status !== 'pago' && link.status !== 'intencao' && link.status !== 'criado') {
+  if (!pago.mudou && link.status !== 'pago' && link.status !== 'intencao' && link.status !== 'criado' && link.status !== 'cancelado') {
     void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem}, mas o link está como "${link.status}" (um aviso de ${link.status === 'estornado' ? 'estorno' : 'cancelamento'} chegou antes ou fora de ordem). Não mudei o status. Confira no app.`).catch(() => false);
     return { http: 200, resultado: `pagamento confirmado com o link em ${link.status}` };
   }

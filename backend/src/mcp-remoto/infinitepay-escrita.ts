@@ -215,16 +215,21 @@ export interface QuemInfinitepay {
 const REFERENCIA = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
 /** telefone brasileiro: DDD (com ou sem parênteses) + 8 ou 9 dígitos; a barra de data não conta como separador */
 const TELEFONE = /(?<!\d)\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}(?!\d)/;
-const CPF_FORMATADO = /(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)/;
-const CNPJ_FORMATADO = /(?<!\d)\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}(?!\d)/;
+/** o marcador que sobra no lugar de uma data ou de um valor: não é separador de dígitos, então não junta o que vem antes com o que vem depois */
+const SEM_DATA_NEM_VALOR = '|';
+// datas (26/11/2026, 26-11-2026) e valores em dinheiro: BR (1.500,00 e 150,00), dólar (1,500.00) e simples (150.00). O ponto de um CPF ("123.456.789.01") NÃO é valor:
+// o valor simples não pode ter dígito nem ponto/vírgula colados antes ou depois.
+const DATAS = /(?<!\d)\d{1,2}[/-]\d{1,2}[/-]\d{4}(?!\d)|(?<!\d)\d{1,2}\/\d{1,2}\/\d{2}(?!\d)/g;
+const VALORES = /(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3}(?:,\d{3})+\.\d{2}|\d+[.,]\d{2})(?![\d]|[.,]\d)/g;
 
 /**
- * CPF, CNPJ ou telefone no texto? Datas ("26/11/2026") e valores em dinheiro ("150.00", "1.500,00") são tirados ANTES de olhar, porque somados davam 11 dígitos
- * e a descrição "Avaliação 26/11/2026 - 150.00" era recusada como CPF. Vale: 11 dígitos ou mais seguidos (CPF/CNPJ sem pontuação), CPF e CNPJ formatados e telefone com DDD.
+ * CPF, CNPJ ou telefone no texto? Datas ("26/11/2026") e valores em dinheiro ("150.00", "1.500,00") são tirados ANTES de olhar, porque somados davam 11 dígitos e a descrição
+ * "Avaliação 26/11/2026 - 150.00" era recusada como CPF. Depois vale a regra de sempre (`temDigitosSeguidos`: 11 dígitos ou mais com até 3 separadores entre eles, o que pega
+ * "CPF 123456789-01", "123 456 789 01", "123.456.789.01" e "CNPJ 12345678/0001-90") e o telefone com DDD.
  */
 export function temDadoPessoal(texto: string): boolean {
-  const t = texto.replace(/(?<!\d)\d{1,2}\/\d{1,2}\/\d{2,4}(?!\d)/g, ' ').replace(/(?<!\d)\d{1,3}(?:\.\d{3})*[.,]\d{2}(?!\d)/g, ' ');
-  return /(?<!\d)\d{11,}(?!\d)/.test(t) || CPF_FORMATADO.test(t) || CNPJ_FORMATADO.test(t) || TELEFONE.test(t);
+  const t = texto.replace(DATAS, SEM_DATA_NEM_VALOR).replace(VALORES, SEM_DATA_NEM_VALOR);
+  return temDigitosSeguidos(t, 11) || TELEFONE.test(t);
 }
 
 export function descricaoLimpa(bruto: string): string {

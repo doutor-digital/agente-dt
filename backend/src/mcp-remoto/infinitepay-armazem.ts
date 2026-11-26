@@ -138,12 +138,13 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`infinitepay-dinheiro:${p.unidade}`}::text, 0))`;
             p.conferir(await lerLivro(tx.infinitepayLink, p.unidade, p.agora));
             const dados = { valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte, criadoPor: p.criadoPor, chaveDuplicata: p.chave };
-            // a referência de um link que a InfinitePay RECUSOU (falhou) pode ser usada de novo: nada existe lá; a linha volta a ser uma intenção, com os dados novos
-            const reaproveitada = await tx.infinitepayLink.updateMany({
+            // a referência de um link que a InfinitePay RECUSOU (falhou) pode ser usada de novo: nada existe lá. A linha recusada NÃO é reaproveitada (isso apagaria a
+            // tentativa do limite por hora): ela fica como histórico, com a referência trocada por `<ref>~f<instante>`, e a tentativa nova ganha a sua própria linha.
+            await tx.infinitepayLink.updateMany({
               where: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'falhou' },
-              data: { ...dados, status: 'intencao', url: null, erro: null, createdAt: new Date(p.agora) },
+              data: { orderNsu: `${p.orderNsu}~f${p.agora}` },
             });
-            if (reaproveitada.count === 0) await tx.infinitepayLink.create({ data: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'intencao', ...dados } });
+            await tx.infinitepayLink.create({ data: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'intencao', ...dados } });
           },
           { timeout: 15_000, maxWait: 15_000 },
         );

@@ -33,10 +33,10 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
     reservar(p: PedidoDeReserva) {
       const feita = fila.then(() => {
         const existente = linhas.find((l) => l.unidade === p.unidade && l.orderNsu === p.orderNsu);
-        // referência de link RECUSADO (falhou) é reaproveitada, como no banco; qualquer outra já existe
+        // referência de link RECUSADO (falhou) pode ser usada de novo, como no banco, mas a linha recusada FICA (com a referência trocada) e continua contando no limite por hora
         if (existente && existente.status !== 'falhou') throw new ErroDeEntrada(`a referência ${p.orderNsu} já foi usada nesta unidade.`);
         p.conferir(livro(p.unidade));
-        if (existente) linhas.splice(linhas.indexOf(existente), 1);
+        if (existente) existente.orderNsu = `${p.orderNsu}~f${p.agora}`;
         linhas.push({
           orderNsu: p.orderNsu, unidade: p.unidade, status: 'intencao', url: null, valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte.toISOString(),
           criadoPor: p.criadoPor, criadoEm: new Date(p.agora).toISOString(), invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null,

@@ -224,6 +224,7 @@ export async function infinitepayLinks(
   let pago = 0;
   let estornado = 0;
   let emRevisao = 0;
+  let estornadoNaoConfirmado = 0;
   for (const l of todos) {
     // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
     const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
@@ -231,8 +232,11 @@ export async function infinitepayLinks(
     g.quantidade += 1;
     g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
     if (l.status !== 'falhou' && l.status !== 'intencao') emitido += l.valorCentavos;
-    if (l.status === 'pago') pago += centavos;
+    // pago com ESTORNO avisado e não confirmado: o dinheiro não conta como pago (pode ter voltado) e entra no estornado, separado em `valorEstornadoNaoConfirmado`
+    const estornoEmRevisao = l.status === 'pago' && Boolean(l.revisao?.startsWith('estorno'));
+    if (l.status === 'pago' && !estornoEmRevisao) pago += centavos;
     if (l.status === 'estornado') estornado += centavos;
+    if (estornoEmRevisao) estornadoNaoConfirmado += centavos;
     if (l.revisao) emRevisao += 1;
   }
   return {
@@ -243,9 +247,12 @@ export async function infinitepayLinks(
       links: todos.length,
       /** valor dos links criados, INCLUINDO cancelados e estornados, sem os que a InfinitePay recusou */
       valorEmitido: reais(emitido),
-      /** o que foi pago e NÃO foi estornado */
+      /** o que foi pago, sem os links com estorno avisado e ainda não confirmado (esses ficam em valorEstornadoNaoConfirmado) */
       valorPago: reais(pago),
-      valorEstornado: reais(estornado),
+      /** estornos que contam: os confirmados (status estornado) MAIS os avisados e ainda não confirmados pela API */
+      valorEstornado: reais(estornado + estornadoNaoConfirmado),
+      /** a parte de valorEstornado que é só aviso da InfinitePay, NÃO confirmado pela API: confira no app */
+      valorEstornadoNaoConfirmado: reais(estornadoNaoConfirmado),
       /** links com estorno/cancelamento avisado e NÃO confirmado pela API (o status NÃO foi mudado) */
       emRevisao: emRevisao,
       porStatus,

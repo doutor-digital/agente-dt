@@ -271,6 +271,27 @@ test('limite por hora: as recusas da InfinitePay (400/422/429) CONTAM, embora n�
   }
 });
 
+test('CPF e CNPJ com pontuação variada continuam recusados (a regra antiga de 11 dígitos com separadores), e data/valor não atrapalham', async () => {
+  const ruins = ['CPF 123456789-01', '123 456 789 01', '123.456.789.01', 'CNPJ 12345678/0001-90', 'cpf 123.456.789-01 e 26/11/2026', 'Avaliação 150.00 CPF 123456789-01', 'paciente 12345678901 em 26/11/2026'];
+  for (const d of ruins) assert.equal(temDadoPessoal(d), true, d);
+  const m = montar();
+  for (const d of ['CPF 123456789-01', '123 456 789 01', '123.456.789.01', 'CNPJ 12345678/0001-90']) {
+    await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: d }), /não pode ter CPF/, d);
+  }
+  assert.equal(m.pedidos.length, 0);
+  for (const d of ['Avaliação 26/11/2026 - 150.00', 'Avaliação 26-11-2026 - R$ 1.500,00', 'Consulta 26/11/26 - 150,00']) assert.equal(temDadoPessoal(d), false, d);
+  assert.equal((await criarLink(m.ctx, m.esc, QUEM, { valor: 150, descricao: 'Avaliação 26/11/2026 - 150.00' })).criado, true, 'continua passando');
+});
+
+test('recusas COM A MESMA REFERÊNCIA contam cada uma no limite por hora (a linha recusada não é reaproveitada) e não chamam a InfinitePay de novo depois do limite', async () => {
+  const m = montar({ porHora: 3, criar: async () => { throw new ErroInfinitepay('recusado', 422); } });
+  for (let i = 0; i < 3; i++) await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Sessão', referencia: 'mesma-ref' }), /Nada foi criado/);
+  assert.equal(m.pedidos.length, 3);
+  assert.equal(m.armazem.linhas.length, 3, 'três tentativas, três linhas');
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Sessão', referencia: 'mesma-ref' }), /limite de 3 links por hora/);
+  assert.equal(m.pedidos.length, 3, 'a 4ª nem chegou à InfinitePay');
+});
+
 test('descrição: datas e valores NÃO são CPF ("Avaliação 26/11/2026 - 150.00" passa); CPF, CNPJ e telefone de verdade são recusados', async () => {
   const boas = ['Avaliação 26/11/2026 - 150.00', 'Sessão 12/11/2026 15h', 'Pacote 10 sessões R$ 1.500,00', 'Consulta 3/12/2026 - 1.250,50', 'Pedido 2026 12 15 10', 'Fisioterapia 01/12/26 e 08/12/26 - 300,00'];
   for (const d of boas) assert.equal(temDadoPessoal(d), false, d);
@@ -316,8 +337,9 @@ test('a referência de um link RECUSADO pode ser usada de novo; a de um link que
   recusar = false;
   const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 100, descricao: 'Sessão corrigida', referencia: 'pedido-123' });
   assert.equal(r.criado, true);
-  assert.equal(m.armazem.linhas.length, 1, 'a mesma linha, não uma duplicada');
-  assert.equal(m.armazem.linhas[0]!.status, 'criado');
+  assert.equal(m.armazem.linhas.length, 2, 'a recusada fica como histórico e a nova tem a sua linha');
+  assert.equal(m.armazem.linhas.filter((l) => l.status === 'falhou').length, 1);
+  assert.equal(m.armazem.linhas.find((l) => l.orderNsu === 'pedido-123')?.status, 'criado');
   await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 300, descricao: 'Outra', referencia: 'pedido-123' }), /já foi usada/);
 });
 
