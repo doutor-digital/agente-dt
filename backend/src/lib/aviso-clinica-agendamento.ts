@@ -406,7 +406,7 @@ function avisarUmaVez(unit: string, motivo: string, msg: string): void {
   logger.warn({ unit }, msg);
 }
 
-function configDaEvolution(env: Partial<NodeJS.ProcessEnv>): { url: string; header: string; valor: string } | null {
+export function configDaEvolution(env: Partial<NodeJS.ProcessEnv>): { url: string; header: string; valor: string } | null {
   const url = env.AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL;
   const header = env.AVISO_CLINICA_AGENDAMENTO_EVOLUTION_HEADER || env.EVOLUTION_ALERT_HEADER;
   const valor = env.AVISO_CLINICA_AGENDAMENTO_EVOLUTION_VALUE || env.EVOLUTION_ALERT_VALUE;

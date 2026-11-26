@@ -46,6 +46,7 @@ import { agendarIndice } from './franquia-indice-telefones.js';
 import { foraDoHorarioDaIa } from './chatwoot-horario-da-ia.js';
 import { AVISO_DE_PRECO_SEGURADO, textoDosValores } from './chatwoot-preco-unico.js';
 import { dataPorExtenso } from './feriados.js';
+import { conferirSofiaParou, DESFECHOS_QUE_PARAM, estadoDoAlerta, minutosDoAlerta } from './chatwoot-sofia-parou.js';
 import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
@@ -240,6 +241,11 @@ export interface PortasDaIa {
   conferirAtendimento?(conversa: number): Promise<void>;
   /** o recurso está ligado aqui (robô configurado e `CHATWOOT_SOFIA_ATENDENDO` != 0)? Define se o webhook confere ou recolhe. */
   atendimentoAtivo?: boolean;
+  /**
+   * A rodada acabou em falha, teto ou erro e o paciente ficou sem resposta (só com a Sofia LIGADA): daqui a N minutos confere se continua assim e avisa a
+   * equipe (chatwoot-sofia-parou.ts, chave por unidade, nasce em seco). Nunca lança. Opcional: os testes que não tratam disso não precisam.
+   */
+  vigiarSofiaParou?(m: MensagemDoPaciente, desfecho: Desfecho): void;
 }
 
 /**
@@ -290,6 +296,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
   const atendimentoAtivo = !!robo && atendimentoLigado();
   // a porta existe sempre: com o recurso desligado ela só serve para TIRAR a etiqueta que um deploy/ligação anterior deixou (abrir não faz nada)
   const atendimento = portaDoAtendimento(ctx, (conversa) => (robo ? robo.abrirParaEquipe(conversa) : Promise.resolve()));
+  const vigiando = new Map<number, NodeJS.Timeout>();
   return {
     estado: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
     unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
@@ -331,6 +338,30 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     encerrarAtendimento: async (conversa) => void (await encerrarAtendimento(conversa, atendimento)),
     conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
     atendimentoAtivo,
+    vigiarSofiaParou: (m, desfecho) => {
+      // chave desta unidade desligada: nem arma o relógio (o padrão do catálogo é «só no papel», então quem não mexeu em nada ainda anota)
+      if (estadoDoAlerta(m.slug) === 'desligado') return;
+      // um relógio por conversa, sempre contado da ÚLTIMA falha: o antigo sai (senão a conferência o acharia «recente» e o alerta se perderia)
+      const antigo = vigiando.get(m.conversa);
+      if (antigo) clearTimeout(antigo);
+      const t = setTimeout(() => {
+        vigiando.delete(m.conversa);
+        void conferirSofiaParou(m, desfecho, {
+          estado: (slug) => estadoDoAlerta(slug),
+          estadoDaSofia: (slug) => estadoDaAutomacao(slug, ID_IA, process.env.CHATWOOT_IA_SLUGS),
+          unidade: (slug) => prisma.unit.findUnique({ where: { slug } }),
+          mensagens: async (conversa) => {
+            const r = (await chamar(ctx, 'GET', `conversations/${conversa}/messages`)) as { payload?: unknown[] } | null;
+            return Array.isArray(r?.payload) ? r.payload : [];
+          },
+          conversa: (id) => chat.conversa(id).catch(() => null),
+          agora: () => Date.now(),
+          link: (conversa) => (ctx.conta ? `${ctx.conta.url.replace(/\/+$/, '')}/app/accounts/${ctx.conta.conta}/conversations/${conversa}` : null),
+        });
+      }, minutosDoAlerta() * 60_000);
+      t.unref();
+      vigiando.set(m.conversa, t);
+    },
     async passarParaEquipe(conversa, lida, motivo, falas, unit) {
       // «hoje» na unidade (o resumo só mostra consulta de hoje em diante); sem a unidade não há «hoje» confiável e a consulta fica fora do resumo
       const hoje = unit ? hojeDaUnidade(unit) : null;
@@ -521,6 +552,14 @@ export async function rodarSofia(m: MensagemDoPaciente, p: PortasDaIa, mem: Memo
     // (`mudou`: o paciente escreveu outra vez; `ocupada`) não mexe aqui.
     if (p.encerrarAtendimento && DESFECHOS_QUE_ENCERRAM.has(desfecho)) {
       await p.encerrarAtendimento(m.conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui tirar a etiqueta sofia-atendendo`));
+    }
+    // alerta «Sofia parou»: falha, teto ou erro com a Sofia LIGADA — confere daqui a N min se o paciente continua sem resposta (nunca atrapalha a rodada)
+    if (modo === 'ligado' && DESFECHOS_QUE_PARAM.has(desfecho) && p.vigiarSofiaParou) {
+      try {
+        p.vigiarSofiaParou(m, desfecho);
+      } catch (err) {
+        logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: não consegui armar o alerta «Sofia parou»`);
+      }
     }
     // aba Registro: a rodada em que ela NÃO respondeu ao paciente, e por quê (a resposta enviada já fica em sofia_mensagem)
     if (DESFECHOS_DO_REGISTRO.has(desfecho) && p.registrarEvento) {

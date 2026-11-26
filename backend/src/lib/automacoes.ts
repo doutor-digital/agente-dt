@@ -1263,6 +1263,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/chatwoot-preco-unico.ts',
   },
   {
+    id: 'chatwoot-sofia-parou',
+    chave: 'CHATWOOT_SOFIA_PAROU_SLUGS',
+    nome: 'Alerta «Sofia parou» no WhatsApp da recepção',
+    oQueFaz:
+      'Quando a Sofia do CRM (LIGADA) deveria estar atendendo e a rodada acaba em falha, teto do dia ou erro, espera 15 minutos (CHATWOOT_SOFIA_PAROU_MIN), relê a conversa e, se a última mensagem pública continua sendo do paciente, avisa no grupo de WhatsApp da recepção: «⚠️ A Sofia parou de responder no CRM: *Maria* escreveu há 17 min e ninguém respondeu (…). Abra a conversa N e responda por lá.» Na hora SÓ durante o horário da EQUIPE (dias da agenda da unidade, 8h–20h, sem feriado) e no máximo UM aviso por unidade e motivo a cada 30 minutos. O que não sai na hora (clínica fechada, ou aviso da unidade recente) fica numa lista e, quando a clínica abre (ou a janela de 30 min acaba), sai UM resumo com quem AINDA está sem resposta. Um aviso por conversa a cada 2 horas.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL»: anota «alertaria» na tela e não manda. Usa o MESMO destino e a MESMA instância do «Aviso à recepção quando a Sofia mexe com agendamento» (AVISO_CLINICA_AGENDAMENTO_DESTINOS e AVISO_CLINICA_AGENDAMENTO_EVOLUTION_*): unidade sem destino ali não recebe (diz no log). NÃO avisa quando a Sofia não ia atender por causa da janela de horário da IA (expediente/feriado: quem atende é a equipe), nem com a unidade pausada, a conversa já passada à equipe ou a IA pausada nela. A lista de espera e o relógio dos 15 minutos são em memória: se o servidor reinicia, o que estava esperando não é avisado.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-sofia-parou.ts',
+  },
+  {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
     nome: 'Agenda da franquia no CRM',
