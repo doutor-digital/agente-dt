@@ -176,7 +176,7 @@ test('erro no ENVIO: a reserva fica (não repete), nota para a equipe conferir o
 
 test('sinal gerado SEM a data da consulta (placeholder <vencimento>T23:59): a confirmação sai sem dia e hora — nunca inventa um horário', async () => {
   const f = fake();
-  await confirmarSinalAoPaciente(UNIDADE, sinal({ consultaEm: '2026-11-29T23:59', venceEm: '2026-11-29' }), f.deps);
+  await confirmarSinalAoPaciente(UNIDADE, sinal({ consultaEm: '2026-11-29T23:59', venceEm: '2026-12-01' }), f.deps);
   assert.deepEqual(f.enviados, ['Recebemos seu sinal de R$ 50 ✅ Sua consulta está confirmada na Doutor Hérnia Açailândia. Até lá!']);
 });
 

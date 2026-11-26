@@ -9,7 +9,8 @@
  *  - dia e hora vêm da consulta que o sinal garante (`consultaEm`, que acompanha a remarcação). Sem data válida, ou de consulta que já passou, a frase sai sem essa parte: nunca se inventa;
  *  - canal: o Kommo, o mesmo caminho da Sofia (`sendChatReply`, Salesbot). Texto livre só chega com o paciente tendo escrito nas últimas 24 h (a mesma janela, com a mesma folga, da
  *    confirmação de véspera). FORA dela NÃO se envia nada, nem modelo: fica uma nota no cartão. Sem rota de envio pelo Salesbot, idem;
- *  - IA pausada (a unidade, «Pausar IA» no cartão ou pausa com data) = não envia; fica a nota;
+ *  - IA pausada (a unidade, «Pausar IA» no cartão ou pausa com data) = não envia; fica a nota. É decisão do João: a nota fica e a confirmação NÃO é tentada de novo quando a pausa acaba (a equipe
+ *    avisa o paciente), assim como fora da janela de 24 h;
  *  - chave `sinal-confirmacao-paciente` (SINAL_CONFIRMACAO_PACIENTE_SLUGS): ligada só onde o João liga; fora dela «só no papel» (decide e REGISTRA o que mandaria, sem tocar no
  *    paciente nem no cartão); desligada não faz nada;
  *  - só no Kommo: o sinal de uma conversa do Chatwoot não tem cartão nem Salesbot (a baixa dele é etiqueta + nota);
@@ -111,8 +112,9 @@ export async function confirmarSinalAoPaciente(unit: Unit, linha: LinhaDoSinal, 
     return { tipo: 'adiada', motivo: 'leitura falhou' };
   }
 
-  // `consultaEm = <vencimento>T23:59` é o PLACEHOLDER de quem gerou o sinal sem saber a data da consulta (sinal-pix.ts): não é horário marcado, e a confirmação não o repete
-  const consultaReal = linha.consultaEm === `${linha.venceEm}T23:59` ? null : linha.consultaEm;
+  // `consultaEm = <vencimento>T23:59` é o PLACEHOLDER de quem gerou o sinal sem saber a data da consulta (sinal-pix.ts): não é horário marcado, e a confirmação não o repete.
+  // Detecta pelo «T23:59» (e não por comparar com `venceEm`, que muda com a validade real do link e com o fuso): clínica não marca consulta às 23:59.
+  const consultaReal = linha.consultaEm && /T23:59$/.test(linha.consultaEm) ? null : linha.consultaEm;
   const texto = textoDaConfirmacao({ valorCentavos: linha.valorCentavos, consultaEm: consultaReal, nomeDaUnidade: unit.name, agoraLocal: instanteLocal(agora, fusoDoSinal(unit)) });
 
   // 2) só no papel: registra o que faria e para (nada reservado, nada enviado, nenhuma nota)

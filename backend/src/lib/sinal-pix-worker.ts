@@ -302,12 +302,12 @@ export interface AlertasDoSinalSemLinha {
 }
 const alertasReais: AlertasDoSinalSemLinha = {
   telegram: (t) => enviarTelegramSofia(t),
-  tarefa: (unit, leadId, texto) => createKommoClient(unit).createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000) + 3600 }),
+  tarefa: async (unit, leadId, texto) => createKommoClient(unit).createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000) + 3600 }),
 };
 
 /** O cartão de um link de sinal pela referência que ele leva: `sinal-<cartão em base 36>-<hex>` (lib/sinal-infinitepay.ts). null = não é referência de sinal. */
 export function leadDaReferenciaDoSinal(orderNsu: string): number | null {
-  const m = /^sinal-([0-9a-z]+)-[0-9a-f]+$/.exec(orderNsu);
+  const m = /^sinal-([0-9a-z]+)-[0-9a-f]{8}$/.exec(orderNsu);
   const n = m ? parseInt(m[1]!, 36) : NaN;
   return Number.isSafeInteger(n) && n > 0 ? n : null;
 }
@@ -325,7 +325,7 @@ export async function baixarSinalDoLinkPago(
   if (!linha) {
     // Link do conector (criado à mão pelo claude.ai) não tem sinal: é normal. Mas uma referência `sinal-…` é da Sofia: o dinheiro entrou e NENHUM cartão foi baixado. Ninguém pode ficar sem saber.
     const lead = leadDaReferenciaDoSinal(e.orderNsu);
-    if (lead === null) return;
+    if (lead === null || estado(unit.slug) === 'desligado') return;
     const texto = `⚠️ ${unit.slug}: o link do SINAL ${e.orderNsu} (R$ ${(e.valorCentavos / 100).toFixed(2).replace('.', ',')}) foi PAGO na InfinitePay, mas não há sinal registrado para ele no agente: o cartão ${lead} NÃO foi marcado e o paciente NÃO foi avisado. Conferir e marcar «✓ Consulta pg antecipado» à mão.`;
     logger.error({ unit: unit.slug, orderNsu: e.orderNsu, leadId: lead }, `${ID_SINAL_PIX}: link de sinal PAGO sem linha em sinais_pix — avisei a equipe`);
     await alertas.telegram(texto).catch(() => undefined);

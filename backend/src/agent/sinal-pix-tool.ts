@@ -171,7 +171,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {
-        const detalhe = `Motivo: ${r.motivo === 'incerto' ? r.detalhe : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
+        const detalhe = `Motivo: ${r.motivo === 'incerto' ? `NÃO envie o Pix antes de conferir: ${r.detalhe}` : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
         if (kommo) {
           const t = await abrirTarefaParaEquipe({
             slug: fresca.slug,

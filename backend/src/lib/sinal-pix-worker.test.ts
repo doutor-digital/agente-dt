@@ -20,6 +20,7 @@ import {
   pagamentosDesde,
   valoresDoSim,
   baixarSinalDoLinkPago,
+  leadDaReferenciaDoSinal,
   _esquecerChavesRecusadas,
   decidirInfinitepay,
   type DepsDaBaixa,
@@ -608,4 +609,11 @@ test('link INCERTO (a criação ficou em dúvida): se o aviso de pagamento dele 
     registrarInfinitepayDoServidor(null);
   }
   assert.equal(sinaisNoBanco[0]!.status, 'expirado');
+});
+
+test('referência de sinal: só o formato exato da Sofia (cartão em base 36 + 8 hex) dispara o alerta; «sinal-teste-abc» feito à mão no conector não', () => {
+  assert.equal(leadDaReferenciaDoSinal(`sinal-${(5829035).toString(36)}-0a1b2c3d`), 5829035);
+  assert.equal(leadDaReferenciaDoSinal('sinal-teste-abc'), null);
+  assert.equal(leadDaReferenciaDoSinal('sinal-teste-0a1b2c3d9'), null);
+  assert.equal(leadDaReferenciaDoSinal('dd-20261126-817b591793'), null);
 });
