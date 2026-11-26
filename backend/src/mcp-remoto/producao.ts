@@ -60,6 +60,8 @@ import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from 
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
+import { registrarRendimentoSePermitido } from './pluggy-rendimento.js';
+import { fontesDoRendimentoReais } from '../lib/rendimento-sofia-fontes.js';
 import { armazemDeRelatoriosPrisma } from './infinitepay-relatorio-armazem.js';
 import { segredoDaContaDoAmbiente } from './infinitepay-relatorio.js';
 import { registrarImportacaoRelatoriosSePermitido, registrarLeituraRelatorios } from './infinitepay-relatorio-ferramentas.js';
@@ -752,6 +754,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
       // Pluggy (leitura bancária, SENSÍVEL): só para quem está na lista de quem altera cartões e só com a Pluggy ligada; leitor comum nem vê as ferramentas
       registrarPluggySePermitido(server, pluggy, quem.userId, escritores, auditar);
+      // ... e «quanto a Sofia rendeu» (Pix do banco × pacientes da agenda): a mesma lista, a mesma trava; sem a Pluggy ligada não existe
+      registrarRendimentoSePermitido(server, pluggy, fontesDoRendimentoReais(), quem.userId, escritores, auditar);
       const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
       registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {
