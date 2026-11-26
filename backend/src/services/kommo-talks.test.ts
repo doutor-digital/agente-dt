@@ -352,3 +352,25 @@ test('duas fotos, uma ainda carregando: espera pela segunda', async () => {
   await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
   assert.deepEqual(c.esperas, [4_000]);
 });
+
+test('foto já carregada + áudio que o Kommo ainda nem listou (2 avisos): espera o áudio', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const fotoPronta = foto('f', s - 20);
+  const c = cenario({ leituras: [normalizar([fotoPronta]), normalizar([fotoPronta]), normalizar([fotoPronta, voz('v', s - 1)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: `${AVISO}\n${AVISO}`, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000]);
+  assert.deepEqual(c.transcritos, ['https://x/lite.ogg']);
+});
+
+test('foto que o webhook JÁ leu + áudio ainda não listado (1 aviso): a foto não cobre o aviso — espera o áudio', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const fotoPronta = foto('f', s - 20);
+  const c = cenario({ leituras: [normalizar([fotoPronta]), normalizar([fotoPronta, voz('v', s - 1)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true, midiaJaLidaNoWebhook: 1 });
+  assert.deepEqual(c.esperas, [4_000]);
+  assert.deepEqual(c.transcritos, ['https://x/lite.ogg']);
+  // sem o aviso de que o webhook leu, a foto cobre o aviso e não espera (é a foto do aviso)
+  const c2 = cenario({ leituras: [normalizar([fotoPronta])] });
+  await blocoDaConversaOficial({ ...c2.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c2.esperas, []);
+});

@@ -1538,6 +1538,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   let algumAnexoLido = false;
   // Unidade com taxa de reserva: comprovante que chegou neste turno (para avisar a equipe se a IA estiver pausada e ninguém o vir)
   const comprovantesDoTurno: ComprovanteComIaPausada[] = [];
+  let anexosLidosPeloWebhook = 0;
   // Chave `exame-de-imagem-pausa-alerta` (Timbó, 11/11/2026): as leituras de exame de imagem deste turno.
   const comExame = exameDeImagemLigado(unit);
   const exames: string[] = [];
@@ -1585,6 +1586,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         ? `${humanMessage}\n\n[${d.tipo} do cliente]: ${naConversa}`
         : `[${d.tipo} do cliente]: ${naConversa}`;
       algumAnexoLido = true;
+      anexosLidosPeloWebhook++;
       await recorder.step({
         kind: 'THINKING',
         title: `${d.tipo === 'arquivo' ? 'Arquivo' : 'Imagem'} ${anexos.length > 1 ? `${i + 1}/${anexos.length} ` : ''}lido (${d.durationMs}ms): "${desc.slice(0, 80)}"`,
@@ -1703,7 +1705,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     if (unit.spineBookingRequiresPayment) {
       for (const c of comprovantesDoTurno) await avisarComprovanteComIaPausada(unit, leadId, recorder, c);
       // WhatsApp Lite: a foto chega só como aviso de mídia — o webhook não a trouxe, está na rota oficial
-      if (comprovantesDoTurno.length === 0 && isChatMessage && temMidiaSemArquivo(humanMessage)) await avisarComprovanteDoLiteComIaPausada(unit, leadId, recorder);
+      if (comprovantesDoTurno.length === 0 && isChatMessage && temMidiaSemArquivo(humanMessage)) await avisarComprovanteDoLiteComIaPausada(unit, leadId, recorder, humanMessage);
     }
 
     const totalLatency = Math.round(performance.now() - requestStart);
@@ -1985,6 +1987,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
           nenhumAudioNoWebhook: audios.length === 0,
           // Boa Vista (taxa de reserva): o aviso de mídia do Lite pode ser a FOTO do comprovante, não só áudio
           esperarImagem: Boolean(unit.spineBookingRequiresPayment),
+          midiaJaLidaNoWebhook: anexosLidosPeloWebhook,
           saida: conversaLida,
         }).catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: falha ao ler (segue sem)');
@@ -1993,8 +1996,9 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       : '';
     // Unidade com taxa de reserva: a foto/PDF que o Lite deixou só na rota oficial (o webhook trouxe apenas o aviso de mídia) é lida pelo
     // servidor e guardada no banco, como no salesbot — sem isto o comprovante do Lite nunca chegava à trava (lib/anexos-do-turno.ts).
-    const anexosDaRotaOficial = isChatMessage && temMidiaSemArquivo(humanMessage)
-      ? await lerAnexosDoTurno(unit, leadId, conversaLida.msgs, recorder)
+    // Turno sem aviso de mídia: só ENTREGA o comprovante que ficou lido e sem entregar (lido com a IA pausada) — a Sofia o vê quando volta.
+    const anexosDaRotaOficial = isChatMessage
+      ? await lerAnexosDoTurno(unit, leadId, conversaLida.msgs, recorder, temMidiaSemArquivo(humanMessage) ? {} : { soEntregar: true })
       : { texto: '', paraEntregar: [] as string[], msgs: conversaLida.msgs };
     const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa].filter(Boolean).join('\n\n');
 

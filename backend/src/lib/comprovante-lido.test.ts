@@ -396,3 +396,20 @@ test('RÉGUA: consulta paga por comprovante, de hoje em diante, NÃO é cobrada 
   const quebrado = { comprovantePixUsado: { findFirst: async () => { throw new Error('fora do ar'); } } } as never;
   assert.equal(await temConsultaPagaPorComprovante(quebrado, 'u', 1, 'America/Boa_Vista', hoje), false, 'na dúvida cobra, como antes');
 });
+
+test('soEntregar (turno comum depois de a IA pausada ler o comprovante): entrega a leitura guardada e NÃO lê imagem nova nem conta anexo sem link', async () => {
+  const { db, linhas } = bancoDeLeituras();
+  let chamadas = 0;
+  const descrever = async () => (chamadas++, visao(true)());
+  // com a IA pausada: leu e guardou, ninguém entregou
+  const lido = await lerAnexosDoPaciente(UNIT, LEAD, [oficial({})], { db, descrever, agora: () => agora });
+  assert.equal(lido.paraEntregar.length, 1);
+  // a IA volta: o turno comum (sem aviso de mídia) só entrega — depois do prazo da reivindicação — e uma foto nova e uma sem link não são tocadas
+  const msgs = [oficial({}), oficial({ id: 'nova', anexo: { tipo: 'picture', link: 'https://kommo/nova.jpg' } }), oficial({ id: 'semlink', anexo: { tipo: 'picture', link: null } })];
+  const r = await lerAnexosDoPaciente(UNIT, LEAD, msgs, { db, descrever, agora: () => Date.now() + 6 * 60_000, soEntregar: true });
+  assert.equal(chamadas, 1, 'nenhuma imagem nova lida');
+  assert.equal(linhas.length, 1);
+  assert.equal(r.naoLidos, 0);
+  assert.deepEqual(r.paraEntregar, lido.paraEntregar);
+  assert.match(r.texto, new RegExp(`\\[comprovante-lido:${linhas[0].id}\\]`));
+});

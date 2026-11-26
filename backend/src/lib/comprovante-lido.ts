@@ -122,6 +122,11 @@ export interface DepsDosAnexos {
   db: BancoDeLeituras;
   descrever: typeof describeImage;
   agora: () => number;
+  /**
+   * Só ENTREGA o que já foi lido e não chegou à conversa (comprovante lido com a IA pausada): não lê imagem nova, não conta anexo que não
+   * deu para ler, não abre nada. Turno comum de unidade com taxa usa isto para o comprovante guardado chegar à Sofia quando ela volta.
+   */
+  soEntregar: boolean;
 }
 
 export interface AnexosLidos {
@@ -147,7 +152,7 @@ export async function lerAnexosDoPaciente(
   msgs: ReadonlyArray<MensagemOficial> | null,
   deps: Partial<DepsDosAnexos> = {},
 ): Promise<AnexosLidos> {
-  const d: DepsDosAnexos = { db: deps.db ?? prisma, descrever: deps.descrever ?? describeImage, agora: deps.agora ?? Date.now };
+  const d: DepsDosAnexos = { db: deps.db ?? prisma, descrever: deps.descrever ?? describeImage, agora: deps.agora ?? Date.now, soEntregar: deps.soEntregar ?? false };
   const vazio: AnexosLidos = { texto: '', lidos: 0, comprovantes: 0, paraEntregar: [], naoLidos: 0 };
   if (!unit.spineBookingRequiresPayment || !msgs?.length) return vazio;
 
@@ -157,7 +162,7 @@ export async function lerAnexosDoPaciente(
   const legivel = anexoLegivel;
   // anexo que não é áudio/vídeo/figurinha e que o servidor não sabe ler (tipo desconhecido, sem link): não pode sumir em silêncio — o modelo é avisado
   // e a equipe ganha a tarefa (o comprovante pode estar ali)
-  const semComoLer = doPaciente.filter((m) => !legivel(m) && !ANEXO_QUE_NAO_E_COMPROVANTE.test(m.anexo?.tipo ?? '') && ANEXO_QUE_PARECE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '')).length;
+  const semComoLer = d.soEntregar ? 0 : doPaciente.filter((m) => !legivel(m) && !ANEXO_QUE_NAO_E_COMPROVANTE.test(m.anexo?.tipo ?? '') && ANEXO_QUE_PARECE_IMAGEM_OU_ARQUIVO.test(m.anexo?.tipo ?? '')).length;
   const candidatas = doPaciente
     .filter(legivel)
     // o MAIS NOVO primeiro: o comprovante que o paciente acabou de mandar não espera atrás de anexos antigos (que podem estar com o link vencido)
@@ -189,7 +194,7 @@ export async function lerAnexosDoPaciente(
     const ja = porFonte.get(fonte);
     if (ja) {
       // a leitura FALHOU num turno anterior e o anexo ainda é posterior à última fala da Sofia (o turno que avisou não respondeu): avisa de novo
-      if (ja.erro?.startsWith(MARCA_DE_FALHA)) naoLidos++;
+      if (!d.soEntregar && ja.erro?.startsWith(MARCA_DE_FALHA)) naoLidos++;
       // lido antes e nunca entregue (o turno que o leu falhou): entrega de novo, sem pagar a visão outra vez — mas só quem ganhar a
       // reivindicação (prazo de 5 min): duas mensagens seguidas do paciente não entregam o mesmo comprovante duas vezes
       if (ja.ehComprovante && ja.entregueEm === null) {
@@ -204,7 +209,7 @@ export async function lerAnexosDoPaciente(
       }
       continue;
     }
-    if (lidos >= MAX_ANEXOS_POR_TURNO || tentativas >= MAX_TENTATIVAS_POR_TURNO) continue;
+    if (d.soEntregar || lidos >= MAX_ANEXOS_POR_TURNO || tentativas >= MAX_TENTATIVAS_POR_TURNO) continue;
     try {
       tentativas++;
       const v = await d.descrever(unit, m.anexo?.link as string, { estruturarComprovante: true });
