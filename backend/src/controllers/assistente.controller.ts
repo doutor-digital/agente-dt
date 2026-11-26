@@ -462,8 +462,8 @@ async function conversaDaAtendente(req: Request, res: Response, idBruto: unknown
   return { a, conversa, slug, porta: portaDaPausaDoChatwoot(a.c, a.sessao) };
 }
 
-/** A Sofia (IA do CRM) está ligada para esta unidade? O botão «Pausar Sofia» da conversa só aparece com ela (o painel ignora o campo). «Só no papel» conta: ela decide, só não envia. */
-export const sofiaDoCrmAtiva = (slug: string, env: NodeJS.ProcessEnv = process.env): boolean => estadoDaAutomacao(slug, 'chatwoot-ia', env.CHATWOOT_IA_SLUGS) !== 'desligado';
+/** A Sofia (IA do CRM) está LIGADA para esta unidade? O botão «Pausar Sofia» da conversa só aparece com ela (o painel ignora o campo). «Só no papel» NÃO conta: ela não responde, então pausar não faz sentido (e reatribuiria a conversa à toa). */
+export const sofiaDoCrmAtiva = (slug: string, env: NodeJS.ProcessEnv = process.env): boolean => estadoDaAutomacao(slug, 'chatwoot-ia', env.CHATWOOT_IA_SLUGS) === 'ligado';
 
 export async function assistentePausaEstadoHandler(req: Request, res: Response): Promise<void> {
   const r = await conversaDaAtendente(req, res, req.query.conversa);

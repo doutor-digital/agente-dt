@@ -5,7 +5,7 @@
  *
  * NÃO é uma pausa nova: usa a que já existe (`chatwoot-pausa.ts`, etiqueta `ia-pausada`) pelos MESMOS endpoints do painel
  * (`GET/POST /api/public/assistente/pausa`, com o login de quem clicou: a atribuição e a nota saem no nome dela). Clicar em «Pausar Sofia» faz o que o
- * painel faz: pausa e a conversa passa a ser de quem clicou. «Reativar» tira a etiqueta.
+ * painel faz: pausa e a conversa passa a ser de quem clicou (por isso pergunta antes). «Reativar» tira a etiqueta. A leitura do estado roda ao abrir a conversa e a cada 90 s com a aba à vista.
  *
  * Só aparece onde há Sofia: o servidor responde 422 para conversa de caixa sem IA (histórico, API de treinamento) e `sofia: false` para unidade com a
  * Sofia do CRM desligada (`chatwoot-ia`), e aí a barra não é criada. Conta sem nenhuma caixa de IA nunca vê nada. Só visual no navegador: nada é gravado sem o clique.
@@ -62,7 +62,7 @@ const PAUSAR_JS = String.raw`(function(){
     fetch(AGENTE + '/api/public/assistente/pausa?conversa=' + id + '&conta=' + conta, { headers: cabecalhos(s, false) })
       .then(function(r){
         if (est.chave !== conta + '/' + id) return;
-        if (r.status === 422 || r.status === 404 || r.status === 403) { est.pronto = true; est.aplicavel = false; return; }
+        if (r.status === 422 || r.status === 404 || r.status === 403 || r.status === 401 || r.status === 400) { est.pronto = true; est.aplicavel = false; return; } // sem Sofia, sem acesso, sessão vencida ou conta inválida: não insiste (volta ao trocar de conversa)
         if (!r.ok) throw new Error('pausa ' + r.status);
         return r.json().then(function(j){ if (est.chave !== conta + '/' + id) return; est.pronto = true; est.aplicavel = !!j && typeof j.pausada === 'boolean' && j.sofia !== false; est.pausada = !!(j && j.pausada); est.por = j && j.por ? String(j.por) : null; });
       })
@@ -71,10 +71,12 @@ const PAUSAR_JS = String.raw`(function(){
   }
   function clicar(id, conta){
     var s = sessao(); if (!s || est.ocupado) return;
+    // pausar passa a conversa para quem clicou (é a pausa do painel: «eu assumo»): pergunta antes, para não tirar o atendimento de outra pessoa sem querer
+    if (!est.pausada && !window.confirm('Pausar a Sofia nesta conversa? Ela para de responder e a conversa passa a ser sua.')) return;
     est.ocupado = true; est.erro = ''; agendar();
     fetch(AGENTE + '/api/public/assistente/pausa?conta=' + conta, { method: 'POST', headers: cabecalhos(s, true), body: JSON.stringify({ conversa: id, acao: est.pausada ? 'reativar' : 'pausar' }) })
       .then(function(r){ return r.json().catch(function(){ return {}; }).then(function(j){ if (!r.ok) throw new Error(j && j.error ? j.error : 'não consegui agora'); return j; }); })
-      .then(function(j){ if (est.chave === conta + '/' + id) { est.pausada = !!j.pausada; est.por = j.por ? String(j.por) : null; } })
+      .then(function(j){ if (est.chave === conta + '/' + id) { est.pausada = !!j.pausada; est.por = j.por ? String(j.por) : null; if (j.sofia === false) est.aplicavel = false; } })
       .catch(function(e){ est.erro = String((e && e.message) || 'não consegui agora').slice(0, 80); setTimeout(function(){ est.erro = ''; agendar(); }, 6000); })
       .then(function(){ est.ocupado = false; est.ultima = Date.now(); agendar(); });
   }
@@ -111,7 +113,7 @@ const PAUSAR_JS = String.raw`(function(){
     if (est.chave !== chave) { est.chave = chave; est.pronto = false; est.aplicavel = false; est.pausada = false; est.por = null; est.erro = ''; est.retry = 0; tirar(); } // outra conversa: o estado da anterior não vale
     if (!est.buscando && !est.ocupado && document.visibilityState === 'visible') {
       if (!est.pronto && Date.now() >= est.retry) ler(id, conta, s);
-      else if (est.pronto && est.aplicavel && Date.now() - est.ultima > 30000) ler(id, conta, s);
+      else if (est.pronto && est.aplicavel && Date.now() - est.ultima > 90000) ler(id, conta, s);
     }
     if (est.pronto && est.aplicavel) { garantirEstilo(); desenhar(id, conta); } else tirar();
   }
@@ -119,7 +121,7 @@ const PAUSAR_JS = String.raw`(function(){
   function agendar(){ if (!espera) espera = setTimeout(passar, 400); }
   new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', agendar);
-  setInterval(agendar, 30000); // reconfere a pausa de tempos em tempos (a equipe pode ter respondido pelo celular)
+  setInterval(agendar, 30000); // a cada 90 s (só com a aba à vista) reconfere a pausa de tempos em tempos (a equipe pode ter respondido pelo celular)
   agendar();
 })();`;
 

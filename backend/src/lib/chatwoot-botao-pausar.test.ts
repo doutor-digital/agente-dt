@@ -50,7 +50,10 @@ test('o bloco parseia, usa SÓ os endpoints da pausa que já existem, nunca inne
   assert.ok(js.includes("acao: est.pausada ? 'reativar' : 'pausar'"), 'o mesmo botão pausa e reativa');
   assert.ok(js.includes("'Pausar Sofia'") && js.includes("'Reativar Sofia'"));
   assert.ok(js.includes('j.sofia !== false'), 'unidade com a Sofia desligada: a barra não aparece');
-  assert.ok(js.includes('r.status === 422'), 'conversa de caixa sem IA: a barra não aparece');
+  assert.ok(js.includes('r.status === 422') && js.includes('r.status === 401'), 'sem Sofia ou sessão vencida: a barra não aparece e não insiste');
+  assert.ok(js.includes('window.confirm('), 'pausar pergunta antes (passa a conversa para quem clicou)');
+  assert.ok(js.includes('if (j.sofia === false) est.aplicavel = false;'), 'o POST também diz se a Sofia foi desligada');
+  assert.ok(js.includes('> 90000'), 'releitura a cada 90 s');
   assert.ok(js.includes('wrap.insertBefore(b, wrap.firstChild); // uma vez só'), 'entra uma vez e nunca é reposicionada (o selo usa o mesmo topo)');
   assert.ok(!/[`]|\$\{/.test(js), 'sem crase nem interpolação dentro do String.raw');
 });
@@ -66,7 +69,7 @@ test('CORS: o menu (origem do Chatwoot) pode LER e MUDAR a pausa; outra origem e
   assert.equal(corsDoAssistente('/api/public/assistente/sugerir', cw, [cw]), null, 'as outras rotas do painel continuam sem CORS');
 });
 
-test('só onde há Sofia: chatwoot-ia ligada ou só no papel = sim; desligada = não (o servidor manda sofia: false)', () => {
+test('só onde há Sofia LIGADA: só no papel e desligada = não (o servidor manda sofia: false)', () => {
   const SLUG = 'doutor-hernia-parauapebas';
   try {
     _esquecerOBancoParaTeste();
@@ -74,7 +77,9 @@ test('só onde há Sofia: chatwoot-ia ligada ou só no papel = sim; desligada = 
     assert.equal(sofiaDoCrmAtiva(SLUG, { CHATWOOT_IA_SLUGS: SLUG }), true);
     assert.equal(sofiaDoCrmAtiva(SLUG, { CHATWOOT_IA_SLUGS: 'outra-unidade' }), false);
     _semearParaTeste([{ slug: SLUG, automacao: 'chatwoot-ia', estado: 'seco' }]);
-    assert.equal(sofiaDoCrmAtiva(SLUG, {}), true, 'só no papel conta');
+    assert.equal(sofiaDoCrmAtiva(SLUG, {}), false, 'só no papel NÃO conta: ela não responde, pausar não faz sentido');
+    _semearParaTeste([{ slug: SLUG, automacao: 'chatwoot-ia', estado: 'ligado' }]);
+    assert.equal(sofiaDoCrmAtiva(SLUG, {}), true);
     _semearParaTeste([{ slug: SLUG, automacao: 'chatwoot-ia', estado: 'desligado' }]);
     assert.equal(sofiaDoCrmAtiva(SLUG, { CHATWOOT_IA_SLUGS: SLUG }), false, 'a tela vence o .env');
   } finally {
