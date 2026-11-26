@@ -38,7 +38,7 @@ export function canalDoConvite(origem: string | null | undefined): CanalDoConvit
 }
 
 /**
- * O telefone como o cadastro da unidade o guarda («(94) 98432-5883», «5594984325883», «+55 94 98432-5883») → só dígitos, com o 55.
+ * O telefone como o cadastro da unidade o guarda («(11) 99999-0000», «5511999990000», «+55 11 99999-0000») → só dígitos, com o 55.
  * `null` se não parece um número do Brasil (10 ou 11 dígitos com DDD, mais o 55): NUNCA se completa nem se adivinha dígito.
  */
 export function numeroDoWhatsapp(bruto: unknown): string | null {
@@ -96,14 +96,20 @@ export interface RotaDeEnvioDaUnidade {
   kommoBypassSalesbot?: boolean | null;
 }
 
+/** A unidade tem rota de envio pelo Salesbot no Kommo (Salesbot + campo de resposta, sem bypass)? É o que separa o caminho do Kommo do do CRM. */
+export function temRotaDeEnvioNoKommo(u: RotaDeEnvioDaUnidade): boolean {
+  return !!u.kommoSalesbotId && !!u.kommoReplyFieldId && !u.kommoBypassSalesbot;
+}
+
 /**
- * O robô vai FALAR nesta unidade — está LIGADO, há número e há rota de envio pelo Salesbot? É a pergunta da Sofia: só se cala no Instagram/Facebook
- * se o robô de fato vai falar (senão o lead ficaria sem ninguém). Quem chama com um objeto sem estes campos (um `select` estreito) não cala a Sofia.
+ * O robô PODE falar pelo Kommo nesta unidade — LIGADO, com número e com rota de envio? É só a PRÉ-CONDIÇÃO para a Sofia se calar: quem a cala é
+ * o lead que de fato RECEBEU o convite (`conviteEnviado`, em `convite-whatsapp-marca.ts`), nunca a unidade inteira.
+ * Quem chama com um objeto sem estes campos (um `select` estreito) não cala a Sofia.
  */
 export function conviteFalaNaUnidade(u: { slug: string } & NumerosDaUnidade & RotaDeEnvioDaUnidade, raw?: string): boolean {
   if (conviteWhatsappEstado(u.slug, raw) !== 'ligado') return false;
   if (!(numeroDoWhatsapp(u.igWhatsappNumber) ?? numeroDoWhatsapp(u.fbWhatsappNumber))) return false;
-  return !!u.kommoSalesbotId && !!u.kommoReplyFieldId && !u.kommoBypassSalesbot;
+  return temRotaDeEnvioNoKommo(u);
 }
 
 // ── memória curta das decisões (o robô não repete as leituras a cada mensagem do mesmo lead) ───────────────────────────────

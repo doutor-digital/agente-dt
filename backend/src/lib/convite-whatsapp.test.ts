@@ -5,6 +5,8 @@ import type { Unit } from '@prisma/client';
 import {
   chaveDoConvite,
   convidarParaWhatsapp,
+  lerCartao,
+  type FontesDoCartao,
   nomeDaClinicaDaUnidade,
   _esquecerFreiosParaTeste,
   ehComentario,
@@ -29,7 +31,7 @@ import {
   textoDoConvite,
   textoPreEscrito,
 } from './convite-whatsapp-estado.js';
-import { decidirCanal, sofiaSoWhatsappEfetivo, sofiaSoWhatsappEstado, pacienteDeRedeSocialCalado, _esquecerOrigensParaTeste } from './sofia-so-whatsapp.js';
+import { cartaoDeRedeSocialCalado, decidirCanal, sofiaCaladaPeloConvite, sofiaSoWhatsappEstado, pacienteDeRedeSocialCalado, _esquecerOrigensParaTeste } from './sofia-so-whatsapp.js';
 import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import { automacaoPorId, verificarCatalogo } from './automacoes.js';
 import { casarFala, lerListaDeTextos } from './origem-texto-pronto.js';
@@ -42,6 +44,7 @@ beforeEach(() => {
   _semearParaTeste([]);
   _esquecerOrigensParaTeste();
   _esquecerFreiosParaTeste();
+  portasEnviados = undefined;
   _esquecerDecisoesParaTeste();
 });
 after(() => _esquecerOBancoParaTeste());
@@ -75,10 +78,15 @@ const pedido = (extra: Partial<PedidoDoConvite> = {}): PedidoDoConvite => ({
 });
 
 /** Portas de mentira que contam o que foi chamado. Padrão: tudo livre. */
+let portasEnviados: Set<string> | undefined;
+/** os leads que RECEBERAM o convite (a marca de «recebeu»): o robô de mentira grava aqui e a porta da Sofia lê daqui */
+const gate = (u: Unit, leadId = 777) => sofiaCaladaPeloConvite(u as never, leadId, { conviteEnviado: async (c) => !!portasEnviados?.has(c) });
+
 function portas(sobre: Partial<DepsDoConvite> & { leitura?: Partial<LeituraDoCartao> } = {}) {
   const { leitura, ...over } = sobre;
   const w = { jaConvidado: 0, soltou: 0, reivindicou: [] as string[], cartao: 0, equipe: 0, franquia: 0, enviou: [] as string[], simulou: [] as Array<Record<string, unknown>> };
   const reivindicadas = new Set<string>();
+  const enviados = (portasEnviados ??= new Set<string>());
   const deps: DepsDoConvite = {
     jaConvidado: async (c) => (w.jaConvidado++, reivindicadas.has(c)),
     reivindicar: async (c) => {
@@ -92,6 +100,7 @@ function portas(sobre: Partial<DepsDoConvite> & { leitura?: Partial<LeituraDoCar
     equipeJaFalou: async () => (w.equipe++, false),
     pacienteNaFranquia: async () => (w.franquia++, 'nao' as const),
     clinica: () => 'Doutor Hérnia Salto',
+    gravarEnviado: async (c) => (enviados.add(c), true),
     enviar: async (_u, _p, texto) => (w.enviou.push(texto), 'entregue'),
     simular: (_u, s) => void w.simulou.push(s as unknown as Record<string, unknown>),
     ...over,
@@ -130,13 +139,13 @@ test('número: normaliza o que o cadastro guarda; NUNCA completa nem inventa dí
   assert.equal(numeroDoWhatsapp('+55 11 99999-0000'), '5511999990000');
   assert.equal(numeroDoWhatsapp('5511999990000'), '5511999990000');
   assert.equal(numeroDoWhatsapp('11999990000'), '5511999990000');
-  assert.equal(numeroDoWhatsapp('559984064332'), '559984064332', '12 dígitos (fixo ou celular antigo) passa como está: não se acrescenta o 9');
+  assert.equal(numeroDoWhatsapp('551133334444'), '551133334444', '12 dígitos (fixo ou celular antigo) passa como está: não se acrescenta o 9');
   for (const ruim of ['', null, undefined, '12345', '98130015', '5599', 'sem número', '(00) 99999-9999']) assert.equal(numeroDoWhatsapp(ruim), null, String(ruim));
 });
 
 test('o número do canal vale; sem ele, o do outro canal; sem nenhum, null', () => {
-  assert.equal(numeroDaUnidade({ igWhatsappNumber: '(94) 98432-5883', fbWhatsappNumber: '(11) 91111-2222' }, 'Facebook'), '5511911112222');
-  assert.equal(numeroDaUnidade({ igWhatsappNumber: '(94) 98432-5883', fbWhatsappNumber: null }, 'Facebook'), '5594984325883');
+  assert.equal(numeroDaUnidade({ igWhatsappNumber: '(21) 98888-7777', fbWhatsappNumber: '(11) 91111-2222' }, 'Facebook'), '5511911112222');
+  assert.equal(numeroDaUnidade({ igWhatsappNumber: '(21) 98888-7777', fbWhatsappNumber: null }, 'Facebook'), '5521988887777');
   assert.equal(numeroDaUnidade({ igWhatsappNumber: null, fbWhatsappNumber: '' }, 'Instagram'), null);
   assert.equal(numeroDaUnidade(null, 'Instagram'), null);
 });
@@ -177,48 +186,125 @@ test('DESLIGADA: não lê o cartão, não consulta o banco, não envia, não gra
   assert.deepEqual({ ...w, enviou: w.enviou.length, simulou: w.simulou.length }, { jaConvidado: 0, soltou: 0, reivindicou: [], cartao: 0, equipe: 0, franquia: 0, enviou: 0, simulou: 0 });
 });
 
-test('DESLIGADA: a Sofia segue calada só pela chave própria (o robô não muda nada nela)', () => {
-  const u = { slug: SLUG, igWhatsappNumber: '(11) 99999-0000', ...ROTA };
-  assert.equal(sofiaSoWhatsappEfetivo(u), 'desligado');
-  assert.equal(conviteFalaNaUnidade(u), false);
+test('DESLIGADA: a Sofia segue calada só pela chave própria (o robô não muda nada nela)', async () => {
+  const u = unidade();
+  assert.equal(await gate(u), false);
+  assert.equal(await pacienteDeRedeSocialCalado(u as never, 3, { origem: async () => 'facebook', conviteEnviado: async () => true }), false, 'robô desligado: nem a marca de «recebeu» cala');
   _semearParaTeste([{ slug: SLUG, automacao: 'sofia-so-whatsapp', estado: 'seco' }]);
-  assert.equal(sofiaSoWhatsappEfetivo(u), 'seco', 'a chave própria vale como sempre');
+  assert.equal(sofiaSoWhatsappEstado(SLUG, undefined), 'seco', 'a chave própria vale como sempre');
   _semearParaTeste([{ slug: SLUG, automacao: 'sofia-so-whatsapp', estado: 'ligado' }]);
-  assert.equal(sofiaSoWhatsappEfetivo({ slug: SLUG }), 'ligado');
+  assert.equal(await pacienteDeRedeSocialCalado({ id: 'u1', slug: SLUG }, 3, { origem: async () => 'facebook' }), true, 'chave própria ligada: como sempre, sem olhar o robô');
 });
 
-// ── a Sofia e o robô não falam os dois ────────────────────────────────────────────────────────
+// ── a Sofia só se cala no lead que RECEBEU o convite ───────────────────────────────────────────
 
-test('robô LIGADO com número: a Sofia se cala no Instagram/Facebook (webhook e envios por iniciativa própria)', async () => {
+test('convite ENTREGUE: a Sofia se cala NESTE lead (webhook e escada/reativação/cutucada) e só nele', async () => {
   ligar('ligado');
-  const u = { id: 'u1', slug: SLUG, igWhatsappNumber: '(11) 99999-0000', ...ROTA };
-  assert.equal(sofiaSoWhatsappEstado(SLUG, undefined), 'desligado', 'a chave própria da Sofia não foi ligada');
-  assert.equal(sofiaSoWhatsappEfetivo(u), 'ligado');
-  assert.deepEqual(decidirCanal(sofiaSoWhatsappEfetivo(u), 'instagram_business'), { acao: 'calar', origem: 'instagram_business' });
-  assert.deepEqual(decidirCanal(sofiaSoWhatsappEfetivo(u), 'waba'), { acao: 'segue' }, 'WhatsApp nunca é calado');
-  assert.equal(await pacienteDeRedeSocialCalado(u, 3, { origem: async () => 'facebook' }), true, 'a escada/reativação/cutucada também não falam por cima');
+  const { w, deps } = portas();
+  assert.equal((await convidarParaWhatsapp(pedido(), deps)).tipo, 'enviou');
+  assert.equal(w.enviou.length, 1);
+  const u = unidade();
+  assert.equal(await gate(u, 777), true);
+  assert.equal(await gate(u, 778), false, 'outro lead da mesma unidade: a Sofia responde');
+  const dep = { origem: async () => 'instagram_business', conviteEnviado: async (c: string) => !!portasEnviados?.has(c) };
+  assert.equal(await pacienteDeRedeSocialCalado(u as never, 777, dep), true);
+  assert.equal(await pacienteDeRedeSocialCalado(u as never, 778, dep), false, 'a escada/reativação seguem valendo para o lead que nunca recebeu convite');
+  assert.equal(await cartaoDeRedeSocialCalado(u as never, 777, async () => [{ origin: 'facebook', is_in_work: true, updated_at: 1 }], { ...dep, origem: async () => null }), true);
+  assert.equal(await cartaoDeRedeSocialCalado(u as never, 778, async () => [{ origin: 'facebook', is_in_work: true, updated_at: 1 }], { ...dep, origem: async () => null }), false);
+  _esquecerOrigensParaTeste();
+  assert.equal(await pacienteDeRedeSocialCalado(u as never, 777, { ...dep, origem: async () => 'waba' }), false, 'WhatsApp nunca é calado');
+  assert.deepEqual(decidirCanal('ligado', 'waba'), { acao: 'segue' });
 });
 
-test('robô LIGADO mas SEM número cadastrado: a Sofia NÃO é calada (o lead não pode ficar sem ninguém)', async () => {
+/** A Sofia tem de RESPONDER (não é calada) quando o robô termina assim. */
+async function sofiaRespondeQuando(nome: string, deps: Partial<DepsDoConvite> & { leitura?: Partial<LeituraDoCartao> }, _esperado: string) {
   ligar('ligado');
-  const u = { id: 'u1', slug: SLUG, igWhatsappNumber: null, fbWhatsappNumber: ' ' };
-  assert.equal(sofiaSoWhatsappEfetivo(u), 'desligado');
-  assert.equal(await pacienteDeRedeSocialCalado(u, 3, { origem: async () => 'facebook' }), false);
+  _esquecerOrigensParaTeste();
+  _esquecerDecisoesParaTeste();
+  _esquecerFreiosParaTeste();
+  portasEnviados = undefined;
+  const { w, deps: d } = portas(deps);
+  const r = await convidarParaWhatsapp(pedido(), d);
+  assert.equal(r.tipo === 'enviou', false, `${nome}: não enviou`);
+  assert.equal(portasEnviados?.size ?? 0, 0, `${nome}: nenhuma marca de «recebeu»`);
+  void w;
+  assert.equal(await gate(unidade()), false, `${nome}: a Sofia responde`);
+  assert.equal(await pacienteDeRedeSocialCalado(unidade() as never, 777, { origem: async () => 'instagram_business', conviteEnviado: async (c) => !!portasEnviados?.has(c) }), false, `${nome}: a escada/reativação seguem valendo`);
+}
+
+test('a Sofia RESPONDE quando a leitura do cartão falha (429/403)', async () => {
+  await sofiaRespondeQuando('cartão', { cartao: async () => Promise.reject(new Error('403')) }, 'leitura');
 });
 
-test('robô LIGADO com número mas SEM Salesbot (ou em modo bypass): a Sofia NÃO é calada — o convite não sairia', () => {
-  ligar('ligado');
-  const base = { slug: SLUG, igWhatsappNumber: '(11) 99999-0000' };
-  assert.equal(sofiaSoWhatsappEfetivo({ ...base, ...ROTA }), 'ligado');
-  assert.equal(sofiaSoWhatsappEfetivo({ ...base, ...ROTA, kommoSalesbotId: null }), 'desligado');
-  assert.equal(sofiaSoWhatsappEfetivo({ ...base, ...ROTA, kommoReplyFieldId: null }), 'desligado');
-  assert.equal(sofiaSoWhatsappEfetivo({ ...base, ...ROTA, kommoBypassSalesbot: true }), 'desligado');
-  assert.equal(sofiaSoWhatsappEfetivo(base), 'desligado', 'objeto sem os campos (select estreito): não cala');
+test('a Sofia RESPONDE quando a franquia não respondeu (nao-sei)', async () => {
+  await sofiaRespondeQuando('franquia', { leitura: { telefone: '+5511988887777' }, pacienteNaFranquia: async () => 'nao-sei' }, 'nao-sei');
 });
 
-test('robô em SECO: não cala a Sofia (ninguém fala no lugar dela ainda)', () => {
+test('a Sofia RESPONDE quando o envio dá erro (não sabemos se saiu: a marca de «uma vez» fica, a de «recebeu» não existe)', async () => {
+  await sofiaRespondeQuando('erro de envio', { enviar: async () => Promise.reject(new Error('timeout')) }, 'erro');
+});
+
+test('a Sofia RESPONDE quando o envio virou nota no cartão', async () => {
+  await sofiaRespondeQuando('virou nota', { enviar: async () => 'virou-nota' }, 'nota');
+});
+
+test('a Sofia RESPONDE quando a equipe já falou, o cartão está pausado ou o robô não convidou por qualquer motivo', async () => {
+  await sofiaRespondeQuando('equipe', { equipeJaFalou: async () => true }, 'equipe');
+  await sofiaRespondeQuando('pausado', { leitura: { pausado: true } }, 'pausado');
+});
+
+test('a Sofia RESPONDE na passagem do SECO para o LIGADO: o seco não deixa marca de «recebeu» e o convite sai na mensagem seguinte', async () => {
   ligar('seco');
-  assert.equal(sofiaSoWhatsappEfetivo({ slug: SLUG, igWhatsappNumber: '(11) 99999-0000', ...ROTA }), 'desligado');
+  const { w, deps } = portas();
+  assert.equal((await convidarParaWhatsapp(pedido(), deps)).tipo, 'seco');
+  assert.equal(await gate(unidade()), false);
+  ligar('ligado');
+  // a memória do seco não segura o convite: o ligado decide de novo (e a Sofia responde até o convite ser entregue)
+  assert.equal((await convidarParaWhatsapp(pedido(), deps)).tipo, 'enviou');
+  assert.equal(w.enviou.length, 1);
+  assert.equal(await gate(unidade()), true);
+});
+
+test('robô ligado mas a marca existe e a chave foi DESLIGADA depois: a Sofia volta a responder', async () => {
+  ligar('ligado');
+  const { deps } = portas();
+  await convidarParaWhatsapp(pedido(), deps);
+  assert.equal(await gate(unidade()), true);
+  _semearParaTeste([]);
+  assert.equal(await gate(unidade()), false);
+});
+
+test('robô LIGADO mas SEM número, SEM Salesbot ou em modo bypass: a Sofia NÃO é calada mesmo com a marca (o convite não sairia)', async () => {
+  ligar('ligado');
+  portasEnviados = new Set([chaveDoConvite(unidade(), 777)]);
+  assert.equal(await gate(unidade()), true);
+  assert.equal(await gate(unidade({ igWhatsappNumber: null })), false);
+  assert.equal(await gate(unidade({ kommoSalesbotId: null })), false);
+  assert.equal(await gate(unidade({ kommoReplyFieldId: null })), false);
+  assert.equal(await gate(unidade({ kommoBypassSalesbot: true })), false);
+});
+
+test('o primeiro turno do lead ESPERA o robô que decide agora: com convite entregue a Sofia se cala; se o envio falhar, ela responde', async () => {
+  ligar('ligado');
+  let solta!: () => void;
+  const trava = new Promise<void>((ok) => (solta = ok));
+  const { deps } = portas({ enviar: async () => (await trava, 'entregue') });
+  const robo = convidarParaWhatsapp(pedido(), deps);
+  const sofia = gate(unidade());
+  solta();
+  await robo;
+  assert.equal(await sofia, true, 'esperou o desfecho e viu o «recebeu»');
+  _esquecerDecisoesParaTeste();
+  _esquecerFreiosParaTeste();
+  portasEnviados = undefined;
+  let solta2!: () => void;
+  const trava2 = new Promise<void>((ok) => (solta2 = ok));
+  const b = portas({ enviar: async () => (await trava2, Promise.reject(new Error('timeout'))) });
+  const robo2 = convidarParaWhatsapp(pedido({ leadId: 778 }), b.deps);
+  const sofia2 = gate(unidade(), 778);
+  solta2();
+  await robo2;
+  assert.equal(await sofia2, false);
 });
 
 // ── SECO ──────────────────────────────────────────────────────────────────────────────────────
@@ -497,7 +583,7 @@ test('fiação: o webhook do Kommo chama o robô e a porta da Sofia usa o estado
   const src = readFileSync(new URL('../controllers/webhook.controller.ts', import.meta.url), 'utf8');
   assert.match(src, /import \{ convidarParaWhatsapp \} from '\.\.\/lib\/convite-whatsapp\.js'/);
   assert.match(src, /void convidarParaWhatsapp\(\{[\s\S]{0,400}origem: ctx\.origem,[\s\S]{0,200}tipoDaMensagem: ctx\.tipoDaMensagem/);
-  assert.match(src, /estado: sofiaSoWhatsappEfetivo\(unit\)/);
+  assert.match(src, /\(await sofiaCaladaPeloConvite\(unit, leadId\)\) \? 'ligado' : sofiaSoWhatsappEstado\(unit\.slug\)/);
   assert.match(src, /message_type: z\.string\(\)\.optional\(\)/);
 });
 
@@ -506,4 +592,56 @@ test('o nome da clínica no texto: o da unidade quando já diz «Doutor Hérnia 
   assert.equal(nomeDaClinicaDaUnidade({ slug: 'doutor-hernia-canaa', name: 'Doutor Hérnia Canaã' }), 'Doutor Hérnia Canaã');
   assert.equal(nomeDaClinicaDaUnidade({ slug: 'doutor-hernia-imperatriz', name: 'Comercial' }), 'Doutor Hérnia Imperatriz');
   assert.equal(nomeDaClinicaDaUnidade({ slug: 'balsas-resgate', name: 'Resgate · Balsas' }), 'Doutor Hérnia Balsas');
+});
+
+// ── a leitura do cartão: erro de leitura NUNCA vira «sem telefone» nem «não pausado» ───────────────────
+
+const esquemaVazio = { nomeDoStatus: () => null, pipelineDoStatus: () => null, nomeDoFunil: () => null } as never;
+function fontes(sobre: Partial<Omit<FontesDoCartao, 'kommo'>> & { kommo?: Record<string, unknown> } = {}): FontesDoCartao {
+  const { kommo: troca, ...resto } = sobre;
+  const kommo = { getLead: async () => ({ id: 777, status_id: 1, pipeline_id: 2 }), isLeadFieldChecked: async () => false, getContactPhoneOuErro: async () => null, ...(troca ?? {}) };
+  return { kommo: () => kommo as never, esquema: async () => esquemaVazio, globais: async () => new Set(), janelaDoLead: async () => null, temIdClient: async () => false, ...resto };
+}
+const unidadeComCampo = () => unidade({ kommoPausedFieldId: 55 } as Partial<Unit>);
+
+test('leitura do cartão: sem erro, devolve o que o Kommo diz (pausa, telefone)', async () => {
+  const f = fontes({ kommo: { isLeadFieldChecked: async () => true, getContactPhoneOuErro: async () => '+5511988887777' } });
+  assert.deepEqual(await lerCartao(unidadeComCampo(), 777, '5', f), { pausado: true, etapaPermite: true, temIdClient: false, telefone: '+5511988887777' });
+  assert.equal((await lerCartao(unidadeComCampo(), 777, null, fontes({ janelaDoLead: async () => ({ ate: new Date(Date.now() + 3600_000) }) }))).pausado, true, 'pausa com data do lead');
+});
+
+test('FALHA FECHADA: o Kommo errou ao ler o TELEFONE do contato (429) — a leitura LANÇA, não vira «contato sem telefone» (e o robô não convida um paciente)', async () => {
+  const f = fontes({ kommo: { getContactPhoneOuErro: async () => Promise.reject(new Error('429')) } });
+  await assert.rejects(() => lerCartao(unidadeComCampo(), 777, '5', f), /429/);
+  ligar('ligado');
+  const { w, deps } = portas({ cartao: (u, l, c) => lerCartao(u, l, c, f) });
+  const r = await convidarParaWhatsapp(pedido(), deps);
+  assert.equal((r as { motivo: string }).motivo, 'nao-consegui-conferir');
+  assert.equal(w.enviou.length, 0);
+});
+
+test('FALHA FECHADA: o Kommo errou ao ler «Pausar IA» (429) — a leitura LANÇA, não vira «não pausado» (o convite não sai com a caixinha marcada)', async () => {
+  const f = fontes({ kommo: { isLeadFieldChecked: async () => Promise.reject(new Error('429')) } });
+  await assert.rejects(() => lerCartao(unidadeComCampo(), 777, '5', f), /429/);
+  ligar('ligado');
+  const { w, deps } = portas({ cartao: (u, l, c) => lerCartao(u, l, c, f) });
+  assert.equal(((await convidarParaWhatsapp(pedido({ unit: unidadeComCampo() }), deps)) as { motivo: string }).motivo, 'nao-consegui-conferir');
+  assert.equal(w.enviou.length, 0);
+});
+
+test('FALHA FECHADA: o banco errou ao ler a pausa com data do lead — não convida', async () => {
+  await assert.rejects(() => lerCartao(unidadeComCampo(), 777, null, fontes({ janelaDoLead: async () => Promise.reject(new Error('banco fora')) })), /banco fora/);
+});
+
+test('o telefone do contato: getContactPhoneOuErro LANÇA no erro de rede, getContactPhone (o de sempre) devolve null — a diferença que o robô precisa', async () => {
+  const { KommoClient } = await import('../services/kommo.service.js');
+  const falha = { get: async () => Promise.reject(new Error('Request failed with status code 429')) };
+  const k = new (KommoClient as unknown as new (c: unknown, h: unknown) => InstanceType<typeof KommoClient>)({ slug: 'x', subdomain: 'x', accessToken: 'x' }, falha);
+  assert.equal(await k.getContactPhone(5), null);
+  await assert.rejects(() => k.getContactPhoneOuErro(5));
+  const ok = { get: async () => ({ data: { custom_fields_values: [{ field_code: 'PHONE', values: [{ value: ' +5511988887777 ' }] }] } }) };
+  const k2 = new (KommoClient as unknown as new (c: unknown, h: unknown) => InstanceType<typeof KommoClient>)({ slug: 'x', subdomain: 'x', accessToken: 'x' }, ok);
+  assert.equal(await k2.getContactPhoneOuErro(5), '+5511988887777');
+  const semTel = { get: async () => ({ data: { custom_fields_values: [] } }) };
+  assert.equal(await new (KommoClient as unknown as new (c: unknown, h: unknown) => InstanceType<typeof KommoClient>)({ slug: 'x', subdomain: 'x', accessToken: 'x' }, semTel).getContactPhoneOuErro(5), null, 'sem telefone de verdade = null, sem erro');
 });

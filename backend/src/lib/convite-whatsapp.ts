@@ -19,20 +19,26 @@
  * FALHA FECHADA: qualquer leitura que não deu (Kommo, banco) = não convida. Convite perdido custa pouco; convite a paciente custa caro.
  *
  * «Uma vez»: a reivindicação em `message_claims` (INSERT atômico, vale 7 dias) vai ANTES do envio; quem perde a corrida não envia. Falha DEPOIS
- * de partir o pedido não solta a marca (pode ter saído); falha certa de que nada saiu (a mensagem virou nota no cartão) também fica — repetir
- * empilharia uma nota a cada mensagem do lead. Em «seco» a marca NÃO é gravada (ligar depois convida normalmente).
+ * de partir o pedido (exceção, timeout) não solta a marca (pode ter saído). Já a falha em que SABEMOS que nada saiu (a mensagem virou nota no
+ * cartão) DEVOLVE a marca — o lead não pode ficar 7 dias sem ninguém — com um freio de 30 min para não empilhar nota a cada mensagem. Em «seco» a
+ * marca NÃO é gravada (ligar depois convida normalmente).
+ *
+ * A SOFIA só se cala nos leads que RECEBERAM o convite: a 2ª marca («recebeu», `convite-whatsapp-marca.ts`) é gravada SÓ depois da entrega confirmada.
+ * Leitura que falhou, franquia que não respondeu, 403, erro de envio, envio que virou nota e a passagem do seco para o ligado não deixam essa marca:
+ * nesses casos a Sofia responde normalmente (e a escada e a reativação continuam valendo para esse lead). Enquanto o robô decide um lead, a Sofia espera o desfecho.
  */
 import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { emPausa } from './pausa-unidade.js';
 import { liberarClaim, reivindicarComCerteza } from './dedup-cache.js';
+import { chaveDoConvite, gravarEnviado, jaConvidado, registrarEmAndamento } from './convite-whatsapp-marca.js';
+import { pausaDoLeadAtiva } from './pausa-lead-regras.js';
 import { registrarSimulacao, type Simulacao } from './so-no-papel.js';
-import { createKommoClient, isLeadPaused, type KommoClient } from '../services/kommo.service.js';
-import { leadPausadoPorJanela } from './pausa-lead.js';
+import { createKommoClient, type KommoClient } from '../services/kommo.service.js';
 import { etapaPermitida, precisaDoFunil, type FunisDaConta } from './etapa-permitida.js';
 import { etapaCalada } from './sofia-calada.js';
-import { esquemaDaUnidade } from './kommo-schema.js';
+import { esquemaDaUnidade, type EsquemaKommo } from './kommo-schema.js';
 import { getPausedStagesGlobalSet } from '../services/actions.service.js';
 import { falasHumanasDaEquipe } from './pausa-equipe.js';
 import { mensagensOficiaisDaUnidade } from '../services/kommo-talks.service.js';
@@ -72,7 +78,7 @@ export type Desfecho =
   /** esta conversa já foi decidida na última hora (a tela e o log já mostram) */
   | { tipo: 'ja-decidido' }
   | { tipo: 'enviou'; texto: string; canal: CanalDoConvite }
-  /** o pedido de envio falhou/virou nota: a marca fica (não repete) e o log diz */
+  /** o pedido de envio falhou ou virou nota (erro sem saber: a marca fica; virou nota: a marca foi devolvida) — e o log diz */
   | { tipo: 'falhou'; detalhe: string };
 
 export interface PedidoDoConvite {
@@ -114,13 +120,12 @@ export interface DepsDoConvite {
   /** «Doutor Hérnia Salto»: como a clínica se chama (o nome da unidade quando já diz; senão a cidade do mapa do ⌂ Unidade). */
   clinica(unit: Unit): string;
   enviar(unit: Unit, p: PedidoDoConvite, texto: string): Promise<'entregue' | 'virou-nota'>;
+  /** grava «o lead RECEBEU o convite» (a Sofia se cala NESTE lead). Só depois da entrega confirmada. `false` = não gravou (a Sofia segue respondendo). */
+  gravarEnviado(chave: string): Promise<boolean>;
   simular(unit: Pick<Unit, 'id' | 'slug'>, s: Simulacao): void;
 }
 
-/** A chave da conversa: por CONTA do Kommo (o lead 123 de uma conta não é o de outra; resgate e comercial dividem a conta e o cartão). */
-export function chaveDoConvite(unit: Pick<Unit, 'id' | 'kommoSubdomain'>, leadId: number): string {
-  return `convite-whatsapp:${unit.kommoSubdomain || unit.id}:${leadId}`;
-}
+export { chaveDoConvite };
 
 const FREIO_DEPOIS_DE_FALHA_MS = 30 * 60_000;
 const freios = new Map<string, number>();
@@ -166,7 +171,14 @@ const ROTULO: Record<MotivoDoConvite, string> = {
 /**
  * O robô. Nunca lança. `desligado` = nenhuma leitura, nenhuma consulta (o custo da chave desligada é o de uma comparação).
  */
-export async function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvite = DEPS_PADRAO): Promise<Desfecho> {
+export function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvite = DEPS_PADRAO): Promise<Desfecho> {
+  const trabalho = decidir(p, deps);
+  // a Sofia (webhook e workers) espera o desfecho deste lead antes de decidir se fala: quem está sendo decidido agora fica registrado
+  if (p.isChatMessage && canalDoConvite(p.origem) && conviteWhatsappEstado(p.unit.slug) === 'ligado') registrarEmAndamento(chaveDoConvite(p.unit, p.leadId), trabalho);
+  return trabalho;
+}
+
+async function decidir(p: PedidoDoConvite, deps: DepsDoConvite): Promise<Desfecho> {
   const { unit, leadId } = p;
   const estado = conviteWhatsappEstado(unit.slug);
   if (estado === 'desligado') return { tipo: 'desligado' };
@@ -176,10 +188,12 @@ export async function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvi
   const chave = chaveDoConvite(unit, leadId);
   const agoraMs = () => deps.agora?.().getTime() ?? Date.now();
   // uma decisão por conversa por hora: o «não» definitivo (equipe já falou, paciente…) e o «mandaria» do seco não repetem as leituras do Kommo a cada mensagem do lead
-  if (decididoRecentemente(chave, agoraMs())) return { tipo: 'ja-decidido' };
+  // a memória é POR MODO: o «mandaria» do seco não pode segurar o convite por 1 h depois de ligar a chave
+  const memoria = seco ? `${chave}#seco` : chave;
+  if (decididoRecentemente(memoria, agoraMs())) return { tipo: 'ja-decidido' };
 
   const nao = (motivo: MotivoDoConvite, detalhe?: string): Desfecho => {
-    if (DEFINITIVOS_DEPOIS_DAS_LEITURAS.has(motivo)) lembrarDecisao(chave, agoraMs());
+    if (DEFINITIVOS_DEPOIS_DAS_LEITURAS.has(motivo)) lembrarDecisao(memoria, agoraMs());
     logger.info({ unit: unit.slug, leadId, canal, motivo, detalhe }, `convite-whatsapp${seco ? ' (seco)' : ''}: não convida — ${ROTULO[motivo]}`);
     if (seco) deps.simular(unit, { leadId, acao: 'pularia', alvo: 'mensagem', motivo: `${ROTULO[motivo]}${detalhe ? ` (${detalhe})` : ''}`.slice(0, 480) });
     return { tipo: 'ignorou', motivo, detalhe };
@@ -213,7 +227,7 @@ export async function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvi
     if (seco) {
       logger.info({ unit: unit.slug, leadId, canal, texto }, 'convite-whatsapp (seco): mandaria o convite — nada foi enviado');
       deps.simular(unit, { leadId, acao: 'mandaria', alvo: 'mensagem', valor: texto, motivo: `convite ao WhatsApp (${canal})` });
-      lembrarDecisao(chave, agoraMs());
+      lembrarDecisao(memoria, agoraMs());
       return { tipo: 'seco', texto, canal };
     }
 
@@ -241,6 +255,8 @@ export async function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvi
       logger.error({ unit: unit.slug, leadId, chave }, 'convite-whatsapp: a mensagem virou NOTA no cartão — o lead NÃO recebeu; a marca foi devolvida e o robô tenta de novo em 30 min, na próxima mensagem do lead');
       return { tipo: 'falhou', detalhe: 'virou nota no cartão' };
     }
+    // entrega CONFIRMADA: só agora a Sofia passa a se calar neste lead
+    await deps.gravarEnviado(chave);
     logger.info({ unit: unit.slug, leadId, canal }, 'convite-whatsapp: convite enviado');
     return { tipo: 'enviou', texto, canal };
   } catch (err) {
@@ -251,18 +267,39 @@ export async function convidarParaWhatsapp(p: PedidoDoConvite, deps: DepsDoConvi
 
 // ── as portas reais ────────────────────────────────────────────────────────────────────────────
 
-async function lerCartao(unit: Unit, leadId: number, contactId: string | null): Promise<LeituraDoCartao> {
-  const kommo = createKommoClient(unit);
+/** De onde o robô lê o cartão (as fontes reais; o teste troca). TODAS lançam quando a leitura não deu. */
+export interface FontesDoCartao {
+  kommo(unit: Unit): Pick<KommoClient, 'getLead' | 'isLeadFieldChecked' | 'getContactPhoneOuErro'>;
+  esquema(unit: Unit): Promise<EsquemaKommo>;
+  globais(): Promise<ReadonlySet<string>>;
+  janelaDoLead(unitId: string, leadId: number): Promise<{ ate: Date } | null>;
+  temIdClient(unitId: string, leadId: number): Promise<boolean>;
+}
+
+const FONTES_REAIS: FontesDoCartao = {
+  kommo: (unit) => createKommoClient(unit),
+  esquema: (unit) => esquemaDaUnidade(unit, createKommoClient(unit)),
+  globais: () => getPausedStagesGlobalSet(),
+  janelaDoLead: (unitId, leadId) => prisma.leadPausa.findUnique({ where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } }, select: { ate: true } }),
+  temIdClient: async (unitId, leadId) => !!(await prisma.spineLeadLink.findFirst({ where: { unitId, kommoLeadId: leadId, spineIdClient: { not: null } }, select: { id: true } })),
+};
+
+export async function lerCartao(unit: Unit, leadId: number, contactId: string | null, f: FontesDoCartao = FONTES_REAIS): Promise<LeituraDoCartao> {
+  const kommo = f.kommo(unit);
   const lead = await kommo.getLead(leadId);
-  const pausado = (await isLeadPaused(unit, leadId)) || (await leadPausadoPorJanela(unit.id, leadId));
+  // FALHA FECHADA: as duas leituras LANÇAM se não deram (`isLeadPaused`/`leadPausadoPorJanela` devolvem «não pausado» no erro — para o robô isso mandaria o convite
+  // com «Pausar IA» marcado, só porque o Kommo respondeu 429)
+  const caixinha = unit.kommoPausedFieldId ? await kommo.isLeadFieldChecked(leadId, unit.kommoPausedFieldId) : false;
+  const janela = pausaDoLeadAtiva(await f.janelaDoLead(unit.id, leadId));
+  const pausado = caixinha || janela;
   const sid = lead.status_id;
   const pid = lead.pipeline_id;
 
   // as mesmas conferências de etapa da Sofia (allowlist, regra global de etapa, GANHO/ALTA/cancelado)
   let etapaPermite = true;
   const permitidas = unit.kommoAllowedStatusIds ?? [];
-  const globais = await getPausedStagesGlobalSet();
-  const esquema = await esquemaDaUnidade(unit, kommo); // lança se a conta não abriu: quem chama não convida
+  const globais = await f.globais();
+  const esquema = await f.esquema(unit); // lança se a conta não abriu: quem chama não convida
   const funis: FunisDaConta | null = precisaDoFunil(permitidas, sid) ? esquema : null;
   if (permitidas.length > 0 && !etapaPermitida(permitidas, sid, pid, funis)) etapaPermite = false;
   if (sid && (globais.has(`*:${sid}`) || (pid && globais.has(`${pid}:${sid}`)))) etapaPermite = false;
@@ -271,10 +308,10 @@ async function lerCartao(unit: Unit, leadId: number, contactId: string | null): 
     if (etapaCalada(posicao?.status ?? null, { statusId: sid, pipeline: posicao?.pipeline ?? null })) etapaPermite = false;
   }
 
-  const temIdClient = !!(await prisma.spineLeadLink.findFirst({ where: { unitId: unit.id, kommoLeadId: leadId, spineIdClient: { not: null } }, select: { id: true } }));
+  const temIdClient = await f.temIdClient(unit.id, leadId);
   const idContato = contactId && Number.isFinite(Number(contactId)) ? Number(contactId) : null;
   // falha ao ler o telefone NÃO vira «contato sem telefone»: lança, e quem chama não convida
-  const telefone = idContato ? await kommo.getContactPhone(idContato) : null;
+  const telefone = idContato ? await kommo.getContactPhoneOuErro(idContato) : null;
   return { pausado, etapaPermite, temIdClient, telefone };
 }
 
@@ -312,11 +349,9 @@ export async function telefoneNaFranquia(unit: Unit, telefone: string): Promise<
 }
 
 export const DEPS_PADRAO: DepsDoConvite = {
-  async jaConvidado(chave) {
-    const linha = await prisma.messageClaim.findUnique({ where: { key: chave }, select: { expiresAt: true } });
-    return !!linha && linha.expiresAt.getTime() > Date.now();
-  },
+  jaConvidado,
   reivindicar: (chave) => reivindicarComCerteza('convite-whatsapp', chave.slice('convite-whatsapp:'.length), VALIDADE_DO_CONVITE_MS),
+  gravarEnviado,
   soltar: (chave) => liberarClaim('convite-whatsapp', chave.slice('convite-whatsapp:'.length)),
   cartao: lerCartao,
   async equipeJaFalou(unit, leadId) {

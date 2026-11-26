@@ -92,7 +92,7 @@ import { portaPerdidoReabre } from '../lib/perdido-reabre.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
 import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
-import { portaDoCanal, sofiaSoWhatsappEfetivo } from '../lib/sofia-so-whatsapp.js';
+import { origemDeRedeSocial, portaDoCanal, sofiaCaladaPeloConvite, sofiaSoWhatsappEstado } from '../lib/sofia-so-whatsapp.js';
 import { convidarParaWhatsapp } from '../lib/convite-whatsapp.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
@@ -1489,8 +1489,9 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         slug: unit.slug,
         leadId,
         origem: args.origem,
-        // a chave própria OU o robô «convite ao WhatsApp» ligado nesta unidade (com número): onde ele fala, a Sofia não fala no Instagram/Facebook
-        estado: sofiaSoWhatsappEfetivo(unit),
+        // a chave própria OU o robô «convite ao WhatsApp» ter CONVIDADO ESTE lead (marca de «recebeu», depois de esperar o robô que decide agora): só neste lead a Sofia
+        // não fala. Robô que falhou, não quis convidar ou está em seco = a Sofia responde.
+        estado: origemDeRedeSocial(args.origem) && (await sofiaCaladaPeloConvite(unit, leadId)) ? 'ligado' : sofiaSoWhatsappEstado(unit.slug),
         latenciaMs: () => Math.round(performance.now() - requestStart),
       },
       {
