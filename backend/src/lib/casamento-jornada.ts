@@ -25,7 +25,7 @@
 import { SPINE_STATUS, type SpineSchedule } from '../services/spine.service.js';
 import type { KommoLead } from '../services/kommo.service.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { chaveTelefone, ehAvaliacao, ehConsulta, nomeDaFranquia, nomeParaBusca, normalizar } from './franquia-sync.js';
+import { chaveTelefone, ehAvaliacao, ehConsulta, ehSessao, nomeDaFranquia, nomeParaBusca, normalizar } from './franquia-sync.js';
 import { normalizarNome } from './kommo-schema.js';
 
 export const ID_AUTOMACAO = 'casamento-jornada';
@@ -242,10 +242,6 @@ function epochDe(s: Pick<SpineSchedule, 'dateAttendanceUtc'>): number | null {
   if (!s.dateAttendanceUtc) return null;
   const t = Math.floor(Date.parse(s.dateAttendanceUtc) / 1000);
   return Number.isFinite(t) ? t : null;
-}
-
-function ehSessao(s: Pick<SpineSchedule, 'categoryName'>): boolean {
-  return !!normalizar(s.categoryName) && !ehConsulta(s);
 }
 
 export type TipoDeFalta = 'sessão' | 'retorno';
