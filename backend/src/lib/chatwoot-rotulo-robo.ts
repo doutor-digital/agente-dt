@@ -106,6 +106,7 @@ const ROTULO_JS = String.raw`(function(){
     if (conector && (quem === 'user' || quem === '')) {
       if (ca.demora_espera) return { t: 'auto' };
       if (ca.dd_sofia) return { t: 'sofia' };
+      if (ca.convite_whatsapp) return { t: 'auto' }; // o convite ao WhatsApp (robô, chatwoot-convite-whatsapp.ts): «🤖 Robô · mensagem automática»
       if (tp && typeof tp === 'object') return { t: 'robo' };
       var nc = nomeDe(s); return nc ? { t: 'gente', nome: /^[A-Za-zÀ-ÿ0-9]/.test(nc) ? '👤 ' + nc : nc } : null; // sem marca: o nome dele, sem adivinhar
     }
