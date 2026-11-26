@@ -55,6 +55,7 @@ import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
+import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -99,10 +100,21 @@ export function motivoDeNaoResponder(c: ConversaLida): string | null {
  * tem consulta de pé ou já passou por ela (`ETAPAS_PROTEGIDAS`) fica na etapa em que está — a etiqueta e a nota avisam a equipe, e a
  * etiqueta cala a Sofia. Devolve a etapa em que a conversa ficou. LANÇA se o Chatwoot falhar.
  */
-export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { conversa: number; etapa: string; motivo: string }): Promise<string> {
+export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: {
+    conversa: number;
+    etapa: string;
+    motivo: string;
+    /**
+     * a linha «Resumo: …» (chatwoot-resumo-passagem.ts) que vai no fim da nota. Em função: recebe os atributos da conversa como estão AGORA (a leitura que esta
+     * passagem já faz) — se a Sofia cancelou ou remarcou nesta rodada, os que a rodada leu no começo estão velhos e a nota mostraria consulta que não existe mais.
+     */
+    resumo?: string | null | ((atributosDeAgora: Record<string, unknown>) => string | null);
+  },
+): Promise<string> {
   let etapa = a.etapa;
   // já passada antes (etiqueta no lugar): a nota repete, mas a MENÇÃO não — a pessoa não é chamada duas vezes pela mesma passagem
-  const jaPassada = !!(await chat.conversa(a.conversa).catch(() => null))?.etiquetas.includes(ETIQUETA_HUMANO);
+  const deAgora = await chat.conversa(a.conversa).catch(() => null);
+  const jaPassada = !!deAgora?.etiquetas.includes(ETIQUETA_HUMANO);
   await chat.adicionarEtiquetas(a.conversa, [ETIQUETA_HUMANO]);
   if (!ETAPAS_PROTEGIDAS.has(etapa) && (await chat.valoresDoAtributo('etapa')).includes('Esperando humano')) {
     await chat.gravarAtributos(a.conversa, { etapa: 'Esperando humano' });
@@ -112,7 +124,16 @@ export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { con
   // com a conversa já ABERTA desde a 1ª mensagem o Chatwoot não avisa ninguém na passagem: a menção na nota privada avisa quem está com a
   // conversa (rodízio) ou, sem dono, a gerente da caixa. Falhar em achar a pessoa cai na nota de sempre.
   const destino = jaPassada || !chat.destinoDaPassagem ? null : await chat.destinoDaPassagem(a.conversa).catch(() => null);
-  await chat.nota(a.conversa, destino ? notaComMencao(destino, `🙋 A Sofia passou esta conversa para você: ${motivo}`) : `🙋 Sofia passou esta conversa para a equipe: ${motivo}`);
+  // sem a leitura de agora (o Chatwoot falhou) a consulta e a qualificação ficam de fora: melhor calar que mostrar o que a rodada já mudou
+  let linha: string | null | undefined;
+  if (typeof a.resumo === 'function' && !deAgora) logger.warn({ conversa: a.conversa }, 'chatwoot-sofia: não consegui reler a conversa para o resumo da passagem — a nota sai sem consulta nem qualificação');
+  try {
+    linha = typeof a.resumo === 'function' ? a.resumo(deAgora?.attrs ?? {}) : a.resumo;
+  } catch {
+    linha = null; // o resumo é enfeite: nunca impede a passagem
+  }
+  const resumo = linha?.trim() ? `\n${linha.trim()}` : '';
+  await chat.nota(a.conversa, destino ? notaComMencao(destino, `🙋 A Sofia passou esta conversa para você: ${motivo}${resumo}`) : `🙋 Sofia passou esta conversa para a equipe: ${motivo}${resumo}`);
   return etapa;
 }
 
@@ -225,6 +246,10 @@ export interface PedidoDasFerramentas {
   estado: EstadoDaRodada;
   onCall: (a: SandboxAction) => void;
   deps?: DepsDasFerramentas;
+  /** o que a Sofia leu da conversa (as falas): alimenta o «Resumo» da nota de passagem; os atributos o resumo lê de AGORA, na hora de passar */
+  falas?: readonly Fala[];
+  /** o relógio (só o teste fixa): a data de hoje na unidade decide se a consulta do atributo ainda vale no resumo */
+  agora?: () => Date;
 }
 
 const sem = (args: unknown): Record<string, unknown> => {
@@ -250,7 +275,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       return true;
     }
     try {
-      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo });
+      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: (atributosDeAgora) => resumoDaPassagem({ attrs: atributosDeAgora, falas: p.falas, hoje: hojeDaUnidade(unit, p.agora?.()) }) });
       passou();
       return true;
     } catch (err) {
@@ -502,6 +527,8 @@ export interface PedidoDaSofia {
   modo: ModoDaSofia;
   lida: ConversaLida;
   chat: PortaDoChatwoot;
+  /** o relógio (só o teste fixa): a data de hoje na unidade decide se a consulta ainda vale no «Resumo» da passagem */
+  agora?: () => Date;
 }
 
 export interface ResultadoDaSofia {
@@ -539,6 +566,8 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
         chat: p.chat,
         recorder,
         estado,
+        falas: p.falas,
+        agora: p.agora,
         onCall: (a) => {
           feitas.push(a);
           onCall(a);
