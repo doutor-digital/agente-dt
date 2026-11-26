@@ -1276,6 +1276,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/chatwoot-sofia-parou.ts',
   },
   {
+    id: 'chatwoot-sofia-resgate',
+    chave: 'CHATWOOT_SOFIA_RESGATE_SLUGS',
+    nome: 'Sofia do CRM atende como resgate quem volta de «Perdido»',
+    oQueFaz:
+      'Quando a conversa está em «Perdido» e o paciente volta a escrever, a Sofia recebe na PRIMEIRA rodada o aviso de que ele foi dado como perdido e voltou (não recomeça do zero), e DEPOIS de a resposta sair a conversa passa de «Perdido» para «Resgate» (só se ninguém mexeu na etapa e a conta tem «Resgate»). Se ele recusa de vez («não quero mais», «pare de me mandar»), fica em «Perdido»; quem a Sofia pôs em «Resgate» e recusa volta para «Perdido» com a etiqueta sem-follow-up (a régua não manda as de 48/96/120 h). Fora do resgate: motivos mortos da casa (outra cidade, clicou por engano, outra patologia, plano de saúde, sem interesse, bandeira vermelha…), os da equipe (lead morto, cancelamento de tratamento, currículo, fornecedor, não perturbar) e luto.',
+    pegadinha:
+      'NASCE EM «SÓ NO PAPEL»: não muda o prompt da Sofia nem a etapa de ninguém — só anota na tela «moveria Perdido → Resgate» (e a volta). Ligar muda o que a Sofia diz ao paciente que volta, por isso é a Doutor Digital que liga (console), depois de ler o seco. A marca «resgate da Sofia» fica num atributo oculto da conversa (`resgate_da_sofia`) e só vale enquanto a etapa for «Resgate»; toda gravação de etapa pelo servidor (porta do Chatwoot, varredura da agenda) a limpa na mesma gravação. LIMITE: a mudança de etapa FEITA PELA EQUIPE à mão no Chatwoot NÃO limpa a marca na hora (o Chatwoot não avisa); ela sai na próxima mensagem do paciente — se a equipe devolver a conversa a «Resgate» antes disso, a marca ainda vale e a Sofia a trata como resgate dela. «Resgate» não tem saída automática (a régua não o trata): é decisão do João. CHATWOOT_SOFIA_RESGATE=0 desliga em todas sem deploy.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/chatwoot-sofia.ts',
+  },
+  {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
     nome: 'Agenda da franquia no CRM',
