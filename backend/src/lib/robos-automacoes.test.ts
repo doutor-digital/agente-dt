@@ -52,8 +52,8 @@ test('a lista: grupos na ordem, as seis chatwoot-*, os comportamentos da Sofia d
   // toda automação chatwoot-* do catálogo aparece (nenhuma nova fica de fora)
   // (as ÚNICAS de fora de propósito: o disparo em massa e as tarefas que mandam mensagem sozinhas só a Doutor Digital liga, pelo console — a clínica não as liga pela tela)
   // e as duas que mandam mensagem sozinhas NÃO aparecem na tela da clínica
-  assert.ok(!ids.includes('chatwoot-tarefas') && !ids.includes('chatwoot-disparo') && !ids.includes('chatwoot-demora'), 'só a Doutor Digital liga: a tela Robôs da clínica não mostra nem muda');
-  for (const a of AUTOMACOES.filter((x) => x.id.startsWith('chatwoot-') && x.id !== 'chatwoot-disparo' && x.id !== 'chatwoot-tarefas' && x.id !== 'chatwoot-demora')) assert.ok(ids.includes(a.id), `${a.id} sumiu da tela`);
+  assert.ok(!ids.includes('chatwoot-tarefas') && !ids.includes('chatwoot-disparo') && !ids.includes('chatwoot-demora') && !ids.includes('chatwoot-vigia'), 'só a Doutor Digital liga: a tela Robôs da clínica não mostra nem muda (o vigia manda aviso ao João e ao grupo)');
+  for (const a of AUTOMACOES.filter((x) => x.id.startsWith('chatwoot-') && x.id !== 'chatwoot-disparo' && x.id !== 'chatwoot-tarefas' && x.id !== 'chatwoot-demora' && x.id !== 'chatwoot-vigia')) assert.ok(ids.includes(a.id), `${a.id} sumiu da tela`);
   assert.ok(!ids.includes('chatwoot-disparo'), 'chatwoot-disparo NÃO pode aparecer na tela da clínica');
   // ordem dos grupos
   const ordem = l.map((x) => x.grupo);
