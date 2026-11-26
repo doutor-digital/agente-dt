@@ -78,3 +78,25 @@ test('janela do menu: parseia, mesma regra, só o botão «Resolver», deixa res
   assert.ok(bloco.includes("Object.assign({}, base, novos)"), 'manda TODOS os atributos (o Chatwoot troca o conjunto inteiro)');
   assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
 });
+
+test('modo lembrete (CHATWOOT_RESOLVER_OBRIGATORIO=lembrete): a janela ganha «Resolver sem preencher» que libera; sem a variável é idêntico a hoje', () => {
+  const montar = (env: NodeJS.ProcessEnv) => assistenteJs(env).split('__AGENTE__').join(JSON.stringify('https://agente.exemplo.test'));
+  const padrao = montar({});
+  const lembrete = montar({ CHATWOOT_RESOLVER_OBRIGATORIO: 'lembrete' });
+  assert.ok(padrao.includes('var LEMBRETE = false;') && padrao.includes('var OBRIGATORIOS = true;'), 'sem configuração nova: nada muda (continua pedindo)');
+  assert.ok(lembrete.includes('var LEMBRETE = true;') && lembrete.includes('var OBRIGATORIOS = true;'), 'lembrete: continua pedindo os campos');
+  assert.ok(montar({ CHATWOOT_RESOLVER_OBRIGATORIO: '0' }).includes('var LEMBRETE = false;'));
+  assert.doesNotThrow(() => new Function(lembrete));
+  const ini = lembrete.indexOf('if (LEMBRETE) {');
+  const bloco = lembrete.slice(ini, lembrete.indexOf('cancelar.onclick', ini));
+  assert.ok(bloco.includes("'Resolver sem preencher'"), 'o botão de pular existe');
+  assert.ok(bloco.includes('pular.onclick = function(){ fecharJanelaResolver(); liberarResolver(); };'), 'pular fecha a janela e resolve de verdade');
+  assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
+});
+
+test('modo lembrete: o servidor continua pondo a etiqueta falta-etapa (é o lembrete); só «0» desliga', async () => {
+  const chamadas: Array<[number, string[]]> = [];
+  const p = { etiquetas: async (c: number, l: string[]) => { chamadas.push([c, l]); } };
+  assert.equal(await aplicarResolucao(eventoDeResolucao(conv(), CAIXAS)!, p, { CHATWOOT_RESOLVER_OBRIGATORIO: 'lembrete' }), 'pos');
+  assert.deepEqual(chamadas[0], [500, [ETIQUETA_FALTA]]);
+});
