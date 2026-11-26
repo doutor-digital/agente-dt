@@ -65,7 +65,8 @@ import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-a
 import { podeSerDuvidaDoLembrete, tratarDuvidaDoLembrete } from '../lib/duvida-no-lembrete.js';
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
-import { blocoDaConversaOficial, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
+import { temMidiaSemArquivo } from '../lib/conversa-oficial.js';
 import { avisarComprovanteComIaPausada, avisarComprovanteDoLiteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno, type ComprovanteComIaPausada } from '../lib/anexos-do-turno.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
