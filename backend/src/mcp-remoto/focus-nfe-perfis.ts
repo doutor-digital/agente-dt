@@ -1,5 +1,5 @@
 /**
- * O perfil fiscal de cada unidade que emite pela Focus NFe: o que a CONTABILIDADE e o João já informaram e que não muda de nota para nota (CNPJ, município, inscrição
+ * O perfil fiscal de cada unidade que emite pela Focus NFe: o que o João informou (do cadastro da clínica) e que não muda de nota para nota (CNPJ, município, inscrição
  * municipal, código de tributação nacional, NBS, texto do serviço). Não é segredo: é o cadastro público da clínica. Fica no código (e não no .env) para a revisão do PR
  * conferir cada dado.
  *
@@ -7,8 +7,8 @@
  * situação/classificação do IBS-CBS, consumidor final e indicador do destinatário. Nunca se supõe alíquota nem retenção: a alíquota do ISS só tem valor padrão quando a unidade a
  * traz AQUI, por decisão registrada (Açailândia: 0, decisão do João por ser Simples Nacional); unidade sem `aliquotaIss` no perfil nunca emite sem alíquota informada.
  *
- * Quem informou (26/11/2026): o João, com os dados do cadastro da clínica na Focus/Asaas. A alíquota 0 de Açailândia também é decisão do João (Simples Nacional: o ISS vai no DAS);
- * a contabilidade ainda pode confirmar ou trocar.
+ * Quem informou (26/11/2026): o João, com os dados do cadastro da clínica na Focus/Asaas. NENHUM destes dados tem confirmação escrita da contabilidade. A alíquota 0 de Açailândia é decisão
+ * do João (Simples Nacional: o ISS vai no DAS), e o resumo da nota diz isso (`aliquotaOrigem`). O perfil só vale para o CNPJ e o município que ele traz: se o ambiente trocar o CNPJ, a unidade NÃO emite.
  */
 export interface PerfilFiscal {
   cnpj: string;
@@ -28,6 +28,8 @@ export interface PerfilFiscal {
   opcaoSimplesNacional: 1 | 2 | 3;
   /** alíquota do ISS em % (ou "parametrizada"): só existe quando a unidade a decidiu e registrou aqui; a pessoa pode trocar a cada nota */
   aliquotaIss?: number | 'parametrizada';
+  /** de onde veio a alíquota, em texto, para o resumo da nota dizer a verdade */
+  aliquotaOrigem?: string;
 }
 
 export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
@@ -44,6 +46,7 @@ export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
     opcaoSimplesNacional: 3,
     // decisão do João (26/11/2026): a clínica é Simples Nacional, então a alíquota do ISS informada na nota é 0 (o ISS é recolhido no DAS)
     aliquotaIss: 0,
+    aliquotaOrigem: 'decisão do João em 26/11 (Simples, ISS no DAS); sem confirmação escrita da contabilidade',
   },
 };
 

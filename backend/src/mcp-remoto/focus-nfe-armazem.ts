@@ -119,7 +119,7 @@ export function armazemDeNotasPrisma(db: BancoDeNotas): ArmazemDeNotas {
             const repetida = (await tx.focusNota.findFirst({ where: { unitSlug: p.unidade, ambiente: p.ambiente, chaveDuplicata: p.chaveDuplicata, status: { in: [...STATUS_ATIVOS] } }, orderBy: { createdAt: 'desc' } })) as LinhaDaNota | null;
             p.conferir(await lerLivro(tx.focusNota, p.unidade, p.ambiente, p.agora), repetida ? comoNotaGuardada(repetida) : null);
             const ultimo = (await tx.focusNota.findFirst({ where: { unitSlug: p.unidade, ambiente: p.ambiente, serieDps: p.serieDps }, orderBy: { numeroDps: 'desc' }, select: { numeroDps: true } })) as { numeroDps: number } | null;
-            const numeroDps = Math.max(p.numeroInicial, (ultimo?.numeroDps ?? 0) + 1);
+            const numeroDps = Math.max(p.numeroInicial, (ultimo?.numeroDps ?? 0) + 1, p.numeroMinimo ?? 0);
             await tx.focusNota.create({
               data: {
                 unitSlug: p.unidade, ambiente: p.ambiente, referencia: p.referencia, status: 'intencao', serieDps: p.serieDps, numeroDps, valorCentavos: p.valorCentavos, dataCompetencia: p.dataCompetencia,

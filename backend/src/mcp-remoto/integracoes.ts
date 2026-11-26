@@ -21,7 +21,7 @@ export interface FontesDeIntegracao {
   /** Leitura bancária (Pluggy). Dado sensível: quem monta a sessão só passa isto para quem pode ver; para os demais fica vazio e a resposta é a de sempre. */
   pluggy?: Map<string, { nome: string }>;
   /** Nota fiscal pela Focus NFe (dado fiscal do paciente). Só para quem escreve: para os demais fica vazio e a resposta é a de sempre. */
-  focus?: Map<string, { nome: string }>;
+  focus?: Map<string, { nome: string; ambiente?: 'homologacao' | 'producao' }>;
   /** Ferramentas da empresa, não de uma unidade (ex. o Chatwoot do atendimento novo), só para quem tem acesso. */
   gerais?: string[];
 }
@@ -35,7 +35,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
   const zenfisio = f.zenfisio ?? new Map<string, { nome: string }>();
   const infinitepay = f.infinitepay ?? new Map<string, { nome: string }>();
   const pluggy = f.pluggy ?? new Map<string, { nome: string }>();
-  const focus = f.focus ?? new Map<string, { nome: string }>();
+  const focus = f.focus ?? new Map<string, { nome: string; ambiente?: 'homologacao' | 'producao' }>();
   const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys(), ...convenia.keys(), ...tiquetaque.keys(), ...tramitacao.keys(), ...sistemas.keys(), ...zenfisio.keys(), ...infinitepay.keys(), ...pluggy.keys(), ...focus.keys()])].sort();
   const unidades = slugs.map((slug) => {
     const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? convenia.get(slug)?.nome ?? tiquetaque.get(slug)?.nome ?? tramitacao.get(slug)?.nome ?? sistemas.get(slug)?.nome ?? zenfisio.get(slug)?.nome ?? infinitepay.get(slug)?.nome ?? pluggy.get(slug)?.nome ?? focus.get(slug)?.nome ?? slug;
@@ -53,7 +53,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar em dois passos para quem tem permissão)'] : []),
       ...(tem.zenfisio ? ['zenfisio_* (clínica de fisioterapia: agenda com status, faltas e taxa de falta, profissionais, pacotes; só leitura)'] : []),
       ...(tem.infinitepay ? ['infinitepay_* (status de um pagamento, os links criados pelo conector e, para quem tem permissão, criar link; vendas e extrato SÓ pelo relatório que a clínica exporta do app e o conector importa: a API da InfinitePay NÃO lê vendas, Pix, saldo, extrato nem recebíveis)'] : []),
-      ...('focus' in tem && tem.focus ? ['focus_* (nota fiscal de serviço NFS-e Nacional pela Focus NFe: dados fiscais, notas emitidas pelo conector e uma nota; emitir e cancelar em DOIS passos, só em ambiente de HOMOLOGAÇÃO até o João ligar a produção; só para quem altera cartões)'] : []),
+      ...('focus' in tem && tem.focus ? ['focus_* (nota fiscal de serviço NFS-e Nacional pela Focus NFe: dados fiscais, notas emitidas pelo conector e uma nota; emitir e cancelar em DOIS passos; ambiente desta unidade agora: ' + (focus.get(slug)?.ambiente === 'producao' ? 'PRODUÇÃO (nota REAL)' : focus.get(slug)?.ambiente === 'homologacao' ? 'HOMOLOGAÇÃO (teste, sem validade fiscal)' : 'não informado') + '; só para quem altera cartões)'] : []),
       ...(tem.pluggy ? ['pluggy_* (leitura bancária via Open Finance: contas com saldo, extrato e resumo por dia/semana; só leitura, só para quem altera cartões; traz a data da última sincronização)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };

@@ -6,7 +6,7 @@
  *   focus_confirmar_nota → com o código (uso ÚNICO, 15 min, só quem preparou) é que chama a Focus: POST /v2/nfsen (emitir) ou DELETE /v2/nfsen/{ref} (cancelar).
  *
  * Regras que não se negociam aqui:
- *   - NUNCA supor alíquota, retenção, regime nem código de serviço. O que a pessoa não disse (e o perfil fiscal da unidade, informado pela contabilidade, não traz) é PERGUNTADO:
+ *   - NUNCA supor alíquota, retenção, regime nem código de serviço. O que a pessoa não disse (e o perfil fiscal da unidade, informado pelo João, não traz) é PERGUNTADO:
  *     o preparar recusa e lista TUDO o que falta de uma vez. Só o que o perfil traz (focus-nfe-perfis.ts) tem valor padrão, e o resumo mostra de onde veio cada dado.
  *   - Só HOMOLOGAÇÃO por padrão (FOCUS_NFE_AMBIENTE_<UNIDADE>); produção só quando o João a liga, e o resumo e o aviso dizem PRODUÇÃO — NOTA REAL.
  *   - Nota repetida NUNCA: a mesma unidade, ambiente, documento do tomador, valor, competência e origem não emite duas vezes (a trava vale dentro do banco, numa transação).
@@ -161,7 +161,7 @@ const digitos = (s: string) => s.replace(/\D/g, '');
 const pct = (n: number) => `${String(n).replace('.', ',')}%`;
 const SIM_NAO = (b: boolean) => (b ? 'sim' : 'não');
 const DE_QUEM_PEDIU = 'informado por quem pediu';
-const DO_PERFIL = 'perfil fiscal da unidade (informado pela contabilidade)';
+const DO_PERFIL = 'perfil fiscal da unidade (informado pelo João em 26/11/2026, do cadastro da clínica; sem confirmação escrita da contabilidade)';
 
 const NOMES_DA_OPCAO_SIMPLES: Record<number, string> = { 1: 'não optante', 2: 'optante MEI', 3: 'optante ME/EPP' };
 const NOMES_DA_RETENCAO: Record<number, string> = { 1: 'ISS NÃO retido', 2: 'ISS retido pelo tomador' };
@@ -221,6 +221,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
   const f = a.fiscal ?? {};
   const t = a.tomador ?? {};
 
+  if (conta.conflitoDePerfil) throw new ErroDeEntrada(`${conta.conflitoDePerfil} Nada foi preparado.`);
   if (!conta.cnpj || !conta.municipio) throw new ErroDeEntrada(`a unidade ${conta.slug} não tem CNPJ e município do prestador configurados (FOCUS_NFE_CNPJ_… e FOCUS_NFE_MUNICIPIO_…, ou um perfil fiscal): o João configura no servidor. Nada foi preparado.`);
   if (conta.ambiente === 'producao' && conta.serieDps === undefined) throw new ErroDeEntrada(`a unidade ${conta.slug} está em PRODUÇÃO sem a série da DPS (FOCUS_NFE_SERIE_DPS_…): o João e a contabilidade escolhem a série. Nada foi preparado.`);
 
@@ -259,7 +260,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
   }
   const origem = a.origem?.trim() ? textoLimpo(a.origem, 'origem', 1, 60) : null;
 
-  // ---- fiscal: o perfil traz o que a contabilidade já informou; o resto vem da pessoa
+  // ---- fiscal: o perfil traz o que o João já informou; o resto vem da pessoa
   const cTribBruto = f.codigoTributacaoNacional?.trim() ? f.codigoTributacaoNacional : perfil?.codigoTributacaoNacional;
   const codigoTrib = cTribBruto ? digitos(cTribBruto) : '';
   if (!cTribBruto) faltam.push('fiscal.codigoTributacaoNacional: o código de tributação nacional do serviço (cTribNac, 6 dígitos, ex. 040802)');
@@ -404,7 +405,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
       tributacao: 'operação tributável',
       retencao: NOMES_DA_RETENCAO[retencao!],
       aliquota: aliq === 'parametrizada' ? 'PARAMETRIZADA: não enviada; o ambiente nacional define a alíquota' : pct(aliq!),
-      origem: f.aliquotaIss !== undefined ? DE_QUEM_PEDIU : `${DO_PERFIL}: decisão registrada para esta unidade (Simples Nacional)`,
+      origem: f.aliquotaIss !== undefined ? DE_QUEM_PEDIU : (perfil?.aliquotaOrigem ?? DO_PERFIL),
     },
     simplesNacional: {
       opcao: `${opcao} — ${NOMES_DA_OPCAO_SIMPLES[opcao!]}`,
@@ -658,10 +659,19 @@ export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscrit
   const chave = chaveDeNotaRepetida(c.slug, c.ambiente, nota.tomadorDocumento, nota.valorCentavos, nota.dataCompetencia, nota.origem);
   const criadoPor = quem.email || `usuario:${quem.id}`;
   return umaPorVez(esc, c.slug, async () => {
+    // o número da DPS nunca fica abaixo do que a Focus já guarda para a série (a empresa dela tem `proximo_numero_nfsen_*`); DPS repetida é recusada pelo ambiente nacional
+    const empresa = await melhorEsforco(() => c.fonte.empresa(c.cnpj!), 6000);
+    const serieDaFocus = c.ambiente === 'producao' ? empresa?.serieNfsenProducao : empresa?.serieNfsenHomologacao;
+    const proximoDaFocus = c.ambiente === 'producao' ? empresa?.proximoNumeroNfsenProducao : empresa?.proximoNumeroNfsenHomologacao;
+    const numeroMinimo = proximoDaFocus !== undefined && (serieDaFocus === undefined || serieDaFocus === serie) ? proximoDaFocus : undefined;
+    // produção sem saber o próximo número da Focus e sem número de partida escolhido: nada de adivinhar
+    if (c.ambiente === 'producao' && numeroMinimo === undefined && !c.numeroInicialExplicito) {
+      throw new ErroDeEntrada('produção: não consegui ler na Focus o próximo número da DPS desta série e FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> não está configurado: um número repetido é recusado pelo ambiente nacional. O João escolhe o número de partida com a contabilidade. Nada foi emitido.');
+    }
     // a reserva que vale: dentro da trava da unidade, relê o banco, confere tudo e grava a INTENÇÃO antes de qualquer chamada à Focus
     const { serieDps, numeroDps } = await ctx.notas.reservar({
       unidade: c.slug, ambiente: c.ambiente, referencia, chaveDuplicata: chave, valorCentavos: nota.valorCentavos, dataCompetencia: nota.dataCompetencia, tomadorMascarado: nota.tomadorMascarado,
-      origem: nota.origem, criadoPor, agora, serieDps: serie, numeroInicial: c.numeroInicial,
+      origem: nota.origem, criadoPor, agora, serieDps: serie, numeroInicial: c.numeroInicial, ...(numeroMinimo !== undefined ? { numeroMinimo } : {}),
       conferir: (livro, repetida) => conferirLimites(esc, livro, repetida, nota.valorCentavos, agora),
     });
     // 60 s para trás: o ambiente nacional recusa data de emissão no futuro e o relógio dele pode estar um pouco atrás do nosso

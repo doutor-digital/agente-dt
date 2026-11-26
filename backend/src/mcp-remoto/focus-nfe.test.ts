@@ -95,6 +95,14 @@ test('focus_dados_fiscais: série diferente da Focus e município diferente do c
   assert.equal(r.proximoNumeroNaFocus, 40);
 });
 
+test('focus_dados_fiscais: a alíquota padrão aparece como decisão do João, sem confirmação da contabilidade; o conflito de perfil aparece como falta configurar', async () => {
+  const m = montar();
+  const r = (await dadosFiscais(m.ctx, LIM, {})) as { cuidados: string[] };
+  assert.ok(r.cuidados.some((x) => /alíquota do ISS padrão \(0%\).*decisão do João.*sem confirmação escrita da contabilidade/.test(x)));
+  m.ctx.contas.set(UNI, { ...m.conta, conflitoDePerfil: 'perfil em conflito' });
+  assert.deepEqual(((await dadosFiscais(m.ctx, LIM, {})) as { faltaConfigurar: string[] }).faltaConfigurar, ['perfil em conflito']);
+});
+
 test('focus_notas: lista o livro local com documento mascarado e diz o que a API não lista; filtra por status e período', async () => {
   const m = montar();
   m.armazem.linhas.push(nota({ referencia: 'a1' }), nota({ referencia: 'a2', status: 'cancelado' }), nota({ referencia: 'a3', criadoEm: '2026-10-01T12:00:00.000Z' }));
@@ -195,6 +203,14 @@ function bancoDeMentira() {
   const db: BancoDeNotas = { focusNota: tabela as never, async $transaction(fn) { chamadas.push('tx'); return fn({ $executeRaw: async (..._a: unknown[]) => (chamadas.push('lock'), 1), focusNota: tabela as never }); } };
   return { db, linhas, chamadas };
 }
+
+test('armazém Prisma: o número da DPS nunca fica abaixo do mínimo que a Focus guarda', async () => {
+  const b = bancoDeMentira();
+  const a = armazemDeNotasPrisma(b.db);
+  assert.deepEqual(await a.reservar({ ...PEDIDO(1, 'r1'), numeroMinimo: 40 }), { serieDps: 1, numeroDps: 40 });
+  assert.deepEqual(await a.reservar({ ...PEDIDO(2, 'r2'), numeroMinimo: 40 }), { serieDps: 1, numeroDps: 41 });
+  assert.deepEqual(await a.reservar({ ...PEDIDO(3, 'r3'), numeroMinimo: 10 }), { serieDps: 1, numeroDps: 42 });
+});
 
 const PEDIDO = (n: number, ref: string, conferir: () => void = () => undefined) => ({
   unidade: UNI, ambiente: 'homologacao' as const, referencia: ref, chaveDuplicata: `k${n}`, valorCentavos: 100, dataCompetencia: '2026-11-25', tomadorMascarado: '***', origem: null, criadoPor: 'a', agora: AGORA, serieDps: 1, numeroInicial: 1, conferir,

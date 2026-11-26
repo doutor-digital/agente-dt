@@ -4,7 +4,7 @@
 #   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh                        # simulação em HOMOLOGAÇÃO: prova o token na Focus e mostra o que gravaria (token mascarado)
 #   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh --executar             # grava no .env da VPS (backup) e aplica no serviço, em HOMOLOGAÇÃO
 #   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh --executar --registrar-webhook   # TAMBÉM cadastra o gatilho (webhook) da Focus para nota autorizada
-#   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh --producao --serie=N --executar  # PRODUÇÃO (NOTA REAL): só com o token de produção e a série escolhida com a contabilidade
+#   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh --producao --serie=N [--numero-inicial=M] --executar  # PRODUÇÃO (NOTA REAL): só com o token de produção e a série escolhida com a contabilidade
 #   bash ~/Kommo-Integracao/_replicacao/ligar-focus-acailandia.sh --desligar [--executar]          # TIRA FOCUS_NFE_UNIDADES, o token, o ambiente e a série do .env e do serviço
 #
 # O PADRÃO É HOMOLOGAÇÃO (ambiente de teste da Focus, sem validade fiscal). Produção só com --producao explícito, com o token de PRODUÇÃO (FOCUS_TOKEN_PRODUCAO_ACAILANDIA) e --serie=N.
@@ -18,15 +18,20 @@
 #   FOCUS_NFE_AMBIENTE_ACAILANDIA=homologacao|producao
 #   FOCUS_NFE_SERIE_DPS_ACAILANDIA                  (só com --serie=N; obrigatória em produção; em homologação o código usa a série 1)
 #   FOCUS_NFE_WEBHOOK_SEGREDO                       (32+ caracteres: GERADO na VPS só se ainda não existir e MANTIDO nas rodadas seguintes; nunca impresso)
-# Os dados fiscais da unidade (CNPJ, município IBGE, inscrição municipal, cTribNac 04.08.02, NBS, texto do serviço) estão no código (focus-nfe-perfis.ts), não no .env.
-# A ALÍQUOTA DO ISS NÃO está em lugar nenhum: a contabilidade informa e a pessoa a passa a cada nota (focus_preparar_nota).
+# Os dados fiscais da unidade (CNPJ, município IBGE, inscrição municipal, cTribNac 04.08.02, NBS, texto do serviço) estão no código (focus-nfe-perfis.ts), não no .env, e foram informados pelo João
+# em 26/11/2026. A ALÍQUOTA DO ISS padrão é 0: decisão do João em 26/11 (Simples, ISS no DAS); SEM confirmação escrita da contabilidade. O resumo de cada nota mostra essa origem.
+# O perfil só vale para o CNPJ e o município dele: não configure FOCUS_NFE_CNPJ_/FOCUS_NFE_MUNICIPIO_ com outro valor (a unidade deixa de emitir).
+# NÚMERO DA DPS: o conector segue o próximo número que a Focus guarda para a série; em PRODUÇÃO, se ele não puder ser lido, a emissão é recusada, a menos que você passe --numero-inicial=N
+# (o número de partida combinado com a contabilidade, sem repetir um já usado no Asaas/portal).
+# TOKEN NA LINHA DE COMANDO DA VPS: `docker service update --env-add FOCUS_NFE_TOKEN_…=…` coloca o token na linha de comando do docker por instantes e `docker service inspect` o mostra (é o
+# mesmo desenho dos scripts da Pluggy e da InfinitePay; o docker não tem outra forma de mudar a variável de um serviço sem recriá-lo). Quem tem acesso root à VPS já o lê do .env. Não há como evitar sem mexer no deploy.
 #
 # DECLARATIVO: o estado final é o que o script grava. Rodar de novo troca o conjunto (ex. voltar de produção para homologação remove a série).
 # Pré-requisito: o código do PR da Focus já estar no ar (merge + deploy); sem ele as variáveis não fazem nada. A tabela focus_notas nasce no deploy (migração).
 # Depois de ligar, confira pelo conector (sessão de quem altera cartões): focus_dados_fiscais (prova o token, mostra o que falta) — e só então focus_preparar_nota.
 # A cópia deste script também está no repositório (ops/conector/ligar-focus-acailandia.sh) para revisão; a que o João roda fica em ~/Kommo-Integracao/_replicacao/.
 set -euo pipefail
-EXEC=0; DESLIGAR=0; PRODUCAO=0; REGISTRAR_WH=0; SERIE=""
+EXEC=0; DESLIGAR=0; PRODUCAO=0; REGISTRAR_WH=0; SERIE=""; NUMINI=""
 for a in "$@"; do
   case "$a" in
     --executar) EXEC=1 ;;
@@ -36,6 +41,9 @@ for a in "$@"; do
     --serie=*)
       SERIE="${a#--serie=}"
       if ! [[ "$SERIE" =~ ^[0-9]{1,5}$ ]] || [ "$SERIE" -lt 1 ] || [ "$SERIE" -gt 49999 ]; then echo "ERRO: --serie precisa ser um número de 1 a 49999 (a faixa da API da Focus)."; exit 2; fi ;;
+    --numero-inicial=*)
+      NUMINI="${a#--numero-inicial=}"
+      if ! [[ "$NUMINI" =~ ^[0-9]{1,9}$ ]] || [ "$NUMINI" -lt 1 ]; then echo "ERRO: --numero-inicial precisa ser um inteiro a partir de 1."; exit 2; fi ;;
     *) echo "argumento desconhecido: $a"; exit 2 ;;
   esac
 done
@@ -47,7 +55,7 @@ SLUG=doutor-hernia-acailandia
 CNPJ=63130582000140
 ORIGEM_PUBLICA="${FOCUS_ORIGEM_PUBLICA:-https://agente-vps.doutordigitalconsultoria.com}"
 # o que --executar DECLARA (grava ou tira); o segredo do webhook é mantido de propósito (o endereço cadastrado na Focus depende dele)
-VARS_LIGAR=(FOCUS_NFE_UNIDADES FOCUS_NFE_TOKEN_ACAILANDIA FOCUS_NFE_AMBIENTE_ACAILANDIA FOCUS_NFE_SERIE_DPS_ACAILANDIA)
+VARS_LIGAR=(FOCUS_NFE_UNIDADES FOCUS_NFE_TOKEN_ACAILANDIA FOCUS_NFE_AMBIENTE_ACAILANDIA FOCUS_NFE_SERIE_DPS_ACAILANDIA FOCUS_NFE_NUMERO_INICIAL_ACAILANDIA)
 TMPD=~/.cache/focus-env; mkdir -p "$TMPD"; chmod 700 "$TMPD"
 LINHAS="$TMPD/linhas.env"; : > "$LINHAS"; chmod 600 "$LINHAS"
 RESP="$TMPD/resp.json"
@@ -137,6 +145,7 @@ rm -f "$RESP"
   printf 'FOCUS_NFE_TOKEN_ACAILANDIA=%s\n' "$TOK"
   printf 'FOCUS_NFE_AMBIENTE_ACAILANDIA=%s\n' "$AMB"
   if [ -n "$SERIE" ]; then printf 'FOCUS_NFE_SERIE_DPS_ACAILANDIA=%s\n' "$SERIE"; fi
+  if [ -n "$NUMINI" ]; then printf 'FOCUS_NFE_NUMERO_INICIAL_ACAILANDIA=%s\n' "$NUMINI"; fi
 } >> "$LINHAS"
 ( set -eu; . "$LINHAS" ) || { echo "ERRO: as linhas não carregam no bash; nada foi feito."; exit 1; }
 
@@ -151,6 +160,7 @@ echo "   FOCUS_NFE_UNIDADES=$SLUG"
 echo "   FOCUS_NFE_TOKEN_ACAILANDIA=$(mascara "$TOK")  (${#TOK} caracteres)"
 echo "   FOCUS_NFE_AMBIENTE_ACAILANDIA=$AMB"
 if [ -n "$SERIE" ]; then echo "   FOCUS_NFE_SERIE_DPS_ACAILANDIA=$SERIE"; else echo "   (sem --serie: FOCUS_NFE_SERIE_DPS_ACAILANDIA será REMOVIDA do .env e do serviço, se existir; em homologação o código usa a série 1)"; fi
+if [ -n "$NUMINI" ]; then echo "   FOCUS_NFE_NUMERO_INICIAL_ACAILANDIA=$NUMINI"; else echo "   (sem --numero-inicial: FOCUS_NFE_NUMERO_INICIAL_ACAILANDIA será REMOVIDA; em produção a emissão exige ler o próximo número na Focus)"; fi
 echo "   (FOCUS_NFE_WEBHOOK_SEGREDO: GERADO na VPS só se ainda não existir; se já existe, é mantido; nunca aparece aqui)"
 if [ $REGISTRAR_WH -eq 1 ]; then echo "   (gatilho: vai cadastrar na Focus ($AMB) o evento nfsen apontando para $ORIGEM_PUBLICA/focus-nfe/webhook/$SLUG/<assinatura>, se ainda não existir)"; fi
 unset TOK

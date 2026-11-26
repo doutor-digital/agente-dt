@@ -68,4 +68,9 @@ test('listar_integracoes: sem Focus a resposta é idêntica à de antes; com Foc
   const com = listarIntegracoes({ ...base, focus: new Map([['a', { nome: 'A' }]]) });
   assert.equal((com as { comFocus?: number }).comFocus, 1);
   assert.ok(JSON.stringify(com).includes('focus_*'));
+  // o ambiente que aparece é o REAL da unidade, nunca um texto fixo
+  const textoDe = (ambiente: 'homologacao' | 'producao') => JSON.stringify(listarIntegracoes({ ...base, focus: new Map([['a', { nome: 'A', ambiente }]]) }));
+  assert.match(textoDe('producao'), /ambiente desta unidade agora: PRODUÇÃO \(nota REAL\)/);
+  assert.match(textoDe('homologacao'), /ambiente desta unidade agora: HOMOLOGAÇÃO \(teste, sem validade fiscal\)/);
+  assert.ok(!textoDe('producao').includes('só em ambiente de HOMOLOGAÇÃO'));
 });

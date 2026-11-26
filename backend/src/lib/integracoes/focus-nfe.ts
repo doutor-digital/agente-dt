@@ -83,6 +83,8 @@ export interface ContaFocusConfig {
   municipio?: string;
   serieDps?: number;
   numeroInicial: number;
+  /** FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> existe (a pessoa escolheu o número de partida) */
+  numeroInicialExplicito?: boolean;
 }
 
 export interface LeituraDoAmbiente {
@@ -181,7 +183,10 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<Unidade>, e: NodeJS.
     }],
     [P.inicial, (c: ContaFocusConfig, v: string, variavel: string) => {
       const n = Number(v);
-      if (/^\d{1,9}$/.test(v) && n >= 1) c.numeroInicial = n;
+      if (/^\d{1,9}$/.test(v) && n >= 1) {
+        c.numeroInicial = n;
+        c.numeroInicialExplicito = true;
+      }
       else ignoradas.push({ variavel, motivo: 'número inicial inválido (inteiro a partir de 1); ignorado' });
     }],
   ] as const) {

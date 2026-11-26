@@ -258,6 +258,8 @@ test('ambiente: CNPJ, município, série e número inicial entram validados; o v
   };
   const c = lerContasDoAmbiente(UNIDADES, e).contas.get('doutor-hernia-acailandia')!;
   assert.deepEqual([c.cnpj, c.municipio, c.serieDps, c.numeroInicial], ['63130582000140', '2100055', 900, 7]);
+  assert.equal(c.numeroInicialExplicito, true);
+  assert.equal(lerContasDoAmbiente(UNIDADES, { FOCUS_NFE_UNIDADES: 'doutor-hernia-acailandia', FOCUS_NFE_TOKEN_ACAILANDIA: TOKEN }).contas.get('doutor-hernia-acailandia')!.numeroInicialExplicito, undefined);
   const ruim = lerContasDoAmbiente(UNIDADES, { ...e, FOCUS_NFE_SERIE_DPS_ACAILANDIA: '50000', FOCUS_NFE_MUNICIPIO_ACAILANDIA: 'abc', FOCUS_NFE_CNPJ_ACAILANDIA: '123' });
   const conta = ruim.contas.get('doutor-hernia-acailandia')!;
   assert.deepEqual([conta.cnpj, conta.municipio, conta.serieDps], [undefined, undefined, undefined]);

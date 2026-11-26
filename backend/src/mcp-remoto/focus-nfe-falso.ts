@@ -40,7 +40,7 @@ export function armazemDeNotasEmMemoria(agora: () => number = Date.now): Armazem
       p.conferir(livro(p.unidade, p.ambiente, p.agora), repetida);
       if (linhas.some((l) => l.unidade === p.unidade && l.ambiente === p.ambiente && l.referencia === p.referencia)) throw new ErroDeEntrada(`a referência ${p.referencia} já foi usada nesta unidade. Prepare de novo. Nada foi emitido.`);
       const ultimo = Math.max(0, ...linhas.filter((l) => l.unidade === p.unidade && l.ambiente === p.ambiente && l.serieDps === p.serieDps).map((l) => l.numeroDps));
-      const numeroDps = Math.max(p.numeroInicial, ultimo + 1);
+      const numeroDps = Math.max(p.numeroInicial, ultimo + 1, p.numeroMinimo ?? 0);
       linhas.push({
         referencia: p.referencia, unidade: p.unidade, ambiente: p.ambiente, status: 'intencao', serieDps: p.serieDps, numeroDps, valorCentavos: p.valorCentavos, dataCompetencia: p.dataCompetencia,
         tomadorMascarado: p.tomadorMascarado, origem: p.origem, chaveDuplicata: p.chaveDuplicata, criadoPor: p.criadoPor, criadoEm: new Date(p.agora).toISOString(), numeroNfse: null, codigoVerificacao: null,

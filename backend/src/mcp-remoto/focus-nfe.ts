@@ -120,6 +120,8 @@ export interface PedidoDeReserva {
   agora: number;
   serieDps: number;
   numeroInicial: number;
+  /** o próximo número de DPS que a Focus já guarda para esta série (lido da empresa dela): o número novo nunca fica abaixo dele */
+  numeroMinimo?: number;
   /** recebe o livro e a nota ativa igual (se houver), lidos DENTRO da trava; lança ErroDeEntrada para recusar */
   conferir(livro: LivroDeNotas, repetida: NotaGuardada | null): void;
 }
@@ -148,8 +150,12 @@ export interface ContaFocus {
   municipio?: string;
   serieDps?: number;
   numeroInicial: number;
-  /** o que a contabilidade já informou desta unidade (focus-nfe-perfis.ts); o CNPJ e o município acima já vêm daqui quando o ambiente não os troca */
+  /** FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> foi configurado de propósito (em produção, sem ele e sem ler o próximo número da Focus, não se emite) */
+  numeroInicialExplicito?: boolean;
+  /** o que o João já informou desta unidade (focus-nfe-perfis.ts); o CNPJ e o município acima já vêm daqui quando o ambiente não os troca */
   perfil?: PerfilFiscal;
+  /** o ambiente trocou o CNPJ ou o município do perfil: o perfil NÃO vale e a unidade não emite */
+  conflitoDePerfil?: string;
   /** a chamada pronta: o token fica na closure e NUNCA sai daqui (a conta serializada ou logada não o mostra) */
   fonte: {
     testar(): Promise<void>;
@@ -163,8 +169,15 @@ export interface ContaFocus {
   };
 }
 
-export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}, perfil: PerfilFiscal | undefined = perfilDaUnidade(c.slug)): ContaFocus {
+export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}, perfilDaUnidadeBruto: PerfilFiscal | undefined = perfilDaUnidade(c.slug)): ContaFocus {
   const cred = { token: c.token, ambiente: c.ambiente };
+  // o perfil é de UM CNPJ e UM município: se o ambiente troca qualquer um, o perfil (inscrição municipal, cTribNac, NBS, alíquota) não é mais desta empresa e NADA dele é usado
+  let perfil = perfilDaUnidadeBruto;
+  let conflitoDePerfil: string | undefined;
+  if (perfil && ((c.cnpj && c.cnpj !== perfil.cnpj) || (c.municipio && c.municipio !== perfil.municipioIbge))) {
+    conflitoDePerfil = `o perfil fiscal de ${c.slug} é do CNPJ e município cadastrados em focus-nfe-perfis.ts, mas o ambiente do servidor configurou outro CNPJ ou município (FOCUS_NFE_CNPJ_/FOCUS_NFE_MUNICIPIO_): o perfil não vale e a unidade NÃO emite até alguém conferir.`;
+    perfil = undefined;
+  }
   const cnpj = c.cnpj ?? perfil?.cnpj;
   const municipio = c.municipio ?? perfil?.municipioIbge;
   return {
@@ -174,6 +187,8 @@ export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}
     ...(cnpj ? { cnpj } : {}),
     ...(municipio ? { municipio } : {}),
     ...(perfil ? { perfil } : {}),
+    ...(conflitoDePerfil ? { conflitoDePerfil } : {}),
+    ...(c.numeroInicialExplicito ? { numeroInicialExplicito: true } : {}),
     ...(c.serieDps !== undefined ? { serieDps: c.serieDps } : {}),
     numeroInicial: c.numeroInicial,
     fonte: {
@@ -382,6 +397,7 @@ const melhor = async <T>(fn: () => Promise<T>): Promise<{ ok: true; valor: T } |
 export async function dadosFiscais(ctx: ContextoFocus, lim: LimitesDeEmissao, a: { unidade?: string }) {
   const c = resolverContaFocus(ctx, a.unidade);
   const faltaConfigurar: string[] = [];
+  if (c.conflitoDePerfil) faltaConfigurar.push(c.conflitoDePerfil);
   if (!c.cnpj) faltaConfigurar.push('FOCUS_NFE_CNPJ_<UNIDADE> (CNPJ do prestador; unidade sem perfil fiscal em focus-nfe-perfis.ts)');
   if (!c.municipio) faltaConfigurar.push('FOCUS_NFE_MUNICIPIO_<UNIDADE> (código IBGE do município do prestador; unidade sem perfil fiscal)');
   if (c.ambiente === 'producao' && c.serieDps === undefined) faltaConfigurar.push('FOCUS_NFE_SERIE_DPS_<UNIDADE> (a série da DPS em produção; a homologação usa a série 1)');
@@ -403,6 +419,8 @@ export async function dadosFiscais(ctx: ContextoFocus, lim: LimitesDeEmissao, a:
   if (cadastro && cadastro.ok && cadastro.valor && c.municipio && cadastro.valor.codigoIbge && cadastro.valor.codigoIbge !== c.municipio) {
     cuidados.push(`o município configurado (${c.municipio}) é diferente do do cadastro público do CNPJ (${cadastro.valor.codigoIbge}): confira FOCUS_NFE_MUNICIPIO_<UNIDADE>`);
   }
+  if (c.perfil?.aliquotaOrigem) cuidados.push(`alíquota do ISS padrão (${c.perfil.aliquotaIss}%): ${c.perfil.aliquotaOrigem}`);
+  if (c.ambiente === 'producao' && !c.numeroInicialExplicito && proximoDaFocus === undefined) cuidados.push('produção: não consegui ler o próximo número da DPS na Focus e FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> não está configurado: a emissão será recusada (número repetido é recusado pelo ambiente nacional)');
   if (!ctx.webhookConfigurado) cuidados.push('FOCUS_NFE_WEBHOOK_SEGREDO ausente (32+ caracteres): o aviso automático de nota autorizada está desligado; o status só atualiza quando alguém consulta com focus_nota');
   const meuGatilho = gatilhos.ok ? gatilhos.valor.some((g) => g.event === 'nfsen' && g.url.includes(`/focus-nfe/webhook/${encodeURIComponent(c.slug)}/`)) : null;
   return {

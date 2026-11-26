@@ -33,12 +33,13 @@ function pedido(sobre: Partial<PedidoDePreparo> = {}): PedidoDePreparo {
   };
 }
 
-function montar(op: { ambiente?: Ambiente; serie?: number; unidades?: string[]; semPerfil?: boolean; tetoNota?: number; tetoDia?: number; porHora?: number; agora?: () => number } = {}) {
+function montar(op: { explicito?: boolean; ambiente?: Ambiente; serie?: number; unidades?: string[]; semPerfil?: boolean; tetoNota?: number; tetoDia?: number; porHora?: number; agora?: () => number } = {}) {
   const { focus, fonte } = focusEmMemoria();
   const armazem = armazemDeNotasEmMemoria();
   const perfil = op.semPerfil ? undefined : PERFIS_FISCAIS[UNI];
   const conta: ContaFocus = {
     slug: UNI, nome: 'Açailândia', ambiente: op.ambiente ?? 'homologacao', cnpj: '63130582000140', municipio: '2100055', ...(op.serie !== undefined ? { serieDps: op.serie } : {}), numeroInicial: 1,
+    ...(op.ambiente === 'producao' && op.explicito !== false ? { numeroInicialExplicito: true } : {}),
     ...(perfil ? { perfil } : {}), fonte,
   };
   const agora = op.agora ?? (() => AGORA);
@@ -134,7 +135,8 @@ test('Açailândia: a alíquota do ISS é 0 por decisão do João (Simples Nacio
   assert.equal(m.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 0);
   const iss = (prep.resumo as { iss: { aliquota: string; origem: string } }).iss;
   assert.equal(iss.aliquota, '0%');
-  assert.match(iss.origem, /perfil fiscal.*Simples Nacional/);
+  assert.equal(iss.origem, 'decisão do João em 26/11 (Simples, ISS no DAS); sem confirmação escrita da contabilidade');
+  assert.ok(!JSON.stringify(prep.resumo).includes('informado pela contabilidade'), 'nenhum dado do perfil se diz informado pela contabilidade');
   const outra = montar();
   await prepararEConfirmar(outra, pedido({ fiscal: { ...f, aliquotaIss: 2 } }));
   assert.equal(outra.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 2, 'quem pede pode trocar');
@@ -172,6 +174,50 @@ test('perfil fiscal: cTribNac, NBS, descrição, inscrição municipal e opção
   // unidade SEM perfil: tudo é perguntado
   const semPerfil = montar({ semPerfil: true });
   await assert.rejects(() => prepararNota(semPerfil.ctx, semPerfil.esc, QUEM, pedido()), (e: unknown) => /codigoTributacaoNacional/.test((e as Error).message) && /descricao/.test((e as Error).message) && /opcaoSimplesNacional/.test((e as Error).message));
+});
+
+test('numeração da DPS: nunca fica abaixo do próximo número que a Focus já guarda (empresa dela), seguindo daí; série diferente da da Focus não usa o número dela', async () => {
+  const m = montar();
+  m.focus.empresa = { serieNfsenHomologacao: 1, proximoNumeroNfsenHomologacao: 40 };
+  await prepararEConfirmar(m, pedido({ origem: 'v1' }));
+  await prepararEConfirmar(m, pedido({ origem: 'v2' }));
+  assert.deepEqual(m.focus.emitidas.map((e) => e.corpo.numero_dps), [40, 41]);
+  const outra = montar({ serie: 7 });
+  outra.focus.empresa = { serieNfsenHomologacao: 1, proximoNumeroNfsenHomologacao: 40 };
+  await prepararEConfirmar(outra);
+  assert.equal(outra.focus.emitidas[0]!.corpo.numero_dps, 1, 'a série 7 é outra numeração: o 40 da série 1 não vale');
+});
+
+test('produção: sem ler o próximo número da Focus e sem FOCUS_NFE_NUMERO_INICIAL a emissão é RECUSADA (DPS repetida é recusada pelo ambiente nacional); com um dos dois, emite', async () => {
+  const sem = montar({ ambiente: 'producao', serie: 900, explicito: false });
+  const prep = await prepararNota(sem.ctx, sem.esc, QUEM, pedido());
+  await assert.rejects(() => confirmarNota(sem.ctx, sem.esc, QUEM, { confirmacao: prep.confirmacao }), /próximo número da DPS.*Nada foi emitido/);
+  assert.equal(sem.focus.emitidas.length, 0);
+  assert.equal(sem.armazem.linhas.length, 0, 'nem a intenção foi gravada');
+  const lendo = montar({ ambiente: 'producao', serie: 900, explicito: false });
+  lendo.focus.empresa = { serieNfsenProducao: 900, proximoNumeroNfsenProducao: 12 };
+  await prepararEConfirmar(lendo);
+  assert.equal(lendo.focus.emitidas[0]!.corpo.numero_dps, 12);
+  const explicito = montar({ ambiente: 'producao', serie: 900 });
+  await prepararEConfirmar(explicito);
+  assert.equal(explicito.focus.emitidas.length, 1);
+});
+
+test('o perfil é de UM CNPJ e município: se o ambiente troca qualquer um, NADA do perfil vale e a unidade não emite', async () => {
+  const token = 'TOKENdeTESTE1234567890abcdefghij';
+  const base = { slug: UNI, nome: 'Açailândia', token, ambiente: 'homologacao' as const, numeroInicial: 1 };
+  const igual = contaFocusDaConfig({ ...base, cnpj: '63130582000140', municipio: '2100055' });
+  assert.ok(igual.perfil && !igual.conflitoDePerfil, 'mesmo CNPJ e município: o perfil vale');
+  for (const troca of [{ cnpj: '11222333000181' }, { municipio: '3550308' }]) {
+    const c = contaFocusDaConfig({ ...base, ...troca });
+    assert.equal(c.perfil, undefined);
+    assert.match(c.conflitoDePerfil ?? '', /perfil não vale/);
+    const m = montar();
+    m.ctx.contas.set(UNI, { ...c, fonte: m.conta.fonte });
+    await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido()), /perfil não vale.*Nada foi preparado/);
+    assert.equal(m.focus.emitidas.length, 0);
+  }
+  assert.ok(contaFocusDaConfig({ ...base }).perfil, 'sem troca nenhuma o perfil vale');
 });
 
 test('o perfil de Açailândia tem os dados que o João e a contabilidade informaram (e nenhuma alíquota)', () => {
