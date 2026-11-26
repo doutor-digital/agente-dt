@@ -17,7 +17,7 @@ const { casarFala } = await import('./origem-texto-pronto.js');
 const TEXTO = 'Olá! Meu nome é Ana, moro em Capivari e estou com dor na coluna. Vim pelo formulário e quero saber mais.';
 const E = { slug: 'doutor-hernia-capivari', contato: 77, conversa: 900, texto: TEXTO };
 
-function portas(o: { estado?: 'desligado' | 'seco' | 'ligado'; contatos?: Array<Record<string, unknown>>; falas?: string[] | null; opcoes?: string[] | null; intents?: unknown } = {}) {
+function portas(o: { estado?: 'desligado' | 'seco' | 'ligado'; estadoOrigem?: 'desligado' | 'seco' | 'ligado'; contatos?: Array<Record<string, unknown>>; falas?: string[] | null; opcoes?: string[] | null; intents?: unknown } = {}) {
   const gravados: Array<[number, Record<string, string>]> = [];
   const etiquetas: Array<[number, string[]]> = [];
   let leituras = 0;
@@ -30,6 +30,7 @@ function portas(o: { estado?: 'desligado' | 'seco' | 'ligado'; contatos?: Array<
     falasLidas: () => falasLidas,
     p: {
       estado: () => o.estado ?? 'ligado',
+      estadoOrigem: () => o.estadoOrigem ?? 'ligado',
       padroes: async () => padroesDoFormulario(o.intents),
       opcoesDaOrigem: async () => (o.opcoes === undefined ? ['Meta Ads', ORIGEM_FORMULARIO] : o.opcoes),
       falasDoPaciente: async () => { falasLidas++; return o.falas === undefined ? [TEXTO] : o.falas; },
@@ -274,4 +275,13 @@ test('o mapa de conversas decididas tem TETO: nunca passa de 2.000 entradas', as
   for (let i = 0; i < 300; i++) { await preencherFormulario({ ...E, conversa: 50_000 + i }, z.p); }
   assert.equal(x.gravados.length, 2300, 'nenhuma decisão perdeu o trabalho');
   assert.ok(V_TAMANHO() <= 2000, `mapa com ${V_TAMANHO()}`);
+});
+
+test('o palpite SÓ roda com `chatwoot-origem` LIGADO (é ele que troca o palpite pelo referral): desligado ou em seco → não lê nada, não grava', async () => {
+  for (const estadoOrigem of ['desligado', 'seco'] as const) {
+    const x = portas({ estadoOrigem });
+    assert.equal(await preencherFormulario(E, x.p), 'origem-desligada', estadoOrigem);
+    assert.equal(x.lidas() + x.falasLidas() + x.gravados.length + x.etiquetas.length, 0);
+  }
+  assert.equal(await preencherFormulario(E, portas({ estadoOrigem: 'ligado' }).p), 'gravado');
 });

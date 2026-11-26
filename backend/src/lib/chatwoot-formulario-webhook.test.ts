@@ -16,7 +16,7 @@ const { prisma } = await import('./prisma.js');
 const { _esquecerOBancoParaTeste } = await import('./automacoes-estado.js');
 
 const ENV = { CHATWOOT_API_TOKEN: 'tk-do-ambiente', CHATWOOT_CONTA_ID: '1', CHATWOOT_URL: 'https://crm.exemplo.test' } as NodeJS.ProcessEnv;
-const CHAVES = [...Object.keys(ENV), 'CHATWOOT_FORMULARIO_SLUGS'];
+const CHAVES = [...Object.keys(ENV), 'CHATWOOT_FORMULARIO_SLUGS', 'CHATWOOT_ORIGEM_SLUGS', 'CHATWOOT_ETIQUETA_ANUNCIO'];
 const salvo = new Map(CHAVES.map((k) => [k, process.env[k]]));
 /** Troca um delegate do Prisma por um de mentira (o delegate é um proxy) e desfaz no fim de cada teste. Nada aqui chega ao banco de verdade. */
 const originais: Array<() => void> = [];
@@ -70,7 +70,7 @@ const disparar = async (corpo: unknown) => {
 const paciente = { event: 'message_created', message_type: 'incoming', private: false, content: TEXTO, conversation: { id: 5, inbox_id: 3 }, content_attributes: {}, sender: { id: 77, type: 'contact' } };
 
 test('webhook: chave da unidade LIGADA + texto do formulário → contato ganha Origem = Formulário e a conversa a etiqueta', async () => {
-  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas' });
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas', CHATWOOT_ORIGEM_SLUGS: 'doutor-hernia-parauapebas' });
   const w = chatwootDeMentira({});
   const f = mock.method(globalThis, 'fetch', w.f as never);
   try {
@@ -83,7 +83,7 @@ test('webhook: chave da unidade LIGADA + texto do formulário → contato ganha 
 });
 
 test('webhook: contato JÁ com origem de anúncio → nada é escrito', async () => {
-  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas' });
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas', CHATWOOT_ORIGEM_SLUGS: 'doutor-hernia-parauapebas' });
   const w = chatwootDeMentira({ origem: 'Meta Ads' });
   const f = mock.method(globalThis, 'fetch', w.f as never);
   try {
@@ -137,7 +137,7 @@ test('webhook: lead de ANÚNCIO que escreve «vim pelo formulário» → o anún
 });
 
 test('webhook: mensagem COM referral do Chatwoot (anúncio) que traz o texto do formulário → o palpite nem roda (a origem é do anúncio)', async () => {
-  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas' });
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas', CHATWOOT_ORIGEM_SLUGS: 'doutor-hernia-parauapebas' });
   trocarDelegate('chatwootReguaDisparo', { create: async () => ({}) });
   const w = chatwootDeMentira({});
   const f = mock.method(globalThis, 'fetch', w.f as never);
@@ -145,6 +145,19 @@ test('webhook: mensagem COM referral do Chatwoot (anúncio) que traz o texto do 
     const corpo = { ...paciente, source_id: 'wamid.HBgMNTU5NDk5OTk5OTk5FQIAEhgg0123456789ABCDEF', content_attributes: { referral: { source_type: 'ad', source_id: '120200000000000001', ctwa_clid: 'Afd', headline: 'Dor?' } } };
     await disparar(corpo);
     assert.ok(!w.escritas.some((l) => l.includes('"origem":"Formulário"') || l.includes('formulario')), `o formulário não escreveu: ${w.escritas.join(' | ')}`);
+  } finally {
+    f.mock.restore();
+  }
+});
+
+test('webhook: formulário LIGADO mas `chatwoot-origem` DESLIGADO → o palpite não roda (o referral não poderia trocá-lo): nada é lido nem escrito', async () => {
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas' });
+  delete process.env.CHATWOOT_ORIGEM_SLUGS;
+  const w = chatwootDeMentira({});
+  const f = mock.method(globalThis, 'fetch', w.f as never);
+  try {
+    await disparar(paciente);
+    assert.deepEqual(w.escritas.filter((l) => l.includes('contacts/77') || l.includes('labels')), []);
   } finally {
     f.mock.restore();
   }

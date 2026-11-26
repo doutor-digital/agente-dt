@@ -196,6 +196,8 @@ export function padroesDoFormulario(pipelineIntents: unknown, aviso: (motivo: st
 
 export type PortasDoFormulario = Pick<PortasDaOrigem, 'contato' | 'gravar'> & {
   estado(slug: string): Estado;
+  /** o estado de `chatwoot-origem` (o tratamento do anúncio): o palpite só roda com ele LIGADO — é ele que troca o palpite pelo referral; sem ele o «Formulário» ficaria para sempre */
+  estadoOrigem(slug: string): Estado;
   /** os padrões da unidade (cadastro ou o de sempre) */
   padroes(slug: string): Promise<EntradaDaLista[]>;
   /** as opções da lista «Origem» da conta; null = não deu para ler */
@@ -233,6 +235,7 @@ export function portasDoFormulario(ctx: ContextoChatwoot, origem: PortasDaOrigem
     contato: origem.contato,
     gravar: origem.gravar,
     estado: (slug) => estadoDaAutomacao(slug, ID_FORMULARIO, process.env.CHATWOOT_FORMULARIO_SLUGS),
+    estadoOrigem: (slug) => estadoDaAutomacao(slug, ID_ORIGEM, process.env.CHATWOOT_ORIGEM_SLUGS),
     async padroes(slug) {
       const hit = cacheDosPadroes.get(slug);
       if (hit && hit.ate > Date.now()) return hit.v;
@@ -290,7 +293,7 @@ export function falaParaFormulario(corpo: any, caixas: Readonly<Record<number, s
   return { slug, conversa, contato: Number.isInteger(contato) && contato > 0 ? contato : null, texto };
 }
 
-export type ResultadoDoFormulario = 'desligado' | 'nada' | 'seco' | 'gravado' | 'sem-opcao';
+export type ResultadoDoFormulario = 'desligado' | 'origem-desligada' | 'nada' | 'seco' | 'gravado' | 'sem-opcao';
 
 /**
  * Roda a cada fala de paciente. Barato quando não casa (só o estado e a comparação do texto). Não lança.
@@ -305,6 +308,8 @@ export async function preencherFormulario(
     if (env.CHATWOOT_FORMULARIO === '0') return 'desligado';
     const modo = p.estado(e.slug);
     if (modo === 'desligado' || !e.contato) return 'desligado';
+    // sem `chatwoot-origem` LIGADO o referral de anúncio não grava origem: o palpite ficaria para sempre e ainda bloquearia o anúncio. Não roda (nem lê nada).
+    if (p.estadoOrigem(e.slug) !== 'ligado') return 'origem-desligada';
     const padroes = await p.padroes(e.slug);
     if (!casarFala(e.texto, padroes)) return 'nada';
     const chave = `${e.slug}:${e.conversa}`;
