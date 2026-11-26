@@ -403,5 +403,68 @@ function agendarVarredura(): void {
   relogio.unref();
 }
 
+// ── retomada no boot: a lista de pendentes reconstruída do Registro ──────────────────────────────────
+
+/** o que a retomada precisa de uma linha do Registro (`sofia_evento`) */
+export interface EventoDoRegistro {
+  unitSlug: string;
+  conversa: number;
+  tipo: string;
+  nome: string | null;
+  criadoEm: Date;
+}
+/** quanto para trás a retomada olha: o aviso é de hoje; o paciente de anteontem já foi atendido ou desistiu (e o pendente vale 24 h) */
+export const JANELA_DA_RETOMADA_MS = VALIDADE_DO_PENDENTE_MS;
+/** quantas conversas são rearmadas de uma vez, e quanto tempo separa um lote do outro (o servidor acabou de subir: sem rajada de leituras no Chatwoot) */
+export const LOTE_DA_RETOMADA = 20;
+export const ENTRE_LOTES_DA_RETOMADA_MS = 3_000;
+
+/**
+ * Quem a Sofia deixou parado, segundo o Registro: o ÚLTIMO evento de cada (unidade, conversa) — de qualquer tipo, para que uma rodada que marcou, passou para a equipe ou
+ * mandou o Pix depois da falha a tire da lista — e só se esse último evento é uma decisão de falha/teto/sem-texto/Kommo-indisponível.
+ */
+export function paradosDoRegistro(eventos: readonly EventoDoRegistro[]): Array<{ slug: string; conversa: number; desfecho: string; em: number }> {
+  const ultimo = new Map<string, EventoDoRegistro>();
+  for (const e of [...eventos].sort((a, b) => a.criadoEm.getTime() - b.criadoEm.getTime())) ultimo.set(`${e.unitSlug}|${e.conversa}`, e);
+  return [...ultimo.values()]
+    .filter((e) => e.tipo === 'decisao' && !!e.nome && DESFECHOS_QUE_PARAM.has(e.nome))
+    .map((e) => ({ slug: e.unitSlug, conversa: e.conversa, desfecho: e.nome!, em: e.criadoEm.getTime() }));
+}
+
+/**
+ * Ao subir o servidor (um deploy a cada ~55 min perde a lista em memória): relê o Registro das últimas 24 h e REARMA a vigia de cada conversa que ficou parada, esperando só o
+ * que faltava dos N minutos — quem já passou do prazo é conferido já, em lotes escalonados. Sem tabela nova. Devolve quantas conversas foram rearmadas. Nunca lança.
+ */
+export async function retomarDoRegistro(d: {
+  eventos(desde: Date): Promise<EventoDoRegistro[]>;
+  armar(p: { slug: string; conversa: number; desfecho: string }, esperaMs: number): void | Promise<void>;
+  agora(): number;
+  env?: Partial<NodeJS.ProcessEnv>;
+}): Promise<number> {
+  try {
+    const agora = d.agora();
+    const minutosMs = minutosDoAlerta((d.env ?? process.env) as NodeJS.ProcessEnv) * 60_000;
+    const parados = paradosDoRegistro(await d.eventos(new Date(agora - JANELA_DA_RETOMADA_MS))).filter((p) => agora - p.em <= JANELA_DA_RETOMADA_MS);
+    parados.sort((a, b) => a.em - b.em);
+    let n = 0;
+    let vencidas = 0;
+    for (const p of parados) {
+      try {
+        // quem ainda tem prazo espera só o que falta; quem JÁ venceu entra em lotes (a mais antiga primeiro), para o boot não virar uma rajada de leituras no Chatwoot
+        const falta = Math.max(0, minutosMs - (agora - p.em));
+        await d.armar(p, falta > 0 ? falta : Math.floor(vencidas++ / LOTE_DA_RETOMADA) * ENTRE_LOTES_DA_RETOMADA_MS);
+        n++;
+      } catch (err) {
+        logger.warn({ err: String(err), conversa: p.conversa }, `${ID_SOFIA_PAROU}: não consegui rearmar a vigia no boot`);
+      }
+    }
+    if (n) logger.info({ rearmadas: n }, `${ID_SOFIA_PAROU}: vigia rearmada a partir do Registro`);
+    return n;
+  } catch (err) {
+    logger.warn({ err: String(err) }, `${ID_SOFIA_PAROU}: não consegui reconstruir a lista a partir do Registro`);
+    return 0;
+  }
+}
+
 /** A chave desta unidade (catálogo). */
 export const estadoDoAlerta = (slug: string, env: NodeJS.ProcessEnv = process.env): Estado => estadoDaAutomacao(slug, ID_SOFIA_PAROU, env.CHATWOOT_SOFIA_PAROU_SLUGS);

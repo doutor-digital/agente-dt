@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
 import type { Estado } from './automacoes-estado.js';
 import type { ConversaLida } from './chatwoot-porta.js';
-import { conferirSofiaParou, DESFECHOS_QUE_PARAM, descarregarPendentes, ENTRE_AVISOS_DA_UNIDADE_MS, ENTRE_AVISOS_MS, esquecerAvisosDoVigia, minutosDoAlerta, pendentesDoVigia, textoDoAviso, ultimaDoPacienteEm, type DepsDoVigia } from './chatwoot-sofia-parou.js';
+import { conferirSofiaParou, DESFECHOS_QUE_PARAM, descarregarPendentes, ENTRE_AVISOS_DA_UNIDADE_MS, ENTRE_LOTES_DA_RETOMADA_MS, LOTE_DA_RETOMADA, paradosDoRegistro, retomarDoRegistro, type EventoDoRegistro, ENTRE_AVISOS_MS, esquecerAvisosDoVigia, minutosDoAlerta, pendentesDoVigia, textoDoAviso, ultimaDoPacienteEm, type DepsDoVigia } from './chatwoot-sofia-parou.js';
 import { novaMemoriaDaIa, rodarSofia, type PortasDaIa } from './chatwoot-ia.js';
 import { textoDaEspera } from './crm-demora/marca.js';
 
@@ -328,4 +328,78 @@ test('duas varreduras não andam ao mesmo tempo (a janela do resumo só é reser
   const [x, y] = await Promise.all([descarregarPendentes(), descarregarPendentes()]);
   assert.equal(x + y, 1, 'um resumo só');
   assert.equal(a.enviados.length, 1);
+});
+
+// ── retomada no boot: o servidor reinicia no meio da noite e o resumo da manhã ainda lista quem está sem resposta ─────────────────────
+
+const ev = (conversa: number, tipo: string, nome: string | null, em: string, unitSlug = M.slug): EventoDoRegistro => ({ unitSlug, conversa, tipo, nome, criadoEm: new Date(em) });
+
+test('Registro → parados: o ÚLTIMO evento de cada conversa; só falha/teto/sem-texto/Kommo-indisponível deixam parado; uma rodada que marcou, passou à equipe ou foi calada depois tira da lista', () => {
+  const p = paradosDoRegistro([
+    ev(1, 'decisao', 'falhou', '2026-11-27T01:00:00Z'),
+    ev(2, 'decisao', 'teto', '2026-11-27T01:05:00Z'),
+    ev(3, 'decisao', 'falhou', '2026-11-27T01:10:00Z'),
+    ev(3, 'marcou', null, '2026-11-27T01:20:00Z'), // falhou, depois a Sofia marcou
+    ev(4, 'decisao', 'falhou', '2026-11-27T01:10:00Z'),
+    ev(4, 'decisao', 'equipe-respondeu', '2026-11-27T01:30:00Z'),
+    ev(5, 'decisao', 'calada', '2026-11-27T01:10:00Z'),
+    ev(6, 'decisao', 'kommo-indisponivel', '2026-11-27T01:12:00Z'),
+    ev(6, 'decisao', 'falhou', '2026-11-27T01:40:00Z', 'doutor-hernia-caxias'), // outra unidade com o MESMO número de conversa não mistura
+    ev(7, 'decisao', 'sem-texto', '2026-11-27T01:14:00Z'),
+  ]);
+  assert.deepEqual(p.map((x) => `${x.slug}|${x.conversa}|${x.desfecho}`).sort(), [`${M.slug}|1|falhou`, `${M.slug}|2|teto`, `${M.slug}|6|kommo-indisponivel`, `${M.slug}|7|sem-texto`, 'doutor-hernia-caxias|6|falhou'].sort());
+});
+
+test('retomada: rearma com o que FALTA dos 15 min (quem já passou do prazo, já), em lotes escalonados; nunca lança; só olha as últimas 24 h', async () => {
+  const agora = Date.parse('2026-11-27T02:00:00Z');
+  const armadas: Array<{ conversa: number; esperaMs: number }> = [];
+  let pediu: Date | null = null;
+  const eventos = [
+    ev(1, 'decisao', 'falhou', '2026-11-27T01:52:00Z'), // 8 min atrás: faltam 7
+    ...Array.from({ length: 45 }, (_, i) => ev(100 + i, 'decisao', 'teto', '2026-11-27T01:00:00Z')), // 1 h atrás: já passou do prazo
+  ];
+  const n = await retomarDoRegistro({ eventos: async (desde) => ((pediu = desde), eventos), armar: (p, esperaMs) => void armadas.push({ conversa: p.conversa, esperaMs }), agora: () => agora, env: {} });
+  assert.equal(n, 46);
+  assert.equal(pediu!.getTime(), agora - 24 * 3600_000, 'as últimas 24 h');
+  assert.equal(armadas.find((a) => a.conversa === 1)!.esperaMs, 7 * 60_000);
+  const velhas = armadas.filter((a) => a.conversa >= 100).map((a) => a.esperaMs);
+  assert.equal(velhas.filter((e) => e === 0).length, LOTE_DA_RETOMADA, 'o 1º lote vai já');
+  assert.equal(Math.max(...velhas), 2 * ENTRE_LOTES_DA_RETOMADA_MS, '45 conversas = 3 lotes: 0, 3 s e 6 s');
+  // o Registro fora do ar não derruba o boot
+  assert.equal(await retomarDoRegistro({ eventos: async () => { throw new Error('banco fora'); }, armar: () => undefined, agora: () => agora }), 0);
+});
+
+test('o servidor REINICIA no meio da noite: a lista é reconstruída do Registro e o resumo da manhã ainda traz quem segue sem resposta (e não quem a equipe atendeu)', async () => {
+  // quinta 23h (SP) as falhas aconteceram; o servidor foi reiniciado às 2h (sexta) — a memória (pendentes) zerou
+  const falhouEm = Date.parse('2026-11-27T02:00:00Z'); // quinta 23h em São Paulo
+  esquecerAvisosDoVigia(); // = o processo novo
+  let agora = Date.parse('2026-11-27T05:00:00Z'); // sexta 2h: a equipe está fechada
+  const respondidos = new Set<number>();
+  const a = deps({ agora: () => agora });
+  a.d.mensagens = async (c) => [{ message_type: 0, private: false, content: 'oi', created_at: Math.floor(falhouEm / 1000) }, ...(respondidos.has(c) ? [{ message_type: 1, private: false, content: 'Oi! Aqui é a recepção', created_at: Math.floor((agora + 1) / 1000) }] : [])];
+  // o Registro guardou as 3 falhas da noite
+  const eventos = [ev(41, 'decisao', 'falhou', '2026-11-27T02:00:00Z'), ev(42, 'decisao', 'teto', '2026-11-27T02:03:00Z'), ev(43, 'decisao', 'falhou', '2026-11-27T02:05:00Z')];
+  // o «armar» do servidor faria um setTimeout; aqui a conferência roda na hora (o prazo de 15 min já tinha passado)
+  const resultados: string[] = [];
+  const n = await retomarDoRegistro({
+    eventos: async () => eventos,
+    agora: () => agora,
+    env: {},
+    armar: async (p) => void resultados.push(await conferirSofiaParou({ slug: p.slug, conversa: p.conversa }, p.desfecho, a.d)),
+  });
+  assert.equal(n, 3);
+  assert.deepEqual(resultados, ['acumulada', 'acumulada', 'acumulada'], 'de madrugada nada sai: fica para o resumo');
+  assert.equal(a.enviados.length, 0);
+  assert.equal(pendentesDoVigia(), 3, 'a lista foi reconstruída');
+  // a recepção atende a 42 ainda de madrugada (pelo celular)
+  respondidos.add(42);
+  // sexta 9h em São Paulo: a clínica abre
+  agora = Date.parse('2026-11-27T12:00:00Z');
+  assert.equal(await descarregarPendentes(), 1, 'UM resumo');
+  assert.equal(a.enviados.length, 1);
+  const t = a.enviados[0]!.texto;
+  assert.match(t, /^⚠️ A Sofia parou de responder no CRM e 2 pacientes seguem sem resposta:/);
+  assert.match(t, /conversa 41 /);
+  assert.match(t, /conversa 43 /);
+  assert.doesNotMatch(t, /conversa 42 /, 'a que a recepção atendeu sai');
 });

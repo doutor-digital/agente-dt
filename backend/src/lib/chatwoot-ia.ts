@@ -24,7 +24,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, contasDoChatwoot, contextoDoAmbiente, donaDaConta, ehContaDoAmbiente, tokenParaChaveDaConta, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { configDaUnidade, contaDaCaixa, unidadeDaCaixa } from './chatwoot-unidades.js';
+import { configDaUnidade, contaDaCaixa, contaDaUnidade, unidadeDaCaixa } from './chatwoot-unidades.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
 import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } from './chatwoot-etiquetas.js';
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
@@ -46,7 +46,7 @@ import { agendarIndice } from './franquia-indice-telefones.js';
 import { foraDoHorarioDaIa } from './chatwoot-horario-da-ia.js';
 import { AVISO_DE_PRECO_SEGURADO, textoDosValores } from './chatwoot-preco-unico.js';
 import { dataPorExtenso } from './feriados.js';
-import { conferirSofiaParou, DESFECHOS_QUE_PARAM, estadoDoAlerta, minutosDoAlerta } from './chatwoot-sofia-parou.js';
+import { conferirSofiaParou, DESFECHOS_QUE_PARAM, estadoDoAlerta, minutosDoAlerta, retomarDoRegistro } from './chatwoot-sofia-parou.js';
 import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
@@ -245,7 +245,7 @@ export interface PortasDaIa {
    * A rodada acabou em falha, teto ou erro e o paciente ficou sem resposta (só com a Sofia LIGADA): daqui a N minutos confere se continua assim e avisa a
    * equipe (chatwoot-sofia-parou.ts, chave por unidade, nasce em seco). Nunca lança. Opcional: os testes que não tratam disso não precisam.
    */
-  vigiarSofiaParou?(m: MensagemDoPaciente, desfecho: Desfecho): void;
+  vigiarSofiaParou?(m: MensagemDoPaciente, desfecho: Desfecho, esperaMs?: number): void;
 }
 
 /**
@@ -338,7 +338,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     encerrarAtendimento: async (conversa) => void (await encerrarAtendimento(conversa, atendimento)),
     conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
     atendimentoAtivo,
-    vigiarSofiaParou: (m, desfecho) => {
+    vigiarSofiaParou: (m, desfecho, esperaMs) => {
       // chave desta unidade desligada: nem arma o relógio (o padrão do catálogo é «só no papel», então quem não mexeu em nada ainda anota)
       if (estadoDoAlerta(m.slug) === 'desligado') return;
       // um relógio por conversa, sempre contado da ÚLTIMA falha: o antigo sai (senão a conferência o acharia «recente» e o alerta se perderia)
@@ -358,7 +358,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
           agora: () => Date.now(),
           link: (conversa) => (ctx.conta ? `${ctx.conta.url.replace(/\/+$/, '')}/app/accounts/${ctx.conta.conta}/conversations/${conversa}` : null),
         });
-      }, minutosDoAlerta() * 60_000);
+      }, esperaMs ?? minutosDoAlerta() * 60_000);
       t.unref();
       vigiando.set(m.conversa, t);
     },
@@ -934,6 +934,26 @@ export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.e
   };
   estados.set(conta, { assinatura, estado: novo });
   return novo;
+}
+
+/**
+ * Ao subir o servidor: rearma a vigia «Sofia parou» a partir do Registro (`sofia_evento`, últimas 24 h) — a lista de pendentes é em memória e um deploy a apaga.
+ * A conta de cada unidade vem da configuração dela (`null` = a do ambiente); unidade ou conta que o servidor não conhece fica de fora. Nunca lança.
+ */
+export async function retomarVigiasDoRegistro(e: NodeJS.ProcessEnv = process.env): Promise<number> {
+  return retomarDoRegistro({
+    eventos: (desde) => prisma.sofiaEvento.findMany({ where: { criadoEm: { gte: desde } }, orderBy: { criadoEm: 'asc' }, take: 20_000, select: { unitSlug: true, conversa: true, tipo: true, nome: true, criadoEm: true } }),
+    agora: () => Date.now(),
+    env: e,
+    armar: ({ slug, conversa, desfecho }, esperaMs) => {
+      if (estadoDoAlerta(slug, e) === 'desligado') return;
+      const daUnidade = contaDaUnidade(slug);
+      if (daUnidade === undefined) return; // unidade desconhecida ou com conta inválida: nunca cai na conta de outra clínica
+      const conta = daUnidade ?? contaChatwootDoAmbiente(e)?.conta;
+      const estado = conta ? estadoDoReceptor(conta, e) : null;
+      estado?.portas.vigiarSofiaParou?.({ conversa, caixa: 0, slug, audios: [] }, desfecho as Desfecho, esperaMs);
+    },
+  });
 }
 
 /**

@@ -88,6 +88,7 @@ import { startCrmTarefasWorker, stopCrmTarefasWorker } from './lib/crm-tarefas-w
 import { startCrmDemoraWorker, stopCrmDemoraWorker } from './lib/crm-demora-worker.js';
 import { paginaTarefasHandler } from './controllers/tarefas.controller.js';
 import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
+import { retomarVigiasDoRegistro } from './lib/chatwoot-ia.js';
 import { startChatwootDuplicadosWorker, stopChatwootDuplicadosWorker } from './lib/chatwoot-duplicados.js';
 import { startChatwootCapiWorker, stopChatwootCapiWorker } from './lib/chatwoot-capi.js';
 
@@ -326,6 +327,8 @@ async function main(): Promise<void> {
       startCrmTarefasWorker();
       startCrmDemoraWorker();
       startChatwootAgendaWorker();
+      // o alerta «Sofia parou» guarda os pendentes em memória e um deploy os apaga: 90 s depois de subir, reconstrói do Registro (sofia_evento, 24 h)
+      setTimeout(() => void retomarVigiasDoRegistro(), 90_000).unref();
       startChatwootDuplicadosWorker();
       startChatwootCapiWorker();
       iniciarVigiaDeQualidade();
