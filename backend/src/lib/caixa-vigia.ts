@@ -24,7 +24,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
-import { configurado, enviarPelaEvolutionComResultado, type ResultadoDoEnvio } from './alerta-whatsapp.js';
+import { avisarJoao, configurado, enviarPelaEvolutionComResultado, type ResultadoDoEnvio } from './alerta-whatsapp.js';
 import { ehFeriadoNacionalAgora } from './feriados.js';
 import { fusoDaUnidade, offsetMinutosNoFuso, partesNoFuso } from './fuso.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
@@ -169,6 +169,7 @@ export async function serieDaCaixa(ctx: ContextoChatwoot, caixa: number, agoraMs
 // ── o Kapso (só leitura; a chave só no cabeçalho) ─────────────────────────────────────────────────────────────────
 
 const KAPSO = 'https://api.kapso.ai/platform/v1';
+const PAGINAS_MAX = 5;
 
 export interface NumeroDoKapso {
   id: string;
@@ -216,7 +217,7 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
       try {
         const j = await ler('/whatsapp/phone_numbers?per_page=100');
         for (const p of Array.isArray(j?.data) ? j.data : []) {
-          const id = String(p?.id ?? p?.phone_number_id ?? '');
+          const id = String(p?.phone_number_id ?? p?.id ?? ''); // o id da Meta (o mesmo que a unidade guarda); na lista do Kapso `id` e `phone_number_id` são iguais (conferido)
           if (id) m.set(id, { id, status: typeof p.status === 'string' ? p.status : null, recebimentoLigado: typeof p.inbound_processing_enabled === 'boolean' ? p.inbound_processing_enabled : null });
         }
       } catch (err) {
@@ -235,12 +236,20 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
     async entregasComErro(desdeMs) {
       try {
         const por = new Map<string, number>();
-        const j = await ler('/webhook_deliveries?per_page=100');
-        for (const e of Array.isArray(j?.data) ? j.data : []) {
-          const quando = Date.parse(String(e?.created_at ?? ''));
-          if (!Number.isFinite(quando) || quando < desdeMs || !falhou(e)) continue;
-          const n = String(e?.phone_number_id ?? '');
-          if (n) por.set(n, (por.get(n) ?? 0) + 1);
+        // as mais novas primeiro: segue as páginas até passar do começo da janela (no máximo 5 — se a janela é maior que isso, o aviso diz o que viu)
+        for (let pagina = 1; pagina <= PAGINAS_MAX; pagina++) {
+          const j = await ler(`/webhook_deliveries?per_page=100&page=${pagina}`);
+          const itens: any[] = Array.isArray(j?.data) ? j.data : [];
+          let maisAntigo = Infinity;
+          for (const e of itens) {
+            const quando = Date.parse(String(e?.created_at ?? ''));
+            if (Number.isFinite(quando)) maisAntigo = Math.min(maisAntigo, quando);
+            // só a entrega de MENSAGEM de paciente ao CRM (o eco do celular da equipe e outros eventos não são lead que deixou de entrar)
+            if (!Number.isFinite(quando) || quando < desdeMs || e?.event !== 'meta.messages' || !falhou(e)) continue;
+            const n = String(e?.phone_number_id ?? '');
+            if (n) por.set(n, (por.get(n) ?? 0) + 1);
+          }
+          if (!itens.length || maisAntigo < desdeMs || !j?.meta?.has_next) break;
         }
         return por;
       } catch (err) {
@@ -250,13 +259,20 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
     },
     async entradas(numero, desdeMs, ateMs) {
       try {
-        const j = await ler(`/whatsapp/messages?phone_number_id=${encodeURIComponent(numero)}&direction=inbound&per_page=100`);
         let n = 0;
-        for (const m of Array.isArray(j?.data) ? j.data : []) {
-          const t = Number(m?.timestamp) * 1000;
-          if (m?.kapso?.direction === 'inbound' && t >= desdeMs && t <= ateMs) n++;
+        // as mais novas primeiro: segue as páginas até passar do começo da janela; se não chegar lá em 5 páginas, NÃO diagnostica (null) em vez de dizer «0»
+        for (let pagina = 1; pagina <= PAGINAS_MAX; pagina++) {
+          const j = await ler(`/whatsapp/messages?phone_number_id=${encodeURIComponent(numero)}&direction=inbound&per_page=100&page=${pagina}`);
+          const itens: any[] = Array.isArray(j?.data) ? j.data : [];
+          let maisAntigo = Infinity;
+          for (const m of itens) {
+            const t = Number(m?.timestamp) * 1000;
+            if (Number.isFinite(t)) maisAntigo = Math.min(maisAntigo, t);
+            if (m?.kapso?.direction === 'inbound' && t >= desdeMs && t <= ateMs) n++;
+          }
+          if (!itens.length || maisAntigo < desdeMs || !j?.meta?.has_next) return n; // chegou ao começo da janela (ou ao fim da lista)
         }
-        return n;
+        return null;
       } catch (err) {
         logger.warn({ err: mascara(err) }, `${ID_VIGIA}: não consegui contar as mensagens recebidas no Kapso`);
         return null;
@@ -308,8 +324,13 @@ export interface DepsDoVigia {
   enviar(slug: string, texto: string): Promise<boolean>;
   /** anota que avisou (só no ligado) */
   marcar(caixa: number, agora: number, resumo: string): Promise<void>;
-  /** só no seco: a trava de memória (o seco não grava no banco) */
-  jaLogouSeco(caixa: number, agora: number): boolean;
+  /** só no seco: a trava de memória (o seco não grava no banco) — olhar e anotar são coisas separadas */
+  secoRecente(caixa: number, agora: number): boolean;
+  anotarSeco(caixa: number, agora: number): void;
+  /** a caixa vem sendo ignorada de propósito (CAIXA_VIGIA_IGNORAR) */
+  ignorada(caixa: number): boolean;
+  /** a varredura ficou CEGA nesta caixa (nada pôde ser lido): conta seguidas e avisa o João uma vez, só no ligado */
+  cegueira(caixa: number, cega: boolean): Promise<void>;
   agora(): number;
 }
 
@@ -317,10 +338,12 @@ export type ResultadoDaCaixa = 'desligado' | 'sem-unidade' | 'sem-leitura' | 'ok
 
 export async function cicloDaCaixa(d: DepsDoVigia, caixa: number, slug: string, horas = horasDaJanela()): Promise<ResultadoDaCaixa> {
   const modo = d.estado(slug);
-  if (modo === 'desligado') return 'desligado';
+  if (modo === 'desligado' || d.ignorada(caixa)) return 'desligado';
   const unit = await d.unidade(slug);
   if (!unit) return 'sem-unidade';
   const agora = d.agora();
+  // já avisou nas últimas 3 h? Então nem lê o Chatwoot nem o Kapso (a leitura seria jogada fora)
+  if (modo === 'ligado' ? await d.jaAvisou(caixa, agora) : d.secoRecente(caixa, agora)) return 'ja-avisou';
   const tz = fusoDaUnidade({ businessHoursTimezone: unit.businessHoursTimezone ?? undefined, spineTimezone: unit.spineTimezone ?? undefined });
   const problemas: ProblemaDaCaixa[] = [];
   let leu = false;
@@ -352,14 +375,14 @@ export async function cicloDaCaixa(d: DepsDoVigia, caixa: number, slug: string, 
     if (erros > 0) problemas.push({ texto: `${erros} mensagem(ns) de paciente não foram entregues ao CRM pelo Kapso (últimas ${horas} h).` });
   }
 
+  await d.cegueira(caixa, !leu);
   if (!problemas.length) return leu ? 'ok' : 'sem-leitura';
   const texto = textoDoAviso({ unidade: unit.name, caixa, problemas });
   if (modo === 'seco') {
-    if (d.jaLogouSeco(caixa, agora)) return 'ja-avisou';
+    d.anotarSeco(caixa, agora);
     logger.info({ slug, caixa, problemas: problemas.map((p) => p.texto) }, `${ID_VIGIA}: [SECO] avisaria o João (e o grupo da unidade): ${problemas.map((p) => p.texto).join(' | ')}`);
     return 'seco';
   }
-  if (await d.jaAvisou(caixa, agora)) return 'ja-avisou';
   const saiu = await d.enviar(slug, texto);
   if (!saiu) {
     logger.warn({ slug, caixa }, `${ID_VIGIA}: aviso NÃO saiu (sem configuração da Evolution ou ela recusou) — tento na próxima varredura`);
@@ -406,12 +429,24 @@ export async function enviarOAviso(slug: string, texto: string, env: NodeJS.Proc
   return resultados.some((r) => r === 'ok' || r === 'incerto');
 }
 
-const seco = new Map<number, number>();
+/** Memória do processo: o último aviso (ligado) e o último log (seco) por caixa — segunda trava quando o banco falha, e a única do seco (que não grava). */
+const ultimoSeco = new Map<number, number>();
+const ultimoEnvio = new Map<number, number>();
+const cegas = new Map<number, number>();
+/** Varreduras seguidas sem ler NADA da caixa até avisar que o vigia está cego (8 × 15 min = 2 h). */
+export const VARREDURAS_CEGAS = 8;
 export function esquecerOSeco(): void {
-  seco.clear();
+  ultimoSeco.clear();
+  ultimoEnvio.clear();
+  cegas.clear();
 }
 
-export function depsReais(ctx: ContextoChatwoot, kapso: PortaDoKapso | null): Omit<DepsDoVigia, 'cicloKapso'> {
+/** Caixas que o vigia ignora de propósito: `CAIXA_VIGIA_IGNORAR` = ids separados por vírgula (caixa aposentada, número migrado). */
+export function caixasIgnoradas(env: NodeJS.ProcessEnv = process.env): Set<number> {
+  return new Set(String(env.CAIXA_VIGIA_IGNORAR ?? '').split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0));
+}
+
+export function depsReais(ctx: ContextoChatwoot, kapso: PortaDoKapso | null, env: NodeJS.ProcessEnv = process.env): Omit<DepsDoVigia, 'cicloKapso'> {
   return {
     estado: estadoDoVigia,
     unidade: async (slug) => {
@@ -428,19 +463,32 @@ export function depsReais(ctx: ContextoChatwoot, kapso: PortaDoKapso | null): Om
       return cfg?.caixas.find((x) => x.id === caixa)?.tipo === 'cloud' ? (cfg.kapsoPhoneNumberId ?? null) : null;
     },
     kapso,
-    jaAvisou: async (caixa, agora) =>
-      (await prisma.chatwootReguaDisparo.findFirst({ where: { caixa, regra: REGRA_VIGIA, criadoEm: { gte: new Date(agora - INTERVALO_DO_AVISO_MS) } }, select: { id: true } }).catch(() => null)) !== null,
+    jaAvisou: async (caixa, agora) => {
+      // a memória do processo é a segunda trava: com o banco falhando, no máximo UM aviso por caixa a cada 3 h por processo (nunca um a cada varredura)
+      if (agora - (ultimoEnvio.get(caixa) ?? 0) < INTERVALO_DO_AVISO_MS) return true;
+      return (await prisma.chatwootReguaDisparo.findFirst({ where: { caixa, regra: REGRA_VIGIA, criadoEm: { gte: new Date(agora - INTERVALO_DO_AVISO_MS) } }, select: { id: true } }).catch(() => null)) !== null;
+    },
     enviar: (slug, texto) => enviarOAviso(slug, texto),
     marcar: async (caixa, agora, resumo) => {
+      ultimoEnvio.set(caixa, agora);
       await prisma.chatwootReguaDisparo
         .create({ data: { caixa, conversationId: 0, regra: REGRA_VIGIA, chave: new Date(agora).toISOString(), modo: 'ligado', texto: resumo } })
-        .catch((err: unknown) => logger.warn({ caixa, err: String(err) }, `${ID_VIGIA}: não consegui anotar o aviso (pode avisar de novo na próxima varredura)`));
+        .catch((err: unknown) => logger.warn({ caixa, err: String(err) }, `${ID_VIGIA}: não consegui anotar o aviso no banco (vale a memória do processo)`));
     },
-    jaLogouSeco: (caixa, agora) => {
-      const antes = seco.get(caixa);
-      if (antes !== undefined && agora - antes < INTERVALO_DO_AVISO_MS) return true;
-      seco.set(caixa, agora);
-      return false;
+    secoRecente: (caixa, agora) => agora - (ultimoSeco.get(caixa) ?? 0) < INTERVALO_DO_AVISO_MS,
+    anotarSeco: (caixa, agora) => void ultimoSeco.set(caixa, agora),
+    ignorada: (caixa) => caixasIgnoradas(env).has(caixa),
+    cegueira: async (caixa, cega) => {
+      if (!cega) {
+        cegas.delete(caixa);
+        return;
+      }
+      const n = (cegas.get(caixa) ?? 0) + 1;
+      cegas.set(caixa, n);
+      if (n !== VARREDURAS_CEGAS) return; // avisa UMA vez quando completa 2 h seguidas; só volta a avisar se voltar a enxergar e cegar de novo
+      const slug = unidadeDaCaixa(caixa);
+      logger.error({ caixa, slug }, `${ID_VIGIA}: CEGO — ${n} varreduras seguidas sem conseguir ler a caixa ${caixa} (token do Chatwoot, relatório ou Kapso)`);
+      if (slug && estadoDoVigia(slug) === 'ligado') await avisarJoao(`⚠️ Vigia de caixa cego na caixa ${caixa}: há 2 h não consigo ler o Chatwoot nem o Kapso dela. Se um lead parar de entrar ali, eu não aviso. Confira o token e a KAPSO_API_KEY.`, `vigia-cego:${caixa}`, 6 * HORA_MS);
     },
     agora: () => Date.now(),
   };
@@ -459,7 +507,7 @@ export async function varrer(ctx: ContextoChatwoot, env: NodeJS.ProcessEnv = pro
   try {
     const chave = (env.KAPSO_API_KEY ?? '').trim();
     const kapso = chave ? kapsoReal(chave) : null;
-    const reais = depsReais(ctx, kapso);
+    const reais = depsReais(ctx, kapso, env);
     const agora = Date.now();
     const horas = horasDaJanela(env);
     const caixas = Object.entries(CAIXAS_REGUA).filter(([c]) => unidadeDaCaixa(Number(c)));

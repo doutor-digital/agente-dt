@@ -105,23 +105,25 @@ function kapsoFalso(rotas: Record<string, unknown>) {
     pedidos.push({ url, chave: init.headers?.['X-API-Key'] ?? null });
     const rota = Object.keys(rotas).find((r) => url.includes(r));
     if (!rota) return { ok: false, status: 404, json: async () => ({}) } as Response;
-    const corpo = rotas[rota];
+    let corpo = rotas[rota];
+    if (Array.isArray(corpo)) corpo = corpo[Number(/[?&]page=(\d+)/.exec(url)?.[1] ?? 1) - 1] ?? { data: [], meta: { has_next: false } }; // uma resposta por página
     if (corpo instanceof Error) throw corpo;
     return { ok: true, status: 200, json: async () => corpo } as Response;
   }) as unknown as typeof fetch;
   return { f, pedidos };
 }
 
-test('Kapso: entregas com erro por número (só as de depois do início, sem as entregues); a chave só vai no cabeçalho', async () => {
+test('Kapso: entregas com erro por número (só mensagem de paciente, só depois do início, sem as entregues); a chave só vai no cabeçalho', async () => {
   const agora = Date.parse('2026-11-23T18:05:00Z');
   const k = kapsoFalso({
     '/webhook_deliveries': { data: [
-      { phone_number_id: '111', created_at: '2026-11-23T17:00:00Z', delivered_at: '2026-11-23T17:00:01Z', response_status: 200 },
-      { phone_number_id: '111', created_at: '2026-11-23T16:00:00Z', failed_at: '2026-11-23T16:05:00Z', response_status: 502 },
-      { phone_number_id: '111', created_at: '2026-11-23T15:30:00Z', response_status: 500 },
-      { phone_number_id: '222', created_at: '2026-11-23T16:10:00Z', failed_at: '2026-11-23T16:12:00Z' },
-      { phone_number_id: '111', created_at: '2026-11-22T10:00:00Z', failed_at: '2026-11-22T10:05:00Z', response_status: 500 },
-    ] },
+      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T17:00:00Z', delivered_at: '2026-11-23T17:00:01Z', response_status: 200 },
+      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T16:00:00Z', failed_at: '2026-11-23T16:05:00Z', response_status: 502 },
+      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T15:30:00Z', response_status: 500 },
+      { event: 'meta.messages', phone_number_id: '222', created_at: '2026-11-23T16:10:00Z', failed_at: '2026-11-23T16:12:00Z' },
+      { event: 'meta.smb_message_echoes', phone_number_id: '111', created_at: '2026-11-23T16:20:00Z', failed_at: '2026-11-23T16:25:00Z' },
+      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-22T10:00:00Z', failed_at: '2026-11-22T10:05:00Z', response_status: 500 },
+    ], meta: { has_next: false } },
   });
   const porta = V.kapsoReal('chave-secreta-do-kapso-123', k.f);
   const erros = await porta.entregasComErro(agora - 3 * HORA);
@@ -148,7 +150,7 @@ test('Kapso: conta as mensagens de paciente recebidas na janela', async () => {
 
 // ── o ciclo de uma caixa ──────────────────────────────────────────────────────────────────────────────────────
 
-function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, number> | Error; numero?: string | null; saude?: string[] | null; entregas?: Map<string, number> | null; entradas?: number | null; jaAvisou?: boolean; envia?: boolean; unidade?: typeof UNIDADE | null } = {}) {
+function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, number> | Error; numero?: string | null; saude?: string[] | null; entregas?: Map<string, number> | null; entradas?: number | null; jaAvisou?: boolean; ignorada?: boolean; envia?: boolean; unidade?: typeof UNIDADE | null } = {}) {
   const c = { enviados: [] as string[], marcas: [] as string[], leituras: 0, kapsoLeituras: 0, jaLogouSeco: false };
   const deps = {
     estado: () => o.modo ?? 'ligado',
@@ -160,7 +162,10 @@ function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, 
     jaAvisou: async () => o.jaAvisou ?? false,
     enviar: async (_s: string, t: string) => { c.enviados.push(t); return o.envia ?? true; },
     marcar: async (_c: number, _a: number, r: string) => { c.marcas.push(r); },
-    jaLogouSeco: () => { const j = c.jaLogouSeco; c.jaLogouSeco = true; return j; },
+    secoRecente: () => c.jaLogouSeco,
+    anotarSeco: () => { c.jaLogouSeco = true; },
+    ignorada: () => o.ignorada ?? false,
+    cegueira: async () => undefined,
     agora: () => AGORA,
   };
   return { c, deps };
@@ -314,4 +319,70 @@ test('série do Chatwoot: pede o relatório por hora DA CAIXA, só leitura (GET)
   assert.equal(pedidos[0]!.token, 'tk-conta-7');
   const ruim = { conta: { url: 'https://crm.test', conta: 7, token: 't' }, fetch: (async () => ({ ok: false, status: 401, json: async () => ({}) })) as never } as never;
   await assert.rejects(() => V.serieDaCaixa(ruim, 3, AGORA, 'America/Sao_Paulo'), /401/);
+});
+
+test('Kapso: entregas — segue as páginas até o começo da janela (não fica só nas 100 mais novas)', async () => {
+  const agora = Date.parse('2026-11-23T18:05:00Z');
+  const nova = (min: number, falha: boolean) => ({ event: 'meta.messages', phone_number_id: '111', created_at: new Date(agora - min * 60_000).toISOString(), ...(falha ? { failed_at: 'x', response_status: 500 } : { delivered_at: 'y', response_status: 200 }) });
+  const k = kapsoFalso({ '/webhook_deliveries': [
+    { data: [nova(5, false), nova(10, false)], meta: { has_next: true } },
+    { data: [nova(90, true), nova(200, false)], meta: { has_next: true } },
+    { data: [nova(400, true)], meta: { has_next: false } },
+  ] });
+  const erros = await V.kapsoReal('chave-do-kapso-1234567', k.f).entregasComErro(agora - 3 * HORA);
+  assert.deepEqual([...erros!], [['111', 1]], 'a falha de 90 min atrás na 2ª página conta; a de 400 min (fora da janela) não');
+  assert.equal(k.pedidos.length, 2, 'parou na página que já passou do começo da janela');
+});
+
+test('Kapso: entradas — pagina até o começo da janela; se não chega lá, devolve null (não diagnostica «0»)', async () => {
+  const ini = Date.parse('2026-11-23T15:00:00Z');
+  const msg = (iso: string) => ({ timestamp: String(Date.parse(iso) / 1000), kapso: { direction: 'inbound' } });
+  const cheia = Array.from({ length: 100 }, () => msg('2026-11-23T17:50:00Z'));
+  const ok = kapsoFalso({ '/messages': [{ data: cheia, meta: { has_next: true } }, { data: [msg('2026-11-23T16:00:00Z'), msg('2026-11-23T10:00:00Z')], meta: { has_next: true } }] });
+  assert.equal(await V.kapsoReal('chave-do-kapso-1234567', ok.f).entradas('111', ini, Date.parse('2026-11-23T17:55:00Z')), 101, 'conta a 1ª página inteira e a 2ª até o começo da janela');
+  const longe = kapsoFalso({ '/messages': Array.from({ length: 6 }, () => ({ data: cheia, meta: { has_next: true } })) });
+  assert.equal(await V.kapsoReal('chave-do-kapso-1234567', longe.f).entradas('111', ini, Date.parse('2026-11-23T17:55:00Z')), null, 'mais de 5 páginas sem chegar ao começo: sem diagnóstico');
+});
+
+test('Kapso: a lista de números é indexada pelo phone_number_id da Meta (o mesmo que a unidade guarda)', async () => {
+  const k = kapsoFalso({ '/phone_numbers': { data: [{ id: '1212928641906230', phone_number_id: '1212928641906230', status: 'CONNECTED', inbound_processing_enabled: true }, { id: 'uuid-qualquer', phone_number_id: '555', status: 'DISCONNECTED', inbound_processing_enabled: false }] } });
+  const m = await V.kapsoReal('chave-do-kapso-1234567', k.f).numeros();
+  assert.deepEqual([...m.keys()], ['1212928641906230', '555']);
+  assert.equal(m.get('555')!.status, 'DISCONNECTED');
+});
+
+test('caixa ignorada de propósito (CAIXA_VIGIA_IGNORAR) não é lida; lista inválida é ignorada', async () => {
+  assert.deepEqual([...V.caixasIgnoradas({ CAIXA_VIGIA_IGNORAR: '2, 7;x,9' })].sort(), [2, 9], '«7;x» não é número: ignorado');
+  const m = mundo({ ignorada: true });
+  assert.equal(await V.cicloDaCaixa(m.deps, 2, 'x'), 'desligado');
+  assert.equal(m.c.leituras + m.c.kapsoLeituras, 0);
+});
+
+test('JÁ AVISOU nas últimas 3 h: nem o Chatwoot nem o Kapso são lidos (a leitura seria jogada fora)', async () => {
+  const m = mundo({ jaAvisou: true });
+  assert.equal(await V.cicloDaCaixa(m.deps, 3, 'x'), 'ja-avisou');
+  assert.equal(m.c.leituras + m.c.kapsoLeituras, 0);
+});
+
+test('memória do processo é a segunda trava: com o banco FALHANDO, depois de um aviso não avisa de novo antes de 3 h', async () => {
+  trocarDelegate('chatwootReguaDisparo', { findFirst: async () => { throw new Error('banco fora'); }, create: async () => { throw new Error('banco fora'); } });
+  const reais = V.depsReais({ conta: null } as never, null);
+  assert.equal(await reais.jaAvisou(3, AGORA), false, 'nunca avisou: avisa');
+  await reais.marcar(3, AGORA, 'x');
+  assert.equal(await reais.jaAvisou(3, AGORA + HORA), true, '1 h depois: ainda dentro das 3 h');
+  assert.equal(await reais.jaAvisou(3, AGORA + 3 * HORA + 1), false, 'passadas as 3 h: pode avisar');
+});
+
+test('vigia CEGO: 8 varreduras seguidas sem ler nada → UM aviso ao João (só no ligado); voltar a enxergar zera a contagem', async () => {
+  const reais = V.depsReais({ conta: null } as never, null);
+  _semearParaTeste([{ slug: 'doutor-hernia-parauapebas', automacao: 'chatwoot-vigia', estado: 'ligado' }]);
+  const salvo = { ...process.env };
+  for (const k of ['EVOLUTION_ALERT_URL', 'EVOLUTION_ALERT_HEADER', 'EVOLUTION_ALERT_VALUE', 'ALERTA_WHATSAPP_NUMERO']) delete process.env[k];
+  try {
+    for (let i = 1; i <= V.VARREDURAS_CEGAS + 2; i++) await reais.cegueira(3, true); // sem Evolution configurada: só log, não lança
+    await reais.cegueira(3, false);
+    for (let i = 1; i < V.VARREDURAS_CEGAS; i++) await reais.cegueira(3, true);
+  } finally {
+    Object.assign(process.env, salvo);
+  }
 });

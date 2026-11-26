@@ -48,7 +48,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
   'chatwoot-ia': 'sofia',
   'chatwoot-agenda': 'agenda',
   'chatwoot-regua': 'mensagens',
-  // `chatwoot-disparo`, `chatwoot-tarefas` e `chatwoot-demora` NÃO estão aqui de propósito: ligar o disparo em massa, a mensagem agendada e a mensagem de espera que saem sozinhas é decisão da Doutor Digital (console), nunca da administradora da clínica pela tela Robôs
+  // `chatwoot-disparo`, `chatwoot-tarefas`, `chatwoot-demora` e `chatwoot-vigia` (aviso de caixa parada ao João e ao grupo da clínica) NÃO estão aqui de propósito: ligar o disparo em massa, a mensagem agendada e a mensagem de espera que saem sozinhas é decisão da Doutor Digital (console), nunca da administradora da clínica pela tela Robôs
   'chatwoot-capi': 'rastreio',
   'chatwoot-origem': 'rastreio',
   'chatwoot-duplicados': 'organizacao',
