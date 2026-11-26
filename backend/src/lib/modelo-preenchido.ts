@@ -14,7 +14,7 @@
  */
 import { TEXTOS_PARAU } from './chatwoot-regua-textos.js';
 import { PREFIXO_BASE_DOS_MODELOS } from './chatwoot-unidades.js';
-import { paraParametro, primeiroNome, proximaDataDaConversa, variaveisDoModeloCampoACampo, type ConversaRegua, type DadosDaUnidade } from './chatwoot-regua.js';
+import { paraParametro, nomeParaTratar, proximaDataDaConversa, variaveisDoModeloCampoACampo, type ConversaRegua, type DadosDaUnidade } from './chatwoot-regua.js';
 
 export interface Preenchimento {
   /** de onde veio a regra: `crm` (modelo da régua), `externo` (modelo criado fora, lido pelo texto) ou `nenhuma` (nada a sugerir) */
@@ -74,7 +74,7 @@ export function preencherModelo(p: { modelo: string; corpo?: string }, c: Conver
   const valores: Record<string, string> = {};
   for (const { chave, antes } of parametrosDoCorpo(corpo)) {
     const papel = papelDoParametro(antes);
-    const v = papel === 'nome' ? primeiroNome(c.nome) : papel === 'data' ? proximaDataDaConversa(c, agora) : null;
+    const v = papel === 'nome' ? nomeParaTratar(c) : papel === 'data' ? proximaDataDaConversa(c, agora) : null;
     const limpo = v ? paraParametro(v) : '';
     if (limpo) valores[chave] = limpo;
   }
