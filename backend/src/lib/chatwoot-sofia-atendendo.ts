@@ -19,7 +19,7 @@
  */
 import { logger } from './logger.js';
 import { chamar, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { conversaLidaDoChatwoot, type ConversaLida } from './chatwoot-porta.js';
+import { conversaLidaDoChatwoot, mudarEtiquetas, type ConversaLida } from './chatwoot-porta.js';
 import { motivoDeNaoResponder } from './chatwoot-sofia.js';
 import { ATRIBUTO_PAUSADA_POR, ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import { CAIXAS_REGUA } from './chatwoot-regua.js';
@@ -41,6 +41,12 @@ export interface PortaDoAtendimento {
   conversa(id: number): Promise<ConversaDoAtendimento | null>;
   /** o Chatwoot SUBSTITUI a lista: mandar a lista inteira */
   etiquetas(id: number, lista: string[]): Promise<void>;
+  /**
+   * Soma / tira UMA etiqueta relendo a lista na fila de gravações da conversa (a mesma do anúncio e do formulário): não regrava uma lista velha, então não
+   * desfaz a etiqueta que outro acabou de pôr. Sem estas portas (testes, portas antigas) vale `etiquetas` com a lista inteira, como antes.
+   */
+  adicionarEtiqueta?(id: number, etiqueta: string): Promise<void>;
+  tirarEtiqueta?(id: number, etiqueta: string): Promise<void>;
   /** «Pendentes» → «Abertas» */
   abrir(id: number): Promise<void>;
   /** cria a etiqueta na conta (roxa, descrição, na barra) se ainda não existir; nunca lança */
@@ -93,7 +99,8 @@ export async function comecarAtendimento(
   c = (await p.conversa(conversa)) ?? c;
   if (!sofiaPodeAtender(c)) return { comeco: 'sem-etiqueta', abriu };
   if (tem(c)) return { comeco: 'ja-etiquetada', abriu };
-  await p.etiquetas(conversa, [...c.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
+  if (p.adicionarEtiqueta) await p.adicionarEtiqueta(conversa, ETIQUETA_SOFIA_ATENDENDO);
+  else await p.etiquetas(conversa, [...c.lida.etiquetas, ETIQUETA_SOFIA_ATENDENDO]);
   // corrida rara: a equipe respondeu entre a leitura e a gravação e a pausa gravou a lista dela ao mesmo tempo. A pausa deixa o atributo
   // `ia_pausada_por`; atributo de pausa SEM a etiqueta = a nossa gravação a desfez → repõe a pausa e tira a nossa etiqueta.
   const depois = await p.conversa(conversa).catch(() => null);
@@ -109,7 +116,8 @@ export async function comecarAtendimento(
 async function tirarEtiqueta(conversa: number, p: PortaDoAtendimento, tirarSe: (c: ConversaDoAtendimento) => boolean): Promise<boolean> {
   const c = await p.conversa(conversa);
   if (!c || !tem(c) || !tirarSe(c)) return false;
-  await p.etiquetas(conversa, c.lida.etiquetas.filter((e) => e !== ETIQUETA_SOFIA_ATENDENDO));
+  if (p.tirarEtiqueta) await p.tirarEtiqueta(conversa, ETIQUETA_SOFIA_ATENDENDO);
+  else await p.etiquetas(conversa, c.lida.etiquetas.filter((e) => e !== ETIQUETA_SOFIA_ATENDENDO));
   return true;
 }
 
@@ -151,6 +159,8 @@ export function portaDoAtendimento(ctx: ContextoChatwoot, abrir: (conversa: numb
     async etiquetas(id, lista) {
       await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: lista } });
     },
+    adicionarEtiqueta: (id, etiqueta) => mudarEtiquetas(ctx, id, [etiqueta]),
+    tirarEtiqueta: (id, etiqueta) => mudarEtiquetas(ctx, id, [], [etiqueta]),
     abrir,
     async garantirEtiqueta() {
       if (etiquetaGarantida) return;

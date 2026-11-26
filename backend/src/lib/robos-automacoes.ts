@@ -51,6 +51,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
   // `chatwoot-preco-unico` (segura a mensagem da Sofia e passa a conversa para a equipe: a Doutor Digital liga depois de medir o «só no papel»), `chatwoot-agenda-so-com-sim` (a trava «só agenda com sim» muda o que a Sofia grava: a Doutor Digital liga depois de medir o «só no papel»), `chatwoot-disparo`, `chatwoot-tarefas`, `chatwoot-demora` e `chatwoot-vigia` (aviso de caixa parada ao João e ao grupo da clínica) NÃO estão aqui de propósito: ligar o disparo em massa, a mensagem agendada e a mensagem de espera que saem sozinhas é decisão da Doutor Digital (console), nunca da administradora da clínica pela tela Robôs
   'chatwoot-capi': 'rastreio',
   'chatwoot-origem': 'rastreio',
+  'chatwoot-formulario': 'rastreio',
   'chatwoot-duplicados': 'organizacao',
   // comportamentos da Sofia que valem também no Chatwoot (conferidos no código: composeSystemPromptForUnit / aplicarGuardrail)
   'conduzir-direto': 'sofia',
