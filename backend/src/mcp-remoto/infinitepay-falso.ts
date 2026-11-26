@@ -32,8 +32,11 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
     },
     reservar(p: PedidoDeReserva) {
       const feita = fila.then(() => {
-        if (linhas.some((l) => l.unidade === p.unidade && l.orderNsu === p.orderNsu)) throw new ErroDeEntrada(`a referência ${p.orderNsu} já foi usada nesta unidade.`);
+        const existente = linhas.find((l) => l.unidade === p.unidade && l.orderNsu === p.orderNsu);
+        // referência de link RECUSADO (falhou) é reaproveitada, como no banco; qualquer outra já existe
+        if (existente && existente.status !== 'falhou') throw new ErroDeEntrada(`a referência ${p.orderNsu} já foi usada nesta unidade.`);
         p.conferir(livro(p.unidade));
+        if (existente) linhas.splice(linhas.indexOf(existente), 1);
         linhas.push({
           orderNsu: p.orderNsu, unidade: p.unidade, status: 'intencao', url: null, valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte.toISOString(),
           criadoPor: p.criadoPor, criadoEm: new Date(p.agora).toISOString(), invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null,

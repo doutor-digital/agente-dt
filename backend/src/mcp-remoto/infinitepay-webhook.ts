@@ -55,8 +55,12 @@ const inteiro = (v: unknown): number | undefined => (typeof v === 'number' && Nu
  * "invoice.refunded" e "REFUNDED" são o mesmo que "paid" e "refunded". Nome que não se reconhece volta como `desconhecido:<nome>` e AVISA o João (nunca some em silêncio).
  */
 export function eventoDoCorpo(c: Record<string, unknown>): string | undefined {
-  const bruto = (texto(c.event, 60) ?? texto(c.type, 60) ?? texto(c.event_type, 60))?.toLowerCase();
+  // `event` manda; `type` e `event_type` são nomes genéricos (podem ser a forma de pagamento): só valem se parecem um evento
+  const pareceEvento = (v: string | undefined) => (v && /paid|settl|refund|cancel|fail|creat|approv|estorn|liquid|pago|aprovad|criad|negad/i.test(v) ? v : undefined);
+  const bruto = (texto(c.event, 60) ?? pareceEvento(texto(c.type, 60)) ?? pareceEvento(texto(c.event_type, 60)))?.toLowerCase();
   if (!bruto) return undefined;
+  // estorno/cancelamento que FALHOU, está pendente ou é parcial não é estorno nem cancelamento: não muda o link, mas avisa o João (desconhecido)
+  if (/refund|estorn|cancel/.test(bruto) && /fail|reject|deny|denied|negad|pend|parcial|partial|erro|error/.test(bruto)) return `desconhecido:${bruto.replace(/[^a-z0-9_.:-]/g, '').slice(0, 40)}`;
   if (/refund|estorn/.test(bruto)) return 'refunded';
   if (/cancel/.test(bruto)) return 'canceled';
   if (/settl|liquid/.test(bruto)) return 'settled';
@@ -141,6 +145,11 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
   // o pagamento primeiro (settled sem paid anterior também confirma e marca); a liquidação só se acrescenta ao que já está pago
   const pago = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado'], pagamento });
   if (pago.mudou) deps.log?.info({ unidade: p.unidade, orderNsu: p.orderNsu, valor: reais(link.valorCentavos) }, 'infinitepay: pagamento confirmado');
+  // o dinheiro entrou mas o link está em outro estado (cancelado ou estornado por um aviso que chegou antes, fora de ordem): ninguém pode ficar sem saber
+  if (!pago.mudou && link.status !== 'pago' && link.status !== 'intencao' && link.status !== 'criado') {
+    void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem}, mas o link está como "${link.status}" (um aviso de ${link.status === 'estornado' ? 'estorno' : 'cancelamento'} chegou antes ou fora de ordem). Não mudei o status. Confira no app.`).catch(() => false);
+    return { http: 200, resultado: `pagamento confirmado com o link em ${link.status}` };
+  }
   if (evento === 'settled') {
     await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, liquidado: true });
   }

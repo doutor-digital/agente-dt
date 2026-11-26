@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ErroInfinitepay, criarLinkNaInfinitepay, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
+import { ErroInfinitepay, criarLinkNaInfinitepay, dominiosDoLink, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 import { criarContextoInfinitepay, contaInfinitepayDaConfig, type ContaInfinitepay } from './infinitepay.js';
 import {
+  auditarSemSegredo,
   chaveDeDuplicata,
   criarEscritaInfinitepay,
   criarLink,
@@ -256,6 +257,44 @@ test('validação: valor, descrição, validade, parcelas e referência ruins s�
   assert.equal(m.armazem.linhas.length, 0);
 });
 
+test('a recusa da descrição NÃO repete o texto (pode ser a chave ou o CPF) e datas como "12/11/2026 15h" passam', async () => {
+  const m = montar();
+  const segredo = 'inchk_AbC123SegredoQueNaoPodeVoltar0000';
+  await assert.rejects(
+    () => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: `Consulta ${segredo}` }),
+    (e: Error) => /não pode ter CPF/.test(e.message) && !e.message.includes('AbC123') && !e.message.includes('inchk_'),
+  );
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'CPF 529.982.247-25' }), (e: Error) => !e.message.includes('529'));
+  const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Fisioterapia 12/11/2026 15h' });
+  assert.equal(r.criado, true);
+  await criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Pacote 2026 12 15 10 sessões' });
+});
+
+test('a auditoria da ferramenta não guarda chave, CPF nem e-mail colados na descrição ou na referência', () => {
+  const gravados: Array<{ argumentos: unknown; erro?: string }> = [];
+  const audita = auditarSemSegredo(((r: { argumentos: unknown; erro?: string }) => gravados.push(r)) as never);
+  audita({ ferramenta: 'infinitepay_criar_link', argumentos: { valor: 10, descricao: 'x inchk_SegredoSegredoSegredo123', referencia: 'cpf52998224725' }, ok: false, ms: 1, erro: 'falhou com inchk_SegredoSegredoSegredo123' } as never);
+  audita({ ferramenta: 'infinitepay_criar_link', argumentos: { valor: 10, descricao: 'fale com maria@exemplo.com' }, ok: true, ms: 1 } as never);
+  const tudo = JSON.stringify(gravados);
+  assert.equal(tudo.includes('SegredoSegredo'), false);
+  assert.equal(tudo.includes('52998224725'), false);
+  assert.equal(tudo.includes('maria@'), false);
+  assert.equal((gravados[0]!.argumentos as { valor: number }).valor, 10, 'o que é número fica');
+});
+
+test('a referência de um link RECUSADO pode ser usada de novo; a de um link que existe, não', async () => {
+  let recusar = true;
+  const m = montar({ criar: async (p) => { if (recusar) throw new ErroInfinitepay('a InfinitePay recusou (422)', 422); return { url: `https://checkout.infinitepay.io/x/${p.orderNsu}` }; } });
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 100, descricao: 'Sessão', referencia: 'pedido-123' }), /Nada foi criado/);
+  assert.equal(m.armazem.linhas[0]!.status, 'falhou');
+  recusar = false;
+  const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 100, descricao: 'Sessão corrigida', referencia: 'pedido-123' });
+  assert.equal(r.criado, true);
+  assert.equal(m.armazem.linhas.length, 1, 'a mesma linha, não uma duplicada');
+  assert.equal(m.armazem.linhas[0]!.status, 'criado');
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 300, descricao: 'Outra', referencia: 'pedido-123' }), /já foi usada/);
+});
+
 test('sem endereço público o link nasce sem aviso automático e a resposta diz isso', async () => {
   const m = montar({ semWebhook: true });
   const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Link' });
@@ -341,6 +380,18 @@ test('POST /links: aceita a URL dentro de data; resposta sem URL é erro que avi
   // https, mas de outro domínio (documentação, redirecionamento ou um domínio parecido): o link iria ao paciente sem cobrar nada
   for (const url of ['https://exemplo.com/pagar', 'https://infinitepay.io.falso.com/x', 'https://notinfinitepay.io/x', 'https://ajuda.infinitepay.io.evil.com/x']) {
     await assert.rejects(() => criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url }).f }), /sem a URL/, url);
+  }
+  // o domínio real do checkout não está na documentação: INFINITEPAY_LINK_DOMINIOS acrescenta outros sem mudar o código
+  assert.deepEqual(dominiosDoLink({}), ['infinitepay.io']);
+  assert.deepEqual(dominiosDoLink({ INFINITEPAY_LINK_DOMINIOS: ' Pagar.Exemplo.com.br , lixo, .outro.com ' }), ['infinitepay.io', 'pagar.exemplo.com.br', 'outro.com']);
+  process.env.INFINITEPAY_LINK_DOMINIOS = 'pagar.exemplo.com.br';
+  try {
+    const extra = await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'https://loja.pagar.exemplo.com.br/x' }).f });
+    assert.equal(extra.url, 'https://loja.pagar.exemplo.com.br/x');
+    await assert.rejects(() => criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'https://pagar.exemplo.com.br.falso.com/x' }).f }), /sem a URL/);
+    await assert.rejects(() => criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'https://usuario:senha@checkout.infinitepay.io/x' }).f }), /sem a URL/);
+  } finally {
+    delete process.env.INFINITEPAY_LINK_DOMINIOS;
   }
   const ok = await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'https://checkout.infinitepay.io/clinica/abc' }).f });
   assert.equal(ok.url, 'https://checkout.infinitepay.io/clinica/abc');

@@ -187,6 +187,35 @@ test('o nome do evento é lido pelo sentido: payment.paid, INVOICE.REFUNDED e or
   assert.equal(eventoDoCorpo({ event: 'algo estranho!' }), 'desconhecido:algoestranho');
 });
 
+test('estorno que FALHOU ou está pendente não é estorno: não muda o link e avisa o João; `type` genérico (forma de pagamento) não é evento', async () => {
+  for (const nome of ['refund_failed', 'refund.pending', 'cancellation_rejected', 'partial_refund']) {
+    const m = montar({ status: 'pago' });
+    const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: nome });
+    assert.match(r.resultado, /^registrado:desconhecido:/, nome);
+    assert.equal(m.armazem.linhas[0]!.status, 'pago', `${nome} não pode estornar o link`);
+    assert.equal(m.avisos.length, 1, nome);
+  }
+  assert.equal(eventoDoCorpo({ type: 'pix' }), undefined);
+  assert.equal(eventoDoCorpo({ event_type: 'credit_card' }), undefined);
+  assert.equal(eventoDoCorpo({ type: 'payment.paid' }), 'paid');
+  const m = montar();
+  const r = await processarAviso(m.deps, m.p, { ...PAGO, type: 'pix' });
+  assert.equal(r.resultado, 'pago', 'o corpo do pago com type=pix continua sendo o pagamento');
+});
+
+test('pagamento confirmado com o link já CANCELADO/ESTORNADO (avisos fora de ordem): não muda o status e avisa o João', async () => {
+  for (const status of ['cancelado', 'estornado']) {
+    const m = montar({ status });
+    const r = await processarAviso(m.deps, m.p, PAGO);
+    assert.equal(r.resultado, `pagamento confirmado com o link em ${status}`);
+    assert.equal(m.armazem.linhas[0]!.status, status);
+    assert.match(m.avisos[0]!, /CONFIRMOU o pagamento/);
+  }
+  const jaPago = montar({ status: 'pago' });
+  assert.equal((await processarAviso(jaPago.deps, jaPago.p, PAGO)).resultado, 'já estava pago');
+  assert.equal(jaPago.avisos.length, 0);
+});
+
 test('estorno com o evento em outra grafia também marca e avisa', async () => {
   const m = montar({ status: 'pago' });
   const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'invoice.REFUNDED' });

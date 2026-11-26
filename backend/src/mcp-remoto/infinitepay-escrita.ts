@@ -12,7 +12,7 @@
  *   - a INTENÇÃO é gravada ANTES de chamar a InfinitePay: queda no meio deixa o link em "intencao", que continua contando para o teto;
  *   - link igual (mesmo valor e descrição) feito há menos de 10 minutos é recusado; a referência (order_nsu) é única por unidade;
  *   - nasce com pagamento ÚNICO e validade (padrão 7 dias, no máximo 90), porque a API não cancela link;
- *   - aviso no Telegram do João a cada link acima de 50% do teto e a cada criação sem confirmação.
+ *   - aviso no Telegram do João a cada link acima de 50% do teto e a cada criação cuja resposta da InfinitePay não veio clara.
  * O segredo (a chave) nunca passa por aqui: a conta carrega a chamada pronta.
  */
 import { createHash, randomBytes } from 'node:crypto';
@@ -20,8 +20,8 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { ErroInfinitepay, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
-import { mascararDigitosSeguidos, temDigitosSeguidos } from '../lib/pii.js';
+import { ErroInfinitepay, tirarChave, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
+import { temDigitosSeguidos } from '../lib/pii.js';
 import { FUSO_PADRAO, arredondar, diaLocal, dinheiro, positivo } from './asaas-limites.js';
 import { executar } from './ferramenta.js';
 import { resolverContaInfinitepay, reais, type ArmazemDeLinks, type ContaInfinitepay, type ContextoInfinitepay, type LinkGuardado } from './infinitepay.js';
@@ -39,8 +39,6 @@ export const LIMITES_INFINITEPAY = {
   valorMinimo: 1,
   descricaoMax: 120,
 };
-
-export const EVENTO_LINK = 'infinitepay_link_gravado';
 
 // ----------------------------------------------------------------- limites (lidos a cada uso, do ambiente)
 
@@ -210,13 +208,16 @@ export interface QuemInfinitepay {
 // ----------------------------------------------------------------- validação
 
 const REFERENCIA = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
+/** telefone brasileiro: DDD (com ou sem parênteses) + 8 ou 9 dígitos; a barra de data não conta como separador */
+const TELEFONE = /(?<!\d)\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}(?!\d)/;
 
 export function descricaoLimpa(bruto: string): string {
   const t = bruto.replace(/\s+/g, ' ').trim();
   if (t.length < 3) throw new ErroDeEntrada('a descrição precisa ter ao menos 3 caracteres (é o que o paciente lê na tela de pagamento)');
   if (t.length > LIMITES_INFINITEPAY.descricaoMax) throw new ErroDeEntrada(`a descrição passa de ${LIMITES_INFINITEPAY.descricaoMax} caracteres`);
-  if (temDigitosSeguidos(t, 10) || /@/.test(t) || /https?:\/\//i.test(t) || /inchk_/i.test(t)) {
-    throw new ErroDeEntrada(`a descrição não pode ter CPF, telefone, e-mail, endereço de site nem chave (apareceria para quem abre o link): "${mascararDigitosSeguidos(t, 10, '[número]')}"`);
+  // CPF/CNPJ (11 dígitos ou mais seguidos, mesmo com ponto e traço) ou telefone com DDD; datas como "12/11/2026 15h" passam. A mensagem NÃO repete o texto: ele pode ser justamente a chave ou o CPF.
+  if (temDigitosSeguidos(t, 11) || TELEFONE.test(t) || /@/.test(t) || /https?:\/\//i.test(t) || /inchk_/i.test(t)) {
+    throw new ErroDeEntrada('a descrição não pode ter CPF, telefone, e-mail, endereço de site nem chave (apareceria para quem abre o link). Tire esse trecho e tente de novo; nada foi criado.');
   }
   return t;
 }
@@ -405,7 +406,17 @@ export function registrarEscritaInfinitepaySePermitido(
   return true;
 }
 
-export function registrarEscritaInfinitepay(server: McpServer, ctx: ContextoInfinitepay, esc: EstadoEscritaInfinitepay, quem: QuemInfinitepay, auditar: Auditar): void {
+/** A auditoria guarda os argumentos como vieram: texto livre (descrição, referência) pode trazer a chave ou um CPF colado por engano, então passa por limpeza antes. */
+export function auditarSemSegredo(auditar: Auditar): Auditar {
+  const limpa = (v: unknown): unknown => (typeof v === 'string' ? temDigitosSeguidos(v, 10) || /@/.test(v) ? '[removido: continha número longo ou e-mail]' : tirarChave(v) : v);
+  return (r) => {
+    const a = r.argumentos && typeof r.argumentos === 'object' ? Object.fromEntries(Object.entries(r.argumentos as Record<string, unknown>).map(([k, v]) => [k, limpa(v)])) : r.argumentos;
+    auditar({ ...r, argumentos: a, ...(r.erro ? { erro: tirarChave(r.erro) } : {}) });
+  };
+}
+
+export function registrarEscritaInfinitepay(server: McpServer, ctx: ContextoInfinitepay, esc: EstadoEscritaInfinitepay, quem: QuemInfinitepay, auditarBruto: Auditar): void {
+  const auditar = auditarSemSegredo(auditarBruto);
   server.registerTool(
     'infinitepay_criar_link',
     {

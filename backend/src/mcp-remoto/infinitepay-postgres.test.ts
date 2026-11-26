@@ -58,6 +58,13 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     await assert.rejects(() => criarLink(b.ctx, b.esc, Q, { valor: 10, descricao: 'Igual' }), /feito há menos de 10 minutos/);
     await assert.rejects(() => criarLink(b.ctx, b.esc, Q, { valor: 11, descricao: 'Outro texto', referencia: 'dup-1' }), /já foi usada/);
 
+    // a referência de um link RECUSADO pela InfinitePay (falhou) é reaproveitada na mesma linha; a de um link que existe continua barrada
+    await A.infinitepayLink.create({ data: { unitSlug: UNI, orderNsu: 'recusado-1', status: 'falhou', valorCentavos: 100, descricao: 'x', criadoPor: 'j', erro: '422' } });
+    const reuso = await criarLink(b.ctx, b.esc, Q, { valor: 20, descricao: 'Corrigido', referencia: 'recusado-1' });
+    assert.equal(reuso.criado, true);
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, orderNsu: 'recusado-1' } }), 1, 'a mesma linha, sem duplicar');
+    assert.equal((await A.infinitepayLink.findFirst({ where: { unitSlug: UNI, orderNsu: 'recusado-1' } }))?.status, 'criado');
+
     // eventos do webhook: pago uma vez só; liquidação; estorno
     const e1 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado'], pagamento: { invoiceSlug: 's1', transactionNsu: 't1', forma: 'pix', parcelas: 1, valorPagoCentavos: 1000, reciboUrl: 'https://r' } });
     assert.equal(e1.mudou, true);
