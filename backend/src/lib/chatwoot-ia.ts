@@ -30,7 +30,7 @@ import { aplicarEtiqueta, eventoDeEtiqueta, portasDaPonte, type PortasDaPonte } 
 import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reativar, type PortaDaPausa } from './chatwoot-pausa.js';
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { aplicarReferralDoKapso, mensagemParaConsultar, type ReferralDoKapso } from './kapso-referral.js';
-import { etiquetarAnuncio, portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
+import { etiquetarAnuncio, falaParaFormulario, portasDaOrigem, portasDoFormulario, preencherFormulario, preencherOrigem, type PortasDaOrigem, type PortasDoFormulario } from './chatwoot-origem.js';
 import { noConviteDoCrm } from './chatwoot-convite-whatsapp.js';
 import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anuncio.js';
 import { transcribeAudio } from '../services/transcription.service.js';
@@ -776,6 +776,8 @@ export interface EstadoDaConta {
   pausa: PortaDaPausa;
   resolver: PortasDoResolver;
   origem: PortasDaOrigem;
+  /** Origem «Formulário» pelo texto pronto (chatwoot-origem.ts) */
+  formulario: PortasDoFormulario;
   chat: PortaDoChatwoot;
   nota: PortasDaNota;
   /** a trava de «Perdido: motivo» por conversa — o id da conversa é POR CONTA, então a trava também */
@@ -811,6 +813,7 @@ export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.e
   const guardado = estados.get(conta);
   if (guardado && guardado.assinatura === assinatura) return guardado.estado;
   const origem = portasDaOrigem(ctx);
+  const chat = portaDoChatwoot(ctx);
   const novo: EstadoDaConta = {
     portas: portasReais(ctx, ehAmbiente ? {} : { tokenRobo }),
     mem: guardado?.estado.mem ?? novaMemoriaDaIa(),
@@ -818,7 +821,8 @@ export function estadoDoReceptor(conta: number, e: NodeJS.ProcessEnv = process.e
     pausa: portaDaPausaDoChatwoot(ctx),
     resolver: portasDoResolver(ctx),
     origem,
-    chat: portaDoChatwoot(ctx),
+    formulario: portasDoFormulario(ctx, origem, (c, et) => chat.adicionarEtiquetas(c, et)),
+    chat,
     nota: portasDaNota(ctx, origem),
     trava: guardado?.estado.trava ?? new Set(),
   };
@@ -973,6 +977,11 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   // com o link do WhatsApp da clínica (não é a Sofia; essas caixas nem estão no mapa de caixas) e, no WhatsApp, o texto pronto do convite marca a origem.
   // Evento que não é nosso volta na hora; chave desligada não lê nem escreve nada. Nunca lança.
   void noConviteDoCrm(req.body, conta);
+  // o texto pronto do formulário do site (sem referral): Origem «Formulário» + etiqueta, só em campo vazio (chatwoot-origem.ts). Também escreve etiquetas da conversa,
+  // então o «Sofia atendendo» espera por ela junto com o anúncio.
+  const fala = falaParaFormulario(req.body, CAIXAS_REGUA);
+  const formularioR = fala ? estadoDoReceptor(conta) : null;
+  if (fala && formularioR) anuncioPronto = Promise.all([anuncioPronto, preencherFormulario(fala, formularioR.formulario)]).catch(() => undefined);
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
   const e = estadoDoReceptor(conta);

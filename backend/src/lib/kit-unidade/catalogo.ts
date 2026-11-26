@@ -9,6 +9,7 @@
 /** Etiquetas (labels) que o código lê ou escreve. Fonte: ETIQUETA_* de chatwoot-*.ts e as regras da régua/Sofia. */
 export const ETIQUETAS_DO_CODIGO: readonly string[] = [
   'anuncio',
+  'formulario',
   'respondeu-pelo-celular',
   'falta-etapa',
   'historico',
