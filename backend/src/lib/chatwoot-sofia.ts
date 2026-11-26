@@ -55,9 +55,7 @@ import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
-import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
-import { dataLocalISO } from './feriados.js';
-import { fusoDaUnidade } from './fuso.js';
+import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -277,7 +275,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       return true;
     }
     try {
-      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: (atributosDeAgora) => resumoDaPassagem({ attrs: atributosDeAgora, falas: p.falas, hoje: dataLocalISO((p.agora?.() ?? new Date()), fusoDaUnidade(unit)) }) });
+      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: (atributosDeAgora) => resumoDaPassagem({ attrs: atributosDeAgora, falas: p.falas, hoje: hojeDaUnidade(unit, p.agora?.()) }) });
       passou();
       return true;
     } catch (err) {

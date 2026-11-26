@@ -48,8 +48,7 @@ import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chat
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
 import { fusoDaUnidade } from './fuso.js';
-import { dataLocalISO } from './feriados.js';
-import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
+import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import { motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
 export type { Fala };
@@ -318,7 +317,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     atendimentoAtivo,
     async passarParaEquipe(conversa, lida, motivo, falas, unit) {
       // «hoje» na unidade (o resumo só mostra consulta de hoje em diante); sem a unidade não há «hoje» confiável e a consulta fica fora do resumo
-      const hoje = unit ? dataLocalISO(new Date(), fusoDaUnidade(unit)) : null;
+      const hoje = unit ? hojeDaUnidade(unit) : null;
       await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo, resumo: (atributosDeAgora) => resumoDaPassagem({ attrs: atributosDeAgora, falas, hoje }) });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
       if (robo) await robo.abrirParaEquipe(conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));

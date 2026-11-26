@@ -8,7 +8,10 @@
  * por palavra, do que o PACIENTE escreveu (queixa, dia e período citados, o último recado) ou uma palavra-chave do que ele escreveu (preço,
  * convênio, exame). Não achou nada confiável = sem resumo (null): a nota fica como sempre foi.
  */
+import type { Unit } from '@prisma/client';
 import type { Fala } from './chatwoot-sofia.js';
+import { dataLocalISO } from './feriados.js';
+import { fusoDaUnidade } from './fuso.js';
 
 const MAX_ULTIMA_FALA = 110;
 const MAX_QUEIXA = 60;
@@ -20,8 +23,21 @@ const cortar = (t: string, max: number): string => {
   const cs = Array.from(t);
   return cs.length > max ? `${cs.slice(0, max - 1).join('').trimEnd()}…` : t;
 };
-/** o que o paciente escreveu vai numa nota que o Chatwoot renderiza (markdown e menção): sem colchete, parêntese, arroba, crase nem link */
-const neutro = (t: string): string => t.replace(/[a-z][a-z0-9+.-]*:\/\/\S+|www\.\S+/gi, 'link').replace(/[\[\]()@`<>]/g, ' ').replace(/\s+/g, ' ').trim();
+/** domínio sem esquema («golpe.com/x»): o Chatwoot também o transforma em link clicável */
+const DOMINIO = /(?<![\w@.-])(?:[a-z0-9-]+\.)+(?:com|net|org|br|io|app|me|ly|info|xyz|site|online|link|top|club|shop|click|live|dev|co|gl|to|cc|ws|bit|tk|ru|cn|ml|ga|cf|gq)(?![a-z0-9])(?:\/\S*)?/gi;
+/**
+ * o que o paciente escreveu vai numa nota que o Chatwoot renderiza (markdown, menção e link): sem colchete, parêntese, arroba, crase, «<»/«>» nem link
+ * (com esquema, «www.» ou domínio solto), e o markdown que sobra (asteriscos, sublinhado, til, cerquilha, barra, barra invertida, exclamação) sai ESCAPADO — o
+ * time lê o que o paciente escreveu e nada vira negrito, título, tabela ou imagem.
+ */
+const neutro = (t: string): string =>
+  t
+    .replace(/[a-z][a-z0-9+.-]*:\/\/\S+|www\.\S+/gi, 'link')
+    .replace(DOMINIO, 'link')
+    .replace(/[\[\]()@`<>]/g, ' ')
+    .replace(/([\\*_~#|!])/g, '\\$1')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 /** só o que o paciente escreveu de verdade (sem as marcas «[áudio]» e «[anexo]» que a leitura da conversa põe no lugar do que não é texto) */
 function falasDoPaciente(falas: readonly Fala[]): string[] {
@@ -49,9 +65,11 @@ const PERIODO = /(?<!\p{L})(?:de\s+manh[ãa]|[àa]\s+tarde|[àa]\s+noite|cedo)(?
 /** a linha fala de MARCAR (horário, consulta, vaga…): só nela «quinta» ou «à noite» é preferência de agenda, não sintoma («a dor piora à noite») */
 const FALA_DE_AGENDA = /hor[aá]rio|consulta|marcar|agendar|agenda|vaga|posso ir|pode ser|dispon[ií]vel|encaix|\d\s*h(?![a-z])|\b[aà]s\s+\d/i;
 const NAO_E_DIA = /segunda\s+(?:opini|vez|via|parte)/i;
-const PRECO = /(?<![a-z])(?:precos?|valor(?:es)?|cust(?:a|am|ou|o|os)|quanto\s+(?:custa|custam|e|fica|ficou|sai|cobra|cobram))(?![a-z])|(?<![a-z])r\$/;
+// «quanto é o tempo de espera?», «quanto fica longe?»: o «quanto» seguido de tempo/espera/distância não é preço
+const NAO_E_PRECO = String.raw`(?!\s+(?:o\s+|a\s+|de\s+|do\s+|da\s+)*(?:tempo|espera|demora|prazo|distancia|longe|perto|dias?|horas?|minutos?|semanas?|meses|vezes))`;
+const PRECO = new RegExp(String.raw`(?<![a-z])(?:precos?|valor(?:es)?|cust(?:a|am|ou|o|os)|quanto\s+(?:custa|custam|e|fica|ficou|sai|cobra|cobram)(?![a-z])${NAO_E_PRECO})(?![a-z])|(?<![a-z])r\$`);
 // «quanto eu vou esperar?» / «quanto tempo demora?» não são pergunta de preço: o «quanto» só vale colado a custa/é/fica/sai/cobra (e flexões)
-const PERGUNTA_DE_PRECO = /quanto\s+(?:vai\s+)?(?:cust\w*|cobr\w*|fic\w*|sai\w*|seria|sera|e)(?![a-z])|qual(?:is)?\s+(?:seria\s+|sera\s+|e\s+|sao\s+)?(?:o|os|a|as)?\s*(?:valor(?:es)?|preco(?:s)?)(?![a-z])|(?:valor(?:es)?|precos?|custa|custam)\s*\?/;
+const PERGUNTA_DE_PRECO = new RegExp(String.raw`quanto\s+(?:vai\s+)?(?:cust\w*|cobr\w*|fic\w*|sai\w*|seria|sera|e)(?![a-z])${NAO_E_PRECO}|qual(?:is)?\s+(?:seria\s+|sera\s+|e\s+|sao\s+)?(?:o|os|a|as)?\s*(?:valor(?:es)?|preco(?:s)?)(?![a-z])|(?:valor(?:es)?|precos?|custa|custam)\s*\?`);
 const CONVENIO = /(?<![a-z])(?:convenio|plano\s+de\s+saude|unimed|hapvida|amil|bradesco\s+saude|sulamerica|carteirinha)(?![a-z])/;
 const EXAME = /(?<![a-z])(?:ressonancia|tomografia|raio[\s-]?x|exames?|laudo|eletroneuromiografia)(?![a-z])/;
 
@@ -70,6 +88,29 @@ function ultimaFalaComTexto(falas: readonly Fala[]): string {
   return '';
 }
 
+/** limite de oração: ponto, ponto e vírgula, exclamação, interrogação, quebra, « e », «mas», «porém», «porque», «pois», «enquanto» */
+const LIMITE_DA_ORACAO = /[.;!?\n]|\s(?:e|mas|porem|porém|porque|pois|enquanto)\s/i;
+/** outra pessoa ou outro assunto entre a dor e o tempo: «dor no joelho, minha mãe faleceu há 2 anos» — o tempo não é da dor */
+const OUTRO_ASSUNTO = /(?<![a-z])(?:minha|meu|minhas|meus|mae|pai|marido|esposa|mulher|filho|filha|irma|irmao|avo|avos|tio|tia|amig[oa]|vizinh[oa]|ele|ela|eles|elas|faleceu|morreu|casou|casei|nasceu|nasci|formei|mudei|mudou|aposentou|operou)(?![a-z])/;
+
+/** o tempo («há 2 meses») que é DA dor: na mesma oração (nem «e», «mas», ponto…) e sem outra pessoa ou assunto no meio */
+function tempoDaDor(l: string, ini: number, fim: number): string | null {
+  const ate = l.slice(fim).search(LIMITE_DA_ORACAO);
+  const depois = ate < 0 ? l.length : fim + ate;
+  const antes = (() => {
+    let k = 0;
+    for (const m of l.slice(0, ini).matchAll(new RegExp(LIMITE_DA_ORACAO.source, 'gi'))) k = (m.index ?? 0) + m[0].length;
+    return k;
+  })();
+  const oracao = l.slice(antes, depois);
+  const t = TEMPO.exec(oracao);
+  if (!t) return null;
+  const a = antes + (t.index ?? 0);
+  const entre = a >= fim ? l.slice(fim, a) : l.slice(a + t[0].length, ini);
+  if (OUTRO_ASSUNTO.test(semAcento(entre))) return null;
+  return t[0];
+}
+
 function queixa(linhas: string[]): string | null {
   for (const l of linhas) {
     const d = DOR.exec(l);
@@ -77,8 +118,8 @@ function queixa(linhas: string[]): string | null {
     if (NEGA_ANTES.test(semAcento(l.slice(Math.max(0, (d.index ?? 0) - 25), d.index)))) continue; // «não tenho dor na lombar»
     const dor = limparDor(d[0]);
     if (!dor) continue;
-    const t = TEMPO.exec(l);
-    const tempo = t ? t[0].replace(/^(?:faz|fazem)\b/i, 'há').replace(/\s+/g, ' ').trim() : null;
+    const bruto = tempoDaDor(l, d.index ?? 0, (d.index ?? 0) + d[0].length);
+    const tempo = bruto ? bruto.replace(/^(?:faz|fazem)\b/i, 'há').replace(/\s+/g, ' ').trim() : null;
     return cortar(neutro(`${dor}${tempo ? ` ${tempo}` : ''}`), MAX_QUEIXA);
   }
   return null;
@@ -92,6 +133,9 @@ function quando(linhas: string[]): string | null {
   if (!dia && !periodo) return null;
   return `mencionou ${[dia?.toLowerCase(), periodo?.toLowerCase()].filter(Boolean).join(', ')}`;
 }
+
+/** «hoje» (AAAA-MM-DD) NO FUSO DA UNIDADE: Boa Vista (UTC−4) às 23h30 ainda é o dia anterior ao de São Paulo; a consulta de «hoje» não some cedo nem sobra */
+export const hojeDaUnidade = (unit: Parameters<typeof fusoDaUnidade>[0] | Unit, agora: Date = new Date()): string => dataLocalISO(agora, fusoDaUnidade(unit));
 
 function dataCurta(d: string): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(d);

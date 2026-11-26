@@ -4,7 +4,7 @@
  */
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
+import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import { passarParaEquipeNoChatwoot, type PortaDoChatwoot } from './chatwoot-sofia.js';
 
 const u = (content: string) => ({ role: 'user' as const, content });
@@ -228,4 +228,42 @@ test('plural e flexão de preço continuam preço; «quanto cobram?», «quais o
   for (const f of ['quais os preços?', 'quanto custam as sessões?', 'isso custou caro', 'os valores são altos']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /preço/, f);
   for (const f of ['quanto cobram pela avaliação?', 'quais os valores?', 'qual seria o valor?', 'quanto ficou?']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /perguntou preço/, f);
   assert.doesNotMatch(resumoDaPassagem({ falas: [u('pagar$ agora')] })!, /preço/);
+});
+
+// ── senior rodada 2 (#478): o resumo não afirma o que o paciente não disse ────────────────────────────
+
+test('o tempo é DA dor: «dor no joelho e minha mãe faleceu há 2 anos» NÃO vira «dor no joelho há 2 anos»; o tempo da própria dor (antes, depois, com vírgula) continua', () => {
+  for (const f of ['dor no joelho e minha mãe faleceu há 2 anos', 'tenho dor no joelho, minha mãe faleceu há 2 anos', 'dor no joelho. meu pai tem câncer há 3 anos', 'dor no joelho mas meu marido operou há 5 meses']) {
+    const queixa = resumoDaPassagem({ falas: [u(f)] })!.split(' · ')[0];
+    assert.equal(queixa, 'Resumo: dor no joelho', f);
+  }
+  assert.match(resumoDaPassagem({ falas: [u('dor no joelho há 2 anos')] })!, /^Resumo: dor no joelho há 2 anos/);
+  assert.match(resumoDaPassagem({ falas: [u('há 2 meses tenho dor na lombar')] })!, /^Resumo: dor na lombar há 2 meses/);
+  assert.match(resumoDaPassagem({ falas: [u('dor no joelho, faz 3 semanas')] })!, /^Resumo: dor no joelho há 3 semanas/);
+});
+
+test('«quanto é o tempo de espera?» NÃO é preço (nem «falou de preço»); «quanto é a consulta?» é', () => {
+  for (const f of ['quanto é o tempo de espera?', 'quanto é a espera?', 'quanto fica longe daí?', 'quanto é de distância até aí?', 'quanto demora a consulta?']) assert.doesNotMatch(resumoDaPassagem({ falas: [u(f)] })!, /preço/, f);
+  for (const f of ['quanto é a consulta?', 'quanto é?', 'quanto fica a avaliação?']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /perguntou preço/, f);
+});
+
+test('markdown e link do paciente na nota: «golpe.com/x **urgente**» não vira link nem negrito; domínio solto, ~riscado~, # título e | tabela também não', () => {
+  const r = resumoDaPassagem({ falas: [u('golpe.com/x **urgente**')] })!;
+  assert.doesNotMatch(r, /golpe|\*\*urgente\*\*/);
+  assert.equal(r, 'Resumo: última fala: «link \\*\\*urgente\\*\\*»');
+  const outros = resumoDaPassagem({ falas: [u('# oi ~x~ a | b ![i](http://x.co/y.png) bit.ly/abc _z_')] })!;
+  assert.doesNotMatch(outros, /bit\.ly|http|x\.co/);
+  assert.doesNotMatch(outros, /(?<!\\)[*_~#|!]/, 'todo caractere de markdown vem escapado');
+  assert.equal(resumoDaPassagem({ falas: [u('meu e-mail é ana@gmail.com e o site dr.silva')] })!.includes('@'), false);
+});
+
+test('«hoje» da unidade no limite do dia: Boa Vista (UTC−4) às 23h30 ainda é o dia anterior ao de São Paulo, e a consulta de «hoje» segue no resumo', () => {
+  const agora = new Date('2026-11-27T03:30:00Z'); // São Paulo 00:30 de 27/11; Boa Vista 23:30 de 26/11
+  assert.equal(hojeDaUnidade({ businessHoursTimezone: 'America/Sao_Paulo' }, agora), '2026-11-27');
+  assert.equal(hojeDaUnidade({ businessHoursTimezone: 'America/Boa_Vista' }, agora), '2026-11-26');
+  assert.equal(hojeDaUnidade({}, agora), '2026-11-27', 'sem fuso: o padrão da rede (São Paulo)');
+  const attrs = { data_consulta: '2026-11-26', hora_consulta: '18:00', situacao_consulta: 'Agendado' };
+  const falas = [u('oi')];
+  assert.match(resumoDaPassagem({ attrs, falas, hoje: hojeDaUnidade({ businessHoursTimezone: 'America/Boa_Vista' }, agora) })!, /consulta Agendado: 26\/11 às 18:00/);
+  assert.equal(resumoDaPassagem({ attrs, falas, hoje: hojeDaUnidade({ businessHoursTimezone: 'America/Sao_Paulo' }, agora) }), 'Resumo: última fala: «oi»', 'em São Paulo a consulta de ontem já passou');
 });
