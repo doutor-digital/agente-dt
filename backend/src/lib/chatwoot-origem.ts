@@ -191,10 +191,14 @@ export type PortasDoFormulario = Pick<PortasDaOrigem, 'contato' | 'gravar'> & {
 };
 
 const cacheDosPadroes = new Map<string, { ate: number; v: EntradaDaLista[] }>();
-const cacheDasOpcoes = new Map<number, { ate: number; v: string[] | null }>();
+const cacheDasOpcoes = new Map<number, { ate: number; v: string[] }>();
+/** conversa → até quando já foi decidida (gravou, seco, sem a opção): as 3 primeiras falas não refazem as leituras nem repetem o log */
+const decididas = new Map<string, number>();
+const VALIDADE_DA_DECISAO_MS = 30 * 60_000;
 export function limparCacheDoFormulario(): void {
   cacheDosPadroes.clear();
   cacheDasOpcoes.clear();
+  decididas.clear();
 }
 
 export function portasDoFormulario(ctx: ContextoChatwoot, origem: PortasDaOrigem, adicionarEtiquetas: (conversa: number, etiquetas: string[]) => Promise<void>): PortasDoFormulario {
@@ -211,20 +215,20 @@ export function portasDoFormulario(ctx: ContextoChatwoot, origem: PortasDaOrigem
       return v;
     },
     async opcoesDaOrigem() {
-      const conta = ctx.conta?.conta ?? 0;
-      const hit = cacheDasOpcoes.get(conta);
+      const conta = ctx.conta?.conta;
+      const hit = conta ? cacheDasOpcoes.get(conta) : undefined;
       if (hit && hit.ate > Date.now()) return hit.v;
-      let v: string[] | null = null;
       try {
         const r = (await chamar(ctx, 'GET', 'custom_attribute_definitions', { query: { attribute_model: 'contact_attribute' } })) as unknown;
         const lista = Array.isArray(r) ? r : ((r as { payload?: unknown } | null)?.payload as unknown[] | undefined) ?? [];
         const d = (lista as Array<{ attribute_key?: unknown; attribute_values?: unknown }>).find((x) => x?.attribute_key === 'origem');
-        v = d && Array.isArray(d.attribute_values) ? d.attribute_values.map(String) : null;
+        const v = d && Array.isArray(d.attribute_values) ? d.attribute_values.map(String) : null;
+        if (v && conta) cacheDasOpcoes.set(conta, { ate: Date.now() + 5 * 60_000, v }); // erro e «sem a lista» NÃO ficam em cache: a próxima fala lê de novo
+        return v;
       } catch (err) {
         logger.warn({ err: String(err) }, `${ID_FORMULARIO}: não consegui ler a lista de Origem da conta`);
+        return null;
       }
-      cacheDasOpcoes.set(conta, { ate: Date.now() + (v ? 5 * 60_000 : 60_000), v });
-      return v;
     },
     async falasDoPaciente(conversa) {
       const r = (await chamar(ctx, 'GET', `conversations/${conversa}/messages`)) as { payload?: Array<{ message_type?: unknown; private?: unknown; content?: unknown }> } | null;
@@ -269,27 +273,39 @@ export async function preencherFormulario(
     if (modo === 'desligado' || !e.contato) return 'desligado';
     const padroes = await p.padroes(e.slug);
     if (!casarFala(e.texto, padroes)) return 'nada';
+    const chave = `${e.slug}:${e.conversa}`;
+    if ((decididas.get(chave) ?? 0) > Date.now()) return 'nada'; // já decidida nesta conversa (as 3 primeiras falas não repetem leitura nem log)
     // posição: o texto pronto é uma das primeiras falas; conversa que não dá para ler (ou já longa) não ganha origem de palpite
     const falas = await p.falasDoPaciente(e.conversa);
     if (!falas || !falas.slice(0, FALAS_DO_FORMULARIO).some((f) => casarFala(f, padroes))) return 'nada';
     const antes = await p.contato(e.contato);
     if (txt(antes.origem)) return 'nada'; // já tem origem (anúncio, equipe, ou o próprio «Formulário»): nunca troca
     const opcoes = await p.opcoesDaOrigem();
-    if (!opcoes?.includes(ORIGEM_FORMULARIO)) {
-      logger.warn({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: a lista de Origem da conta não tem a opção «${ORIGEM_FORMULARIO}» — não grava (adicione a opção em Configurações > Atributos personalizados)`);
+    // a opção como a LISTA da conta a escreve («Formulário», «formulario»…): grava o texto exato dela, nunca o nosso
+    const opcao = opcoes?.find((o) => normalizarFrase(o) === normalizarFrase(ORIGEM_FORMULARIO));
+    if (!opcao) {
+      if (opcoes === null) logger.warn({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: não consegui ler a lista de Origem da conta agora — não grava; a próxima fala tenta de novo`);
+      else {
+        logger.warn({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: a lista de Origem da conta não tem a opção «${ORIGEM_FORMULARIO}» — não grava (adicione a opção em Configurações > Atributos personalizados)`);
+        decididas.set(chave, Date.now() + 10 * 60_000);
+      }
       return 'sem-opcao';
     }
+    if (decididas.size > 2000) decididas.clear();
+    decididas.set(chave, Date.now() + VALIDADE_DA_DECISAO_MS);
     if (modo === 'seco') {
       logger.info({ slug: e.slug, conversa: e.conversa, contato: e.contato }, `${ID_FORMULARIO}: [SECO] preencheria Origem = ${ORIGEM_FORMULARIO} + etiqueta ${ETIQUETA_FORMULARIO} no contato ${e.contato}`);
       return 'seco';
     }
     // relê na hora de gravar: o referral de anúncio ou a equipe podem ter preenchido enquanto líamos a conversa
     if (txt((await p.contato(e.contato)).origem)) return 'nada';
-    await p.gravar(e.contato, { origem: ORIGEM_FORMULARIO });
+    // (a releitura e o PUT não são uma operação só — o Chatwoot não tem «grava se vazio» —, mas a janela é de milissegundos e o anúncio é chamado ANTES deste, em fila)
+    await p.gravar(e.contato, { origem: opcao });
     await p.etiquetar(e.conversa, [ETIQUETA_FORMULARIO]).catch((err: unknown) => logger.warn({ conversa: e.conversa, err: String(err) }, `${ID_FORMULARIO}: não consegui pôr a etiqueta ${ETIQUETA_FORMULARIO}`));
     logger.info({ slug: e.slug, conversa: e.conversa, contato: e.contato }, `${ID_FORMULARIO}: Origem = ${ORIGEM_FORMULARIO} no contato ${e.contato}`);
     return 'gravado';
   } catch (err) {
+    decididas.delete(`${e.slug}:${e.conversa}`); // falhou: a próxima fala tenta de novo
     logger.warn({ slug: e.slug, contato: e.contato, err: String(err) }, `${ID_FORMULARIO}: falhou`);
     return 'nada';
   }

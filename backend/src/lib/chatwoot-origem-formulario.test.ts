@@ -2,14 +2,15 @@
  * Origem «Formulário» (caso Capivari): o texto pronto do formulário do site, sem referral, grava Origem = «Formulário» + etiqueta.
  * Nunca sobrescreve origem existente (anúncio!), só nas primeiras falas, só com a opção na lista da conta, seco não grava, desligado não lê nada.
  */
-import { test } from 'node:test';
+import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
 process.env.KOMMO_ACCESS_TOKEN ??= 'token-de-teste-123';
 process.env.OPENAI_API_KEY ??= 'sk-teste-1234567890';
 
-const { preencherFormulario, padroesDoFormulario, falaParaFormulario, ORIGEM_FORMULARIO, ETIQUETA_FORMULARIO } = await import('./chatwoot-origem.js');
+const { preencherFormulario, padroesDoFormulario, falaParaFormulario, limparCacheDoFormulario, ORIGEM_FORMULARIO, ETIQUETA_FORMULARIO } = await import('./chatwoot-origem.js');
+beforeEach(() => limparCacheDoFormulario());
 const { automacaoPorId, verificarCatalogo } = await import('./automacoes.js');
 const { casarFala } = await import('./origem-texto-pronto.js');
 
@@ -129,6 +130,7 @@ test('só as primeiras falas: «vim pelo formulário» depois de 3 falas, ou con
 
 test('sem a opção «Formulário» na lista de Origem da conta (ou lista ilegível): não grava valor fora da lista', async () => {
   for (const opcoes of [['Meta Ads', 'Google'], null]) {
+    limparCacheDoFormulario();
     const x = portas({ opcoes });
     assert.equal(await preencherFormulario(E, x.p), 'sem-opcao');
     assert.equal(x.gravados.length + x.etiquetas.length, 0);
@@ -142,4 +144,30 @@ test('falha ao gravar não lança; falha na etiqueta não desfaz a origem', asyn
   const p2 = { ...x.p, etiquetar: async () => { throw new Error('etiqueta falhou'); } };
   assert.equal(await preencherFormulario(E, p2), 'gravado');
   assert.equal(x.gravados.length, 1);
+});
+
+test('a opção da lista da conta manda no texto: «formulario» na lista → grava «formulario» (o valor exato dela)', async () => {
+  const x = portas({ opcoes: ['Meta Ads', 'formulario'] });
+  assert.equal(await preencherFormulario(E, x.p), 'gravado');
+  assert.deepEqual(x.gravados, [[77, { origem: 'formulario' }]]);
+});
+
+test('a mesma conversa não refaz leitura nem log nas falas seguintes (seco, gravado ou sem a opção)', async () => {
+  const s = portas({ estado: 'seco' });
+  assert.equal(await preencherFormulario(E, s.p), 'seco');
+  const lidasAntes = s.lidas() + s.falasLidas();
+  assert.equal(await preencherFormulario(E, s.p), 'nada');
+  assert.equal(s.lidas() + s.falasLidas(), lidasAntes, 'nenhuma leitura nova');
+  limparCacheDoFormulario();
+  const sem = portas({ opcoes: ['Meta Ads'] });
+  assert.equal(await preencherFormulario(E, sem.p), 'sem-opcao');
+  assert.equal(await preencherFormulario(E, sem.p), 'nada');
+});
+
+test('lista de Origem ilegível (erro do Chatwoot) NÃO fica decidida: a próxima fala tenta de novo', async () => {
+  const x = portas({ opcoes: null });
+  assert.equal(await preencherFormulario(E, x.p), 'sem-opcao');
+  const l = x.lidas();
+  assert.equal(await preencherFormulario(E, x.p), 'sem-opcao', 'não virou «nada»: leu de novo');
+  assert.ok(x.lidas() > l);
 });

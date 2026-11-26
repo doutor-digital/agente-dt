@@ -979,9 +979,13 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   void noConviteDoCrm(req.body, conta);
   // o texto pronto do formulário do site (sem referral): Origem «Formulário» + etiqueta, só em campo vazio (chatwoot-origem.ts). Também escreve etiquetas da conversa,
   // então o «Sofia atendendo» espera por ela junto com o anúncio.
+  // DEPOIS do anúncio (em fila, nunca junto): o anúncio grava «Meta Ads» e a etiqueta `anuncio` — o formulário relê o contato e não troca; e as duas regravam a lista de etiquetas
   const fala = falaParaFormulario(req.body, CAIXAS_REGUA);
   const formularioR = fala ? estadoDoReceptor(conta) : null;
-  if (fala && formularioR) anuncioPronto = Promise.all([anuncioPronto, preencherFormulario(fala, formularioR.formulario)]).catch(() => undefined);
+  if (fala && formularioR) {
+    const antes = anuncioPronto;
+    anuncioPronto = antes.then(() => preencherFormulario(fala, formularioR.formulario)).catch(() => undefined);
+  }
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
   const e = estadoDoReceptor(conta);

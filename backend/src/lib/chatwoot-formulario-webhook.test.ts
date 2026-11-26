@@ -106,3 +106,32 @@ test('webhook: SEM chave da unidade (como Parauapebas hoje) → não lê nem esc
     f.mock.restore();
   }
 });
+
+test('webhook: lead de ANÚNCIO que escreve «vim pelo formulário» → o anúncio grava primeiro, o formulário relê e NÃO troca (nunca em paralelo)', async () => {
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas', CHATWOOT_ORIGEM_SLUGS: 'doutor-hernia-parauapebas', CHATWOOT_ETIQUETA_ANUNCIO: '1' });
+  trocarDelegate('chatwootReguaDisparo', { create: async () => ({}) });
+  const w = chatwootDeMentira({});
+  // o contato só ganha origem quando o anúncio grava (a leitura seguinte já vê «Meta Ads»)
+  let origem = '';
+  const f0 = w.f;
+  const f = (async (url: string, o: { method?: string; body?: string } = {}) => {
+    const u = new URL(url);
+    if ((o.method ?? 'GET') === 'GET' && u.pathname.endsWith('/contacts/77')) {
+      return { ok: true, status: 200, text: async () => JSON.stringify({ payload: { custom_attributes: origem ? { origem } : {} } }) } as Response;
+    }
+    if (o.method === 'PUT' && u.pathname.endsWith('/contacts/77')) {
+      const campos = JSON.parse(o.body ?? '{}').custom_attributes ?? {};
+      if (campos.origem) origem = String(campos.origem);
+    }
+    return f0(url, o as never);
+  }) as unknown as typeof fetch;
+  const mocka = mock.method(globalThis, 'fetch', f as never);
+  try {
+    const corpo = { ...paciente, source_id: 'wamid.HBgMNTU5NDk5OTk5OTk5FQIAEhgg0123456789ABCDEF', content_attributes: { referral: { source_type: 'ad', source_id: '120200000000000001', ctwa_clid: 'Afd', headline: 'Dor?' } } };
+    await disparar(corpo);
+    assert.equal(origem, 'Meta Ads', 'a origem de anúncio ficou');
+    assert.ok(!w.escritas.some((l) => l.includes('"origem":"Formulário"')), 'o formulário não sobrescreveu');
+  } finally {
+    mocka.mock.restore();
+  }
+});
