@@ -55,6 +55,7 @@ import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
 import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
+import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -99,7 +100,7 @@ export function motivoDeNaoResponder(c: ConversaLida): string | null {
  * tem consulta de pé ou já passou por ela (`ETAPAS_PROTEGIDAS`) fica na etapa em que está — a etiqueta e a nota avisam a equipe, e a
  * etiqueta cala a Sofia. Devolve a etapa em que a conversa ficou. LANÇA se o Chatwoot falhar.
  */
-export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { conversa: number; etapa: string; motivo: string }): Promise<string> {
+export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { conversa: number; etapa: string; motivo: string; /** uma linha «Resumo: …» (chatwoot-resumo-passagem.ts) que vai no fim da nota */ resumo?: string | null }): Promise<string> {
   let etapa = a.etapa;
   // já passada antes (etiqueta no lugar): a nota repete, mas a MENÇÃO não — a pessoa não é chamada duas vezes pela mesma passagem
   const jaPassada = !!(await chat.conversa(a.conversa).catch(() => null))?.etiquetas.includes(ETIQUETA_HUMANO);
@@ -112,7 +113,8 @@ export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: { con
   // com a conversa já ABERTA desde a 1ª mensagem o Chatwoot não avisa ninguém na passagem: a menção na nota privada avisa quem está com a
   // conversa (rodízio) ou, sem dono, a gerente da caixa. Falhar em achar a pessoa cai na nota de sempre.
   const destino = jaPassada || !chat.destinoDaPassagem ? null : await chat.destinoDaPassagem(a.conversa).catch(() => null);
-  await chat.nota(a.conversa, destino ? notaComMencao(destino, `🙋 A Sofia passou esta conversa para você: ${motivo}`) : `🙋 Sofia passou esta conversa para a equipe: ${motivo}`);
+  const resumo = a.resumo?.trim() ? `\n${a.resumo.trim()}` : '';
+  await chat.nota(a.conversa, destino ? notaComMencao(destino, `🙋 A Sofia passou esta conversa para você: ${motivo}${resumo}`) : `🙋 Sofia passou esta conversa para a equipe: ${motivo}${resumo}`);
   return etapa;
 }
 
@@ -225,6 +227,9 @@ export interface PedidoDasFerramentas {
   estado: EstadoDaRodada;
   onCall: (a: SandboxAction) => void;
   deps?: DepsDasFerramentas;
+  /** o que a Sofia sabe da conversa (atributos e falas): alimenta o «Resumo» da nota de passagem para a equipe */
+  attrs?: Record<string, unknown>;
+  falas?: readonly Fala[];
 }
 
 const sem = (args: unknown): Record<string, unknown> => {
@@ -250,7 +255,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       return true;
     }
     try {
-      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo });
+      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: resumoDaPassagem({ attrs: p.attrs, falas: p.falas }) });
       passou();
       return true;
     } catch (err) {
@@ -539,6 +544,8 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
         chat: p.chat,
         recorder,
         estado,
+        attrs: p.lida.attrs,
+        falas: p.falas,
         onCall: (a) => {
           feitas.push(a);
           onCall(a);
