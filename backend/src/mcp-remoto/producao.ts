@@ -57,7 +57,7 @@ import { lerContasDoAmbiente as lerContasInfinitepay } from '../lib/integracoes/
 import { contaInfinitepayDaConfig, criarContextoInfinitepay, registrarFerramentasInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import { armazemDeEscritaPrisma } from './infinitepay-armazem.js';
 import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from './infinitepay-escrita.js';
-import { montarRotaDoWebhookInfinitepay, urlDoAviso } from './infinitepay-webhook.js';
+import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
@@ -640,16 +640,20 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const zenfisio = criarContextoZenfisio(new Map());
   manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
   // InfinitePay: criar link DIRETO (portão INFINITEPAY_ESCRITA_UNIDADES, vazio = desligado; tetos e aviso no Telegram) e o webhook que confirma o pagamento.
-  // O segredo do endereço do webhook é derivado, não o do console: um endereço vazado serve a um link só e nunca vira sessão.
-  // INFINITEPAY_WEBHOOK_SEGREDO (opcional) fixa o segredo: o endereço de cada link vale por até 90 dias, e girar SESSION_JWT_SECRET sem ele faria os avisos dos links já criados darem 404
-  const segredoDoAviso = process.env.INFINITEPAY_WEBHOOK_SEGREDO?.trim() || createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:infinitepay-webhook').digest('hex');
+  // O segredo do endereço do webhook vem SÓ de INFINITEPAY_WEBHOOK_SEGREDO (32+ caracteres), sem derivar do segredo do console: o endereço de cada link vale por até 90 dias e girar
+  // SESSION_JWT_SECRET faria os avisos dos links vivos darem 404. Sem o segredo: nenhum link é criado e a rota nem é montada (ver ligar-infinitepay-acailandia.sh, que o gera uma vez).
+  const segredoDoAviso = segredoDoAvisoDoAmbiente();
+  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook não é montado');
   const escritaInfinitepay = criarEscritaInfinitepay({
     armazem: armazemDeEscritaPrisma(prisma as never),
     alertar: (texto) => enviarTelegram(texto),
-    urlDoWebhook: (unidade, orderNsu) => urlDoAviso(new URL(urlPublica).origin, segredoDoAviso, unidade, orderNsu),
+    urlDoWebhook: (unidade, orderNsu) => {
+      if (!segredoDoAviso) throw new ErroDeEntrada('INFINITEPAY_WEBHOOK_SEGREDO não está configurado (32+ caracteres): sem ele o aviso de pagamento não pode ser assinado e o conector não cria o link. Nada foi criado.');
+      return urlDoAviso(new URL(urlPublica).origin, segredoDoAviso, unidade, orderNsu);
+    },
   });
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
-  montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());

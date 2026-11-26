@@ -363,6 +363,8 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
   const chave = chaveDeDuplicata(conta.slug, centavos, descricao);
   const { iso: validoAte, data: validoAteData } = validoAteDe(agora, dias);
   const criadoPor = quem.email || `usuario:${quem.id}`;
+  // o endereço do aviso é montado ANTES de reservar: sem o segredo do webhook ele lança, e nada fica gravado (nem a intenção)
+  const webhookUrl = esc.urlDoWebhook?.(conta.slug, orderNsu);
 
   return umPorVez(esc, conta.slug, async () => {
     // a reserva que vale: dentro da trava da unidade, relê o banco, confere tudo e grava a INTENÇÃO antes de qualquer chamada à InfinitePay
@@ -370,7 +372,6 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       unidade: conta.slug, orderNsu, chave, valorCentavos: centavos, descricao, validoAte: validoAteData, criadoPor, agora,
       conferir: (livro) => verificar(esc, livro, { valor, chave }),
     });
-    const webhookUrl = esc.urlDoWebhook?.(conta.slug, orderNsu);
     const pedido: PedidoDeLink = {
       orderNsu,
       itens: [{ quantidade: 1, precoCentavos: centavos, descricao }],

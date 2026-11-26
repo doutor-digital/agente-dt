@@ -18,6 +18,18 @@ import { reais } from './infinitepay.js';
 import { temMarca, type ArmazemDeEscrita } from './infinitepay-escrita.js';
 import { ipDoCliente, JanelaDeContagem } from './limites.js';
 
+/** O tamanho mínimo do segredo do webhook (INFINITEPAY_WEBHOOK_SEGREDO): 32 caracteres. */
+export const SEGREDO_MINIMO = 32;
+
+/**
+ * O segredo do webhook, SÓ do ambiente: nada de derivar de SESSION_JWT_SECRET (girar o segredo do console quebraria o aviso de todo link vivo: eles valem até 90 dias).
+ * Ausente ou curto = undefined, e então o conector não cria link nem monta a rota.
+ */
+export function segredoDoAvisoDoAmbiente(e: NodeJS.ProcessEnv = process.env): string | undefined {
+  const s = e.INFINITEPAY_WEBHOOK_SEGREDO?.trim();
+  return s && s.length >= SEGREDO_MINIMO ? s : undefined;
+}
+
 export const ROTA_WEBHOOK_INFINITEPAY = '/infinitepay/webhook/:unidade/:orderNsu/:assinatura';
 
 export function assinaturaDoAviso(segredo: string, unidade: string, orderNsu: string): string {

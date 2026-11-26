@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroInfinitepay, criarLinkNaInfinitepay, dominiosDoLink, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 import { criarContextoInfinitepay, contaInfinitepayDaConfig, type ContaInfinitepay } from './infinitepay.js';
 import {
@@ -17,7 +18,7 @@ import {
   validoAteDe,
 } from './infinitepay-escrita.js';
 import { armazemEmMemoria } from './infinitepay-falso.js';
-import { assinaturaDoAviso, urlDoAviso } from './infinitepay-webhook.js';
+import { assinaturaDoAviso, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 
 const CHAVE = 'inchk_FIXTURE0123456789abcdefghijklmnopqrstu';
 const UNI = 'doutor-hernia-acailandia';
@@ -344,6 +345,20 @@ test('a referência de um link RECUSADO pode ser usada de novo; a de um link que
   assert.equal(m.armazem.linhas.filter((l) => l.status === 'falhou').length, 1);
   assert.equal(m.armazem.linhas.find((l) => l.orderNsu === 'pedido-123')?.status, 'criado');
   await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 300, descricao: 'Outra', referencia: 'pedido-123' }), /já foi usada/);
+});
+
+test('sem o segredo do webhook (INFINITEPAY_WEBHOOK_SEGREDO) nenhum link é criado e nada fica gravado; o segredo vem só do ambiente, com 32+ caracteres', async () => {
+  const m = montar();
+  const esc = criarEscritaInfinitepay({ armazem: m.armazem, unidades: () => new Set([UNI]), urlDoWebhook: () => { throw new ErroDeEntrada('INFINITEPAY_WEBHOOK_SEGREDO não está configurado'); } });
+  await assert.rejects(() => criarLink(m.ctx, esc, QUEM, { valor: 10, descricao: 'Link' }), /INFINITEPAY_WEBHOOK_SEGREDO/);
+  assert.equal(m.pedidos.length, 0);
+  assert.equal(m.armazem.linhas.length, 0, 'nem a intenção foi gravada');
+  assert.equal(segredoDoAvisoDoAmbiente({}), undefined);
+  assert.equal(segredoDoAvisoDoAmbiente({ INFINITEPAY_WEBHOOK_SEGREDO: 'curto' }), undefined);
+  assert.equal(segredoDoAvisoDoAmbiente({ INFINITEPAY_WEBHOOK_SEGREDO: '  ' }), undefined);
+  assert.equal(segredoDoAvisoDoAmbiente({ INFINITEPAY_WEBHOOK_SEGREDO: 'a'.repeat(32) }), 'a'.repeat(32));
+  // girar o segredo do console (SESSION_JWT_SECRET) não muda nada: ele nem é lido
+  assert.equal(segredoDoAvisoDoAmbiente({ SESSION_JWT_SECRET: 'x'.repeat(40) }), undefined);
 });
 
 test('sem endereço público o link nasce sem aviso automático e a resposta diz isso', async () => {
