@@ -122,7 +122,7 @@ function chatFalso(
 }
 
 const deps = (armazem: Armazem, chat: Chat): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined });
-const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 const VESPERA = new Date('2026-11-16T17:30:00Z'); // consulta de 17/11 14:30 Belém, 24 h antes
 
 test('catálogo: a automação existe, tem seco e passa na verificação', () => {
@@ -670,7 +670,7 @@ test('UNIFICAÇÃO (controle): a MESMA conversa sem a etiqueta historico, nascid
 
 // ── histórico com consulta de pé: o worker passa a enxergar, e não dobra com o Kommo ──
 
-const HIST_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const HIST_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 
 test('conversa do histórico parada, mas com consulta de pé: lembrete sai (ligado); com consulta velha (mais de 35 dias) segue fora', async () => {
   const f = armazemFalso();

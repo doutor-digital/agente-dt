@@ -21,7 +21,7 @@ const { estadoDoAmbiente } = await import('./automacoes-estado.js');
 const SLUG_PARAU = U.SEMENTE_PARAUAPEBAS.slug;
 const unix = (s: string) => Math.floor(new Date(s).getTime() / 1000);
 const DADOS = { nome: 'Doutor Hérnia Parauapebas', pixKey: 'pix@parau.com', valorAntecipado: 250 };
-const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 const PARTIDA = new Date('2026-11-16T17:20:00Z');
 const VESPERA = new Date('2026-11-16T17:30:00Z');
 
