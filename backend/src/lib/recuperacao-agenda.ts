@@ -151,8 +151,10 @@ export function candidatosDaLista(e: EntradaDaLista): ResultadoDosCandidatos {
       continue;
     }
     const dele = porPaciente.get(c.pacienteChave) ?? [];
-    // voltou: outra consulta dele (não esta), de pé ou atendida, no mesmo horário ou depois — marcou de novo ou já foi atendido
-    const voltou = dele.some((o) => o.id !== c.idSchedule && o.status !== null && COM_CONSULTA.has(o.status) && o.inicioMs >= c.inicio.getTime());
+    // voltou: outra consulta dele (não esta), de pé ou atendida, a partir do momento em que o desmarque foi LANÇADO (ou do horário da consulta, o que vier
+    // primeiro): quem remarcou para ANTES do horário original (cancelou no dia 25 e foi atendido no dia 22, por exemplo) também voltou.
+    const desde = Math.min(c.inicio.getTime(), c.modificadoEm?.getTime() ?? Infinity);
+    const voltou = dele.some((o) => o.id !== c.idSchedule && o.status !== null && COM_CONSULTA.has(o.status) && o.inicioMs >= desde);
     if (voltou) {
       saidas.voltou++;
       continue;

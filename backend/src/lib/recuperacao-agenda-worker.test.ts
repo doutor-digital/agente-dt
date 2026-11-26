@@ -33,7 +33,7 @@ function armazemFalso(): ArmazemDaLista & { itens: ItemParaGravar[]; concluidos:
     itens, concluidos,
     async contarDoDia(_u, modo, d) { return itens.filter((i) => i.modo === modo && i.dia === d && i.envio !== 'pendente').length; },
     async pendentesDoDia(_u, modo, d) { return itens.filter((i) => i.modo === modo && i.dia === d && i.envio === 'pendente').map((i) => i.idSchedule); },
-    async jaListados(_u, modo) { return itens.filter((i) => i.modo === modo && i.envio !== 'pendente').map((i) => ({ idSchedule: i.idSchedule, pacienteChave: i.pacienteChave })); },
+    async jaListados() { return itens.filter((i) => i.envio !== 'pendente').map((i) => ({ idSchedule: i.idSchedule, pacienteChave: i.pacienteChave })); },
     async reivindicar(item) {
       const existente = itens.find((i) => i.idSchedule === item.idSchedule && i.modo === item.modo);
       if (existente && existente.envio !== 'pendente') return false;
@@ -473,6 +473,25 @@ test('quem o cartão tirou fica lembrado: a rodada seguinte não lê o cartão d
   const r = await listarRecuperacao(unit, segunda.deps);
   assert.equal(segunda.chamadas.kommo, 0);
   assert.equal(r.saidasDoCartao.lembrado, 1);
+});
+
+test('a chave passa de «só no papel» para ligada: quem entrou na lista simulada nos últimos 14 dias NÃO é listado de novo (nem conta nos dois grupos)', async () => {
+  const agenda = AGENDA_DE_HOJE();
+  const seco = montar({ agenda }, { estado: 'seco' });
+  await listarRecuperacao(unit, seco.deps);
+  assert.equal(seco.armazem.itens.length, 3);
+  _limparMemoriaDaRecuperacao();
+  const ligada = montar({ agenda }, { armazem: seco.deps.armazem, agora: new Date('2026-11-27T12:00:00.000Z') });
+  const r = await listarRecuperacao(unit, ligada.deps);
+  assert.equal(r.listados, 0);
+  assert.deepEqual(ligada.enviados, []);
+  assert.equal(seco.armazem.itens.every((i) => i.modo === 'seco'), true, 'ninguém aparece nos dois grupos');
+  // quem entrar DEPOIS do corte (agendamento novo) é listado normalmente
+  const novo = montar({ agenda: [...agenda, ag('ELENA NOVA', '2026-11-26', 57)] }, { armazem: seco.deps.armazem, agora: new Date('2026-11-28T09:00:00.000Z') });
+  _limparMemoriaDaRecuperacao();
+  await listarRecuperacao(unit, { ...novo.deps, agora: new Date('2026-11-27T13:00:00.000Z') });
+  assert.match(novo.enviados.join('\n'), /Elena/);
+  assert.doesNotMatch(novo.enviados.join('\n'), /Ana|Bruno|Carla/);
 });
 
 test('Kommo dividido (Petrópolis × Caxias): fora desta versão — o cartão achado poderia ser da outra unidade', async () => {
