@@ -1386,6 +1386,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'seco',
     arquivo: 'src/lib/agendados-sem-pix.ts',
   },
+  {
+    id: 'recuperacao-agenda',
+    chave: 'RECUPERACAO_AGENDA_SLUGS',
+    nome: 'Histórico da agenda da franquia (base da lista de recuperação)',
+    oQueFaz:
+      'Guarda, a cada varredura do sincronizador, as MUDANÇAS de status dos agendamentos da franquia (marcado → desmarcado, faltou, atendido…, com a hora em que a franquia lançou e a hora em que vimos). A franquia só devolve o estado atual: sem este histórico não dá para saber quando o paciente desmarcou nem se voltou a marcar depois. Base da lista diária de avaliações desmarcadas ou faltosas e da medição do retorno (próximos passos).',
+    pegadinha:
+      'NASCE DESLIGADA. «Só no papel» e ligada fazem a MESMA coisa aqui (gravar o histórico: é observação, não toca em paciente, cartão nem etapa). Não chama a franquia de novo: usa a agenda que o sincronizador já leu (de −3 a +45 dias), então só funciona onde o sincronizador está ligado ou em «só no papel». Sem nome nem telefone no banco: o paciente é um HMAC com o segredo AGENDA_HISTORICO_SEGREDO (32+ caracteres, que NUNCA se gira: girar troca a chave de todos); SEM o segredo nada é gravado e o log diz por quê. AGENDA_HISTORICO_RETENCAO_DIAS (inteiro ≥ 120; vazio = nunca apaga) liga a purga diária do que passou do prazo. Lista da franquia incompleta (mais páginas que o teto) não grava nada.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/agenda-historico.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
