@@ -11,7 +11,7 @@ interface Linha extends LinkGuardado {
 export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderNsu: string; unidade: string; valorCentavos: number; criadoEmMs?: number; chave?: string }> = []): ArmazemDeEscrita & { linhas: Linha[] } {
   const linhas: Linha[] = inicial.map((l) => ({
     status: 'criado', url: `https://checkout.infinitepay.io/${l.orderNsu}`, descricao: 'x', validoAte: null, criadoPor: 'u', criadoEm: new Date(l.criadoEmMs ?? 0).toISOString(),
-    invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null, reciboUrl: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null,
+    invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null, reciboUrl: null, revisao: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null,
     chave: l.chave ?? null, criadoEmMs: l.criadoEmMs ?? 0, ...l,
   }));
   // uma reserva por vez, como a trava do banco
@@ -40,7 +40,7 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
         linhas.push({
           orderNsu: p.orderNsu, unidade: p.unidade, status: 'intencao', url: null, valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte.toISOString(),
           criadoPor: p.criadoPor, criadoEm: new Date(p.agora).toISOString(), invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null,
-          reciboUrl: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null, chave: p.chave, criadoEmMs: p.agora,
+          reciboUrl: null, revisao: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null, chave: p.chave, criadoEmMs: p.agora,
         });
       });
       fila = feita.catch(() => undefined);
@@ -76,6 +76,7 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
         mudou = true;
       }
       l.ultimoEvento = e.evento;
+      if (e.revisao) l.revisao = e.revisao;
       return { mudou, atual: { ...l } };
     },
   };

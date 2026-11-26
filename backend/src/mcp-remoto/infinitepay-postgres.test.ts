@@ -37,8 +37,10 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
   const B = clientes[1]!;
   try {
     await A.$executeRawUnsafe('DROP TABLE IF EXISTS "infinitepay_links"');
-    const sql = readFileSync(path.resolve(process.cwd(), 'prisma/migrations/20261126120000_infinitepay_links/migration.sql'), 'utf8');
-    for (const comando of sql.split(/;\s*\n/).map((c) => c.replace(/^(--.*\n)+/gm, '').trim()).filter(Boolean)) await A.$executeRawUnsafe(comando);
+    for (const m of ['20261126120000_infinitepay_links', '20261126140000_infinitepay_links_revisao']) {
+      const sql = readFileSync(path.resolve(process.cwd(), `prisma/migrations/${m}/migration.sql`), 'utf8');
+      for (const comando of sql.split(/;\s*\n/).map((c) => c.replace(/^(--.*\n)+/gm, '').trim()).filter(Boolean)) await A.$executeRawUnsafe(comando);
+    }
 
     const a = instancia(A);
     const b = instancia(B);
@@ -75,12 +77,15 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     const e3 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'settled', liquidado: true });
     assert.equal(e3.mudou, true);
     assert.ok(e3.atual?.liquidadoEm);
-    const e4 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'refunded', paraStatus: 'estornado', deStatus: ['intencao', 'criado', 'pago'] });
-    assert.equal(e4.atual?.status, 'estornado');
+    // estorno avisado NÃO desfaz o pago: marca revisão (coluna nova) e o status segue
+    const e4 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'refunded', revisao: 'estorno avisado, NÃO confirmado pela API' });
+    assert.equal(e4.atual?.status, 'pago');
+    assert.equal(e4.atual?.revisao, 'estorno avisado, NÃO confirmado pela API');
+    assert.equal(e4.atual?.ultimoEvento, 'refunded');
 
     // a leitura do conector lê a tabela de verdade
     const lista = await infinitepayLinks(a.ctx, {});
-    assert.equal(lista.resumo.porStatus.estornado?.quantidade, 1);
+    assert.equal(lista.resumo.emRevisao, 1);
     assert.ok(lista.resumo.links >= 3);
   } finally {
     await A.$executeRawUnsafe('DROP TABLE IF EXISTS "infinitepay_links"').catch(() => undefined);

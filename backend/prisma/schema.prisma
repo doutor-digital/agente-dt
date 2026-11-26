@@ -3140,6 +3140,8 @@ model InfinitepayLink {
   parcelas          Int?
   valorPagoCentavos Int?      @map("valor_pago_centavos")
   reciboUrl         String?   @map("recibo_url")
+  /// estorno/cancelamento avisado pela InfinitePay e NÃO confirmado pela API: o João confere no app (o status não é mudado por ele)
+  revisao           String?
   pagoEm            DateTime? @map("pago_em")
   liquidadoEm       DateTime? @map("liquidado_em")
   ultimoEvento      String?   @map("ultimo_evento")

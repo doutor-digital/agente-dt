@@ -20,6 +20,7 @@ export interface LinhaDoLink {
   parcelas: number | null;
   valorPagoCentavos: number | null;
   reciboUrl: string | null;
+  revisao: string | null;
   pagoEm: Date | null;
   liquidadoEm: Date | null;
   ultimoEvento: string | null;
@@ -52,6 +53,7 @@ export function comoLinkGuardado(l: LinhaDoLink): LinkGuardado {
     parcelas: l.parcelas,
     valorPagoCentavos: l.valorPagoCentavos,
     reciboUrl: l.reciboUrl,
+    revisao: l.revisao,
     pagoEm: iso(l.pagoEm),
     liquidadoEm: iso(l.liquidadoEm),
     ultimoEvento: l.ultimoEvento,
@@ -161,7 +163,7 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
     },
     async aplicarEvento(unidade, orderNsu, e: EventoDoLink) {
       const agora = new Date();
-      const registro = { ultimoEvento: e.evento, ultimoEventoEm: agora };
+      const registro = { ultimoEvento: e.evento, ultimoEventoEm: agora, ...(e.revisao ? { revisao: e.revisao } : {}) };
       let mudou = false;
       const alvo = { unitSlug: unidade, orderNsu };
       if (e.paraStatus) {

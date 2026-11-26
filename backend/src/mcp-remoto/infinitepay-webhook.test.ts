@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
-import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
+import { criarContextoInfinitepay, infinitepayLinks, type ContaInfinitepay } from './infinitepay.js';
 import { armazemEmMemoria } from './infinitepay-falso.js';
 import { assinaturaDoAviso, eventoDoCorpo, montarRotaDoWebhookInfinitepay, processarAviso, urlDoAviso, type DepsDoAviso } from './infinitepay-webhook.js';
 import { mascararUrlDoLog } from '../lib/mascara-url-log.js';
@@ -133,7 +133,8 @@ test('order_nsu do corpo diferente do endereço: recusa; link desconhecido ou qu
   const desconhecido = { unidade: UNI, orderNsu: 'nao-existe', assinatura: assinaturaDoAviso(SEGREDO, UNI, 'nao-existe') };
   assert.equal((await processarAviso(m.deps, desconhecido, PAGO)).http, 404);
   const outraUnidade = { unidade: 'timbo', orderNsu: REF, assinatura: assinaturaDoAviso(SEGREDO, 'timbo', REF) };
-  assert.equal((await processarAviso(m.deps, outraUnidade, PAGO)).http, 404);
+  // unidade que NÃO está carregada mas com assinatura nossa: 503 (a InfinitePay repete), nunca 404
+  assert.equal((await processarAviso(m.deps, outraUnidade, PAGO)).http, 503);
 });
 
 test('settled: liquida o que já está pago; sem paid antes, confirma e marca pago também', async () => {
@@ -148,18 +149,85 @@ test('settled: liquida o que já está pago; sem paid antes, confirma e marca pa
   assert.ok(b.armazem.linhas[0]!.liquidadoEm);
 });
 
-test('refunded: marca estornado e SEMPRE avisa o João; canceled só vale para link ainda não pago', async () => {
+test('refunded sobre um link PAGO não sobrescreve `pago`: marca para revisão ("não confirmado pela API") e SEMPRE avisa o João', async () => {
   const pago = montar({ status: 'pago' });
   const r = await processarAviso(pago.deps, pago.p, { order_nsu: REF, event: 'refunded' });
-  assert.equal(r.resultado, 'estornado');
-  assert.equal(pago.armazem.linhas[0]!.status, 'estornado');
-  assert.match(pago.avisos[0]!, /ESTORNO/);
+  assert.equal(r.resultado, 'estorno marcado para revisão');
+  const l = pago.armazem.linhas[0]!;
+  assert.equal(l.status, 'pago', 'o estorno avisado NUNCA desfaz um pagamento confirmado');
+  assert.match(l.revisao ?? '', /NÃO confirmado pela API/);
+  assert.equal(l.ultimoEvento, 'refunded');
+  assert.match(pago.avisos[0]!, /ESTORNO.*NÃO confirmado pela API.*não mudei o status \(pago\)/);
+  // a repetição do aviso não muda nada além da marca
+  await processarAviso(pago.deps, pago.p, { order_nsu: REF, event: 'refunded' });
+  assert.equal(pago.armazem.linhas[0]!.status, 'pago');
+});
+
+test('refunded sobre link ainda não pago também só marca (estorno não muda status algum)', async () => {
+  const m = montar({ status: 'criado' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'refunded' });
+  assert.equal(m.armazem.linhas[0]!.status, 'criado');
+  assert.ok(m.armazem.linhas[0]!.revisao);
+});
+
+test('canceled: antes do pagamento vale como cancelado (e marcado como não confirmado); sobre um `pago` só marca para revisão e avisa', async () => {
   const cancelado = montar({ status: 'criado' });
-  await processarAviso(cancelado.deps, cancelado.p, { order_nsu: REF, event: 'canceled' });
+  assert.equal((await processarAviso(cancelado.deps, cancelado.p, { order_nsu: REF, event: 'canceled' })).resultado, 'cancelado');
   assert.equal(cancelado.armazem.linhas[0]!.status, 'cancelado');
+  assert.match(cancelado.armazem.linhas[0]!.revisao ?? '', /NÃO confirmado pela API/);
   const jaPago = montar({ status: 'pago' });
-  await processarAviso(jaPago.deps, jaPago.p, { order_nsu: REF, event: 'canceled' });
+  const r = await processarAviso(jaPago.deps, jaPago.p, { order_nsu: REF, event: 'canceled' });
+  assert.equal(r.resultado, 'cancelamento marcado para revisão');
   assert.equal(jaPago.armazem.linhas[0]!.status, 'pago', 'cancelamento não desfaz pagamento');
+  assert.match(jaPago.armazem.linhas[0]!.revisao ?? '', /cancelamento avisado/);
+  assert.match(jaPago.avisos[0]!, /NÃO sobrescrevi o status \(pago\)/);
+});
+
+test('o estorno avisado aparece em infinitepay_links como NÃO confirmado pela API, e o link segue pago', async () => {
+  const m = montar({ status: 'pago' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'refunded' });
+  const r = await infinitepayLinks(m.deps.ctx, {});
+  assert.equal(r.resumo.emRevisao, 1);
+  assert.equal(r.itens[0]!.status, 'pago');
+  assert.equal(r.itens[0]!.confirmadoPelaApi, false);
+  assert.match(String(r.itens[0]!.revisao), /NÃO confirmado pela API/);
+  assert.match(String(r.revisaoPendente), /NÃO confirmados? pela API/);
+});
+
+test('unidade que não está carregada (carga inicial, banco fora, chave renomeada): 503 para a InfinitePay repetir e UM alerta por 15 min', async () => {
+  let agora = Date.parse('2026-11-26T15:00:00Z');
+  const m = montar();
+  const deps: DepsDoAviso = { ...m.deps, ctx: criarContextoInfinitepay(new Map(), m.armazem), agora: () => agora };
+  const r1 = await processarAviso(deps, m.p, PAGO);
+  assert.equal(r1.http, 503, 'nunca 404: com 404 a InfinitePay desiste e o pagamento fica criado para sempre');
+  assert.equal(m.avisos.length, 1);
+  assert.match(m.avisos[0]!, /não tem essa unidade carregada/);
+  assert.match(m.avisos[0]!, /dd-20261126-aaaaaaaaaa/);
+  // a InfinitePay repete: continua 503 e NÃO repete o alerta dentro da janela
+  assert.equal((await processarAviso(deps, m.p, PAGO)).http, 503);
+  assert.equal((await processarAviso(deps, m.p, PAGO)).http, 503);
+  assert.equal(m.avisos.length, 1);
+  agora += 16 * 60_000;
+  await processarAviso(deps, m.p, PAGO);
+  assert.equal(m.avisos.length, 2, 'passada a janela, avisa de novo');
+  assert.equal(m.armazem.linhas[0]!.status, 'criado', 'nada foi marcado');
+});
+
+test('unidade ausente com assinatura ERRADA continua 404 e sem alerta (não é aviso nosso)', async () => {
+  const m = montar();
+  const deps: DepsDoAviso = { ...m.deps, ctx: criarContextoInfinitepay(new Map(), m.armazem) };
+  const r = await processarAviso(deps, { ...m.p, assinatura: 'x'.repeat(32) }, PAGO);
+  assert.equal(r.http, 404);
+  assert.equal(m.avisos.length, 0);
+});
+
+test('unidade ausente pela rota: 503 de verdade na resposta HTTP', async () => {
+  const m = montar();
+  const deps: DepsDoAviso = { ...m.deps, ctx: criarContextoInfinitepay(new Map(), m.armazem) };
+  await comServidor(deps, async (base) => {
+    const r = await fetch(`${base}/infinitepay/webhook/${UNI}/${REF}/${m.p.assinatura}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(PAGO) });
+    assert.equal(r.status, 503);
+  });
 });
 
 test('payment_failed e created só ficam registrados; evento que não se conhece também, mas AVISA o João', async () => {
@@ -216,10 +284,11 @@ test('pagamento confirmado com o link já CANCELADO/ESTORNADO (avisos fora de or
   assert.equal(jaPago.avisos.length, 0);
 });
 
-test('estorno com o evento em outra grafia também marca e avisa', async () => {
+test('estorno com o evento em outra grafia também marca para revisão e avisa', async () => {
   const m = montar({ status: 'pago' });
   const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'invoice.REFUNDED' });
-  assert.equal(r.resultado, 'estornado');
+  assert.equal(r.resultado, 'estorno marcado para revisão');
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
   assert.match(m.avisos[0]!, /ESTORNO/);
 });
 

@@ -37,6 +37,8 @@ export interface LinkGuardado {
   parcelas: number | null;
   valorPagoCentavos: number | null;
   reciboUrl: string | null;
+  /** estorno/cancelamento avisado pela InfinitePay e NÃO confirmado pela API: o João confere no app */
+  revisao: string | null;
   pagoEm: string | null;
   liquidadoEm: string | null;
   ultimoEvento: string | null;
@@ -138,6 +140,8 @@ const reaisDoLink = (l: LinkGuardado) => ({
   parcelas: l.parcelas,
   reciboUrl: l.reciboUrl,
   ultimoEvento: l.ultimoEvento,
+  ...(l.revisao ? { revisao: l.revisao, confirmadoPelaApi: false } : {}),
+  ...(l.status === 'cancelado' || l.status === 'estornado' ? { avisoDoStatus: 'status vindo de AVISO da InfinitePay, não confirmado pela API (o /payment_check só confirma pagamento)' } : {}),
   ...(l.erro ? { erro: l.erro } : {}),
 });
 
@@ -219,6 +223,7 @@ export async function infinitepayLinks(
   let emitido = 0;
   let pago = 0;
   let estornado = 0;
+  let emRevisao = 0;
   for (const l of todos) {
     // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
     const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
@@ -228,6 +233,7 @@ export async function infinitepayLinks(
     if (l.status !== 'falhou' && l.status !== 'intencao') emitido += l.valorCentavos;
     if (l.status === 'pago') pago += centavos;
     if (l.status === 'estornado') estornado += centavos;
+    if (l.revisao) emRevisao += 1;
   }
   return {
     unidade: conta.slug,
@@ -240,11 +246,16 @@ export async function infinitepayLinks(
       /** o que foi pago e NÃO foi estornado */
       valorPago: reais(pago),
       valorEstornado: reais(estornado),
+      /** links com estorno/cancelamento avisado e NÃO confirmado pela API (o status NÃO foi mudado) */
+      emRevisao: emRevisao,
       porStatus,
     },
     itens: todos.slice(0, max).map(reaisDoLink),
     itensOmitidos: Math.max(todos.length - max, 0),
     ...(cortouLeitura ? { truncado: true, aviso: `mais de ${MAX_LEITURA} links no período: divida o período. Os totais estão INCOMPLETOS.` } : {}),
+    ...(emRevisao > 0
+      ? { revisaoPendente: `${emRevisao} link(s) com estorno ou cancelamento AVISADO pela InfinitePay e NÃO confirmado pela API (o /payment_check só vê pagamento). O status não foi mudado: confira no app e veja o campo revisao de cada um.` }
+      : {}),
     ...(todos.some((l) => l.status === 'intencao')
       ? { atencao: 'há link em "intencao": o conector gravou o pedido e não chegou a registrar a resposta da InfinitePay (queda no meio). Confira no app da InfinitePay antes de refazer.' }
       : {}),

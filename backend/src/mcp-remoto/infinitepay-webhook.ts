@@ -35,6 +35,8 @@ function assinaturaBoa(segredo: string, unidade: string, orderNsu: string, receb
 }
 
 export interface DepsDoAviso {
+  /** relógio (testes); padrão Date.now */
+  agora?: () => number;
   ctx: ContextoInfinitepay;
   armazem: ArmazemDeEscrita;
   segredo: string;
@@ -70,10 +72,31 @@ export function eventoDoCorpo(c: Record<string, unknown>): string | undefined {
   return `desconhecido:${bruto.replace(/[^a-z0-9_.:-]/g, '').slice(0, 40)}`;
 }
 
+/** Um aviso ao João por unidade a cada 15 minutos: a InfinitePay repete a entrega e o Telegram não pode virar enxurrada. */
+const JANELA_DO_ALERTA_MS = 15 * 60_000;
+const ultimoAlertaDeUnidade = new WeakMap<DepsDoAviso, Map<string, number>>();
+
+function alertaDeUnidadeAusente(deps: DepsDoAviso, unidade: string, orderNsu: string): void {
+  const agora = (deps.agora ?? Date.now)();
+  let m = ultimoAlertaDeUnidade.get(deps);
+  if (!m) ultimoAlertaDeUnidade.set(deps, (m = new Map()));
+  const antes = m.get(unidade);
+  if (antes !== undefined && agora - antes < JANELA_DO_ALERTA_MS) return;
+  m.set(unidade, agora);
+  void deps.alertar(
+    `⚠️ InfinitePay mandou um aviso de pagamento (${orderNsu}) para a unidade ${unidade}, mas o conector não tem essa unidade carregada agora (carga inicial, banco fora do ar, unidade inativada ou chave renomeada). Respondi 503: a InfinitePay tenta de novo. Se continuar, confira INFINITEPAY_CHAVE_* e o banco.`,
+  ).catch(() => false);
+}
+
 export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; orderNsu: string; assinatura: string }, corpoBruto: unknown): Promise<RespostaDoAviso> {
   if (!assinaturaBoa(deps.segredo, p.unidade, p.orderNsu, p.assinatura)) return { http: 404, resultado: 'assinatura' };
   const conta = deps.ctx.contas.get(p.unidade);
-  if (!conta) return { http: 404, resultado: 'unidade sem InfinitePay' };
+  if (!conta) {
+    // a assinatura é NOSSA (este link foi criado por este conector): não ter a unidade carregada não é "aviso de ninguém", é falha nossa. 503 faz a InfinitePay repetir
+    // (um 404 a faria desistir e o pagamento ficaria "criado" para sempre) e o João é avisado.
+    alertaDeUnidadeAusente(deps, p.unidade, p.orderNsu);
+    return { http: 503, resultado: 'unidade sem InfinitePay carregada' };
+  }
   const link = await deps.armazem.porOrderNsu(p.unidade, p.orderNsu);
   if (!link || link.status === 'falhou') return { http: 404, resultado: 'link desconhecido' };
   const corpo = corpoBruto && typeof corpoBruto === 'object' && !Array.isArray(corpoBruto) ? (corpoBruto as Record<string, unknown>) : {};
@@ -84,15 +107,21 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
   // o que o link tinha ANTES deste aviso (o armazém pode devolver o mesmo objeto que depois atualiza)
   const eventoAnterior = link.ultimoEvento;
 
+  // Estorno e cancelamento chegam só pelo aviso: a API NÃO os confirma (o /payment_check só diz se pagou). Por isso NUNCA desfazem um link já confirmado como pago:
+  // o link fica `pago` e ganha uma marca de REVISÃO (visível em infinitepay_links) e um alerta ao João, que confere no app.
+  const marca = (o: string) => `${o} avisado pela InfinitePay em ${new Date((deps.agora ?? Date.now)()).toISOString()}, NÃO confirmado pela API (o /payment_check só confirma pagamento): confira no app`;
   if (evento === 'refunded') {
-    const r = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, paraStatus: 'estornado', deStatus: ['intencao', 'criado', 'pago'] });
-    void deps.alertar(`↩️ InfinitePay avisou um ESTORNO (${quem}). ${r.mudou ? 'Marquei o link como estornado.' : 'O link já estava marcado.'} Confira no app da InfinitePay.`).catch(() => false);
-    return { http: 200, resultado: 'estornado' };
+    // estorno não muda o status (nem de `pago`, nem de link ainda não pago): só marca para revisão
+    await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, revisao: marca('estorno') });
+    void deps.alertar(`↩️ InfinitePay avisou um ESTORNO (${quem}). NÃO confirmado pela API: não mudei o status (${link.status}); o link ficou marcado para revisão. Confira no app da InfinitePay.`).catch(() => false);
+    return { http: 200, resultado: 'estorno marcado para revisão' };
   }
   if (evento === 'canceled') {
-    const r = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, paraStatus: 'cancelado', deStatus: ['intencao', 'criado'] });
-    void deps.alertar(`🚫 InfinitePay avisou um link CANCELADO (${quem}). ${r.mudou ? 'Marquei como cancelado.' : 'Nada mudou (já estava pago ou marcado).'}`).catch(() => false);
-    return { http: 200, resultado: 'cancelado' };
+    // cancelamento de um link que ainda não foi pago vale como cancelado (sem pagamento a proteger); sobre um `pago` só marca para revisão
+    const antesDoPagamento = link.status === 'intencao' || link.status === 'criado';
+    await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, revisao: marca('cancelamento'), ...(antesDoPagamento ? { paraStatus: 'cancelado' as const, deStatus: ['intencao', 'criado'] } : {}) });
+    void deps.alertar(`🚫 InfinitePay avisou um link CANCELADO (${quem}). NÃO confirmado pela API. ${antesDoPagamento ? 'Marquei como cancelado (ainda não estava pago).' : `NÃO sobrescrevi o status (${link.status}): o link ficou marcado para revisão.`} Confira no app.`).catch(() => false);
+    return { http: 200, resultado: antesDoPagamento ? 'cancelado' : 'cancelamento marcado para revisão' };
   }
   if (evento !== 'paid' && evento !== 'settled') {
     // created e payment_failed só ficam registrados; evento que não conhecemos também, mas avisa o João (pode ser um pagamento ou estorno com outro nome)

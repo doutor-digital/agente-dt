@@ -79,7 +79,10 @@ export interface ItemDoLivro {
   url: string | null;
 }
 
-/** Os links das últimas 36 h da unidade, lidos do banco naquele instante. Só calcula; não guarda estado. `falhou` (recusa certa da InfinitePay) não conta. */
+/**
+ * Os links das últimas 36 h da unidade, lidos do banco naquele instante. Só calcula; não guarda estado. `falhou` (recusa certa da InfinitePay) NÃO gasta o
+ * teto de VALOR do dia, mas CONTA no limite por hora: o limite por hora existe para segurar quem martela a InfinitePay (400/422/429 inclusive).
+ */
 export class LivroDeLinks {
   constructor(private itens: ItemDoLivro[] = []) {}
 
@@ -94,7 +97,7 @@ export class LivroDeLinks {
   }
 
   naHora(agora: number, horaMs: number): number {
-    return this.vivos().filter((x) => agora - x.em < horaMs).length;
+    return this.itens.filter((x) => agora - x.em < horaMs).length;
   }
 
   igual(chave: string, agora: number, janelaMs: number): ItemDoLivro | undefined {
@@ -123,8 +126,10 @@ export type ResultadoDaCriacao =
 
 export interface EventoDoLink {
   evento: string;
+  /** marca o link para o João conferir no app (estorno/cancelamento avisados e NÃO confirmados pela API): texto livre, visível em infinitepay_links */
+  revisao?: string;
   /** só muda o status se o atual estiver em `deStatus` (ex.: pago só sai de criado/intencao) */
-  paraStatus?: 'pago' | 'estornado' | 'cancelado';
+  paraStatus?: 'pago' | 'cancelado';
   deStatus?: string[];
   pagamento?: { invoiceSlug?: string; transactionNsu?: string; forma?: string; parcelas?: number; valorPagoCentavos?: number; reciboUrl?: string };
   liquidado?: boolean;
@@ -210,13 +215,24 @@ export interface QuemInfinitepay {
 const REFERENCIA = /^[A-Za-z0-9][A-Za-z0-9_-]{0,59}$/;
 /** telefone brasileiro: DDD (com ou sem parênteses) + 8 ou 9 dígitos; a barra de data não conta como separador */
 const TELEFONE = /(?<!\d)\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}(?!\d)/;
+const CPF_FORMATADO = /(?<!\d)\d{3}\.\d{3}\.\d{3}-\d{2}(?!\d)/;
+const CNPJ_FORMATADO = /(?<!\d)\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}(?!\d)/;
+
+/**
+ * CPF, CNPJ ou telefone no texto? Datas ("26/11/2026") e valores em dinheiro ("150.00", "1.500,00") são tirados ANTES de olhar, porque somados davam 11 dígitos
+ * e a descrição "Avaliação 26/11/2026 - 150.00" era recusada como CPF. Vale: 11 dígitos ou mais seguidos (CPF/CNPJ sem pontuação), CPF e CNPJ formatados e telefone com DDD.
+ */
+export function temDadoPessoal(texto: string): boolean {
+  const t = texto.replace(/(?<!\d)\d{1,2}\/\d{1,2}\/\d{2,4}(?!\d)/g, ' ').replace(/(?<!\d)\d{1,3}(?:\.\d{3})*[.,]\d{2}(?!\d)/g, ' ');
+  return /(?<!\d)\d{11,}(?!\d)/.test(t) || CPF_FORMATADO.test(t) || CNPJ_FORMATADO.test(t) || TELEFONE.test(t);
+}
 
 export function descricaoLimpa(bruto: string): string {
   const t = bruto.replace(/\s+/g, ' ').trim();
   if (t.length < 3) throw new ErroDeEntrada('a descrição precisa ter ao menos 3 caracteres (é o que o paciente lê na tela de pagamento)');
   if (t.length > LIMITES_INFINITEPAY.descricaoMax) throw new ErroDeEntrada(`a descrição passa de ${LIMITES_INFINITEPAY.descricaoMax} caracteres`);
   // CPF/CNPJ (11 dígitos ou mais seguidos, mesmo com ponto e traço) ou telefone com DDD; datas como "12/11/2026 15h" passam. A mensagem NÃO repete o texto: ele pode ser justamente a chave ou o CPF.
-  if (temDigitosSeguidos(t, 11) || TELEFONE.test(t) || /@/.test(t) || /https?:\/\//i.test(t) || /inchk_/i.test(t)) {
+  if (temDadoPessoal(t) || /@/.test(t) || /https?:\/\//i.test(t) || /inchk_/i.test(t)) {
     throw new ErroDeEntrada('a descrição não pode ter CPF, telefone, e-mail, endereço de site nem chave (apareceria para quem abre o link). Tire esse trecho e tente de novo; nada foi criado.');
   }
   return t;
@@ -408,7 +424,7 @@ export function registrarEscritaInfinitepaySePermitido(
 
 /** A auditoria guarda os argumentos como vieram: texto livre (descrição, referência) pode trazer a chave ou um CPF colado por engano, então passa por limpeza antes. */
 export function auditarSemSegredo(auditar: Auditar): Auditar {
-  const limpa = (v: unknown): unknown => (typeof v === 'string' ? temDigitosSeguidos(v, 10) || /@/.test(v) ? '[removido: continha número longo ou e-mail]' : tirarChave(v) : v);
+  const limpa = (v: unknown): unknown => (typeof v === 'string' ? temDadoPessoal(v) || /@/.test(v) ? '[removido: continha número longo ou e-mail]' : tirarChave(v) : v);
   return (r) => {
     const a = r.argumentos && typeof r.argumentos === 'object' ? Object.fromEntries(Object.entries(r.argumentos as Record<string, unknown>).map(([k, v]) => [k, limpa(v)])) : r.argumentos;
     auditar({ ...r, argumentos: a, ...(r.erro ? { erro: tirarChave(r.erro) } : {}) });

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { ErroInfinitepay, criarLinkNaInfinitepay, dominiosDoLink, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 import { criarContextoInfinitepay, contaInfinitepayDaConfig, type ContaInfinitepay } from './infinitepay.js';
 import {
+  temDadoPessoal,
   auditarSemSegredo,
   chaveDeDuplicata,
   criarEscritaInfinitepay,
@@ -255,6 +256,31 @@ test('validação: valor, descrição, validade, parcelas e referência ruins s�
   for (const [a, re] of casos) await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, a), re);
   assert.equal(m.pedidos.length, 0);
   assert.equal(m.armazem.linhas.length, 0);
+});
+
+test('limite por hora: as recusas da InfinitePay (400/422/429) CONTAM, embora não gastem o teto do dia', async () => {
+  for (const status of [400, 422, 429]) {
+    const m = montar({ porHora: 3, criar: async () => { throw new ErroInfinitepay('recusado', status); } });
+    for (let i = 0; i < 3; i++) await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: `Tentativa ${i}` }), /Nada foi criado/);
+    assert.equal(m.pedidos.length, 3);
+    // a 4ª tentativa nem chega à InfinitePay: quem martela com dado ruim é barrado pelo limite por hora
+    await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: 'Tentativa 3' }), /limite de 3 links por hora/);
+    assert.equal(m.pedidos.length, 3, `status ${status}`);
+    // e o teto do DIA continua intacto
+    assert.equal((await m.armazem.ler(UNI, AGORA)).somaDoDia(AGORA), 0);
+  }
+});
+
+test('descrição: datas e valores NÃO são CPF ("Avaliação 26/11/2026 - 150.00" passa); CPF, CNPJ e telefone de verdade são recusados', async () => {
+  const boas = ['Avaliação 26/11/2026 - 150.00', 'Sessão 12/11/2026 15h', 'Pacote 10 sessões R$ 1.500,00', 'Consulta 3/12/2026 - 1.250,50', 'Pedido 2026 12 15 10', 'Fisioterapia 01/12/26 e 08/12/26 - 300,00'];
+  for (const d of boas) assert.equal(temDadoPessoal(d), false, d);
+  const ruins = ['CPF 529.982.247-25', 'cpf 52998224725', 'CNPJ 12.345.678/0001-90', 'cnpj 12345678000190', 'ligar (63) 99999-8888', 'ligar 63999998888', 'tel 6399998888', 'fone 63 3333-4444'];
+  for (const d of ruins) assert.equal(temDadoPessoal(d), true, d);
+  const m = montar();
+  const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 150, descricao: 'Avaliação 26/11/2026 - 150.00' });
+  assert.equal(r.criado, true);
+  assert.equal(m.pedidos[0]!.itens[0]!.descricao, 'Avaliação 26/11/2026 - 150.00');
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 150, descricao: 'Avaliação CPF 529.982.247-25' }), /não pode ter CPF/);
 });
 
 test('a recusa da descrição NÃO repete o texto (pode ser a chave ou o CPF) e datas como "12/11/2026 15h" passam', async () => {
