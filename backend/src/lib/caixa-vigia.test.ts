@@ -2,7 +2,7 @@
  * Vigia de caixa parada: o silêncio só vale com média que o justifique, dentro do horário comercial e com histórico; o Kapso entra como segunda fonte
  * (entrega com erro, número que não recebe) e como diagnóstico; seco não manda nem grava; um aviso por caixa a cada 3 h; texto sem dado de paciente.
  */
-import { test, beforeEach, afterEach } from 'node:test';
+import { test, beforeEach, afterEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
@@ -18,12 +18,16 @@ const HORA = 3_600_000;
 const UNIDADE = { name: 'Doutor Hérnia Teste', spineAgendaDays: [1, 2, 3, 4, 5], spineAgendaStart: '08:00', spineAgendaEnd: '18:00', businessHoursTimezone: 'America/Sao_Paulo' };
 // segunda-feira 23/11/2026, 15:05 em São Paulo (UTC-3) — as 3 últimas horas cheias (12h, 13h, 14h) são comerciais
 const AGORA = Date.UTC(2026, 10, 23, 18, 5);
+// Parauapebas como está no banco (26/11/2026): seg–sáb, 08:00–18:30, almoço 12–13; o sábado muda (07:00–13:00, sem almoço)
+const PARAUAPEBAS = { name: 'Doutor Hérnia Parauapebas', spineEnabled: true, spineAgendaDays: [1, 2, 3, 4, 5, 6], spineAgendaStart: '08:00', spineAgendaEnd: '18:30', spineLunchStart: '12:00', spineLunchEnd: '13:00', spineDayHours: { '6': { start: '07:00', end: '13:00', lunchStart: null, lunchEnd: null } }, businessHoursTimezone: 'America/Sao_Paulo' };
+// só abre no sábado de manhã (08–12) — unidade de teste
+const SO_SABADO = { name: 'Só sábado', spineEnabled: true, spineAgendaDays: [6], spineAgendaStart: '08:00', spineAgendaEnd: '12:00', spineLunchStart: null, spineLunchEnd: null, businessHoursTimezone: 'America/Sao_Paulo' };
 
-/** `valor` mensagens em TODA hora comercial dos 20 dias anteriores a `AGORA`, e o que `ajusta` mandar por cima. */
-function serie(valor: number, ajusta: (h: number, atual: number) => number = (_h, a) => a): Map<number, number> {
+/** `valor` mensagens em TODA hora comercial dos 50 dias (7 semanas) anteriores a `AGORA`, e o que `ajusta` mandar por cima. */
+function serie(valor: number, ajusta: (h: number, atual: number) => number = (_h, a) => a, unidade: Parameters<typeof V.horaCheiaComercial>[0] = UNIDADE): Map<number, number> {
   const m = new Map<number, number>();
-  for (let t = Math.floor(AGORA / HORA) * HORA - 20 * 24 * HORA; t <= Math.floor(AGORA / HORA) * HORA; t += HORA) {
-    m.set(t, ajusta(t, V.horaCheiaComercial(UNIDADE, new Date(t)) ? valor : 0));
+  for (let t = Math.floor(AGORA / HORA) * HORA - 50 * 24 * HORA; t <= Math.floor(AGORA / HORA) * HORA; t += HORA) {
+    m.set(t, ajusta(t, V.horaCheiaComercial(unidade, new Date(t)) ? valor : 0));
   }
   return m;
 }
@@ -39,7 +43,7 @@ test('catálogo: chatwoot-vigia existe, tem seco, NASCE EM SECO em qualquer unid
   assert.equal(V.estadoDoVigia('qualquer-outra'), 'seco');
 });
 
-test('horário comercial: hora cheia inteira dentro da agenda, dia útil, sem feriado', () => {
+test('horário comercial: a janela de CADA dia da semana (spineDayHours), fora do almoço, sem feriado — a mesma fonte de retorno-da-equipe e agenda-tools', () => {
   const brt = (d: number, h: number) => new Date(Date.UTC(2026, 10, d, h + 3));
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(23, 8)), true);
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(23, 17)), true, '17h–18h cabe inteira');
@@ -47,7 +51,15 @@ test('horário comercial: hora cheia inteira dentro da agenda, dia útil, sem fe
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(23, 7)), false);
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(22, 10)), false, 'domingo');
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(20, 10)), false, '20/11 é feriado nacional');
-  assert.equal(V.horaCheiaComercial({ ...UNIDADE, spineAgendaDays: [1, 2, 3, 4, 5, 6] }, brt(21, 10)), true, 'sábado, se a unidade atende');
+  // Parauapebas de verdade (produção, 26/11): seg–sáb, semana 08:00–18:30 com almoço 12–13, sábado 07:00–13:00 SEM almoço
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(23, 12)), false, 'almoço da segunda');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(23, 18)), false, '18h–19h passa das 18h30');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 7)), true, 'sábado abre às 7h');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 12)), true, 'sábado não tem almoço (lunchStart: null)');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 13)), false, 'sábado fecha às 13h: a tarde NÃO é de atendimento');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 15)), false);
+  assert.equal(V.horaCheiaComercial({ ...PARAUAPEBAS, spineEnabled: false }, brt(23, 10)), false, 'agenda desligada: o horário no banco é o padrão que ninguém conferiu');
+  assert.equal(V.janelaDoDia(PARAUAPEBAS, 0), null);
 });
 
 test('silêncio: zero nas últimas 3 h cheias com média alta (6/h) → avisa, com observado 0 e esperado ~18', () => {
@@ -73,11 +85,37 @@ test('silêncio: a hora em curso não conta (ela ainda está enchendo) e janela 
   assert.equal(V.decidirSilencio({ serie: serie(6, () => 0), unidade: UNIDADE, agora: Date.UTC(2026, 10, 21, 15, 5) }).veredito, 'fora-do-horario');
 });
 
-test('silêncio: sem 5 dias comparáveis de histórico → não cobra', () => {
+test('silêncio: sem 3 semanas comparáveis do MESMO dia da semana → não cobra (mesmo com muito histórico de outros dias)', () => {
   const poucos = new Map<number, number>();
-  for (let t = ate - 3 * 24 * HORA; t <= ate; t += HORA) poucos.set(t, V.horaCheiaComercial(UNIDADE, new Date(t)) ? 6 : 0);
+  for (let t = ate - 15 * 24 * HORA; t <= ate; t += HORA) poucos.set(t, V.horaCheiaComercial(UNIDADE, new Date(t)) ? 6 : 0); // 2 semanas: só 2 segundas anteriores
   for (const h of [ate - 3 * HORA, ate - 2 * HORA, ate - HORA]) poucos.set(h, 0);
   assert.equal(V.decidirSilencio({ serie: poucos, unidade: UNIDADE, agora: AGORA }).veredito, 'sem-historico');
+});
+
+test('SÁBADO compara com SÁBADOS, nunca com a média dos dias úteis: sábado calmo (1/h) com semana movimentada (10/h) NÃO dá alarme; sábado normal parado dá', () => {
+  const sab = Date.UTC(2026, 10, 21, 13, 5); // sábado 21/11, 10:05 em Parauapebas — janela 7h–10h
+  const sabAte = Math.floor(sab / HORA) * HORA;
+  const dow = (h: number) => new Date(h - 3 * HORA).getUTCDay();
+  const comoSabadoCalmo = (h: number) => (dow(h) === 6 ? 1 : 10);
+  const calmo = serie(10, (h, a) => (a === 0 ? 0 : comoSabadoCalmo(h)), PARAUAPEBAS);
+  for (const h of [sabAte - 3 * HORA, sabAte - 2 * HORA, sabAte - HORA]) calmo.set(h, 0);
+  const d1 = V.decidirSilencio({ serie: calmo, unidade: PARAUAPEBAS, agora: sab });
+  assert.equal(d1.veredito, 'pouco-esperado', `sábado costuma ter ~1/h (esperado ${d1.esperado}): zero não é alarme`);
+  assert.ok(d1.esperado < 4, 'a média usada é a dos sábados, não a dos 10/h da semana');
+  const movimentado = serie(10, (h, a) => (a === 0 ? 0 : dow(h) === 6 ? 8 : 2), PARAUAPEBAS);
+  for (const h of [sabAte - 3 * HORA, sabAte - 2 * HORA, sabAte - HORA]) movimentado.set(h, 0);
+  assert.equal(V.decidirSilencio({ serie: movimentado, unidade: PARAUAPEBAS, agora: sab }).veredito, 'silencio', 'sábado que costuma ter 8/h e ficou zero: avisa');
+});
+
+test('unidade que SÓ abre no sábado de manhã: sábado à tarde (e qualquer dia de semana) nunca dá alarme de silêncio', () => {
+  const sabTarde = Date.UTC(2026, 10, 21, 18, 5); // sábado 15:05
+  assert.equal(V.decidirSilencio({ serie: serie(10, () => 0, SO_SABADO), unidade: SO_SABADO, agora: sabTarde }).veredito, 'fora-do-horario');
+  assert.equal(V.decidirSilencio({ serie: serie(10, () => 0, SO_SABADO), unidade: SO_SABADO, agora: AGORA }).veredito, 'fora-do-horario', 'segunda');
+  // e de manhã, parado de verdade com histórico de sábados movimentados: avisa
+  const sabManha = Date.UTC(2026, 10, 21, 15, 5); // 12:05 — janela 9h–12h
+  const base = serie(10, undefined, SO_SABADO);
+  for (const h of [9, 10, 11]) base.set(Date.UTC(2026, 10, 21, h + 3), 0);
+  assert.equal(V.decidirSilencio({ serie: base, unidade: SO_SABADO, agora: sabManha }).veredito, 'silencio');
 });
 
 test('janela configurável: CAIXA_VIGIA_HORAS de 1 a 12, senão 3', () => {
@@ -99,6 +137,7 @@ test('Kapso: problemas de RECEBER (conexão, inscrição, verificação, status,
   assert.deepEqual(V.problemasDeReceber(null, { status: 'DISCONNECTED', recebimentoLigado: false }), ['número DISCONNECTED', 'recebimento desligado no Kapso']);
 });
 
+/** Kapso de mentira no formato DOCUMENTADO (docs.kapso.ai): `limit`/`after` na query, `data` + `paging.{cursors.after,next}` na resposta. Array = uma resposta por página (cursor «cN» = página N). */
 function kapsoFalso(rotas: Record<string, unknown>) {
   const pedidos: Array<{ url: string; chave: string | null }> = [];
   const f = (async (url: string, init: { headers?: Record<string, string> } = {}) => {
@@ -106,29 +145,69 @@ function kapsoFalso(rotas: Record<string, unknown>) {
     const rota = Object.keys(rotas).find((r) => url.includes(r));
     if (!rota) return { ok: false, status: 404, json: async () => ({}) } as Response;
     let corpo = rotas[rota];
-    if (Array.isArray(corpo)) corpo = corpo[Number(/[?&]page=(\d+)/.exec(url)?.[1] ?? 1) - 1] ?? { data: [], meta: { has_next: false } }; // uma resposta por página
+    if (Array.isArray(corpo)) {
+      const depois = /[?&]after=(c\d+)/.exec(url)?.[1];
+      corpo = corpo[depois ? Number(depois.slice(1)) : 0] ?? { data: [], paging: { cursors: {}, next: null, previous: null } };
+    }
     if (corpo instanceof Error) throw corpo;
     return { ok: true, status: 200, json: async () => corpo } as Response;
   }) as unknown as typeof fetch;
   return { f, pedidos };
 }
+/** o `paging` documentado: há próxima página → `cursors.after` = `next` = «c<n>»; última → `next: null`. */
+const pag = (proxima: number | null) => ({ paging: proxima === null ? { cursors: {}, next: null, previous: null } : { cursors: { after: `c${proxima}` }, next: `c${proxima}`, previous: null } });
 
-test('Kapso: entregas com erro por número (só mensagem de paciente, só depois do início, sem as entregues); a chave só vai no cabeçalho', async () => {
+test('Kapso: entregas — pede SÓ `status=failed` de `meta.messages` com `limit` e cursor (como a doc), conta por número, sem as de fora da janela; a chave só no cabeçalho', async () => {
   const agora = Date.parse('2026-11-23T18:05:00Z');
   const k = kapsoFalso({
     '/webhook_deliveries': { data: [
-      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T17:00:00Z', delivered_at: '2026-11-23T17:00:01Z', response_status: 200 },
-      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T16:00:00Z', failed_at: '2026-11-23T16:05:00Z', response_status: 502 },
-      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-23T15:30:00Z', response_status: 500 },
-      { event: 'meta.messages', phone_number_id: '222', created_at: '2026-11-23T16:10:00Z', failed_at: '2026-11-23T16:12:00Z' },
-      { event: 'meta.smb_message_echoes', phone_number_id: '111', created_at: '2026-11-23T16:20:00Z', failed_at: '2026-11-23T16:25:00Z' },
-      { event: 'meta.messages', phone_number_id: '111', created_at: '2026-11-22T10:00:00Z', failed_at: '2026-11-22T10:05:00Z', response_status: 500 },
-    ], meta: { has_next: false } },
+      { event: 'meta.messages', status: 'failed', phone_number_id: '111', created_at: '2026-11-23T16:00:00Z', failed_at: '2026-11-23T16:05:00Z', response_status: 502, attempt_count: 5 },
+      { event: 'meta.messages', status: 'failed', phone_number_id: '111', created_at: '2026-11-23T15:30:00Z', response_status: 500 },
+      { event: 'meta.messages', status: 'failed', phone_number_id: '222', created_at: '2026-11-23T16:10:00Z' },
+      { event: 'meta.messages', status: 'failed', phone_number_id: '111', created_at: '2026-11-22T10:00:00Z' },
+    ], ...pag(null) },
   });
-  const porta = V.kapsoReal('chave-secreta-do-kapso-123', k.f);
-  const erros = await porta.entregasComErro(agora - 3 * HORA);
+  const erros = await V.kapsoReal('chave-secreta-do-kapso-123', k.f).entregasComErro(agora - 3 * HORA);
   assert.deepEqual([...erros!], [['111', 2], ['222', 1]]);
+  assert.match(k.pedidos[0]!.url, /\/webhook_deliveries\?status=failed&event=meta\.messages&period=24h&limit=100$/);
   assert.ok(k.pedidos.every((p) => p.chave === 'chave-secreta-do-kapso-123' && !p.url.includes('chave-secreta')), 'a chave só no cabeçalho');
+});
+
+test('Kapso: entrega ainda SENDO TENTADA de novo (`pending`, com tentativas e resposta 5xx) ou já entregue NÃO conta — só `status === "failed"`', async () => {
+  const agora = Date.parse('2026-11-23T18:05:00Z');
+  const k = kapsoFalso({ '/webhook_deliveries': { data: [
+    { event: 'meta.messages', status: 'pending', phone_number_id: '111', created_at: '2026-11-23T17:00:00Z', response_status: 503, attempt_count: 2, failed_at: null },
+    { event: 'meta.messages', status: 'pending', phone_number_id: '111', created_at: '2026-11-23T17:10:00Z', response_status: 500, failed_at: '2026-11-23T17:11:00Z' },
+    { event: 'meta.messages', status: 'delivered', phone_number_id: '111', created_at: '2026-11-23T17:20:00Z', delivered_at: '2026-11-23T17:20:01Z', response_status: 200 },
+    { event: 'meta.smb_message_echoes', status: 'failed', phone_number_id: '111', created_at: '2026-11-23T17:30:00Z' },
+  ], ...pag(null) } });
+  const erros = await V.kapsoReal('chave-do-kapso-1234567', k.f).entregasComErro(agora - 3 * HORA);
+  assert.deepEqual([...erros!], [], 'nenhuma falhou de vez');
+});
+
+test('Kapso: entregas — segue o CURSOR documentado (`paging.cursors.after`, enquanto `paging.next`) até acabar; no máximo 5 páginas', async () => {
+  const agora = Date.parse('2026-11-23T18:05:00Z');
+  const falha = (min: number) => ({ event: 'meta.messages', status: 'failed', phone_number_id: '111', created_at: new Date(agora - min * 60_000).toISOString() });
+  const k = kapsoFalso({ '/webhook_deliveries': [
+    { data: [falha(5), falha(10)], ...pag(1) },
+    { data: [falha(20)], ...pag(2) },
+    { data: [falha(30)], ...pag(null) },
+  ] });
+  const erros = await V.kapsoReal('chave-do-kapso-1234567', k.f).entregasComErro(agora - 3 * HORA);
+  assert.deepEqual([...erros!], [['111', 4]]);
+  assert.equal(k.pedidos.length, 3);
+  assert.ok(k.pedidos[1]!.url.endsWith('&after=c1') && k.pedidos[2]!.url.endsWith('&after=c2'), 'o cursor de cada página vem do `paging` da anterior');
+  const sempre = kapsoFalso({ '/webhook_deliveries': Array.from({ length: 9 }, (_, i) => ({ data: [falha(5)], ...pag(i + 1) })) });
+  await V.kapsoReal('chave-do-kapso-1234567', sempre.f).entregasComErro(agora - 3 * HORA);
+  assert.equal(sempre.pedidos.length, 5, 'teto de 5 páginas');
+});
+
+test('Kapso: o próximo cursor só existe com `paging.next` preenchido', () => {
+  assert.equal(V.proximaPagina({ paging: { cursors: { after: 'abc' }, next: 'abc', previous: null } }), 'abc');
+  assert.equal(V.proximaPagina({ paging: { cursors: { after: 'abc' }, next: null } }), null, 'última página: o `after` sobra mas `next` é null');
+  assert.equal(V.proximaPagina({ paging: { cursors: {}, next: null } }), null);
+  assert.equal(V.proximaPagina({ data: [] }), null);
+  assert.equal(V.proximaPagina(null), null);
 });
 
 test('Kapso: erro de rede não lança, vira null, e a chave não aparece no que se loga', async () => {
@@ -138,14 +217,15 @@ test('Kapso: erro de rede não lança, vira null, e a chave não aparece no que 
   assert.equal(await V.kapsoReal('chave-secreta-do-kapso-123', kapsoFalso({}).f).saude('111'), null);
 });
 
-test('Kapso: conta as mensagens de paciente recebidas na janela', async () => {
+test('Kapso: conta as mensagens de paciente recebidas na janela (`direction=inbound`, `limit=100`)', async () => {
   const k = kapsoFalso({ '/messages': { data: [
     { timestamp: String(Date.parse('2026-11-23T16:00:00Z') / 1000), kapso: { direction: 'inbound' } },
     { timestamp: String(Date.parse('2026-11-23T16:30:00Z') / 1000), kapso: { direction: 'outbound' } },
     { timestamp: String(Date.parse('2026-11-23T10:00:00Z') / 1000), kapso: { direction: 'inbound' } },
-  ] } });
+  ], ...pag(null) } });
   const n = await V.kapsoReal('chave-do-kapso-1234567', k.f).entradas('111', Date.parse('2026-11-23T15:00:00Z'), Date.parse('2026-11-23T17:55:00Z'));
   assert.equal(n, 1);
+  assert.match(k.pedidos[0]!.url, /\/whatsapp\/messages\?phone_number_id=111&direction=inbound&limit=100$/);
 });
 
 // ── o ciclo de uma caixa ──────────────────────────────────────────────────────────────────────────────────────
@@ -164,8 +244,8 @@ function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, 
     marcar: async (_c: number, _a: number, r: string) => { c.marcas.push(r); },
     secoRecente: () => c.jaLogouSeco,
     anotarSeco: () => { c.jaLogouSeco = true; },
-    ignorada: () => o.ignorada ?? false,
-    cegueira: async () => undefined,
+    ignorada: (_c: number, _s: string) => o.ignorada ?? false,
+    cegueira: async (_c: number, _f: 'chatwoot' | 'kapso', _cega: boolean): Promise<void> => undefined,
     agora: () => AGORA,
   };
   return { c, deps };
@@ -321,26 +401,14 @@ test('série do Chatwoot: pede o relatório por hora DA CAIXA, só leitura (GET)
   await assert.rejects(() => V.serieDaCaixa(ruim, 3, AGORA, 'America/Sao_Paulo'), /401/);
 });
 
-test('Kapso: entregas — segue as páginas até o começo da janela (não fica só nas 100 mais novas)', async () => {
-  const agora = Date.parse('2026-11-23T18:05:00Z');
-  const nova = (min: number, falha: boolean) => ({ event: 'meta.messages', phone_number_id: '111', created_at: new Date(agora - min * 60_000).toISOString(), ...(falha ? { failed_at: 'x', response_status: 500 } : { delivered_at: 'y', response_status: 200 }) });
-  const k = kapsoFalso({ '/webhook_deliveries': [
-    { data: [nova(5, false), nova(10, false)], meta: { has_next: true } },
-    { data: [nova(90, true), nova(200, false)], meta: { has_next: true } },
-    { data: [nova(400, true)], meta: { has_next: false } },
-  ] });
-  const erros = await V.kapsoReal('chave-do-kapso-1234567', k.f).entregasComErro(agora - 3 * HORA);
-  assert.deepEqual([...erros!], [['111', 1]], 'a falha de 90 min atrás na 2ª página conta; a de 400 min (fora da janela) não');
-  assert.equal(k.pedidos.length, 2, 'parou na página que já passou do começo da janela');
-});
-
-test('Kapso: entradas — pagina até o começo da janela; se não chega lá, devolve null (não diagnostica «0»)', async () => {
+test('Kapso: entradas — segue o cursor até o começo da janela; se estoura as páginas antes de chegar lá, devolve null (não diagnostica «0»)', async () => {
   const ini = Date.parse('2026-11-23T15:00:00Z');
   const msg = (iso: string) => ({ timestamp: String(Date.parse(iso) / 1000), kapso: { direction: 'inbound' } });
   const cheia = Array.from({ length: 100 }, () => msg('2026-11-23T17:50:00Z'));
-  const ok = kapsoFalso({ '/messages': [{ data: cheia, meta: { has_next: true } }, { data: [msg('2026-11-23T16:00:00Z'), msg('2026-11-23T10:00:00Z')], meta: { has_next: true } }] });
-  assert.equal(await V.kapsoReal('chave-do-kapso-1234567', ok.f).entradas('111', ini, Date.parse('2026-11-23T17:55:00Z')), 101, 'conta a 1ª página inteira e a 2ª até o começo da janela');
-  const longe = kapsoFalso({ '/messages': Array.from({ length: 6 }, () => ({ data: cheia, meta: { has_next: true } })) });
+  const ok = kapsoFalso({ '/messages': [{ data: cheia, ...pag(1) }, { data: [msg('2026-11-23T16:00:00Z'), msg('2026-11-23T10:00:00Z')], ...pag(2) }, { data: [msg('2026-11-23T16:00:00Z')], ...pag(null) }] });
+  assert.equal(await V.kapsoReal('chave-do-kapso-1234567', ok.f).entradas('111', ini, Date.parse('2026-11-23T17:55:00Z')), 101, 'conta a 1ª página inteira e a 2ª; parou ao passar do começo da janela');
+  assert.equal(ok.pedidos.length, 2);
+  const longe = kapsoFalso({ '/messages': Array.from({ length: 9 }, (_, i) => ({ data: cheia, ...pag(i + 1) })) });
   assert.equal(await V.kapsoReal('chave-do-kapso-1234567', longe.f).entradas('111', ini, Date.parse('2026-11-23T17:55:00Z')), null, 'mais de 5 páginas sem chegar ao começo: sem diagnóstico');
 });
 
@@ -351,10 +419,18 @@ test('Kapso: a lista de números é indexada pelo phone_number_id da Meta (o mes
   assert.equal(m.get('555')!.status, 'DISCONNECTED');
 });
 
-test('caixa ignorada de propósito (CAIXA_VIGIA_IGNORAR) não é lida; lista inválida é ignorada', async () => {
-  assert.deepEqual([...V.caixasIgnoradas({ CAIXA_VIGIA_IGNORAR: '2, 7;x,9' })].sort(), [2, 9], '«7;x» não é número: ignorado');
+test('ignorados: a unidade CANCELADA (Timbó) já vem na lista, sem configurar nada; CAIXA_VIGIA_IGNORAR soma ids de caixa e slugs; lixo é ignorado', async () => {
+  const padrao = V.ignoradas({});
+  assert.deepEqual([...padrao.unidades], ['doutor-hernia-timbo']);
+  assert.equal(padrao.caixas.size, 0);
+  const i = V.ignoradas({ CAIXA_VIGIA_IGNORAR: '2, 7;x,9 doutor-hernia-aposentada,  -3' });
+  assert.deepEqual([...i.caixas].sort(), [2, 7, 9], 'vírgula, espaço e ponto-e-vírgula separam');
+  assert.deepEqual([...i.unidades].sort(), ['doutor-hernia-aposentada', 'doutor-hernia-timbo'], '«x» (curto) e «-3» não são caixa nem slug: ignorados');
+  const reais = V.depsReais({ conta: null } as never, null, {});
+  assert.equal(reais.ignorada(9, 'doutor-hernia-timbo'), true, 'Timbó: ignorada de fábrica');
+  assert.equal(reais.ignorada(3, 'doutor-hernia-parauapebas'), false);
   const m = mundo({ ignorada: true });
-  assert.equal(await V.cicloDaCaixa(m.deps, 2, 'x'), 'desligado');
+  assert.equal(await V.cicloDaCaixa(m.deps, 9, 'doutor-hernia-timbo'), 'desligado');
   assert.equal(m.c.leituras + m.c.kapsoLeituras, 0);
 });
 
@@ -373,16 +449,65 @@ test('memória do processo é a segunda trava: com o banco FALHANDO, depois de u
   assert.equal(await reais.jaAvisou(3, AGORA + 3 * HORA + 1), false, 'passadas as 3 h: pode avisar');
 });
 
-test('vigia CEGO: 8 varreduras seguidas sem ler nada → UM aviso ao João (só no ligado); voltar a enxergar zera a contagem', async () => {
+test('vigia CEGO por FONTE: 8 varreduras seguidas sem ler o relatório do Chatwoot → UM aviso (só no ligado), mesmo com o Kapso respondendo; as fontes não se misturam; voltar a ler zera', async () => {
+  const { logger } = await import('./logger.js');
+  const erros = mock.method(logger, 'error', () => undefined);
   const reais = V.depsReais({ conta: null } as never, null);
   _semearParaTeste([{ slug: 'doutor-hernia-parauapebas', automacao: 'chatwoot-vigia', estado: 'ligado' }]);
   const salvo = { ...process.env };
   for (const k of ['EVOLUTION_ALERT_URL', 'EVOLUTION_ALERT_HEADER', 'EVOLUTION_ALERT_VALUE', 'ALERTA_WHATSAPP_NUMERO']) delete process.env[k];
   try {
-    for (let i = 1; i <= V.VARREDURAS_CEGAS + 2; i++) await reais.cegueira(3, true); // sem Evolution configurada: só log, não lança
-    await reais.cegueira(3, false);
-    for (let i = 1; i < V.VARREDURAS_CEGAS; i++) await reais.cegueira(3, true);
+    for (let i = 1; i < V.VARREDURAS_CEGAS; i++) { await reais.cegueira(3, 'chatwoot', true); await reais.cegueira(3, 'kapso', false); }
+    assert.equal(erros.mock.calls.length, 0, 'ainda não completou');
+    await reais.cegueira(3, 'chatwoot', true);
+    assert.equal(erros.mock.calls.length, 1, 'completou 8 seguidas no Chatwoot, com o Kapso lendo bem');
+    assert.match(String(erros.mock.calls[0]!.arguments[1]), /CEGO.*Chatwoot/);
+    for (let i = 0; i < 5; i++) await reais.cegueira(3, 'chatwoot', true);
+    assert.equal(erros.mock.calls.length, 1, 'só UM aviso por cegueira');
+    await reais.cegueira(3, 'chatwoot', false); // voltou a ler
+    for (let i = 1; i < V.VARREDURAS_CEGAS; i++) await reais.cegueira(3, 'chatwoot', true);
+    assert.equal(erros.mock.calls.length, 1, 'a contagem recomeçou do zero');
+    for (let i = 1; i <= V.VARREDURAS_CEGAS; i++) await reais.cegueira(3, 'kapso', true);
+    assert.equal(erros.mock.calls.length, 2, 'o Kapso cego é outra fonte, com a sua própria contagem');
+    assert.match(String(erros.mock.calls[1]!.arguments[1]), /CEGO.*Kapso/);
+    // no SECO a cegueira só loga (nunca manda): estado seco não chama o João — o log de erro continua saindo
   } finally {
     Object.assign(process.env, salvo);
+    erros.mock.restore();
   }
+});
+
+test('o ciclo: o Chatwoot que FALHA SEMPRE é contado como cego MESMO com o Kapso lendo bem (antes o Kapso escondia a falha); Kapso lendo não vira «ok»', async () => {
+  const m = mundo({ serie: new Error('relatório 401'), saude: [], entregas: new Map() });
+  const chamadas: Array<[string, boolean]> = [];
+  m.deps.cegueira = async (_c, f, cega) => { chamadas.push([f, cega]); };
+  const r = await V.cicloDaCaixa(m.deps, 3, 'x');
+  assert.deepEqual(chamadas.sort(), [['chatwoot', true], ['kapso', false]], 'Chatwoot cego, Kapso enxergando — cada fonte com a sua saúde');
+  assert.equal(r, 'ok', 'sem problema algum a reportar');
+  assert.equal(m.c.enviados.length, 0);
+});
+
+test('o ciclo: o Chatwoot respondendo e o Kapso fora → o SILÊNCIO continua sendo detectado e só o Kapso conta como cego', async () => {
+  const m = mundo({ saude: null, entregas: null, entradas: null });
+  const chamadas: Array<[string, boolean]> = [];
+  (m.deps as any).cegueira = async (_c: number, f: string, cega: boolean) => { chamadas.push([f, cega]); };
+  assert.equal(await V.cicloDaCaixa(m.deps as never, 3, 'x'), 'avisou', 'silêncio detectado');
+  assert.deepEqual(chamadas.sort(), [['chatwoot', false], ['kapso', true]]);
+  assert.doesNotMatch(m.c.enviados[0]!, /O Kapso (também )?não recebeu|recebeu \d/, 'sem leitura do Kapso o aviso não inventa diagnóstico');
+});
+
+test('Kapso de madrugada NÃO acorda ninguém: problema do número / entrega só vira aviso no horário de atendimento da unidade (e é «ok» fora dele)', async () => {
+  const mundoAs = (utc: number) => {
+    const m = mundo({ serie: serie(6), saude: ['verificação do webhook falhando'], entregas: new Map([['111', 3]]) });
+    (m.deps as any).agora = () => utc;
+    return m;
+  };
+  const noite = mundoAs(Date.UTC(2026, 10, 24, 2, 0)); // 23:00 em Parauapebas
+  assert.equal(await V.cicloDaCaixa(noite.deps as never, 3, 'x'), 'ok');
+  assert.equal(noite.c.enviados.length, 0);
+  const dia = mundoAs(Date.UTC(2026, 10, 24, 13, 0)); // 10:00 de terça
+  assert.equal(await V.cicloDaCaixa(dia.deps as never, 3, 'x'), 'avisou');
+  assert.match(dia.c.enviados[0]!, /Número do WhatsApp com problema/);
+  assert.equal(V.emHorarioDeAtendimento(PARAUAPEBAS, Date.UTC(2026, 10, 21, 17, 0)), false, 'sábado 14:00: já fechou (13h)');
+  assert.equal(V.emHorarioDeAtendimento(PARAUAPEBAS, Date.UTC(2026, 10, 21, 15, 0)), true, 'sábado 12:00');
 });
