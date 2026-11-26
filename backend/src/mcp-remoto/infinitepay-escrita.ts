@@ -20,7 +20,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { ErroInfinitepay, tirarChave, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
+import { ErroInfinitepay, tirarChave, type ClienteDoLink, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 import { temDigitosSeguidos } from '../lib/pii.js';
 import { FUSO_PADRAO, arredondar, diaLocal, dinheiro, positivo } from './asaas-limites.js';
 import { executar } from './ferramenta.js';
@@ -344,6 +344,9 @@ export interface ArgsCriarLink {
   pix?: boolean;
   /** até quantas parcelas a CLÍNICA absorve a taxa (0 a 12; padrão 0: quem parcela paga a taxa do parcelamento) */
   parcelasSemTaxa?: number;
+  /** SÓ para quem chama pelo servidor (a Sofia): a ferramenta do conector não tem estes campos. Nome e telefone vão para a página de pagamento, nunca para o livro nem para o log. */
+  cliente?: ClienteDoLink;
+  semEndereco?: boolean;
 }
 
 export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfinitepay, quem: QuemInfinitepay, a: ArgsCriarLink) {
@@ -385,6 +388,8 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       pagamentoUnico: true,
       pix: a.pix !== false,
       parcelasSemTaxa: parcelas,
+      ...(a.cliente ? { cliente: a.cliente } : {}),
+      ...(a.semEndereco ? { semEndereco: true } : {}),
     };
     let url: string;
     let invoiceSlug: string | undefined;

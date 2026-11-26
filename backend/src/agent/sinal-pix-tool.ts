@@ -16,6 +16,7 @@ import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
 import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { depsDoSinalPorVia } from '../lib/sinal-infinitepay.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fmtBRL, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
@@ -67,6 +68,14 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     return (
       `O sinal de ${sinal} deste paciente JÁ foi pago. NÃO gere nem peça outro Pix. Diga que o sinal está confirmado e que no dia ficam ${resto}. ` +
       'NUNCA envie chave Pix.'
+    );
+  }
+  if (r.tipo === 'link' && r.via === 'infinitepay') {
+    return (
+      `Link de pagamento do sinal de ${sinal} gerado (o paciente paga por Pix ou cartão, na página do link). Envie ao paciente ESTE link, copiado exatamente, sem encurtar nem mudar: ${r.url} ` +
+      `Na confirmação, no lugar de «por este Pix», escreva: «Para garantir a vaga, o sinal de ${sinal} é pago por este link: <o link acima>». Diga também, em UMA frase curta, que o link vale até ${diaCurto(r.venceEm)} e que, com o sinal, a consulta fica R$ ${fmtBRL(s.comSinal)} (${sinal} agora + ${resto} no dia). ` +
+      (r.novo ? '' : 'Este é o MESMO link já gerado antes: NÃO gere outro. ') +
+      'NUNCA envie chave Pix nem diga que a equipe envia a chave. NÃO diga que o pagamento foi confirmado: a confirmação chega sozinha depois que ele pagar.'
     );
   }
   if (r.tipo === 'link' && r.copiaECola) {
@@ -136,18 +145,19 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       // Gerar o link sem a baixa LIGADA deixaria o paciente pagar de verdade e ninguém saber (sem webhook, quem enxerga o Pix é o worker, e em "só no
       // papel" ele não grava nada): só com a baixa ligada; senão a equipe manda o Pix.
+      // `sinalVia = infinitepay` (só no Kommo: a conversa do Chatwoot segue no Asaas): o link da InfinitePay primeiro, o Pix do Asaas se ela falhar (lib/sinal-pix.ts)
       const r: ResultadoDoSinal =
         estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) !== 'ligado'
           ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) não está ligada nesta unidade' }
-          : await gerarSinalPix(fresca, leadId, quando).catch((err: unknown): ResultadoDoSinal => {
+          : await gerarSinalPix(fresca, leadId, quando, depsDoSinalPorVia(fresca.slug, { kommo, conversaGarantida })).catch((err: unknown): ResultadoDoSinal => {
               // nunca derruba a resposta: a trava do banco, o fuso ou qualquer imprevisto viram o caminho "a equipe envia o Pix"
               logger.error({ err: String(err), unit: fresca.slug, leadId }, 'sinal-pix: a geração lançou — segue como falha');
               return { tipo: 'falhou', motivo: 'asaas', detalhe: String(err).slice(0, 300) };
             });
       await recorder.step({
         kind: r.tipo === 'falhou' ? 'ERROR' : 'TOOL_RESULT',
-        title: r.tipo === 'link' ? `Sinal Pix ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
-        payload: r.tipo === 'falhou' ? { leadId, motivo: r.motivo, detalhe: r.detalhe } : { leadId, tipo: r.tipo },
+        title: r.tipo === 'link' ? `Sinal ${r.via === 'infinitepay' ? 'link InfinitePay' : 'Pix'} ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})${r.fallback ? ' — InfinitePay falhou, saiu pelo Asaas' : ''}` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
+        payload: r.tipo === 'falhou' ? { leadId, motivo: r.motivo, detalhe: r.detalhe } : { leadId, tipo: r.tipo, ...(r.tipo === 'link' && r.via ? { via: r.via } : {}), ...(r.tipo === 'link' && r.fallback ? { fallbackDaInfinitepay: r.fallback } : {}) },
       });
 
       // o código exato vai numa mensagem à parte, depois da resposta (controller → lib/pix-do-sinal-envio.ts)

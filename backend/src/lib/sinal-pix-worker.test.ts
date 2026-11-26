@@ -19,10 +19,15 @@ import {
   notaDoVencimento,
   pagamentosDesde,
   valoresDoSim,
+  baixarSinalDoLinkPago,
+  decidirInfinitepay,
   type DepsDaBaixa,
   type PagamentoDoAsaas,
 } from './sinal-pix-worker.js';
-import type { LinhaDoSinal } from './sinal-pix.js';
+import { somarDias, type LinhaDoSinal } from './sinal-pix.js';
+import type { LinkGuardado } from '../mcp-remoto/infinitepay.js';
+import { registrarInfinitepayDoServidor } from './infinitepay-servidor.js';
+import type { LinkPago } from './link-pago.js';
 
 const linha = (over: Partial<LinhaDoSinal> = {}): LinhaDoSinal => ({
   id: 's1', unitId: 'u1', clinica: 'doutor-hernia-araguaina', consultaEm: '2026-11-14T09:00', leadId: '28000001', linkId: '725104409743', url: 'https://www.asaas.com/c/725104409743', valorCentavos: 5000,
@@ -176,11 +181,17 @@ Object.defineProperty(prisma, 'sinalPix', {
       return { count: l ? 1 : 0 };
     },
     update: async ({ where, data }: any) => Object.assign(sinaisNoBanco.find((x) => x.id === where.id)!, data),
+    findFirst: async ({ where }: any) => sinaisNoBanco.find((l) => l.unitId === where.unitId && l.linkId === where.linkId && (l.via ?? 'asaas') === where.via) ?? null,
   },
   configurable: true,
 });
+const simulacoes: Array<{ alvo: string; motivo: string }> = [];
+Object.defineProperty(prisma, 'automacaoSimulacao', {
+  value: { upsert: async ({ create }: any) => void simulacoes.push({ alvo: create.alvo, motivo: create.motivo }), deleteMany: async () => ({ count: 0 }) },
+  configurable: true,
+});
 Object.defineProperty(prisma, 'unit', {
-  value: { findMany: async (a: any) => { consultasAoBanco.push({ model: 'unit', where: a.where }); return [UNIDADE]; }, findUnique: async () => null },
+  value: { findMany: async (a: any) => { consultasAoBanco.push({ model: 'unit', where: a.where }); return [UNIDADE]; }, findUnique: async (a: any) => (a?.where?.slug === 'doutor-hernia-araguaina' ? UNIDADE : null) },
   configurable: true,
 });
 Object.defineProperty(prisma, 'chaveDeIntegracao', {
@@ -227,3 +238,111 @@ test('403 permanente do Asaas: a unidade fica 1 h sem ser relida (não bate a ca
   assert.equal(sinaisNoBanco[0]!.status, 'expirado');
   assert.ok(sinaisNoBanco[0]!.avisadoEm);
 });
+
+
+// ── o sinal por LINK DA INFINITEPAY (via = 'infinitepay') ─────────────────────────────────────────────────────────────────────────
+
+const HOJE = new Date().toISOString().slice(0, 10);
+const doLivro = (over: Partial<LinkGuardado> = {}): LinkGuardado => ({
+  orderNsu: 'sinal-abc-1', unidade: 'doutor-hernia-araguaina', status: 'pago', url: 'https://checkout.infinitepay.io/x', valorCentavos: 5000, descricao: 'Sinal', validoAte: null, criadoPor: 'usuario:sofia-sinal',
+  criadoEm: '2026-11-10T15:00:00.000Z', invoiceSlug: 'fat-1', transactionNsu: 'tx-uuid-1', formaPagamento: 'pix', parcelas: null, valorPagoCentavos: 5000, reciboUrl: null, revisao: null, pagoEm: null, liquidadoEm: null, ultimoEvento: 'paid', erro: null, ...over,
+});
+const ip = (over: Partial<LinhaDoSinal> = {}) => linha({ id: 'ip1', via: 'infinitepay', linkId: 'sinal-abc-1', url: 'https://checkout.infinitepay.io/x', venceEm: '2026-11-13', ...over });
+const livroCom = (l: LinkGuardado | null | Error) => async () => {
+  if (l instanceof Error) throw l;
+  return l;
+};
+const evento = (over: Partial<LinkPago> = {}): LinkPago => ({ unidade: 'doutor-hernia-araguaina', orderNsu: 'sinal-abc-1', valorCentavos: 5000, descricao: 'Sinal', transactionNsu: 'tx-uuid-1', invoiceSlug: 'fat-1', pagoEm: new Date(), ...over });
+
+test('decidirInfinitepay: link PAGO no livro = baixa (com o nsu da transação); nunca por link não pago nem de valor menor', async () => {
+  const d = await decidirInfinitepay('doutor-hernia-araguaina', [ip()], '2026-11-12', livroCom(doLivro()));
+  assert.equal(d.length, 1);
+  assert.equal(d[0]!.tipo, 'pago');
+  assert.equal((d[0] as { paymentId: string }).paymentId, 'tx-uuid-1');
+  assert.deepEqual(await decidirInfinitepay('x', [ip()], '2026-11-12', livroCom(doLivro({ status: 'criado', transactionNsu: null }))), [], 'criado, ainda não pago');
+  assert.deepEqual(await decidirInfinitepay('x', [ip()], '2026-11-12', livroCom(doLivro({ status: 'intencao' }))), []);
+  assert.deepEqual(await decidirInfinitepay('x', [ip()], '2026-11-12', livroCom(doLivro({ valorCentavos: 1000 }))), [], 'link de valor menor que o sinal não quita');
+  assert.deepEqual(await decidirInfinitepay('x', [ip({ status: 'pago' })], '2026-11-12', livroCom(doLivro())), [], 'só pendente');
+});
+
+test('decidirInfinitepay: vence como o Pix do Asaas (fim do link + 2 dias de carência), e NUNCA vence se não deu para ler o livro', async () => {
+  const naoPago = doLivro({ status: 'criado', transactionNsu: null });
+  assert.deepEqual(await decidirInfinitepay('x', [ip()], '2026-11-15', livroCom(naoPago)), [], 'dentro da carência (13/11 + 2 = 15/11)');
+  const v = await decidirInfinitepay('x', [ip()], '2026-11-16', livroCom(naoPago));
+  assert.deepEqual(v.map((x) => x.tipo), ['expirou']);
+  assert.deepEqual(await decidirInfinitepay('x', [ip()], '2026-11-16', livroCom(new Error('banco fora'))), [], 'livro ilegível: decide depois');
+  // o link pago que ainda não tinha sido baixado vence menos que a data: a baixa vem primeiro
+  assert.deepEqual((await decidirInfinitepay('x', [ip()], '2026-11-16', livroCom(doLivro()))).map((x) => x.tipo), ['pago']);
+});
+
+test('as notas do sinal da InfinitePay dizem onde foi pago e mandam conferir o app quando o link vence; as do Asaas seguem iguais', () => {
+  assert.equal(notaDoPagamento(ip(), 'tx-uuid-1'), '💸 Sinal de R$ 50,00 pago no InfinitePay (tx-uuid-1). O restante é pago no dia da consulta.');
+  assert.match(notaDoVencimento(ip()), /Confira no app da InfinitePay se ele pagou mesmo assim/);
+  assert.equal(notaDoPagamento(linha(), 'pay_9'), '💸 Sinal de R$ 50,00 pago no Asaas (pay_9). O restante é pago no dia da consulta.');
+  assert.doesNotMatch(notaDoVencimento(linha()), /InfinitePay/);
+});
+
+test('link pago (evento): marca "✓ Consulta pg antecipado" e a nota no cartão, vira pago e avisado — igual ao Pix do Asaas', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip());
+  const k = kommoFalso();
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo);
+  assert.deepEqual(k.gravou, [{ leadId: 28000001, campos: [{ field_id: 555, values: [{ enum_id: 1 }] }] }]);
+  assert.equal(k.notas.length, 1);
+  assert.match(k.notas[0]!.texto, /pago no InfinitePay \(tx-uuid-1\)/);
+  assert.equal(sinaisNoBanco[0]!.status, 'pago');
+  assert.equal(sinaisNoBanco[0]!.paymentId, 'tx-uuid-1');
+  assert.ok(sinaisNoBanco[0]!.pagoEm);
+  assert.ok(sinaisNoBanco[0]!.avisadoEm, 'o cartão foi avisado: a varredura não repete');
+  // o mesmo aviso de novo (entrega repetida): nada de segunda nota
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo);
+  assert.equal(k.notas.length, 1);
+  assert.equal(k.gravou.length, 1);
+});
+
+test('link pago (evento): o que NÃO é sinal, está desligado, é seco ou vale menos que o sinal não escreve nada', async () => {
+  sinaisNoBanco.length = 0;
+  const k = kommoFalso();
+  // link do conector, não é sinal
+  await baixarSinalDoLinkPago(evento({ orderNsu: 'dd-do-conector' }), null, k.deps.kommo);
+  // automação sinal-pix desligada
+  sinaisNoBanco.push(ip());
+  process.env.SINAL_PIX_SLUGS = '';
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo);
+  // link que vale menos que o sinal
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  await baixarSinalDoLinkPago(evento({ valorCentavos: 1000 }), null, k.deps.kommo);
+  // sinal de unidade que não existe
+  await baixarSinalDoLinkPago(evento({ unidade: 'outra-unidade' }), null, k.deps.kommo);
+  assert.equal(k.gravou.length + k.notas.length, 0);
+  assert.equal(sinaisNoBanco[0]!.status, 'pendente');
+});
+
+test('baixa em modo SECO: só registra «gravaria» (com o nome certo do provedor) e não toca no cartão nem no banco', async () => {
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ leadId: '28000777' }));
+  const k = kommoFalso();
+  const antes = simulacoes.length;
+  registrarInfinitepayDoServidor({ ctx: {} as never, esc: { armazem: { porOrderNsu: async () => doLivro() } } as never });
+  idas.length = 0;
+  await varrerUnidade(UNIDADE, true);
+  registrarInfinitepayDoServidor(null);
+  assert.equal(k.gravou.length + k.notas.length, 0);
+  assert.equal(sinaisNoBanco[0]!.status, 'pendente');
+  assert.equal(idas.length, 0, 'link da InfinitePay nunca vai ler o Asaas');
+  await new Promise((r) => setImmediate(r));
+  assert.equal(simulacoes.length, antes + 1);
+  assert.match(simulacoes.at(-1)!.motivo, /sinal pago no InfinitePay \(tx-uuid-1\)/);
+});
+
+test('varredura: sem o conector da InfinitePay carregado, o link da InfinitePay NÃO vence nem baixa (e o Asaas não é lido por causa dele)', async () => {
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ venceEm: somarDias(HOJE, -5), criadoEm: new Date() })); // passou da carência (2 dias), mas não dos 30 de desistir
+  registrarInfinitepayDoServidor(null);
+  idas.length = 0;
+  await varrerUnidade(UNIDADE, false);
+  assert.equal(sinaisNoBanco[0]!.status, 'pendente');
+  assert.equal(idas.length, 0);
+});
+

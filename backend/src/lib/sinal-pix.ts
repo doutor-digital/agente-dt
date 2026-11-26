@@ -50,6 +50,8 @@ export interface LinhaDoSinal {
   criadoEm: Date;
   pagoEm: Date | null;
   avisadoEm: Date | null;
+  /** 'asaas' (o Pix de sempre) ou 'infinitepay'; ausente = asaas */
+  via?: string;
 }
 
 export interface DadosDoSinal {
@@ -62,6 +64,7 @@ export interface DadosDoSinal {
   venceEm: string;
   consultaEm: string;
   status?: string;
+  via?: string;
 }
 
 /** O pedaço do Prisma que este módulo usa (a fachada permite testar sem banco). */
@@ -69,7 +72,7 @@ export interface BancoDoSinal {
   findMany(args: { where: { clinica: string; leadId: string; status: { in: string[] }; criadoEm: { gte: Date } }; orderBy: { criadoEm: 'desc' } }): Promise<LinhaDoSinal[]>;
   count(args: { where: { clinica: string; criadoEm: { gte: Date } } }): Promise<number>;
   create(args: { data: DadosDoSinal }): Promise<LinhaDoSinal>;
-  updateMany(args: { where: { id: string }; data: Partial<Pick<LinhaDoSinal, 'linkId' | 'url' | 'status' | 'consultaEm'>> }): Promise<{ count: number }>;
+  updateMany(args: { where: { id: string }; data: Partial<Pick<LinhaDoSinal, 'linkId' | 'url' | 'status' | 'consultaEm' | 'via'>> }): Promise<{ count: number }>;
   deleteMany(args: { where: { id: string } }): Promise<{ count: number }>;
 }
 
@@ -88,6 +91,12 @@ export interface DepsDoSinal {
    * paciente cola no app do banco, sem formulário. Sem ela (testes antigos), o link de pagamento de antes.
    */
   ler?: typeof asaasGet;
+  /**
+   * Cobrança por link da InfinitePay (`sinalVia = infinitepay`, ver sinal-via.ts). Quando existe, é tentada ANTES do Asaas; se LANÇAR (InfinitePay fora do ar, criação
+   * desligada na unidade, teto…), o sinal cai no Pix do Asaas, como se ela não existisse, e o motivo vai para o log e para o resultado (`fallback`).
+   * Sem ela (o padrão), nada muda: é o Pix do Asaas de sempre.
+   */
+  infinitepay?: CriadorDeLinkDoSinal;
   agora: () => Date;
   /** espera enquanto outra geração do mesmo paciente termina (o teste encurta) */
   esperar?: (ms: number) => Promise<void>;
@@ -130,11 +139,38 @@ export const depsReais = (): DepsDoSinal => ({
   agora: () => new Date(),
 });
 
+/** O que o criador do link da InfinitePay precisa saber do sinal; devolve a URL e a referência (order_nsu) que liga o link ao cartão. */
+export interface PedidoDeLinkDoSinal {
+  slug: string;
+  nomeDaClinica: string;
+  leadId: number;
+  valorCentavos: number;
+  /** "AAAA-MM-DD": último dia em que o link aceita pagamento */
+  venceEm: string;
+  /** "AAAA-MM-DD" de hoje no fuso da unidade */
+  hoje: string;
+  /** "AAAA-MM-DDTHH:mm" da consulta que o sinal garante, ou null */
+  consultaEm: string | null;
+}
+export type CriadorDeLinkDoSinal = (p: PedidoDeLinkDoSinal) => Promise<{ url: string; orderNsu: string }>;
+
 export type MotivoDaFalha = 'sem-chave' | 'teto' | 'asaas' | 'baixa-desligada' | 'em-andamento';
 
 export type ResultadoDoSinal =
   /** `registrado` = false: o link existe no Asaas mas NÃO ficou gravado no banco (a baixa automática não o enxerga) */
-  | { tipo: 'link'; url: string; novo: boolean; valor: number; venceEm: string; registrado?: boolean; copiaECola?: boolean }
+  | {
+      tipo: 'link';
+      url: string;
+      novo: boolean;
+      valor: number;
+      venceEm: string;
+      registrado?: boolean;
+      copiaECola?: boolean;
+      /** o link é da InfinitePay (Pix ou cartão na página dela); ausente = o Pix/link do Asaas */
+      via?: 'infinitepay';
+      /** o sinal estava ligado à InfinitePay mas ela falhou: o motivo (sem dado pessoal). O que o paciente recebeu foi o Pix do Asaas. */
+      fallback?: string;
+    }
   | { tipo: 'ja-pago' }
   | { tipo: 'falhou'; motivo: MotivoDaFalha; detalhe: string };
 
@@ -263,7 +299,15 @@ export async function gerarSinalPix(
       if (pendente) {
         return {
           tipo: 'pronto',
-          resultado: { tipo: 'link', url: pendente.url, novo: false, valor: pendente.valorCentavos / 100, venceEm: pendente.venceEm, copiaECola: copiaEColaValido(pendente.url) },
+          resultado: {
+            tipo: 'link',
+            url: pendente.url,
+            novo: false,
+            valor: pendente.valorCentavos / 100,
+            venceEm: pendente.venceEm,
+            copiaECola: copiaEColaValido(pendente.url),
+            ...(pendente.via === 'infinitepay' ? { via: 'infinitepay' as const } : {}),
+          },
         };
       }
 
@@ -290,6 +334,27 @@ export async function gerarSinalPix(
   const reserva = f.reserva;
   const venceEm = reserva.venceEm;
   const largar = () => deps.banco.deleteMany({ where: { id: reserva.id } }).catch((err: unknown) => logger.warn({ err: String(err), reserva: reserva.id }, 'sinal-pix: não consegui largar a reserva'));
+
+  // Fase 2 (fora da trava). Com `sinalVia = infinitepay` o link da InfinitePay vem primeiro; qualquer falha dele segue para o Pix do Asaas (o paciente nunca fica sem como pagar).
+  let fallback: string | undefined;
+  if (deps.infinitepay) {
+    try {
+      const l = await deps.infinitepay({ slug: unit.slug, nomeDaClinica: nomeDaClinica(unit.name), leadId, valorCentavos: centavos as number, venceEm, hoje: diaNoFuso(deps.agora(), fuso), consultaEm: quando });
+      let registradoIp = true;
+      try {
+        const r = await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: l.orderNsu, url: l.url, status: 'pendente', via: 'infinitepay' } });
+        if (r.count !== 1) throw new Error('a reserva sumiu');
+      } catch (err) {
+        registradoIp = false;
+        logger.error({ err: String(err), unit: unit.slug, leadId, orderNsu: l.orderNsu }, 'sinal-pix: link da InfinitePay criado mas NÃO gravado no banco — sem baixa automática');
+      }
+      logger.info({ unit: unit.slug, clinica, leadId, orderNsu: l.orderNsu, venceEm }, 'sinal-pix: link da InfinitePay criado');
+      return { tipo: 'link', url: l.url, novo: true, valor: (centavos as number) / 100, venceEm, registrado: registradoIp, via: 'infinitepay' };
+    } catch (err) {
+      fallback = (err instanceof Error ? err.message : String(err)).slice(0, 300);
+      logger.warn({ unit: unit.slug, leadId, motivo: fallback }, 'sinal-pix: a InfinitePay não criou o link — sigo para o Pix do Asaas (fallback)');
+    }
+  }
 
   // Fase 2 (fora da trava): a chave do Asaas da CLÍNICA e o link.
   const conta = await deps.chave({ id: unit.id, slug: unit.slug }).catch(() => null);
@@ -339,7 +404,7 @@ export async function gerarSinalPix(
       logger.error({ err: String(err), unit: unit.slug, leadId, qrId }, 'sinal-pix: Pix criado no Asaas mas NÃO gravado no banco — sem baixa automática');
     }
     logger.info({ unit: unit.slug, clinica, leadId, qrId, venceEm }, 'sinal-pix: Pix copia-e-cola criado');
-    return { tipo: 'link', url: payload, novo: true, valor, venceEm, registrado: registradoPix, copiaECola: true };
+    return { tipo: 'link', url: payload, novo: true, valor, venceEm, registrado: registradoPix, copiaECola: true, ...(fallback ? { fallback } : {}) };
   }
 
   let criado: { id?: unknown; url?: unknown } | null;
@@ -378,7 +443,7 @@ export async function gerarSinalPix(
     logger.error({ err: String(err), unit: unit.slug, leadId, linkId }, 'sinal-pix: link criado no Asaas mas NÃO gravado no banco — sem baixa automática');
   }
   logger.info({ unit: unit.slug, clinica, leadId, linkId, venceEm }, 'sinal-pix: link criado');
-  return { tipo: 'link', url: criado.url, novo: true, valor, venceEm, registrado };
+  return { tipo: 'link', url: criado.url, novo: true, valor, venceEm, registrado, ...(fallback ? { fallback } : {}) };
 }
 
 /**

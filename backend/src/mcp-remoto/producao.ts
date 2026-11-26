@@ -56,6 +56,8 @@ import { entityIdDaConta, lerConfigZenfisio, zenfisioGet } from '../lib/integrac
 import { lerContasDoAmbiente as lerContasInfinitepay } from '../lib/integracoes/infinitepay.js';
 import { contaInfinitepayDaConfig, criarContextoInfinitepay, registrarFerramentasInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import { armazemDeEscritaPrisma } from './infinitepay-armazem.js';
+import { emitirLinkPago } from '../lib/link-pago.js';
+import { registrarInfinitepayDoServidor } from '../lib/infinitepay-servidor.js';
 import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from './infinitepay-escrita.js';
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
@@ -657,7 +659,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   });
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
   // a rota é montada SEMPRE: sem o segredo ela responde 503 e avisa o João (um 404 faria a InfinitePay desistir de avisar o pagamento de links vivos)
-  montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), aoPagar: emitirLinkPago, log: logger });
+  // a Sofia cobra o sinal por este MESMO contexto e estado (mesmos tetos, mesma trava, mesmo livro): ver lib/sinal-infinitepay.ts
+  registrarInfinitepayDoServidor({ ctx: infinitepay, esc: escritaInfinitepay });
   // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
   const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
   // o hash da conta do extrato é um HMAC com este segredo (INFINITEPAY_CONTA_SEGREDO, 32+ caracteres, SÓ do ambiente: sem ele a importação recusa)

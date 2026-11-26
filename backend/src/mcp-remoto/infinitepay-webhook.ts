@@ -17,6 +17,7 @@ import type { ContextoInfinitepay } from './infinitepay.js';
 import { reais } from './infinitepay.js';
 import { MARCA, temMarca, type ArmazemDeEscrita } from './infinitepay-escrita.js';
 import { ipDoCliente, JanelaDeContagem } from './limites.js';
+import type { LinkPago } from '../lib/link-pago.js';
 
 /** O tamanho mínimo do segredo do webhook (INFINITEPAY_WEBHOOK_SEGREDO): 32 caracteres. */
 export const SEGREDO_MINIMO = 32;
@@ -54,6 +55,11 @@ export interface DepsDoAviso {
   /** o segredo do webhook (INFINITEPAY_WEBHOOK_SEGREDO); ausente = a rota existe mas responde 503 e avisa o João (404 faria a InfinitePay desistir de links vivos) */
   segredo: string | undefined;
   alertar: (texto: string) => Promise<boolean>;
+  /**
+   * Chamado UMA vez, quando o link vira `pago` (pagamento confirmado no /payment_check, valor conferido). É o evento «link pago» (lib/link-pago.ts).
+   * Nunca lança nem atrasa a resposta além do que o ouvinte levar; o aviso já está gravado quando ele roda.
+   */
+  aoPagar?: (e: LinkPago) => Promise<void>;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
 }
 
@@ -229,6 +235,18 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
     void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem} depois de um cancelamento avisado e NÃO confirmado. Marquei o link como pago (o pagamento foi confirmado e o valor conferido). Confira no app.`).catch(() => false);
   }
   if (pago.mudou) deps.log?.info({ unidade: p.unidade, orderNsu: p.orderNsu, valor: reais(link.valorCentavos) }, 'infinitepay: pagamento confirmado');
+  if (pago.mudou && deps.aoPagar) {
+    await deps
+      .aoPagar({
+        unidade: p.unidade,
+        orderNsu: p.orderNsu,
+        valorCentavos: link.valorCentavos,
+        descricao: link.descricao,
+        ...pagamento,
+        pagoEm: new Date((deps.agora ?? Date.now)()),
+      })
+      .catch((e: unknown) => deps.log?.warn({ unidade: p.unidade, orderNsu: p.orderNsu, erro: e instanceof Error ? e.message : String(e) }, 'infinitepay: o ouvinte do link pago falhou'));
+  }
   // o dinheiro entrou mas o link está em outro estado (cancelado ou estornado por um aviso que chegou antes, fora de ordem): ninguém pode ficar sem saber
   if (!pago.mudou && link.status !== 'pago' && link.status !== 'intencao' && link.status !== 'criado' && link.status !== 'cancelado') {
     void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem}, mas o link está como "${link.status}" (um aviso de ${link.status === 'estornado' ? 'estorno' : 'cancelamento'} chegou antes ou fora de ordem). Não mudei o status. Confira no app.`).catch(() => false);

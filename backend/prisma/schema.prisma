@@ -2547,6 +2547,8 @@ model SinalPix {
   pagoEm        DateTime? @map("pago_em")
   /// quando o worker já avisou a equipe (nota no cartão) do desfecho: pago ou expirado
   avisadoEm     DateTime? @map("avisado_em")
+  /// por onde o sinal é cobrado: asaas (o Pix de sempre) | infinitepay (link da InfinitePay; `linkId` = order_nsu em `infinitepay_links`, baixa pelo aviso assinado dela)
+  via           String    @default("asaas")
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 

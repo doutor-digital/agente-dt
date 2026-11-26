@@ -650,7 +650,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'SINAL_PIX_SLUGS',
     nome: 'Baixa do sinal Pix da Sofia (Asaas)',
     oQueFaz:
-      'A cada 5 min lê os Pix pagos no Asaas da unidade (só leitura, sem webhook) e, quando o link de sinal que a Sofia mandou é pago, marca "✓ Consulta pg antecipado" no cartão e deixa uma nota "Sinal de R$ 50 pago no Asaas". Link vencido sem pagamento vira nota para a SDR. Só vale na unidade com sinal ligado (units.sinal_pix_centavos).',
+      'A cada 5 min lê os Pix pagos no Asaas da unidade (só leitura, sem webhook) e, quando o link de sinal que a Sofia mandou é pago, marca "✓ Consulta pg antecipado" no cartão e deixa uma nota "Sinal de R$ 50 pago no Asaas". Link vencido sem pagamento vira nota para a SDR. Só vale na unidade com sinal ligado (units.sinal_pix_centavos). Na unidade com SOFIA_SINAL_VIA_<UNIDADE>=infinitepay o sinal sai por link da InfinitePay e a baixa vem do aviso assinado dela (o Pix do Asaas fica de reserva se a InfinitePay falhar).',
     pegadinha:
       'Ligue JUNTO com o sinal da unidade: sem esta chave a Sofia não gera o link (a equipe manda o Pix, com tarefa). Não escreve "¤ Pagamento antecipado" nem mexe em etapa. Casa o pagamento pelo link, então cobrança de outra origem na mesma conta do Asaas nunca conta. O link vale até a véspera da consulta; passados 2 dias do fim sem pagamento vira "expirado".',
     risco: 'escreve-campo',

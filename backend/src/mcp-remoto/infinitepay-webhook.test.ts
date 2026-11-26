@@ -468,3 +468,70 @@ test('rota: GET não existe (só POST) e a confirmação indisponível vira 503'
     assert.equal(post.status, 503);
   });
 });
+
+// ── o evento «link pago» (lib/link-pago.ts) ───────────────────────────────────────────────────────────────────────────────────────
+
+test('link pago: o evento sai UMA vez, só depois do /payment_check com o valor conferido, e a reentrega do mesmo aviso não repete', async () => {
+  const m = montar();
+  const eventos: Array<Parameters<NonNullable<DepsDoAviso['aoPagar']>>[0]> = [];
+  m.deps.aoPagar = async (e) => void eventos.push(e);
+  assert.deepEqual(await processarAviso(m.deps, m.p, PAGO), { http: 200, resultado: 'pago' });
+  assert.equal(eventos.length, 1);
+  assert.equal(eventos[0]!.unidade, UNI);
+  assert.equal(eventos[0]!.orderNsu, REF);
+  assert.equal(eventos[0]!.valorCentavos, 15000, 'o valor do link, o mesmo que o /payment_check confirmou');
+  assert.equal(eventos[0]!.transactionNsu, 'tx-uuid-1');
+  assert.equal(eventos[0]!.invoiceSlug, 'fat-1');
+  assert.equal(eventos[0]!.valorPagoCentavos, 15150);
+  assert.equal(eventos[0]!.forma, 'credit_card');
+  assert.ok(eventos[0]!.pagoEm instanceof Date);
+  // a InfinitePay repete o aviso (no pagamento de teste de hoje ele chegou duas vezes): continua 200 e NÃO há segundo evento
+  assert.equal((await processarAviso(m.deps, m.p, PAGO)).http, 200);
+  assert.equal(eventos.length, 1);
+});
+
+test('link pago: aviso que o /payment_check não prova, valor diferente, estorno e aviso sem códigos NUNCA disparam o evento', async () => {
+  const eventos: unknown[] = [];
+  const naoConfirma = montar({ consultar: async () => ({ sucesso: true, pago: false }) });
+  naoConfirma.deps.aoPagar = async (e) => void eventos.push(e);
+  assert.equal((await processarAviso(naoConfirma.deps, naoConfirma.p, PAGO)).http, 503);
+  const valorOutro = montar({ consultar: async () => ({ sucesso: true, pago: true, valorCentavos: 100 }) });
+  valorOutro.deps.aoPagar = async (e) => void eventos.push(e);
+  assert.equal((await processarAviso(valorOutro.deps, valorOutro.p, PAGO)).resultado, 'valor diferente');
+  const semCodigos = montar();
+  semCodigos.deps.aoPagar = async (e) => void eventos.push(e);
+  assert.equal((await processarAviso(semCodigos.deps, semCodigos.p, { order_nsu: REF })).resultado, 'sem códigos para confirmar');
+  const estorno = montar({ status: 'pago' });
+  estorno.deps.aoPagar = async (e) => void eventos.push(e);
+  await processarAviso(estorno.deps, estorno.p, { event: 'refunded', order_nsu: REF });
+  const semConsulta = montar();
+  semConsulta.deps.aoPagar = async (e) => void eventos.push(e);
+  await processarAviso(semConsulta.deps, { ...semConsulta.p, assinatura: 'x'.repeat(32) }, PAGO);
+  assert.deepEqual(eventos, []);
+});
+
+test('link pago: um ouvinte que quebra não derruba o aviso (o pagamento já está gravado e a InfinitePay recebe 200)', async () => {
+  const m = montar();
+  m.deps.aoPagar = async () => {
+    throw new Error('ouvinte quebrou');
+  };
+  assert.deepEqual(await processarAviso(m.deps, m.p, PAGO), { http: 200, resultado: 'pago' });
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
+});
+
+test('link pago: sem ouvinte (o padrão do conector antigo) nada muda', async () => {
+  const m = montar();
+  assert.equal(m.deps.aoPagar, undefined);
+  assert.deepEqual(await processarAviso(m.deps, m.p, PAGO), { http: 200, resultado: 'pago' });
+});
+
+test('link pago: liquidação (settled) de um link que ainda não estava pago também confirma e dispara; settled depois de paid não repete', async () => {
+  const m = montar();
+  const eventos: unknown[] = [];
+  m.deps.aoPagar = async (e) => void eventos.push(e);
+  await processarAviso(m.deps, m.p, { ...PAGO, event: 'settled' });
+  assert.equal(eventos.length, 1);
+  await processarAviso(m.deps, m.p, PAGO);
+  await processarAviso(m.deps, m.p, { ...PAGO, event: 'settled' });
+  assert.equal(eventos.length, 1);
+});
