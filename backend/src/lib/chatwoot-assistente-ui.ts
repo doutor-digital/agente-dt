@@ -366,10 +366,8 @@ const BOTAO_JS = String.raw`(function(){
   // O «Fluxos de Conversa» do Chatwoot que faz isso é do plano pago; este é o nosso, no mesmo lugar. Antes de resolver: Etapa sempre;
   // Perdido → Motivo do não agendamento; Fechou → Valor fechado. As opções vêm das definições do próprio Chatwoot. Qualquer falha
   // (sem sessão, rede, Chatwoot fora) DEIXA resolver — nunca trava o trabalho; o servidor marca «falta-etapa» no que escapar.
-  // Desliga pelo servidor: CHATWOOT_RESOLVER_OBRIGATORIO=0. Com CHATWOOT_RESOLVER_OBRIGATORIO=lembrete a janela vira LEMBRETE: continua
-  // pedindo os campos, mas tem «Resolver sem preencher» (não impede resolver); o servidor põe «falta-etapa» no que ficar sem.
+  // Desliga pelo servidor: CHATWOOT_RESOLVER_OBRIGATORIO=0.
   var OBRIGATORIOS = __OBRIGATORIOS__;
-  var LEMBRETE = __LEMBRETE__;
   var RS = { liberar: false, aberto: null, defs: null };
   var ROTULO_RESOLVER = /^(Resolver|Resolve)$/i;
   function contaDaUrl(){ var m = location.pathname.match(/\/accounts\/(\d+)/); return m ? m[1] : null; }
@@ -431,18 +429,12 @@ const BOTAO_JS = String.raw`(function(){
     var erro = document.createElement('div'); erro.setAttribute('role', 'alert'); erro.style.cssText = 'color:#c53030;font-size:12.5px;min-height:16px;margin-bottom:6px'; cx.appendChild(erro);
     function mostrar(){ lMotivo.style.display = etapa.value === 'Perdido' ? 'block' : 'none'; lValor.style.display = etapa.value === 'Fechou' ? 'block' : 'none'; }
     etapa.onchange = mostrar; mostrar();
-    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:4px';
+    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;__LEMBRETE_WRAP__justify-content:flex-end;gap:8px;margin-top:4px';
     var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar';
     var ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Salvar e resolver';
     cancelar.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
     ok.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:0;background:#2781f6;color:#fff;font:inherit;font-weight:600;cursor:pointer';
-    if (LEMBRETE) {
-      var pular = document.createElement('button'); pular.type = 'button'; pular.textContent = 'Resolver sem preencher'; pular.setAttribute('data-dd-resolver-pular', '1');
-      pular.style.cssText = 'white-space:nowrap;height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
-      pular.onclick = function(){ fecharJanelaResolver(); liberarResolver(); };
-      bs.appendChild(pular);
-    }
-    bs.appendChild(cancelar); bs.appendChild(ok); cx.appendChild(bs);
+    __LEMBRETE_BLOCO__bs.appendChild(cancelar); bs.appendChild(ok); cx.appendChild(bs);
     cancelar.onclick = fecharJanelaResolver;
     fundo.addEventListener('mousedown', function(ev){ if (ev.target === fundo) fecharJanelaResolver(); });
     cx.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') fecharJanelaResolver(); });
@@ -452,13 +444,13 @@ const BOTAO_JS = String.raw`(function(){
       if (etapa.value === 'Fechou') novos.valor_fechado = Number(valor.value);
       var falta = faltandoAoResolver(Object.assign({}, atual, novos));
       if (falta.length) { erro.textContent = falta[0] === 'etapa' ? 'Escolha a etapa.' : falta[0] === 'valor_fechado' ? 'Informe o valor fechado.' : 'Escolha o motivo.'; return; }
-      ok.disabled = true; ok.textContent = 'Salvando…'; erro.textContent = '';
+      ok.disabled = true;__LEMBRETE_SALVANDO__ ok.textContent = 'Salvando…'; erro.textContent = '';
       // o Chatwoot TROCA o conjunto inteiro de atributos: relê a conversa agora e manda tudo junto
       cwApi('GET', 'conversations/' + conversa).then(function(j){
         var base = (j && j.custom_attributes) || {};
         return cwApi('POST', 'conversations/' + conversa + '/custom_attributes', { custom_attributes: Object.assign({}, base, novos) });
       }).then(function(){ fecharJanelaResolver(); liberarResolver(); })
-        .catch(function(){ ok.disabled = false; ok.textContent = 'Salvar e resolver'; erro.textContent = 'Não consegui salvar agora. Tente de novo.'; });
+        .catch(function(){ ok.disabled = false;__LEMBRETE_LIVRE__ ok.textContent = 'Salvar e resolver'; erro.textContent = 'Não consegui salvar agora. Tente de novo.'; });
     };
     fundo.appendChild(cx); document.body.appendChild(fundo); RS.aberto = fundo;
     setTimeout(function(){ try { etapa.focus(); } catch (e) {} }, 0);
@@ -507,12 +499,32 @@ const BOTAO_JS = String.raw`(function(){
 })();`;
 
 /** O JavaScript do botão. Tem `__AGENTE__` no lugar do endereço do servidor (quem monta troca por um texto JSON). */
+/** O que o modo «lembrete» acrescenta à janela «Antes de resolver» (só entra com CHATWOOT_RESOLVER_OBRIGATORIO=lembrete; sem isso nada disto existe no menu.js). */
+const LEMBRETE = {
+  wrap: 'flex-wrap:wrap;',
+  bloco: `{
+      var pular = document.createElement('button'); pular.type = 'button'; pular.textContent = 'Resolver sem preencher'; pular.setAttribute('data-dd-resolver-pular', '1');
+      pular.style.cssText = 'white-space:nowrap;height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
+      pular.onclick = function(){ fecharJanelaResolver(); liberarResolver(); };
+      bs.appendChild(pular);
+    }
+    `,
+  salvando: ' pular.disabled = true;',
+  livre: ' pular.disabled = false;',
+};
+
 export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
+  const lembrete = String(env.CHATWOOT_RESOLVER_OBRIGATORIO ?? '').trim().toLowerCase() === 'lembrete';
   // CHATWOOT_ATALHOS=0 desliga os atalhos «⚡ Mensagens prontas» / «📋 Modelos do WhatsApp» sem novo deploy de código
   return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'))
-    // CHATWOOT_RESOLVER_OBRIGATORIO=0 desliga a janela de campos obrigatórios ao «Resolver»; =lembrete mantém a janela mas deixa resolver sem preencher
+    // CHATWOOT_RESOLVER_OBRIGATORIO=0 desliga a janela de campos obrigatórios ao «Resolver»
     .split('__OBRIGATORIOS__').join(String(env.CHATWOOT_RESOLVER_OBRIGATORIO !== '0'))
-    .split('__LEMBRETE__').join(String(String(env.CHATWOOT_RESOLVER_OBRIGATORIO ?? '').trim().toLowerCase() === 'lembrete'));
+    // =lembrete (maiúsculas e espaço tolerados): a janela continua pedindo, mas ganha «Resolver sem preencher». Fora desse valor os marcadores somem e o
+    // menu.js sai BYTE A BYTE igual ao de antes (o teste compara com o de main).
+    .split('__LEMBRETE_WRAP__').join(lembrete ? LEMBRETE.wrap : '')
+    .split('__LEMBRETE_BLOCO__').join(lembrete ? LEMBRETE.bloco : '')
+    .split('__LEMBRETE_SALVANDO__').join(lembrete ? LEMBRETE.salvando : '')
+    .split('__LEMBRETE_LIVRE__').join(lembrete ? LEMBRETE.livre : '');
 }
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
