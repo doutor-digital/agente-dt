@@ -1372,6 +1372,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     quandoVazio: 'desligado',
     arquivo: 'src/lib/chatwoot-origem.ts',
   },
+  {
+    id: 'agendados-sem-pix',
+    chave: 'AGENDADOS_SEM_PIX_SLUGS',
+    nome: 'Lista da manhã: agendados sem Pix (recepção)',
+    oQueFaz:
+      'Todo dia útil depois da sincronização do banco (12:15, hora da unidade), cruza quem foi MARCADO desde ontem (avaliação ou consulta, ainda agendada ou confirmada) com o Pix que entrou no banco (Open Finance, só leitura) e manda no grupo da recepção: primeiro nome, dia e hora da consulta e «não achei Pix». O que não é certeza vai para «a conferir», nunca para «não achei». Sem CPF, sem sobrenome, sem valor e sem saldo na mensagem.',
+    pegadinha:
+      'Só unidade com pagamento antecipado, agenda da franquia e item do banco em PLUGGY_ITENS (hoje só Açailândia). Casa pelo CPF do pagador quando a agenda tem o CPF do paciente (a franquia não tem hoje) e senão por NOME (primeiro + último) + VALOR (sinal ou consulta, lidos do cadastro e do texto de produtos da unidade; AGENDADOS_SEM_PIX_VALORES troca) + DATA. A venda de maquininha chega agregada e sem nome: não entra. Pix feito de manhã, depois da sincronização, não aparece até o dia seguinte; Pix de parente em outro nome vira «a conferir». Quem escolheu pagar na clínica ainda aparece na lista (a agenda não sabe). Banco que não atualizou hoje: espera 4 h e sai tudo «a conferir». NASCE EM «SÓ NO PAPEL»: grava o texto que mandaria no rastro do dia e não manda nada. Ligado sem destino NÃO manda e avisa no log: o grupo vem de AGENDADOS_SEM_PIX_DESTINOS (JSON slug → id@g.us) e a Evolution da própria AGENDADOS_SEM_PIX_EVOLUTION_URL ou da dos avisos à recepção. Uma lista por unidade por dia.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/agendados-sem-pix.ts',
+  },
 ] as const;
 
 const PORCHAVE = new Map(AUTOMACOES.map((a) => [a.chave, a]));
