@@ -16,7 +16,7 @@ const sinal = (over: Partial<LinhaDoSinal> = {}): LinhaDoSinal => ({
   status: 'pago', paymentId: 'p', criadoEm: new Date('2026-11-26T14:00:00Z'), pagoEm: new Date('2026-11-26T14:59:00Z'), avisadoEm: new Date(), confirmacaoEm: null, ...over,
 });
 
-function fake(over: Partial<DepsDaConfirmacao> & { janela?: boolean | Error; pausa?: string | null; rota?: boolean; envio?: 'enviado' | 'sem-rota' | Error; estado?: 'ligado' | 'seco' | 'desligado' } = {}) {
+function fake(over: Omit<Partial<DepsDaConfirmacao>, 'estado'> & { janela?: boolean | Error; pausa?: string | null; rota?: boolean; envio?: 'enviado' | 'sem-rota' | Error; estado?: 'ligado' | 'seco' | 'desligado' } = {}) {
   const enviados: string[] = [];
   const notas: string[] = [];
   const mensagens: string[] = [];
@@ -172,4 +172,16 @@ test('erro no ENVIO: a reserva fica (não repete), nota para a equipe conferir o
   assert.match(f.notas[0]!, /o envio deu erro/);
   assert.deepEqual(f.concluidos, [{ id: 's1', desfecho: 'erro' }]);
   assert.equal((await confirmarSinalAoPaciente(UNIDADE, sinal(), f.deps)).tipo, 'ja-feita');
+});
+
+test('sinal gerado SEM a data da consulta (placeholder <vencimento>T23:59): a confirmação sai sem dia e hora — nunca inventa um horário', async () => {
+  const f = fake();
+  await confirmarSinalAoPaciente(UNIDADE, sinal({ consultaEm: '2026-11-29T23:59', venceEm: '2026-11-29' }), f.deps);
+  assert.deepEqual(f.enviados, ['Recebemos seu sinal de R$ 50 ✅ Sua consulta está confirmada na Doutor Hérnia Açailândia. Até lá!']);
+});
+
+test('o Kommo só deixou uma nota interna (sem Salesbot): a nota da equipe diz que a «🤖 IA» acima NÃO foi para o paciente', async () => {
+  const f = fake({ envio: 'sem-rota' });
+  await confirmarSinalAoPaciente(UNIDADE, sinal(), f.deps);
+  assert.match(f.notas[0]!, /a «🤖 IA» acima NÃO foi para o paciente/);
 });

@@ -63,7 +63,7 @@ export function textoDaConfirmacao(a: { valorCentavos: number; consultaEm: strin
 const NOTA: Record<Exclude<Desfecho, 'enviada'>, (porque: string) => string> = {
   'fora-da-janela': () => '📵 confirmação não enviada: fora da janela de 24 h. O sinal está pago e o cartão marcado; avise o paciente por outro canal.',
   pausada: (porque) => `📵 confirmação não enviada: a IA está pausada (${porque}). O sinal está pago e o cartão marcado; avise o paciente se precisar.`,
-  'sem-rota': () => '📵 confirmação não enviada: a unidade não tem rota de envio pelo Salesbot. O sinal está pago e o cartão marcado; avise o paciente.',
+  'sem-rota': (porque) => `📵 confirmação não enviada: ${porque || 'a unidade não tem rota de envio pelo Salesbot'}. O sinal está pago e o cartão marcado; avise o paciente.`,
   erro: () => '📵 confirmação não enviada: o envio deu erro (confira no Kommo se a mensagem saiu antes de avisar de novo). O sinal está pago e o cartão marcado.',
 };
 
@@ -111,7 +111,9 @@ export async function confirmarSinalAoPaciente(unit: Unit, linha: LinhaDoSinal, 
     return { tipo: 'adiada', motivo: 'leitura falhou' };
   }
 
-  const texto = textoDaConfirmacao({ valorCentavos: linha.valorCentavos, consultaEm: linha.consultaEm, nomeDaUnidade: unit.name, agoraLocal: instanteLocal(agora, fusoDoSinal(unit)) });
+  // `consultaEm = <vencimento>T23:59` é o PLACEHOLDER de quem gerou o sinal sem saber a data da consulta (sinal-pix.ts): não é horário marcado, e a confirmação não o repete
+  const consultaReal = linha.consultaEm === `${linha.venceEm}T23:59` ? null : linha.consultaEm;
+  const texto = textoDaConfirmacao({ valorCentavos: linha.valorCentavos, consultaEm: consultaReal, nomeDaUnidade: unit.name, agoraLocal: instanteLocal(agora, fusoDoSinal(unit)) });
 
   // 2) só no papel: registra o que faria e para (nada reservado, nada enviado, nenhuma nota)
   if (estado === 'seco') {
@@ -139,7 +141,7 @@ export async function confirmarSinalAoPaciente(unit: Unit, linha: LinhaDoSinal, 
   try {
     const via = await deps.enviar(unit, leadId, texto);
     if (via === 'sem-rota') {
-      await deps.nota(unit, leadId, NOTA['sem-rota']('')).catch(() => undefined);
+      await deps.nota(unit, leadId, NOTA['sem-rota']('o Kommo só deixou uma nota interna (a «🤖 IA» acima NÃO foi para o paciente)')).catch(() => undefined);
       await deps.concluir(linha.id, 'sem-rota').catch(() => undefined);
       return { tipo: 'nota', desfecho: 'sem-rota' };
     }
