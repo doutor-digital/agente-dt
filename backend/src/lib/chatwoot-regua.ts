@@ -352,6 +352,30 @@ function valorEmReais(v: unknown): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
+/**
+ * O atributo da CONVERSA com o nome do paciente como está no cadastro da franquia (gravado pela agenda, `chatwoot-agenda.ts`, só quando a pessoa casa
+ * com UM cadastro pelo telefone). É o nome que a régua usa primeiro: o nome do perfil do WhatsApp é o que a pessoa (ou quem usa o número) escolheu e pode
+ * ser de outra pessoa — o caso do «Olá, Aline», em que Aline era a secretária.
+ */
+export const ATRIBUTO_NOME_DO_CADASTRO = 'nome_paciente';
+/** Quando não há nome nenhum que valha: o espaço do nome é preenchido com uma saudação, para o texto e o template aprovado na Meta (que exige o valor) saírem iguais. */
+export const SAUDACAO_SEM_NOME = 'tudo bem';
+
+const semAcento = (t: string): string => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+
+/**
+ * O primeiro nome para tratar o paciente: 1º o do cadastro da franquia (atributo `nome_paciente`); 2º o do contato (perfil do WhatsApp), exceto quando é o
+ * nome de quem atende a conversa (o contato é a secretária, não o paciente); 3º nenhum (null). Nunca inventa e nunca usa o de outra pessoa conhecida.
+ */
+export function nomeParaTratar(c: Pick<ConversaRegua, 'nome' | 'atendente' | 'attrs'>): string | null {
+  const cadastro = primeiroNome(str(c.attrs[ATRIBUTO_NOME_DO_CADASTRO]));
+  if (cadastro) return cadastro;
+  const perfil = primeiroNome(c.nome);
+  if (!perfil) return null;
+  const atendente = c.atendente ? primeiroNome(c.atendente) : null;
+  return atendente && semAcento(atendente) === semAcento(perfil) ? null : perfil;
+}
+
 /** Primeiro nome do contato, com maiúscula; nome sem letra (telefone) = null. */
 export function primeiroNome(nome: string): string | null {
   const t = nome.trim().split(/\s+/)[0] ?? '';
@@ -526,8 +550,12 @@ function valoresDosCampos(c: ConversaRegua, u: DadosDaUnidade, momentoDoEnvio?: 
   };
   const valorDoCampo = (nome: string): string => {
     switch (nome) {
-      case 'contact.name':
-        return primeiroNome(c.nome) ?? falta('nome do contato');
+      case 'contact.name': {
+        const nome = nomeParaTratar(c);
+        if (nome) return nome;
+        // a régua cumprimenta sem nome; o preenchimento à mão (`apartirDe`) deixa a atendente escrever o nome, como sempre
+        return apartirDe ? falta('nome do contato') : SAUDACAO_SEM_NOME;
+      }
       case 'lead.cf.2450736': {
         // passada a consulta, o preenchimento à mão usa a próxima data futura (a sessão, depois o retorno); a régua não (`apartirDe` indefinido)
         const dataDaConsulta = momentoDoEnvio ?? consulta ?? (apartirDe ? (sessao ?? retorno) : null);

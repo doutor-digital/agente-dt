@@ -238,11 +238,15 @@ test('consulta: etapa e situação que não valem', () => {
   assert.deepEqual(regras(rodar(conv({ attrs: { ...CONSULTA, data_consulta: '' } }), '2026-11-16T17:30:00Z')), []);
 });
 
-test('consulta: contato sem nome (só telefone) não recebe', () => {
+test('consulta: contato sem nome (só telefone) é cumprimentado sem nome (o lembrete não deixa de sair por isso)', () => {
   const r = rodar(conv({ attrs: CONSULTA, nome: '+55 94 99999-0000' }), '2026-11-16T17:30:00Z');
-  assert.equal(r.disparos[0]!.texto, null);
-  assert.deepEqual(r.disparos[0]!.faltando, ['nome do contato']);
+  assert.match(r.disparos[0]!.texto!, /^Olá, tudo bem\. A sua consulta é amanhã\./);
+  assert.deepEqual(r.disparos[0]!.faltando, []);
+  assert.deepEqual(r.disparos[0]!.variaveis![0], 'tudo bem');
 });
+
+/** unidade sem nome cujo texto da véspera pede o nome da unidade: o jeito de fazer «faltar campo» sem depender do nome do contato */
+const U_FALTA: DadosDaUnidade = { ...U, nome: '', textos: { ...TEXTOS_PARAU, parau_consulta_lembrete_vespera: `${TEXTOS_PARAU.parau_consulta_lembrete_vespera}\n{{lead.cf.2450798}}` } };
 
 // ── 9–10: falta ────────────────────────────────────────────────────────────────────────────────────
 
@@ -462,8 +466,8 @@ test('interna: entrou em «Fechou» sem «Fechou tratamento» → pendência', (
 test('nota do seco: texto renderizado ou o que falta', () => {
   const ok = rodar(conv({ attrs: CONSULTA }), '2026-11-16T17:30:00Z').disparos[0]!;
   assert.ok(notaDoSeco(ok).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora:\n\nOlá, Maria. A sua consulta é amanhã.'));
-  const falta = rodar(conv({ attrs: CONSULTA, nome: '+5594' }), '2026-11-16T17:30:00Z').disparos[0]!;
-  assert.equal(notaDoSeco(falta), '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome do contato.');
+  const falta = rodar(conv({ attrs: CONSULTA }), '2026-11-16T17:30:00Z', {}, [], U_FALTA).disparos[0]!;
+  assert.equal(notaDoSeco(falta), '🧪 [SECO] Régua «consulta-vespera» — NÃO enviaria agora, falta: nome da unidade.');
 });
 
 test('renderizar: modelo desconhecido não vira texto', () => {
@@ -929,14 +933,17 @@ test('sessão da agenda: {{1}} nome e {{2}} «data às hora» saem de data_consu
     assert.deepEqual(r.variaveis, ['Maria', '19/11 às 09:30'], m);
     assert.deepEqual(r.faltando, []);
   }
-  // contato sem nome (só telefone): falta, não inventa
+  // contato sem nome (só telefone): o texto sai sem nome (a saudação ocupa o lugar), não inventa nome
   const semNome = renderizar('parau_sessao_lembrete_vespera', conv({ attrs: SESSAO, nome: '+5594999990000' }), U);
-  assert.equal(semNome.texto, null);
-  assert.deepEqual(semNome.faltando, ['nome do contato']);
-  // e o disparo vem com texto nulo + o que falta (o worker deixa a nota no seco / não manda no ligado)
-  const d = decidirRegua(conv({ attrs: SESSAO, nome: '+5594999990000' }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:40:00Z'), U);
+  assert.match(semNome.texto!, /^Olá, tudo bem\. A sua sessão é amanhã\.\nData e horário: 19\/11 às 09:30/);
+  assert.deepEqual(semNome.variaveis, ['tudo bem', '19/11 às 09:30']);
+  assert.deepEqual(semNome.faltando, []);
+  // campo que falta DE VERDADE (aqui o nome da unidade, num texto que o pede) segue o caminho de falta: o disparo vem com texto nulo + o que falta
+  const faltaDeVerdade = { ...U, nome: '', textos: { ...TEXTOS_PARAU, parau_sessao_lembrete_vespera: `${TEXTOS_PARAU.parau_sessao_lembrete_vespera}\n{{lead.cf.2450798}}` } };
+  const d = decidirRegua(conv({ attrs: SESSAO }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-18T12:40:00Z'), faltaDeVerdade);
   assert.deepEqual(regras(d), ['consulta-vespera']);
   assert.equal(d.disparos[0]!.texto, null);
+  assert.deepEqual(d.disparos[0]!.faltando, ['nome da unidade']);
   // em tratamento, a proxima_sessao da equipe continua mandando no texto
   assert.deepEqual(renderizar('parau_sessao_lembrete_vespera', conv({ attrs: { ...SESSAO, etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-26', hora_sessao: '10:00' } }), U).variaveis, ['Maria', '26/11 às 10:00']);
 });

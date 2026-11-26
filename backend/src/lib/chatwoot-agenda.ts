@@ -18,7 +18,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
+import { ATRIBUTO_NOME_DO_CADASTRO, CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
@@ -133,20 +133,24 @@ export interface ConversaDaCaixa {
   atividade: number;
 }
 
-/** Junta agendamentos por pessoa e casa com as conversas pelo telefone. `whatsDoNome` devolve o(s) WhatsApp do cadastro com o nome igual. */
-export function casar(
-  agenda: SpineSchedule[],
-  conversas: ConversaDaCaixa[],
-  whatsDoNome: (nome: string) => string[] | null,
-  hoje: string,
-): Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string; porCategoria?: string }> {
+/** Uma pessoa da agenda casada com a conversa dela (pelo telefone do cadastro), com o que mudaria nos atributos. */
+export interface CasadaDaAgenda {
+  conversa: ConversaDaCaixa;
+  muda: Record<string, string>;
+  nome: string;
+  segurada?: string;
+  porCategoria?: string;
+}
+
+/** TODAS as pessoas da agenda que casam com uma conversa (mesmo as que não têm nada a mudar). `casar` é o filtro de quem tem o que gravar. */
+export function casarTodas(agenda: SpineSchedule[], conversas: ConversaDaCaixa[], whatsDoNome: (nome: string) => string[] | null, hoje: string): CasadaDaAgenda[] {
   const porNome = new Map<string, SpineSchedule[]>();
   for (const s of agenda) {
     const n = normalizar(s.clientName);
     if (!n) continue;
     porNome.set(n, [...(porNome.get(n) ?? []), s]);
   }
-  const saida: Array<{ conversa: ConversaDaCaixa; muda: Record<string, string>; nome: string; segurada?: string; porCategoria?: string }> = [];
+  const saida: CasadaDaAgenda[] = [];
   for (const [nome, lista] of porNome) {
     const whats = whatsDoNome(nome);
     // sem cadastro, ou o mesmo nome com telefones diferentes: não dá para saber quem é
@@ -158,9 +162,35 @@ export function casar(
     if (!d) continue;
     const muda = mudancas(alvo.attrs, d, hoje);
     const { segurada, porCategoria } = etapaDaConsulta(alvo.attrs, d, hoje);
-    if (Object.keys(muda).length || segurada || porCategoria) {
-      saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}), ...(porCategoria ? { porCategoria } : {}) });
+    saida.push({ conversa: alvo, muda, nome: lista[0]!.clientName ?? nome, ...(segurada ? { segurada } : {}), ...(porCategoria ? { porCategoria } : {}) });
+  }
+  return saida;
+}
+
+/** Junta agendamentos por pessoa e casa com as conversas pelo telefone. `whatsDoNome` devolve o(s) WhatsApp do cadastro com o nome igual. */
+export function casar(agenda: SpineSchedule[], conversas: ConversaDaCaixa[], whatsDoNome: (nome: string) => string[] | null, hoje: string): CasadaDaAgenda[] {
+  return casarTodas(agenda, conversas, whatsDoNome, hoje).filter((l) => Object.keys(l.muda).length || l.segurada || l.porCategoria);
+}
+
+/**
+ * O nome do cadastro (`nome_paciente`: o que a régua usa para cumprimentar) a gravar em cada conversa. Só quando UM nome da agenda casa com a conversa: dois
+ * nomes no mesmo telefone (mãe e filha) = não dá para saber de quem é a conversa, então não grava nenhum (e não regrava um por cima do outro a cada ciclo) e
+ * LIMPA o que já estava (nome vazio). Só devolve o que está DIFERENTE do que a conversa já tem.
+ */
+export function nomesParaGravar(casadas: CasadaDaAgenda[]): Map<number, { conversa: ConversaDaCaixa; nome: string }> {
+  const contagem = new Map<number, number>();
+  for (const l of casadas) contagem.set(l.conversa.id, (contagem.get(l.conversa.id) ?? 0) + 1);
+  const saida = new Map<number, { conversa: ConversaDaCaixa; nome: string }>();
+  for (const l of casadas) {
+    const atual = String(l.conversa.attrs[ATRIBUTO_NOME_DO_CADASTRO] ?? '').trim();
+    // dois nomes casam com a conversa (a filha também agendou, no mesmo WhatsApp da mãe): o nome que já estava ali não é mais de uma pessoa só — limpa
+    if ((contagem.get(l.conversa.id) ?? 0) > 1) {
+      if (atual) saida.set(l.conversa.id, { conversa: l.conversa, nome: '' });
+      continue;
     }
+    const nome = l.nome.replace(/\s+/g, ' ').trim();
+    // comparação sem maiúscula/acento: «MARIA SILVA» e «Maria Silva» são o mesmo nome (senão a grafia alternaria e regravaria a cada ciclo)
+    if (nome && normalizar(atual) !== normalizar(nome)) saida.set(l.conversa.id, { conversa: l.conversa, nome });
   }
   return saida;
 }
@@ -241,7 +271,10 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     await new Promise((ok) => setTimeout(ok, 250));
   }
   const conversas = await conversasDaCaixa(ctx, caixa);
-  const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
+  const todas = casarTodas(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
+  const plano = todas.filter((l) => Object.keys(l.muda).length || l.segurada || l.porCategoria);
+  const nomesDoCadastro = nomesParaGravar(todas);
+  const nomesGravados = new Set<number>();
   let gravadas = 0;
   for (const { conversa, muda, nome, segurada, porCategoria } of plano) {
     if (porCategoria) {
@@ -267,11 +300,18 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
       if (modo === 'seco') {
         if (notasFeitas.has(chave)) continue;
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
-          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
+          corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}${nomesDoCadastro.has(conversa.id) ? ` · nome no cadastro = ${nomesDoCadastro.get(conversa.id)!.nome || '(nenhum)'}` : ''}`, message_type: 'outgoing', private: true },
         });
         notasFeitas.add(chave);
+        if (nomesDoCadastro.has(conversa.id)) nomesGravados.add(conversa.id);
       } else {
-        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), ...atributosParaGravar(etapasDoContexto(ctx), muda) } } });
+        // o nome do cadastro vai NA MESMA gravação (o Chatwoot troca o objeto inteiro: duas gravações seguidas, a 2ª apagaria a 1ª)
+        const nomeDele = nomesDoCadastro.get(conversa.id);
+        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, {
+          corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), ...atributosParaGravar(etapasDoContexto(ctx), muda), ...(nomeDele ? { [ATRIBUTO_NOME_DO_CADASTRO]: nomeDele.nome } : {}) } },
+        });
+        // gravado: se a nota falhar a seguir, o laço do nome não regrava a conversa com os atributos velhos (apagaria o que acabou de entrar)
+        if (nomeDele) nomesGravados.add(conversa.id);
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
           corpo: { content: `📅 Agenda da franquia: ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
@@ -279,6 +319,27 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
       gravadas++;
     } catch (err) {
       logger.warn({ err: String(err), slug, conversa: conversa.id }, `${ID_AGENDA}: não consegui gravar`);
+    }
+  }
+  // quem tem o nome do cadastro a gravar mas nada mais a mudar: grava em silêncio (sem nota: a nota da agenda é para a equipe ver data, hora, situação e etapa)
+  for (const [id, { conversa, nome }] of nomesDoCadastro) {
+    if (nomesGravados.has(id)) continue;
+    if (modo === 'seco') {
+      const chave = `${caixa}|${id}|nome|${nome}`;
+      if (notasFeitas.has(chave)) continue;
+      try {
+        await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria nome no cadastro = ${nome || "(nenhum)"}`, message_type: 'outgoing', private: true } });
+        notasFeitas.add(chave);
+      } catch (err) {
+        logger.warn({ err: String(err), slug, conversa: id }, `${ID_AGENDA}: não consegui deixar a nota do nome`);
+      }
+      continue;
+    }
+    try {
+      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), [ATRIBUTO_NOME_DO_CADASTRO]: nome } } });
+      gravadas++;
+    } catch (err) {
+      logger.warn({ err: String(err), slug, conversa: id }, `${ID_AGENDA}: não consegui gravar o nome do cadastro`);
     }
   }
   logger.info({ slug, caixa, modo, agenda: agenda.length, casadas: plano.length, gravadas }, `${ID_AGENDA}: ciclo`);
