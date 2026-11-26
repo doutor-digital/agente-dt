@@ -92,11 +92,12 @@ test('conversa que não existe: adicionar lança (como sempre) e a fila não tra
 
 // ── referral de anúncio tira a etiqueta do palpite ───────────────────────────────────────────────────────────────
 
-function estadoDeMentira(modoOrigem: 'ligado' | 'seco' | 'desligado') {
+function estadoDeMentira(modoOrigem: 'ligado' | 'seco' | 'desligado', contato: Record<string, unknown> = { origem: 'Formulário', origem_palpite: 'formulario-texto' }, modoFormulario: 'ligado' | 'seco' | 'desligado' = 'ligado') {
   const f = { somou: [] as string[][], tirou: [] as string[][] };
   const r = {
     chat: { adicionarEtiquetas: async (_c: number, l: string[]) => { f.somou.push(l); }, removerEtiquetas: async (_c: number, l: string[]) => { f.tirou.push(l); } },
-    origem: { estado: () => modoOrigem, contato: async () => ({}), nomes: async () => null, gravar: async () => undefined },
+    origem: { estado: () => modoOrigem, contato: async () => ({ ...contato }), nomes: async () => null, gravar: async () => undefined },
+    formulario: { estado: () => modoFormulario },
     nota: {},
   };
   return { r, f };
@@ -104,15 +105,27 @@ function estadoDeMentira(modoOrigem: 'ligado' | 'seco' | 'desligado') {
 const REF = { anuncio: '120200000000000001', ctwaClid: 'Afd', tipo: 'ad', titulo: 'Dor?', url: null, quando: 1 };
 const M = { conversa: 5, caixa: 3, contato: 77 };
 
-test('anúncio comprovado com a origem LIGADA: tira a etiqueta `formulario` (o palpite caiu); seco, desligado ou publicação (não anúncio): não mexe', async () => {
+test('o referral troca o PALPITE do formulário por «Meta Ads»: só então a etiqueta `formulario` cai (e só com o formulário não desligado)', async () => {
   const lig = estadoDeMentira('ligado');
-  await aoAcharReferral(lig.r as never)(M, REF, false);
+  const det = await aoAcharReferral(lig.r as never)(M, REF, false);
+  assert.equal(det.origem, 'trocou-palpite');
   assert.deepEqual(lig.f.tirou, [['formulario']]);
   assert.deepEqual(lig.f.somou, [['anuncio']]);
-  for (const modo of ['seco', 'desligado'] as const) {
-    const x = estadoDeMentira(modo);
+  const off = estadoDeMentira('ligado', undefined, 'desligado');
+  await aoAcharReferral(off.r as never)(M, REF, false);
+  assert.deepEqual(off.f.tirou, [], 'formulário desligado: não mexe em etiqueta dele');
+});
+
+test('a origem NÃO mudou (equipe escolheu «Formulário» à mão, ou origem de outro tipo, ou seco/desligado, ou publicação): a etiqueta `formulario` fica', async () => {
+  const casos: Array<[string, ReturnType<typeof estadoDeMentira>]> = [
+    ['equipe à mão (sem marcador)', estadoDeMentira('ligado', { origem: 'Formulário' })],
+    ['origem Indicação', estadoDeMentira('ligado', { origem: 'Indicação', origem_palpite: 'formulario-texto' })],
+    ['origem em seco', estadoDeMentira('seco')],
+    ['origem desligada', estadoDeMentira('desligado')],
+  ];
+  for (const [rotulo, x] of casos) {
     await aoAcharReferral(x.r as never)(M, REF, false);
-    assert.deepEqual(x.f.tirou, [], `origem ${modo}: não tira`);
+    assert.deepEqual(x.f.tirou, [], rotulo);
   }
   const post = estadoDeMentira('ligado');
   await aoAcharReferral(post.r as never)(M, { ...REF, tipo: 'post' }, false);

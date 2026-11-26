@@ -37,22 +37,27 @@ export interface NomesDoAnuncio {
   campanha: string | null;
   conjunto: string | null;
 }
-type Atual = { origem?: unknown; campanha_nome?: unknown; conjunto?: unknown };
+type Atual = { origem?: unknown; campanha_nome?: unknown; conjunto?: unknown; origem_palpite?: unknown };
+/** Atributo OCULTO do contato (sem definição no Chatwoot, não aparece na tela): o robô o grava junto com «Formulário» para saber que a origem é palpite dele. */
+export const ATRIBUTO_PALPITE = 'origem_palpite';
+export const MARCA_PALPITE_FORMULARIO = 'formulario-texto';
 const txt = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
 /**
- * «Formulário» é um PALPITE pelo texto da mensagem (`preencherFormulario`), e palpite não vale mais que prova: com o referral do anúncio na mão a origem passa a
- * «Meta Ads» (e a campanha). Acontece quando o Kapso falhou na hora e o referral chegou depois (o script retroativo). Qualquer outra origem preenchida
- * (a da equipe, «Indicação»…) continua intocável.
+ * «Formulário» do ROBÔ é um PALPITE pelo texto da mensagem (`preencherFormulario`), e palpite não vale mais que prova: com o referral do anúncio na mão a origem passa a
+ * «Meta Ads» (e a campanha). Acontece quando o Kapso falhou na hora e o referral chegou depois (o script retroativo). Só o palpite do ROBÔ é trocado — o contato tem o
+ * marcador oculto `origem_palpite` que o robô gravou junto. «Formulário» que a EQUIPE escolheu à mão (sem o marcador) e qualquer outra origem preenchida
+ * («Indicação»…) continuam intocáveis.
  */
-export const ehPalpiteDeFormulario = (origem: unknown): boolean => normalizarFrase(txt(origem)) === normalizarFrase('Formulário');
+export const ehPalpiteDeFormulario = (atual: Atual): boolean => normalizarFrase(txt(atual.origem)) === normalizarFrase('Formulário') && txt(atual[ATRIBUTO_PALPITE]) === MARCA_PALPITE_FORMULARIO;
 
 /** O que gravar no contato (só campos vazios, e «Formulário» no lugar do anúncio comprovado), ou null. Função pura. */
 export function decidirOrigem(atual: Atual, nomes: NomesDoAnuncio | null): Record<string, string> | null {
   const grava: Record<string, string> = {};
   const origem = txt(atual.origem);
-  const trocaOPalpite = ehPalpiteDeFormulario(origem);
+  const trocaOPalpite = ehPalpiteDeFormulario(atual);
   if (!origem || trocaOPalpite) grava.origem = ORIGEM_ANUNCIO;
+  if (trocaOPalpite) grava[ATRIBUTO_PALPITE] = ''; // o palpite caiu: o marcador sai junto
   if ((origem || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO || trocaOPalpite) {
     if (!txt(atual.campanha_nome) && nomes?.campanha) grava.campanha_nome = nomes.campanha.slice(0, 200);
     if (!txt(atual.conjunto) && nomes?.conjunto) grava.conjunto = nomes.conjunto.slice(0, 200);
@@ -146,13 +151,13 @@ export async function etiquetarAnuncio(
 export async function preencherOrigem(
   e: { slug: string; contato: number; conversa: number; ref: ReferralDoKapso },
   p: PortasDaOrigem,
-): Promise<'desligado' | 'nada' | 'seco' | 'gravado'> {
+): Promise<'desligado' | 'nada' | 'seco' | 'gravado' | 'trocou-palpite'> {
   try {
     const modo = p.estado(e.slug);
     if (modo === 'desligado') return 'desligado';
     if (e.ref.tipo !== 'ad') return 'nada'; // publicação (não anúncio): não chuta origem
     const antes = await p.contato(e.contato);
-    const precisaNome = !!e.ref.anuncio && (!txt(antes.campanha_nome) || !txt(antes.conjunto)) && ((txt(antes.origem) || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO || ehPalpiteDeFormulario(antes.origem));
+    const precisaNome = !!e.ref.anuncio && (!txt(antes.campanha_nome) || !txt(antes.conjunto)) && ((txt(antes.origem) || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO || ehPalpiteDeFormulario(antes));
     const nomes = precisaNome ? await p.nomes(e.slug, e.ref.anuncio!).catch(() => null) : null;
     // relê na hora de gravar: outra mensagem (ou a menina) pode ter preenchido enquanto a Meta respondia
     const agora = precisaNome ? await p.contato(e.contato) : antes;
@@ -164,7 +169,7 @@ export async function preencherOrigem(
     }
     await p.gravar(e.contato, grava);
     logger.info({ slug: e.slug, conversa: e.conversa, contato: e.contato, grava }, `${ID_ORIGEM}: preenchido no contato ${e.contato}`);
-    return 'gravado';
+    return ATRIBUTO_PALPITE in grava ? 'trocou-palpite' : 'gravado'; // 'trocou-palpite' = a origem era o palpite do formulário e virou anúncio
   } catch (err) {
     logger.warn({ slug: e.slug, contato: e.contato, err: String(err) }, `${ID_ORIGEM}: falhou`);
     return 'nada';
@@ -204,7 +209,19 @@ const cacheDosPadroes = new Map<string, { ate: number; v: EntradaDaLista[] }>();
 const cacheDasOpcoes = new Map<number, { ate: number; v: string[] }>();
 /** conversa → até quando já foi decidida (gravou, seco, sem a opção): as 3 primeiras falas não refazem as leituras nem repetem o log */
 const decididas = new Map<string, number>();
+const TETO_DAS_DECISOES = 2000;
+/** anota a decisão da conversa; o mapa tem teto (limpa o vencido e, se ainda passar, tudo) — nunca cresce sem fim */
+function decidir(chave: string, ms: number): void {
+  if (decididas.size >= TETO_DAS_DECISOES) {
+    const agora = Date.now();
+    for (const [k, ate] of decididas) if (ate <= agora) decididas.delete(k);
+    if (decididas.size >= TETO_DAS_DECISOES) decididas.clear();
+  }
+  decididas.set(chave, Date.now() + ms);
+}
 const VALIDADE_DA_DECISAO_MS = 30 * 60_000;
+/** só para teste: quantas conversas estão decididas agora */
+export const tamanhoDasDecisoes = (): number => decididas.size;
 export function limparCacheDoFormulario(): void {
   cacheDosPadroes.clear();
   cacheDasOpcoes.clear();
@@ -307,12 +324,11 @@ export async function preencherFormulario(
       if (opcoes === null) dizer({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: ${marca}não consegui ler a lista de Origem da conta agora — não gravaria; a próxima fala tenta de novo`);
       else {
         dizer({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: ${marca}a lista de Origem da conta não tem a opção «${ORIGEM_FORMULARIO}» — não grava (adicione a opção em Configurações > Atributos personalizados)`);
-        decididas.set(chave, Date.now() + 10 * 60_000);
+        decidir(chave, 10 * 60_000);
       }
       return 'sem-opcao';
     }
-    if (decididas.size > 2000) decididas.clear();
-    decididas.set(chave, Date.now() + VALIDADE_DA_DECISAO_MS);
+    decidir(chave, VALIDADE_DA_DECISAO_MS);
     if (modo === 'seco') {
       logger.info({ slug: e.slug, conversa: e.conversa, contato: e.contato }, `${ID_FORMULARIO}: [SECO] preencheria Origem = ${ORIGEM_FORMULARIO} + etiqueta ${ETIQUETA_FORMULARIO} no contato ${e.contato}`);
       return 'seco';
@@ -320,7 +336,7 @@ export async function preencherFormulario(
     // relê na hora de gravar: o referral de anúncio ou a equipe podem ter preenchido enquanto líamos a conversa
     if (txt((await p.contato(e.contato)).origem)) return 'nada';
     // (a releitura e o PUT não são uma operação só — o Chatwoot não tem «grava se vazio» —, mas a janela é de milissegundos e o anúncio é chamado ANTES deste, em fila)
-    await p.gravar(e.contato, { origem: opcao });
+    await p.gravar(e.contato, { origem: opcao, [ATRIBUTO_PALPITE]: MARCA_PALPITE_FORMULARIO }); // o marcador oculto diz que esta origem é palpite do robô (só ela o anúncio troca)
     await p.etiquetar(e.conversa, [ETIQUETA_FORMULARIO]).catch((err: unknown) => logger.warn({ conversa: e.conversa, err: String(err) }, `${ID_FORMULARIO}: não consegui pôr a etiqueta ${ETIQUETA_FORMULARIO}`));
     logger.info({ slug: e.slug, conversa: e.conversa, contato: e.contato }, `${ID_FORMULARIO}: Origem = ${ORIGEM_FORMULARIO} no contato ${e.contato}`);
     return 'gravado';

@@ -81,7 +81,7 @@ test('webhook: só fala de paciente (incoming, não privada, com texto) numa cai
 test('ligado: contato sem origem → grava Origem = Formulário e põe a etiqueta', async () => {
   const x = portas();
   assert.equal(await preencherFormulario(E, x.p), 'gravado');
-  assert.deepEqual(x.gravados, [[77, { origem: ORIGEM_FORMULARIO }]]);
+  assert.deepEqual(x.gravados, [[77, { origem: ORIGEM_FORMULARIO, origem_palpite: 'formulario-texto' }]]);
   assert.deepEqual(x.etiquetas, [[900, [ETIQUETA_FORMULARIO]]]);
 });
 
@@ -149,7 +149,7 @@ test('falha ao gravar não lança; falha na etiqueta não desfaz a origem', asyn
 test('a opção da lista da conta manda no texto: «formulario» na lista → grava «formulario» (o valor exato dela)', async () => {
   const x = portas({ opcoes: ['Meta Ads', 'formulario'] });
   assert.equal(await preencherFormulario(E, x.p), 'gravado');
-  assert.deepEqual(x.gravados, [[77, { origem: 'formulario' }]]);
+  assert.deepEqual(x.gravados, [[77, { origem: 'formulario', origem_palpite: 'formulario-texto' }]]);
 });
 
 test('a mesma conversa não refaz leitura nem log nas falas seguintes (seco, gravado ou sem a opção)', async () => {
@@ -174,17 +174,21 @@ test('lista de Origem ilegível (erro do Chatwoot) NÃO fica decidida: a próxim
 
 // ── palpite não vale mais que prova: o referral do anúncio substitui «Formulário» ─────────────────────────────────
 
-const { decidirOrigem, preencherOrigem, ehPalpiteDeFormulario, portasDoFormulario } = await import('./chatwoot-origem.js');
+const { decidirOrigem, preencherOrigem, ehPalpiteDeFormulario, portasDoFormulario, tamanhoDasDecisoes } = await import('./chatwoot-origem.js');
+const V_TAMANHO = () => tamanhoDasDecisoes();
 const { prisma } = await import('./prisma.js');
 
 test('decidirOrigem: «Formulário» (palpite) + anúncio comprovado → «Meta Ads» + campanha e conjunto; outra origem preenchida segue intocável', () => {
   const nomes = { campanha: 'Camp X', conjunto: 'Conj Y' };
-  assert.deepEqual(decidirOrigem({ origem: 'Formulário' }, nomes), { origem: 'Meta Ads', campanha_nome: 'Camp X', conjunto: 'Conj Y' });
-  assert.deepEqual(decidirOrigem({ origem: ' formulario ' }, null), { origem: 'Meta Ads' }, 'sem os nomes da Meta, ao menos a origem');
+  const palpite = { origem_palpite: 'formulario-texto' };
+  assert.deepEqual(decidirOrigem({ origem: 'Formulário', ...palpite }, nomes), { origem: 'Meta Ads', origem_palpite: '', campanha_nome: 'Camp X', conjunto: 'Conj Y' }, 'o marcador do palpite sai junto');
+  assert.deepEqual(decidirOrigem({ origem: ' formulario ', ...palpite }, null), { origem: 'Meta Ads', origem_palpite: '' }, 'sem os nomes da Meta, ao menos a origem');
+  assert.equal(decidirOrigem({ origem: 'Formulário' }, nomes), null, 'SEM o marcador é «Formulário» da equipe: intocável');
   assert.equal(decidirOrigem({ origem: 'Indicação' }, nomes), null);
   assert.equal(decidirOrigem({ origem: 'Orgânico' }, nomes), null);
-  assert.equal(ehPalpiteDeFormulario('Formulário') && ehPalpiteDeFormulario('formulario'), true);
-  assert.equal(ehPalpiteDeFormulario('Meta Ads') || ehPalpiteDeFormulario(''), false);
+  assert.equal(ehPalpiteDeFormulario({ origem: 'Formulário', origem_palpite: 'formulario-texto' }) && ehPalpiteDeFormulario({ origem: 'formulario', origem_palpite: 'formulario-texto' }), true);
+  assert.equal(ehPalpiteDeFormulario({ origem: 'Formulário' }), false, 'sem marcador: foi a equipe');
+  assert.equal(ehPalpiteDeFormulario({ origem: 'Meta Ads', origem_palpite: 'formulario-texto' }) || ehPalpiteDeFormulario({}), false);
 });
 
 test('«Formulário» foi gravado primeiro; DEPOIS chega o referral (Kapso falhou na hora, retroativo trouxe) → origem vira «Meta Ads» + campanha', async () => {
@@ -195,6 +199,7 @@ test('«Formulário» foi gravado primeiro; DEPOIS chega o referral (Kapso falho
   f.p.contato = async () => ({ ...contato });
   assert.equal(await preencherFormulario(E, f.p), 'gravado');
   assert.equal(contato.origem, 'Formulário');
+  assert.equal(contato.origem_palpite, 'formulario-texto', 'o robô marca que a origem é palpite dele');
   // 2) o referral chega depois
   const gravados: Array<Record<string, string>> = [];
   const ref = { anuncio: '120200000000000001', ctwaClid: 'Afd', tipo: 'ad', titulo: 'Dor?', url: null, quando: 1 };
@@ -204,8 +209,8 @@ test('«Formulário» foi gravado primeiro; DEPOIS chega o referral (Kapso falho
     nomes: async () => ({ campanha: 'Campanha Real', conjunto: 'Conjunto Real' }),
     gravar: async (_c: number, campos: Record<string, string>) => { gravados.push(campos); Object.assign(contato, campos); },
   };
-  assert.equal(await preencherOrigem({ slug: E.slug, contato: 77, conversa: 900, ref }, p), 'gravado');
-  assert.deepEqual(gravados, [{ origem: 'Meta Ads', campanha_nome: 'Campanha Real', conjunto: 'Conjunto Real' }]);
+  assert.equal(await preencherOrigem({ slug: E.slug, contato: 77, conversa: 900, ref }, p), 'trocou-palpite');
+  assert.deepEqual(gravados, [{ origem: 'Meta Ads', origem_palpite: '', campanha_nome: 'Campanha Real', conjunto: 'Conjunto Real' }]);
   assert.equal(contato.origem, 'Meta Ads');
   // e o palpite não volta: o formulário relê e vê «Meta Ads»
   limparCacheDoFormulario();
@@ -247,4 +252,26 @@ test('«sem opção»: no SECO é só info («[SECO] … não gravaria»), no li
     w.mock.restore();
     i.mock.restore();
   }
+});
+
+test('«Formulário» ESCOLHIDO À MÃO pela equipe (sem o marcador do robô) + referral de anúncio → continua «Formulário»; nada é gravado', async () => {
+  const gravados: Array<Record<string, string>> = [];
+  const ref = { anuncio: '120200000000000001', ctwaClid: 'Afd', tipo: 'ad', titulo: 'Dor?', url: null, quando: 1 };
+  const p = {
+    estado: () => 'ligado' as const,
+    contato: async () => ({ origem: 'Formulário' }),
+    nomes: async () => ({ campanha: 'Campanha Real', conjunto: 'Conjunto Real' }),
+    gravar: async (_c: number, campos: Record<string, string>) => { gravados.push(campos); },
+  };
+  assert.equal(await preencherOrigem({ slug: E.slug, contato: 77, conversa: 900, ref }, p), 'nada');
+  assert.deepEqual(gravados, []);
+});
+
+test('o mapa de conversas decididas tem TETO: nunca passa de 2.000 entradas', async () => {
+  const x = portas();
+  for (let i = 0; i < 2300; i++) { await preencherFormulario({ ...E, conversa: 10_000 + i }, x.p); }
+  const z = portas({ opcoes: ['Meta Ads'] }); // 'sem opção' também decide: mesmo teto
+  for (let i = 0; i < 300; i++) { await preencherFormulario({ ...E, conversa: 50_000 + i }, z.p); }
+  assert.equal(x.gravados.length, 2300, 'nenhuma decisão perdeu o trabalho');
+  assert.ok(V_TAMANHO() <= 2000, `mapa com ${V_TAMANHO()}`);
 });

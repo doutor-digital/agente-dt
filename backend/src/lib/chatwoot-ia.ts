@@ -57,8 +57,9 @@ export const ID_IA = 'chatwoot-ia';
 export const ESPERA_SOFIA_MS = 60_000;
 export const TETO_SOFIA_POR_DIA = 300;
 /**
- * quanto o «Sofia atendendo» espera o anúncio (e o formulário, que vem em fila depois dele) da mesma mensagem. É só CORTESIA de ordem: as gravações de etiqueta de uma conversa
- * entram numa fila única (`mudarEtiquetas`, chatwoot-porta.ts) e releem a lista dentro dela, então passar de 8 s não faz ninguém desfazer a etiqueta do outro.
+ * quanto o «Sofia atendendo» espera o anúncio (e o formulário, que vem em fila depois dele) da mesma mensagem. Os que somam/tiram etiqueta por `mudarEtiquetas` (anúncio,
+ * formulário, «sofia-atendendo», chatwoot-porta.ts) entram numa fila única por conversa e releem a lista dentro dela, então entre ELES passar de 8 s não desfaz nada. Os outros
+ * escritores de etiqueta (pausa, resolver, «Perdido», régua) AINDA gravam a lista inteira fora dessa fila: a espera continua valendo para não correr com eles.
  */
 export const ESPERA_DO_ANUNCIO_MS = 8_000;
 /** quantas mensagens públicas da conversa a Sofia lê */
@@ -888,14 +889,14 @@ export function aoAcharReferral(r: EstadoDaConta | null): (m: { conversa: number
     // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
     const etiquetou = await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
     const slug = CAIXAS_REGUA[m.caixa];
-    // o referral prova que veio de anúncio: a etiqueta `formulario` (palpite pelo texto) não vale mais — tira (só quando o anúncio é comprovado e a origem está ligada)
-    if (ref.tipo === 'ad' && r.chat.removerEtiquetas && slug && r.origem.estado(slug) === 'ligado') await r.chat.removerEtiquetas(m.conversa, ['formulario']).catch(() => undefined);
     // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
     const [nota, origem] = await Promise.all([
       // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts
       novo ? notaDoAnuncio({ conversa: m.conversa, slug, ref }, r.nota) : Promise.resolve('ja-existia'),
       slug && m.contato ? preencherOrigem({ slug, contato: m.contato, conversa: m.conversa, ref }, r.origem) : Promise.resolve('sem-contato-ou-unidade'),
     ]);
+    // o referral trocou o PALPITE do formulário por «Meta Ads»: só agora, sabendo que a origem mudou, a etiqueta `formulario` cai (e só com o formulário ligado ou em seco)
+    if (origem === 'trocou-palpite' && slug && r.chat.removerEtiquetas && r.formulario.estado(slug) !== 'desligado') await r.chat.removerEtiquetas(m.conversa, ['formulario']).catch(() => undefined);
     return { etiqueta: etiquetou ? 'sim' : ref.tipo === 'ad' && process.env.CHATWOOT_ETIQUETA_ANUNCIO !== '0' ? 'falhou' : 'nao-ad', nota, origem };
   };
 }
@@ -985,7 +986,8 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
   // o texto pronto do formulário do site (sem referral): Origem «Formulário» + etiqueta, só em campo vazio (chatwoot-origem.ts). Também escreve etiquetas da conversa,
   // então o «Sofia atendendo» espera por ela junto com o anúncio.
   // DEPOIS do anúncio (em fila, nunca junto): o anúncio grava «Meta Ads» e a etiqueta `anuncio` — o formulário relê o contato e não troca; e as duas regravam a lista de etiquetas
-  const fala = falaParaFormulario(req.body, CAIXAS_REGUA);
+  // mensagem COM referral (o Chatwoot trouxe o anúncio) não é palpite de texto: o anúncio decide
+  const fala = consultar?.referral ? null : falaParaFormulario(req.body, CAIXAS_REGUA);
   const formularioR = fala ? estadoDoReceptor(conta) : null;
   if (fala && formularioR) {
     const antes = anuncioPronto;

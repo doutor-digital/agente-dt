@@ -135,3 +135,17 @@ test('webhook: lead de ANÚNCIO que escreve «vim pelo formulário» → o anún
     mocka.mock.restore();
   }
 });
+
+test('webhook: mensagem COM referral do Chatwoot (anúncio) que traz o texto do formulário → o palpite nem roda (a origem é do anúncio)', async () => {
+  Object.assign(process.env, ENV, { CHATWOOT_FORMULARIO_SLUGS: 'doutor-hernia-parauapebas' });
+  trocarDelegate('chatwootReguaDisparo', { create: async () => ({}) });
+  const w = chatwootDeMentira({});
+  const f = mock.method(globalThis, 'fetch', w.f as never);
+  try {
+    const corpo = { ...paciente, source_id: 'wamid.HBgMNTU5NDk5OTk5OTk5FQIAEhgg0123456789ABCDEF', content_attributes: { referral: { source_type: 'ad', source_id: '120200000000000001', ctwa_clid: 'Afd', headline: 'Dor?' } } };
+    await disparar(corpo);
+    assert.ok(!w.escritas.some((l) => l.includes('"origem":"Formulário"') || l.includes('formulario')), `o formulário não escreveu: ${w.escritas.join(' | ')}`);
+  } finally {
+    f.mock.restore();
+  }
+});
