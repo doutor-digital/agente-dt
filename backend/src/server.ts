@@ -82,6 +82,8 @@ import { startRenomearLeadWorker, stopRenomearLeadWorker } from './lib/renomear-
 import { startTipoLeadChegadaWorker, stopTipoLeadChegadaWorker } from './lib/tipo-lead-chegada-worker.js';
 import { startLigacaoWhatsappWorker, stopLigacaoWhatsappWorker } from './controllers/ligacao-whatsapp.controller.js';
 import { startChatwootReguaWorker, stopChatwootReguaWorker } from './lib/chatwoot-regua-worker.js';
+import { startVigiaDeCaixa, stopVigiaDeCaixa } from './lib/caixa-vigia.js';
+import { contaChatwootDoAmbiente, criarContextoChatwoot } from './mcp-remoto/chatwoot.js';
 import { startCrmTarefasWorker, stopCrmTarefasWorker } from './lib/crm-tarefas-worker.js';
 import { startCrmDemoraWorker, stopCrmDemoraWorker } from './lib/crm-demora-worker.js';
 import { paginaTarefasHandler } from './controllers/tarefas.controller.js';
@@ -320,6 +322,7 @@ async function main(): Promise<void> {
       startPreencheCamposWorker();
       startBlingRenovacaoWorker();
       startChatwootReguaWorker();
+      startVigiaDeCaixa(criarContextoChatwoot(contaChatwootDoAmbiente())); // vigia de caixa parada: nasce em seco (chave por unidade)
       startCrmTarefasWorker();
       startCrmDemoraWorker();
       startChatwootAgendaWorker();
@@ -352,6 +355,7 @@ async function main(): Promise<void> {
       stopPreencheCamposWorker();
       stopBlingRenovacaoWorker();
       stopChatwootReguaWorker();
+      stopVigiaDeCaixa();
       stopCrmTarefasWorker();
       stopCrmDemoraWorker();
       stopChatwootDuplicadosWorker();
