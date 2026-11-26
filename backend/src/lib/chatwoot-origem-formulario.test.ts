@@ -2,7 +2,7 @@
  * Origem «Formulário» (caso Capivari): o texto pronto do formulário do site, sem referral, grava Origem = «Formulário» + etiqueta.
  * Nunca sobrescreve origem existente (anúncio!), só nas primeiras falas, só com a opção na lista da conta, seco não grava, desligado não lê nada.
  */
-import { test, beforeEach } from 'node:test';
+import { test, beforeEach, mock } from 'node:test';
 import assert from 'node:assert/strict';
 
 process.env.KOMMO_SUBDOMAIN ??= 'teste';
@@ -170,4 +170,81 @@ test('lista de Origem ilegível (erro do Chatwoot) NÃO fica decidida: a próxim
   const l = x.lidas();
   assert.equal(await preencherFormulario(E, x.p), 'sem-opcao', 'não virou «nada»: leu de novo');
   assert.ok(x.lidas() > l);
+});
+
+// ── palpite não vale mais que prova: o referral do anúncio substitui «Formulário» ─────────────────────────────────
+
+const { decidirOrigem, preencherOrigem, ehPalpiteDeFormulario, portasDoFormulario } = await import('./chatwoot-origem.js');
+const { prisma } = await import('./prisma.js');
+
+test('decidirOrigem: «Formulário» (palpite) + anúncio comprovado → «Meta Ads» + campanha e conjunto; outra origem preenchida segue intocável', () => {
+  const nomes = { campanha: 'Camp X', conjunto: 'Conj Y' };
+  assert.deepEqual(decidirOrigem({ origem: 'Formulário' }, nomes), { origem: 'Meta Ads', campanha_nome: 'Camp X', conjunto: 'Conj Y' });
+  assert.deepEqual(decidirOrigem({ origem: ' formulario ' }, null), { origem: 'Meta Ads' }, 'sem os nomes da Meta, ao menos a origem');
+  assert.equal(decidirOrigem({ origem: 'Indicação' }, nomes), null);
+  assert.equal(decidirOrigem({ origem: 'Orgânico' }, nomes), null);
+  assert.equal(ehPalpiteDeFormulario('Formulário') && ehPalpiteDeFormulario('formulario'), true);
+  assert.equal(ehPalpiteDeFormulario('Meta Ads') || ehPalpiteDeFormulario(''), false);
+});
+
+test('«Formulário» foi gravado primeiro; DEPOIS chega o referral (Kapso falhou na hora, retroativo trouxe) → origem vira «Meta Ads» + campanha', async () => {
+  // 1) o texto pronto grava o palpite
+  const contato: Record<string, unknown> = {};
+  const f = portas();
+  f.p.gravar = async (c: number, campos: Record<string, string>) => { Object.assign(contato, campos); };
+  f.p.contato = async () => ({ ...contato });
+  assert.equal(await preencherFormulario(E, f.p), 'gravado');
+  assert.equal(contato.origem, 'Formulário');
+  // 2) o referral chega depois
+  const gravados: Array<Record<string, string>> = [];
+  const ref = { anuncio: '120200000000000001', ctwaClid: 'Afd', tipo: 'ad', titulo: 'Dor?', url: null, quando: 1 };
+  const p = {
+    estado: () => 'ligado' as const,
+    contato: async () => ({ ...contato }),
+    nomes: async () => ({ campanha: 'Campanha Real', conjunto: 'Conjunto Real' }),
+    gravar: async (_c: number, campos: Record<string, string>) => { gravados.push(campos); Object.assign(contato, campos); },
+  };
+  assert.equal(await preencherOrigem({ slug: E.slug, contato: 77, conversa: 900, ref }, p), 'gravado');
+  assert.deepEqual(gravados, [{ origem: 'Meta Ads', campanha_nome: 'Campanha Real', conjunto: 'Conjunto Real' }]);
+  assert.equal(contato.origem, 'Meta Ads');
+  // e o palpite não volta: o formulário relê e vê «Meta Ads»
+  limparCacheDoFormulario();
+  assert.equal(await preencherFormulario(E, f.p), 'nada');
+  assert.equal(contato.origem, 'Meta Ads');
+});
+
+test('padrões da unidade: ERRO do banco não fica em cache por 10 min (a próxima fala lê de novo e usa o padrão da unidade)', async () => {
+  const original = (prisma as any).unit;
+  let chamadas = 0;
+  const intents = { origem_por_texto: [{ texto: 'Preenchi o cadastro no site da clínica', origem: 'Formulário', contem: true }] };
+  Object.defineProperty(prisma, 'unit', { value: { findUnique: async () => { chamadas++; if (chamadas === 1) throw new Error('banco fora'); return { pipelineIntents: intents }; } }, configurable: true, writable: true });
+  try {
+    const portasReais = portasDoFormulario({ conta: null } as never, { contato: async () => ({}), gravar: async () => undefined } as never, async () => undefined);
+    const antes = await portasReais.padroes('doutor-hernia-x');
+    assert.ok(casarFala(TEXTO, antes), 'com o banco fora vale o padrão de sempre');
+    const depois = await portasReais.padroes('doutor-hernia-x');
+    assert.equal(chamadas, 2, 'não ficou em cache: leu de novo');
+    assert.ok(casarFala('oi, preenchi o cadastro no site da clínica ontem', depois) && !casarFala(TEXTO, depois), 'e agora vale o padrão da unidade');
+    await portasReais.padroes('doutor-hernia-x');
+    assert.equal(chamadas, 2, 'leitura boa fica em cache');
+  } finally {
+    Object.defineProperty(prisma, 'unit', { value: original, configurable: true, writable: true });
+  }
+});
+
+test('«sem opção»: no SECO é só info («[SECO] … não gravaria»), no ligado é warn de configuração', async () => {
+  const { logger } = await import('./logger.js');
+  const w = mock.method(logger, 'warn', () => undefined);
+  const i = mock.method(logger, 'info', () => undefined);
+  try {
+    await preencherFormulario(E, portas({ estado: 'seco', opcoes: ['Meta Ads'] }).p);
+    assert.equal(w.mock.calls.length, 0, 'seco não alarma');
+    assert.ok(i.mock.calls.some((c) => String(c.arguments[1]).includes('[SECO]') && String(c.arguments[1]).includes('não tem a opção')));
+    limparCacheDoFormulario();
+    await preencherFormulario(E, portas({ estado: 'ligado', opcoes: ['Meta Ads'] }).p);
+    assert.equal(w.mock.calls.length, 1, 'ligado avisa');
+  } finally {
+    w.mock.restore();
+    i.mock.restore();
+  }
 });

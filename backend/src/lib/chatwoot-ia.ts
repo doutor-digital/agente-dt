@@ -56,7 +56,10 @@ export type { Fala };
 export const ID_IA = 'chatwoot-ia';
 export const ESPERA_SOFIA_MS = 60_000;
 export const TETO_SOFIA_POR_DIA = 300;
-/** quanto o «Sofia atendendo» espera o anúncio da mesma mensagem terminar de gravar a etiqueta dele */
+/**
+ * quanto o «Sofia atendendo» espera o anúncio (e o formulário, que vem em fila depois dele) da mesma mensagem. É só CORTESIA de ordem: as gravações de etiqueta de uma conversa
+ * entram numa fila única (`mudarEtiquetas`, chatwoot-porta.ts) e releem a lista dentro dela, então passar de 8 s não faz ninguém desfazer a etiqueta do outro.
+ */
 export const ESPERA_DO_ANUNCIO_MS = 8_000;
 /** quantas mensagens públicas da conversa a Sofia lê */
 export const MAX_MENSAGENS_LIDAS = 24;
@@ -885,6 +888,8 @@ export function aoAcharReferral(r: EstadoDaConta | null): (m: { conversa: number
     // etiqueta «anuncio» na conversa (informação: vale com a origem desligada) — chatwoot-origem.ts
     const etiquetou = await etiquetarAnuncio(m.conversa, ref, (c, e) => r.chat.adicionarEtiquetas(c, e));
     const slug = CAIXAS_REGUA[m.caixa];
+    // o referral prova que veio de anúncio: a etiqueta `formulario` (palpite pelo texto) não vale mais — tira (só quando o anúncio é comprovado e a origem está ligada)
+    if (ref.tipo === 'ad' && r.chat.removerEtiquetas && slug && r.origem.estado(slug) === 'ligado') await r.chat.removerEtiquetas(m.conversa, ['formulario']).catch(() => undefined);
     // juntas (nenhuma das duas lança): a origem é dado e não espera o download/envio da imagem da nota
     const [nota, origem] = await Promise.all([
       // o «cartão» do anúncio (título, texto, imagem, link) numa nota interna, só na 1ª vez — chatwoot-anuncio.ts

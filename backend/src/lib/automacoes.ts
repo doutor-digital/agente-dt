@@ -1299,7 +1299,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'O lead do formulário do site abre o WhatsApp com um texto pronto («Olá! Meu nome é X… Vim pelo formulário…») e chega SEM o código do anúncio, então o contato ficava sem origem. Ao reconhecer esse texto numa das primeiras falas do paciente, grava no contato Origem = «Formulário» e põe a etiqueta «formulario» na conversa. O texto reconhecido é «vim pelo formulário» ou o que a unidade cadastrou (units.pipeline_intents.origem_por_texto, as entradas com origem «Formulário»). «Só no papel» não grava: loga «preencheria Origem = Formulário no contato N».',
     pegadinha:
-      'Só grava se o contato NÃO tem origem (anúncio e o que a equipe preencheu nunca são trocados) e se a opção «Formulário» existe na lista de Origem da conta — sem ela avisa no log e não grava (adicione a opção em Configurações > Atributos personalizados antes de ligar). Só olha as 3 primeiras falas do paciente. Não manda nada ao paciente.',
+      'Só grava se o contato NÃO tem origem (anúncio e o que a equipe preencheu nunca são trocados) e se a opção «Formulário» existe na lista de Origem da conta — sem ela avisa no log e não grava (adicione a opção em Configurações > Atributos personalizados antes de ligar). Só olha as 3 primeiras falas do paciente. É palpite pelo texto: se o código do anúncio chegar depois (inclusive pelo script retroativo), a origem vira «Meta Ads» com a campanha e a etiqueta «formulario» sai. Não manda nada ao paciente.',
     risco: 'escreve-campo',
     temSeco: true,
     exigeSecoAntes: true,

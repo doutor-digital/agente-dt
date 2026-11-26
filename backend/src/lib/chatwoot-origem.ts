@@ -17,7 +17,9 @@
  * numa das primeiras falas do paciente e grava Origem = «Formulário» + etiqueta `formulario`. Padrão por unidade em
  * `units.pipeline_intents.origem_por_texto` (as entradas cuja origem é «Formulário» — a MESMA lista que o Kommo já usa); sem lista, vale
  * «vim pelo formulário». Nunca sobrescreve origem que já existe (a de anúncio, a da equipe), e só grava se a opção «Formulário» existir na lista
- * de Origem da conta (senão o valor ficaria fora da lista, ilegível). Estado por unidade: CHATWOOT_FORMULARIO_SLUGS (nasce em seco).
+ * de Origem da conta (senão o valor ficaria fora da lista, ilegível). É palpite pelo texto: o referral de anúncio, quando chega (inclusive depois, pelo script retroativo),
+ * o SUBSTITUI por «Meta Ads» + campanha (`decidirOrigem`) e tira a etiqueta `formulario` (`aoAcharReferral`).
+ * Estado por unidade: CHATWOOT_FORMULARIO_SLUGS. Padrão: DESLIGADO (Parauapebas idêntica); numa conta própria (clínica nova) o catálogo faz o padrão ser SECO, como nas outras `chatwoot-*`.
  */
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
@@ -38,12 +40,20 @@ export interface NomesDoAnuncio {
 type Atual = { origem?: unknown; campanha_nome?: unknown; conjunto?: unknown };
 const txt = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
 
-/** O que gravar no contato (só campos vazios), ou null. Função pura. */
+/**
+ * «Formulário» é um PALPITE pelo texto da mensagem (`preencherFormulario`), e palpite não vale mais que prova: com o referral do anúncio na mão a origem passa a
+ * «Meta Ads» (e a campanha). Acontece quando o Kapso falhou na hora e o referral chegou depois (o script retroativo). Qualquer outra origem preenchida
+ * (a da equipe, «Indicação»…) continua intocável.
+ */
+export const ehPalpiteDeFormulario = (origem: unknown): boolean => normalizarFrase(txt(origem)) === normalizarFrase('Formulário');
+
+/** O que gravar no contato (só campos vazios, e «Formulário» no lugar do anúncio comprovado), ou null. Função pura. */
 export function decidirOrigem(atual: Atual, nomes: NomesDoAnuncio | null): Record<string, string> | null {
   const grava: Record<string, string> = {};
   const origem = txt(atual.origem);
-  if (!origem) grava.origem = ORIGEM_ANUNCIO;
-  if ((origem || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO) {
+  const trocaOPalpite = ehPalpiteDeFormulario(origem);
+  if (!origem || trocaOPalpite) grava.origem = ORIGEM_ANUNCIO;
+  if ((origem || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO || trocaOPalpite) {
     if (!txt(atual.campanha_nome) && nomes?.campanha) grava.campanha_nome = nomes.campanha.slice(0, 200);
     if (!txt(atual.conjunto) && nomes?.conjunto) grava.conjunto = nomes.conjunto.slice(0, 200);
   }
@@ -142,7 +152,7 @@ export async function preencherOrigem(
     if (modo === 'desligado') return 'desligado';
     if (e.ref.tipo !== 'ad') return 'nada'; // publicação (não anúncio): não chuta origem
     const antes = await p.contato(e.contato);
-    const precisaNome = !!e.ref.anuncio && (!txt(antes.campanha_nome) || !txt(antes.conjunto)) && (txt(antes.origem) || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO;
+    const precisaNome = !!e.ref.anuncio && (!txt(antes.campanha_nome) || !txt(antes.conjunto)) && ((txt(antes.origem) || ORIGEM_ANUNCIO) === ORIGEM_ANUNCIO || ehPalpiteDeFormulario(antes.origem));
     const nomes = precisaNome ? await p.nomes(e.slug, e.ref.anuncio!).catch(() => null) : null;
     // relê na hora de gravar: outra mensagem (ou a menina) pode ter preenchido enquanto a Meta respondia
     const agora = precisaNome ? await p.contato(e.contato) : antes;
@@ -209,7 +219,14 @@ export function portasDoFormulario(ctx: ContextoChatwoot, origem: PortasDaOrigem
     async padroes(slug) {
       const hit = cacheDosPadroes.get(slug);
       if (hit && hit.ate > Date.now()) return hit.v;
-      const u = await prisma.unit.findUnique({ where: { slug }, select: { pipelineIntents: true } }).catch(() => null);
+      let u: { pipelineIntents: unknown } | null;
+      try {
+        u = await prisma.unit.findUnique({ where: { slug }, select: { pipelineIntents: true } });
+      } catch (err) {
+        // erro do banco NÃO fica em cache: vale o padrão desta vez e a próxima fala lê de novo (senão o padrão da unidade sumiria por 10 min)
+        logger.warn({ slug, err: String(err) }, `${ID_FORMULARIO}: não consegui ler os padrões da unidade — uso o padrão de sempre desta vez`);
+        return padroesDoFormulario(null);
+      }
       const v = padroesDoFormulario(u?.pipelineIntents, (motivo) => logger.warn({ slug }, `${ID_FORMULARIO}: ${motivo}`));
       cacheDosPadroes.set(slug, { ate: Date.now() + 10 * 60_000, v });
       return v;
@@ -284,9 +301,12 @@ export async function preencherFormulario(
     // a opção como a LISTA da conta a escreve («Formulário», «formulario»…): grava o texto exato dela, nunca o nosso
     const opcao = opcoes?.find((o) => normalizarFrase(o) === normalizarFrase(ORIGEM_FORMULARIO));
     if (!opcao) {
-      if (opcoes === null) logger.warn({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: não consegui ler a lista de Origem da conta agora — não grava; a próxima fala tenta de novo`);
+      // no SECO não há o que avisar como problema: diz o que NÃO gravaria (info); no ligado é falha de configuração (warn)
+      const dizer = modo === 'seco' ? logger.info.bind(logger) : logger.warn.bind(logger);
+      const marca = modo === 'seco' ? '[SECO] ' : '';
+      if (opcoes === null) dizer({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: ${marca}não consegui ler a lista de Origem da conta agora — não gravaria; a próxima fala tenta de novo`);
       else {
-        logger.warn({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: a lista de Origem da conta não tem a opção «${ORIGEM_FORMULARIO}» — não grava (adicione a opção em Configurações > Atributos personalizados)`);
+        dizer({ slug: e.slug, conversa: e.conversa }, `${ID_FORMULARIO}: ${marca}a lista de Origem da conta não tem a opção «${ORIGEM_FORMULARIO}» — não grava (adicione a opção em Configurações > Atributos personalizados)`);
         decididas.set(chave, Date.now() + 10 * 60_000);
       }
       return 'sem-opcao';

@@ -22,12 +22,42 @@ export interface ConversaLida {
   interno: boolean;
 }
 
+// ── etiquetas: UMA gravação por vez por conversa ───────────────────────────────────────────────────────────────────
+// O Chatwoot SUBSTITUI a lista de etiquetas. Quem soma ou tira uma etiqueta lê a lista e regrava: se dois fazem isso ao mesmo tempo (o anúncio, o formulário,
+// a Sofia que passou a atender), o último a gravar desfaz o outro. Aqui as gravações de UMA conversa entram em fila neste processo, e cada uma relê a lista
+// DENTRO da fila — então nenhuma regrava uma lista velha. (Escritor fora desta fila segue como antes: a fila vale para quem a usa.)
+const filasDeEtiquetas = new Map<string, Promise<unknown>>();
+
+export function emFilaDeEtiquetas<T>(conta: number | undefined, conversa: number, fn: () => Promise<T>): Promise<T> {
+  const chave = `${conta ?? 0}:${conversa}`;
+  const minha = (filasDeEtiquetas.get(chave) ?? Promise.resolve()).catch(() => undefined).then(fn);
+  const cauda = minha.catch(() => undefined);
+  filasDeEtiquetas.set(chave, cauda);
+  void cauda.then(() => {
+    if (filasDeEtiquetas.get(chave) === cauda) filasDeEtiquetas.delete(chave);
+  });
+  return minha;
+}
+
+/** Soma e/ou tira etiquetas da conversa: relê a lista na fila e só grava se algo mudou. Lança se a conversa não existe. */
+export async function mudarEtiquetas(ctx: ContextoChatwoot, id: number, somar: readonly string[], tirar: readonly string[] = []): Promise<void> {
+  await emFilaDeEtiquetas(ctx.conta?.conta, id, async () => {
+    const raw = (await chamar(ctx, 'GET', `conversations/${id}`)) as { id?: unknown; labels?: unknown } | null;
+    if (!raw || !Number.isInteger(Number(raw.id))) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
+    const atual = Array.isArray(raw.labels) ? raw.labels.map(String) : [];
+    const lista = [...new Set([...atual.filter((e) => !tirar.includes(e)), ...somar])];
+    if (lista.length !== atual.length || lista.some((e, i) => e !== atual[i])) await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: lista } });
+  });
+}
+
 export interface PortaDoChatwoot {
   conversa(id: number): Promise<ConversaLida | null>;
   /** Mescla `parcial` nos atributos que a conversa tem AGORA (o Chatwoot substitui o objeto inteiro). */
   gravarAtributos(id: number, parcial: Record<string, unknown>): Promise<void>;
   /** Soma etiquetas às que a conversa já tem. */
   adicionarEtiquetas(id: number, etiquetas: string[]): Promise<void>;
+  /** Tira etiquetas (e só elas) da lista que a conversa tem AGORA; sem a etiqueta, não grava nada. */
+  removerEtiquetas?(id: number, etiquetas: string[]): Promise<void>;
   /** Nota PRIVADA. */
   nota(id: number, texto: string): Promise<void>;
   /** Mensagem PÚBLICA: chega ao paciente. Devolve o usuário do Chatwoot que a enviou (o da integração) e o id da mensagem, se a resposta disser. */
@@ -86,12 +116,8 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       // papel → nome da conta; papel que a conta não tem sai da gravação (a etapa de agora fica); sem mapa, `parcial` segue igual
       await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...atributosParaGravar(mapa(), parcial) } } });
     },
-    async adicionarEtiquetas(id, etiquetas) {
-      const atual = await lerCrua(id);
-      if (!atual) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
-      const lista = [...new Set([...atual.etiquetas, ...etiquetas])];
-      if (lista.length !== atual.etiquetas.length) await chamar(ctx, 'POST', `conversations/${id}/labels`, { corpo: { labels: lista } });
-    },
+    adicionarEtiquetas: (id, etiquetas) => mudarEtiquetas(ctx, id, etiquetas),
+    removerEtiquetas: (id, etiquetas) => mudarEtiquetas(ctx, id, [], etiquetas),
     async nota(id, t) {
       await chamar(ctx, 'POST', `conversations/${id}/messages`, { corpo: { content: t, message_type: 'outgoing', private: true } });
     },
