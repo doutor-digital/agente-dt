@@ -79,6 +79,7 @@ const pedido = (extra: Partial<PedidoDoConvite> = {}): PedidoDoConvite => ({
 
 /** Portas de mentira que contam o que foi chamado. Padrão: tudo livre. */
 let portasEnviados: Set<string> | undefined;
+const quantosEnviados = (): number => portasEnviados?.size ?? 0;
 /** os leads que RECEBERAM o convite (a marca de «recebeu»): o robô de mentira grava aqui e a porta da Sofia lê daqui */
 const gate = (u: Unit, leadId = 777) => sofiaCaladaPeloConvite(u as never, leadId, { conviteEnviado: async (c) => !!portasEnviados?.has(c) });
 
@@ -226,7 +227,7 @@ async function sofiaRespondeQuando(nome: string, deps: Partial<DepsDoConvite> & 
   const { w, deps: d } = portas(deps);
   const r = await convidarParaWhatsapp(pedido(), d);
   assert.equal(r.tipo === 'enviou', false, `${nome}: não enviou`);
-  assert.equal(portasEnviados?.size ?? 0, 0, `${nome}: nenhuma marca de «recebeu»`);
+  assert.equal(quantosEnviados(), 0, `${nome}: nenhuma marca de «recebeu»`);
   void w;
   assert.equal(await gate(unidade()), false, `${nome}: a Sofia responde`);
   assert.equal(await pacienteDeRedeSocialCalado(unidade() as never, 777, { origem: async () => 'instagram_business', conviteEnviado: async (c) => !!portasEnviados?.has(c) }), false, `${nome}: a escada/reativação seguem valendo`);
