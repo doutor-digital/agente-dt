@@ -26,7 +26,7 @@ export const CANCELAMENTOS_POR_HORA_PADRAO = 10;
 export const PADRAO_TETOS = { operacaoReais: 5000, diaReais: 20000, saidaOperacaoReais: 500, saidaDiaReais: 2000 };
 export const JANELA_LIVRO_MS = 36 * 3_600_000;
 
-const positivo = (bruto: string | undefined): number | null => {
+export const positivo = (bruto: string | undefined): number | null => {
   const t = bruto?.trim();
   if (!t) return null;
   // formato brasileiro também vale: "20.000" é vinte mil (não 20) e "1.500,50" é mil e quinhentos e cinquenta centavos

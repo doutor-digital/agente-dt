@@ -15,7 +15,7 @@ import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
-import { consultarPagamento, finalDaChave, testarChave, type ContaInfinitepayConfig, type OpcoesDeChamada, type PagamentoConsultado, type PedidoDeConsulta } from '../lib/integracoes/infinitepay.js';
+import { consultarPagamento, criarLinkNaInfinitepay, finalDaChave, testarChave, type ContaInfinitepayConfig, type OpcoesDeChamada, type PagamentoConsultado, type PedidoDeConsulta, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 
 export const STATUS_DO_LINK = ['intencao', 'criado', 'falhou', 'pago', 'estornado', 'cancelado'] as const;
 export type StatusDoLink = (typeof STATUS_DO_LINK)[number];
@@ -70,6 +70,8 @@ export interface ContaInfinitepay {
     consultar(p: Omit<PedidoDeConsulta, 'handle'>): Promise<PagamentoConsultado>;
     /** prova a chave sem criar nada; lança se estiver revogada */
     testar(): Promise<void>;
+    /** a ESCRITA (POST /links): só o código de criação de link, com portão e tetos, chama. Ausente = a conta não cria link. */
+    criarLink?(p: Omit<PedidoDeLink, 'handle'>): Promise<{ url: string; slug?: string }>;
   };
 }
 
@@ -89,6 +91,7 @@ export function contaInfinitepayDaConfig(c: ContaInfinitepayConfig, op: OpcoesDe
     fonte: {
       consultar: (p) => consultarPagamento(c.chave, { ...p, ...(c.handle ? { handle: c.handle } : {}) }, op),
       testar: () => testarChave(c.chave, op),
+      criarLink: (p) => criarLinkNaInfinitepay(c.chave, { ...p, ...(c.handle ? { handle: c.handle } : {}) }, op),
     },
   };
 }
