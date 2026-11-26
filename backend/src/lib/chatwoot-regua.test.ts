@@ -176,7 +176,7 @@ test('prepagamento: já pagou, sem antecipado, outra situação ou valor desconh
 
 // ── 6–8: véspera, dia, preparo ─────────────────────────────────────────────────────────────────────
 
-const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 
 test('consulta: véspera 24 h, dia 3 h e preparo 1 h antes — no alvo, não antes', () => {
   const c = conv({ attrs: CONSULTA });
@@ -603,7 +603,7 @@ test('janelaDe24hAberta: conta da última mensagem do paciente, com 15 min de fo
 });
 
 test('notaDoSeco com via: diz se iria como texto ou como template, com {{1}}=…', () => {
-  const attrs = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+  const attrs = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
   const d = decidirRegua(conv({ attrs }), { vistos: new Map(), feitos: new Set() }, Z('2026-11-16T17:30:00Z'), U).disparos[0]!;
   assert.equal(d.modelo, 'parau_consulta_lembrete_vespera');
   assert.ok(notaDoSeco(d, { tipo: 'texto' }).startsWith('🧪 [SECO] Régua «consulta-vespera» — enviaria agora, como TEXTO (janela de 24 h aberta):\n\nOlá, Maria.'));
@@ -720,7 +720,7 @@ test('integração Kommo: o paciente que VOLTA depois da importação é visto p
   assert.equal(depois.vistos.get('etapa')?.inicial, true, 'a etapa que veio do cartão é ponto de partida (etiqueta historico)');
   assert.deepEqual(cicloDaKommo(voltou, '2026-11-28T12:10:00Z', depois.vistos).disparos.map((d) => d.regra), [], 'o Perdido de antes da importação NÃO vira follow-up 48 h');
   // (b) cartão AGENDADO com consulta amanhã: nasce VIVA (consulta de pé) e a véspera sai no horário — a conversa não precisa de paciente escrevendo
-  const agendado = { ...base, status: 'resolved', last_activity_at: importadoEm - 86_400, custom_attributes: { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-27', hora_consulta: '14:30' } };
+  const agendado = { ...base, status: 'resolved', last_activity_at: importadoEm - 86_400, custom_attributes: { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-27', hora_consulta: '14:30' } };
   const noDia = cicloDaKommo(agendado, '2026-11-26T11:00:00Z', new Map());
   assert.equal(noDia.arquivo, false, 'consulta de pé: viva desde o nascimento');
   assert.deepEqual(noDia.disparos.map((d) => d.regra), [], '24 h antes das 14:30 de 27/11 são 17:30Z de 26/11: ainda cedo');

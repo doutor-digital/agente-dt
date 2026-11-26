@@ -601,6 +601,12 @@ const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
+/**
+ * Os lembretes cujo texto PEDE confirmação («Está tudo certo para o seu comparecimento?», «Está tudo certo?»). Quem já está «Confirmado» não os recebe:
+ * a pergunta repetida, depois de ele já ter dito sim, confunde (paciente idoso não entende «confirmar de novo») e fez a unidade reclamar. O preparo («leve
+ * o documento…») não pede nada e segue saindo.
+ */
+const PEDEM_CONFIRMACAO: ReadonlySet<string> = new Set(['consulta-vespera', 'consulta-dia', 'sessao-dia']);
 /** motivo da espera → modelo da régua (só estes 4 têm lembrete; os outros motivos da lista não mandam nada) */
 export const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
@@ -686,6 +692,8 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
   const consulta = momento(a.data_consulta, a.hora_consulta);
   /** consulta da agenda que é SESSÃO de tratamento: tem os lembretes de sessão (mais abaixo), não os de consulta comercial */
   const ehSessao = str(a.categoria_consulta) === 'Sessão';
+  /** a consulta (ou sessão) da agenda já está «Confirmado»: não se pede a confirmação outra vez (`PEDEM_CONFIRMACAO`) */
+  const jaConfirmou = situ === 'Confirmado';
   const saida: Candidato[] = [];
   /** o valor visto agora (não o que já estava na partida) */
   const novo = (campo: string, valor?: string): Visto | null => {
@@ -737,7 +745,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
           vespera: ['consulta-vespera', etapa === 'Fechou' ? 'parau_sessao_lembrete_vespera' : 'parau_consulta_lembrete_vespera'],
           dia: ['consulta-dia', 'parau_consulta_confirmacao_dia'],
           preparo: ['consulta-preparo', 'parau_consulta_preparo'],
-        }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }),
+        }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }).filter((k) => !jaConfirmou || !PEDEM_CONFIRMACAO.has(k.regra)),
       );
     }
     // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
@@ -807,7 +815,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     const dele = etapaTratamento === 'Em tratamento' ? momento(a.proxima_sessao, a.hora_sessao) : null;
     // «Em tratamento» com a próxima sessão preenchida e DIFERENTE da consulta da agenda: vale o campo que a equipe mantém (sessao-dia, abaixo)
     if (!dele || dele.chave === consulta.chave) {
-      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }, { vespera: tempo('consulta-vespera'), dia: tempo('sessao-dia') }));
+      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }, { vespera: tempo('consulta-vespera'), dia: tempo('sessao-dia') }).filter((k) => !jaConfirmou || !PEDEM_CONFIRMACAO.has(k.regra)));
     }
   }
   // falta numa sessão da agenda: marcada «Não compareceu» no dia da sessão (o texto diz «hoje»); não usa os textos de falta de consulta.
@@ -845,7 +853,11 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     if (etapaTratamento === 'Em tratamento') {
       // sessão: 3 h antes (precisa da hora)
       const sessao = momento(a.proxima_sessao, a.hora_sessao);
-      if (sessao?.hora) {
+      // «Confirmado» é a situação da CONSULTA da agenda: só vale para esta sessão se for a MESMA (dia e, havendo hora, hora). Outro dia é a confirmação de uma consulta
+      // antiga; outra hora no mesmo dia é outra sessão, que ninguém confirmou
+      const sessaoJaConfirmada =
+        jaConfirmou && !!sessao && !!consulta && consulta.data.iso === sessao.data.iso && (!consulta.hora || (consulta.hora.hh === sessao.hora?.hh && consulta.hora.mm === sessao.hora?.mm));
+      if (sessao?.hora && !sessaoJaConfirmada) {
         const teto = instante(sessao, 0);
         saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - tempo('sessao-dia')), momento: sessao });
       }

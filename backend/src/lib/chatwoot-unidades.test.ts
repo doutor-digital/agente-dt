@@ -128,7 +128,7 @@ test('a régua decide e escreve o MESMO com os textos da configuração e com os
     atendente: 'Ana',
     ultima: null,
   });
-  const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+  const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
   const FEITOS_VESPERA = ['consulta-vespera|2026-11-17T14:30'];
   const FEITOS_DIA = [...FEITOS_VESPERA, 'consulta-dia|2026-11-17T14:30'];
   const TRAT = { funil: 'Tratamento', etapa_tratamento: 'Em tratamento', proxima_sessao: '2026-11-20', hora_sessao: '14:00' };
