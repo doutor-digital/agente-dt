@@ -97,7 +97,7 @@ export function criadorDeLinkDoSinal(kommo: Pick<KommoClient, 'getLead' | 'getCo
     const levaNomeOuTelefone = !!(cliente.nome || cliente.telefone);
     const tentar = async (comExtras: boolean) => {
       try {
-        return await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia(), ...(comExtras ? { ...(levaNomeOuTelefone ? { cliente } : {}), semEndereco: true } : {}) });
+        return await criar(srv.ctx, srv.esc, quem, { ...pedido, origem: 'sofia', referencia: referencia(), ...(comExtras ? { ...(levaNomeOuTelefone ? { cliente } : {}), semEndereco: true } : {}) });
       } catch (err) {
         // criação sem resposta clara: o link PODE existir. Sobe com a referência para o sinal não cair em outra forma de cobrança (ver LinkIncertoDoSinal).
         if (err instanceof LinkIncertoInfinitepay) throw new LinkIncertoDoSinal(err.message, err.orderNsu);

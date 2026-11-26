@@ -2,8 +2,8 @@
  * O armazém de produção (`armazemDeEscritaPrisma`) contra um Postgres DE VERDADE, com a migration real aplicada: duas conexões (duas "instâncias" do
  * servidor) disputando o teto do dia pela trava `pg_advisory_xact_lock`, referência repetida (violação de unicidade) e eventos do webhook. Só roda com
  * `TESTE_POSTGRES_URL` apontando para um banco DESCARTÁVEL (ele recria a tabela `infinitepay_links`), por exemplo:
- *   docker run -d --rm -p 55999:5432 -e POSTGRES_PASSWORD=t postgres:16
- *   TESTE_POSTGRES_URL=postgresql://postgres:t@127.0.0.1:55999/postgres pnpm exec tsx --test src/mcp-remoto/infinitepay-postgres.test.ts
+ *   docker run -d --rm -p 55999:5432 -e POSTGRES_PASSWORD=t -e POSTGRES_DB=teste postgres:16
+ *   TESTE_POSTGRES_URL=postgresql://postgres:t@127.0.0.1:55999/teste pnpm exec tsx --test src/mcp-remoto/infinitepay-postgres.test.ts
  * Sem a variável o teste é pulado (a suíte normal não tem banco).
  */
 import { test } from 'node:test';
@@ -16,6 +16,10 @@ import { armazemDeEscritaPrisma } from './infinitepay-armazem.js';
 import { criarEscritaInfinitepay, criarLink } from './infinitepay-escrita.js';
 
 const BANCO = process.env.TESTE_POSTGRES_URL;
+// o teste APAGA a tabela infinitepay_links: só roda contra um banco local DESCARTÁVEL (127.0.0.1/localhost e «teste» no nome do banco), igual ao outro teste que usa a mesma variável
+if (BANCO && !(/^postgres(ql)?:\/\/[^/]*@(127\.0\.0\.1|localhost)(:\d+)?\/[^/?]*teste/i.test(BANCO))) {
+  throw new Error('TESTE_POSTGRES_URL recusada: só 127.0.0.1/localhost e banco com "teste" no nome (o teste apaga a tabela infinitepay_links).');
+}
 const UNI = 'doutor-hernia-acailandia';
 const Q = { id: 'u-teste', email: 'j@x.com' };
 
@@ -26,7 +30,7 @@ function instancia(prisma: PrismaClient) {
   };
   const armazem = armazemDeEscritaPrisma(prisma as never);
   const ctx = criarContextoInfinitepay(new Map([[UNI, conta]]), armazem);
-  const esc = criarEscritaInfinitepay({ armazem, agora: () => Date.now(), unidades: () => new Set([UNI]), tetoLink: () => 9000, tetoDia: () => 20000, porHora: () => 50, alertar: async () => true });
+  const esc = criarEscritaInfinitepay({ armazem, agora: () => Date.now(), unidades: () => new Set([UNI]), tetoLink: () => 9000, tetoDia: (o) => (o === 'sofia' ? 1000 : 20000), porHora: () => 50, alertar: async () => true });
   return { ctx, esc, armazem };
 }
 
@@ -37,7 +41,8 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
   const B = clientes[1]!;
   try {
     await A.$executeRawUnsafe('DROP TABLE IF EXISTS "infinitepay_links"');
-    for (const m of ['20261126120000_infinitepay_links', '20261126125000_infinitepay_links_revisao']) {
+    // TODAS as migrations que mexem na tabela, na ordem (o Prisma Client lê todas as colunas do schema: faltando uma, nada funciona)
+    for (const m of ['20261126120000_infinitepay_links', '20261126125000_infinitepay_links_revisao', '20261126200000_infinitepay_origem_ref']) {
       const sql = readFileSync(path.resolve(process.cwd(), `prisma/migrations/${m}/migration.sql`), 'utf8');
       for (const comando of sql.split(/;\s*\n/).map((c) => c.replace(/^(--.*\n)+/gm, '').trim()).filter(Boolean)) await A.$executeRawUnsafe(comando);
     }
@@ -70,6 +75,44 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     const historico = await A.infinitepayLink.findMany({ where: { unitSlug: UNI, orderNsu: { startsWith: 'recusado-1~f' } } });
     assert.equal(historico.length, 1);
     assert.equal(historico[0]!.status, 'falhou');
+
+    // referência de ORIGEM: 24 instâncias pedindo o MESMO link ao mesmo tempo criam UM só (a trava da unidade + o índice único); o resto recebe o mesmo link
+    const pedidosOrigem: string[] = [];
+    const comContador = (prisma: PrismaClient) => {
+      const x = instancia(prisma);
+      const conta = x.ctx.contas.get(UNI)!;
+      const original = conta.fonte.criarLink!;
+      conta.fonte.criarLink = async (p) => (pedidosOrigem.push(p.orderNsu), original(p));
+      return x;
+    };
+    const ro = await Promise.allSettled(clientes.map((c) => { const x = comContador(c); return criarLink(x.ctx, x.esc, Q, { valor: 5, descricao: 'Origem igual', origemRef: 'cx-corrida' }); }));
+    // quem perde a corrida pela regra dos 10 minutos (mesma descrição) também é aceitável: o que importa é UM link no banco e na InfinitePay
+    assert.equal(pedidosOrigem.length, 1, 'a InfinitePay foi chamada uma vez só');
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, origemRef: 'cx-corrida' } }), 1);
+    const ok = ro.filter((x): x is PromiseFulfilledResult<Awaited<ReturnType<typeof criarLink>>> => x.status === 'fulfilled');
+    assert.ok(ok.length >= 1);
+    assert.equal(new Set(ok.map((x) => x.value.orderNsu)).size, 1, 'todos que voltaram com sucesso têm o mesmo link');
+    // cancelado NÃO libera a referência de origem (o webhook ainda aceita pago): pedir de novo devolve o mesmo link
+    const o1 = (await A.infinitepayLink.findFirst({ where: { unitSlug: UNI, origemRef: 'cx-corrida' } }))!;
+    await a.armazem.aplicarEvento(UNI, o1.orderNsu, { evento: 'canceled', paraStatus: 'cancelado', deStatus: ['criado', 'intencao'] });
+    const de_novo = await criarLink(a.ctx, a.esc, Q, { valor: 5, descricao: 'Origem igual', origemRef: 'cx-corrida' });
+    assert.equal(de_novo.criado, false);
+    assert.equal(de_novo.orderNsu, o1.orderNsu);
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, origemRef: 'cx-corrida' } }), 1);
+    // recusado (falhou) libera: a linha velha ganha a referência trocada e a nova fica com a original
+    await A.infinitepayLink.create({ data: { unitSlug: UNI, orderNsu: 'orig-falhou', status: 'falhou', valorCentavos: 700, descricao: 'x', criadoPor: 'j', erro: '422', origemRef: 'cx-falhou' } });
+    const nova = await criarLink(b.ctx, b.esc, Q, { valor: 7, descricao: 'Origem corrigida', origemRef: 'cx-falhou' });
+    assert.equal(nova.criado, true);
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, origemRef: 'cx-falhou' } }), 1);
+    assert.equal(await A.infinitepayLink.count({ where: { unitSlug: UNI, origemRef: { startsWith: 'cx-falhou~f' } } }), 1);
+    // o índice único é a última defesa: duas linhas vivas com a mesma origem não existem
+    await assert.rejects(() => A.infinitepayLink.create({ data: { unitSlug: UNI, orderNsu: 'dup-origem', status: 'criado', valorCentavos: 100, descricao: 'x', criadoPor: 'j', origemRef: 'cx-falhou' } }));
+
+    // a ORIGEM fica gravada e o livro é por origem: a Sofia emite um sinal mesmo com o teto do dia do conector já estourado nesta unidade
+    const sofia = await criarLink(a.ctx, a.esc, Q, { valor: 50, descricao: 'Sinal Sofia', origem: 'sofia' });
+    assert.equal(sofia.criado, true);
+    assert.equal((await A.infinitepayLink.findFirst({ where: { unitSlug: UNI, orderNsu: sofia.orderNsu } }))?.origem, 'sofia');
+    assert.equal((await A.infinitepayLink.findFirst({ where: { unitSlug: UNI, orderNsu: 'dup-1' } }))?.origem, 'conector', 'o padrão é conector');
 
     // eventos do webhook: pago uma vez só; liquidação; estorno
     const e1 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado'], pagamento: { invoiceSlug: 's1', transactionNsu: 't1', forma: 'pix', parcelas: 1, valorPagoCentavos: 1000, reciboUrl: 'https://r' } });

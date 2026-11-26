@@ -3141,6 +3141,10 @@ model InfinitepayLink {
   /// hash do conteúdo (valor + descrição + unidade), para achar link igual feito há pouco
   chaveDuplicata    String?   @map("chave_duplicata")
   invoiceSlug       String?   @map("invoice_slug")
+  /// a referência de QUEM PEDIU o link (o Caixa: «cx-…»); única por unidade → pedir de novo devolve o mesmo link (idempotência). Nulo nos links do conector e da Sofia.
+  origemRef         String?   @map("origem_ref")
+  /// QUEM pediu o link: conector (claude.ai) | caixa (RH) | sofia (sinal). Cada origem tem o seu livro, os seus tetos e o seu limite por hora dentro da unidade.
+  origem            String    @default("conector")
   transactionNsu    String?   @map("transaction_nsu")
   formaPagamento    String?   @map("forma_pagamento")
   parcelas          Int?
@@ -3157,6 +3161,7 @@ model InfinitepayLink {
   updatedAt         DateTime  @updatedAt @map("updated_at")
 
   @@unique([unitSlug, orderNsu])
+  @@unique([unitSlug, origemRef])
   @@index([unitSlug, createdAt])
   @@index([chaveDuplicata])
   @@map("infinitepay_links")

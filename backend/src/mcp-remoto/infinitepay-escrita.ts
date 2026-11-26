@@ -52,18 +52,33 @@ export const LIMITES_INFINITEPAY = {
 
 // ----------------------------------------------------------------- limites (lidos a cada uso, do ambiente)
 
-export function tetoPorLink(e: NodeJS.ProcessEnv = process.env): number {
-  return positivo(e.INFINITEPAY_TETO_OPERACAO_REAIS) ?? LIMITES_INFINITEPAY.tetoOperacaoPadrao;
+/**
+ * QUEM pede o link. Cada ORIGEM tem o seu livro, os seus tetos e o seu limite por hora DENTRO de cada unidade: uma nunca bloqueia a outra (o Caixa gastar o dia dele não impede a Sofia de cobrar um sinal).
+ *  - `conector`: o claude.ai (o que sempre existiu; as variáveis sem sufixo) · `caixa`: o RH (INFINITEPAY_*_CAIXA) · `sofia`: o sinal da Sofia (INFINITEPAY_*_SOFIA).
+ */
+export const ORIGENS_DO_LINK = ['conector', 'caixa', 'sofia'] as const;
+export type OrigemDoLink = (typeof ORIGENS_DO_LINK)[number];
+/** Padrões por origem (R$ por link, R$ por dia e unidade, links por hora e unidade). Sofia: sinal de consulta, valores pequenos. */
+export const PADROES_POR_ORIGEM: Record<OrigemDoLink, { tetoOperacao: number; tetoDia: number; porHora: number }> = {
+  conector: { tetoOperacao: LIMITES_INFINITEPAY.tetoOperacaoPadrao, tetoDia: LIMITES_INFINITEPAY.tetoDiaPadrao, porHora: LIMITES_INFINITEPAY.porHoraPadrao },
+  caixa: { tetoOperacao: 5000, tetoDia: 20000, porHora: 20 },
+  sofia: { tetoOperacao: 100, tetoDia: 1000, porHora: 20 },
+};
+const sufixoDe = (o: OrigemDoLink) => (o === 'conector' ? '' : `_${o.toUpperCase()}`);
+export const nomeDaVariavel = (base: string, o: OrigemDoLink) => `${base}${sufixoDe(o)}`;
+
+export function tetoPorLink(e: NodeJS.ProcessEnv = process.env, origem: OrigemDoLink = 'conector'): number {
+  return positivo(e[nomeDaVariavel('INFINITEPAY_TETO_OPERACAO_REAIS', origem)]) ?? PADROES_POR_ORIGEM[origem].tetoOperacao;
 }
 
-export function tetoPorDiaInfinitepay(e: NodeJS.ProcessEnv = process.env): number {
-  return positivo(e.INFINITEPAY_TETO_DIA_REAIS) ?? LIMITES_INFINITEPAY.tetoDiaPadrao;
+export function tetoPorDiaInfinitepay(e: NodeJS.ProcessEnv = process.env, origem: OrigemDoLink = 'conector'): number {
+  return positivo(e[nomeDaVariavel('INFINITEPAY_TETO_DIA_REAIS', origem)]) ?? PADROES_POR_ORIGEM[origem].tetoDia;
 }
 
-/** Vazio = padrão; número inteiro ≥ 0; 0 ou lixo = criação DESLIGADA (mesma regra do Asaas). */
-export function linksPorHora(e: NodeJS.ProcessEnv = process.env): number {
-  const bruto = e.INFINITEPAY_LINKS_POR_HORA?.trim();
-  if (!bruto) return LIMITES_INFINITEPAY.porHoraPadrao;
+/** Vazio = padrão da origem; número inteiro ≥ 0; 0 ou lixo = criação DESLIGADA para essa origem (mesma regra do Asaas). */
+export function linksPorHora(e: NodeJS.ProcessEnv = process.env, origem: OrigemDoLink = 'conector'): number {
+  const bruto = e[nomeDaVariavel('INFINITEPAY_LINKS_POR_HORA', origem)]?.trim();
+  if (!bruto) return PADROES_POR_ORIGEM[origem].porHora;
   const n = Number(bruto);
   return Number.isInteger(n) && n >= 0 ? n : 0;
 }
@@ -87,6 +102,8 @@ export interface ItemDoLivro {
   chave: string | null;
   orderNsu: string;
   url: string | null;
+  /** quem pediu (ausente = conector, o que existia antes das origens) */
+  origem?: string;
 }
 
 /**
@@ -100,14 +117,15 @@ export class LivroDeLinks {
     return this.itens.filter((x) => x.status !== 'falhou');
   }
 
-  somaDoDia(agora: number, fuso: string = FUSO_PADRAO): number {
+  /** `origem` ausente = todas as origens somadas (a conta da unidade inteira); com ela, só os links dessa origem (o teto é por origem). */
+  somaDoDia(agora: number, fuso: string = FUSO_PADRAO, origem?: OrigemDoLink): number {
     const hoje = diaLocal(agora, fuso);
-    const cents = this.vivos().filter((x) => diaLocal(x.em, fuso) === hoje).reduce((s, x) => s + x.valorCentavos, 0);
+    const cents = this.vivos().filter((x) => diaLocal(x.em, fuso) === hoje && (origem === undefined || (x.origem ?? 'conector') === origem)).reduce((s, x) => s + x.valorCentavos, 0);
     return cents / 100;
   }
 
-  naHora(agora: number, horaMs: number): number {
-    return this.itens.filter((x) => agora - x.em < horaMs).length;
+  naHora(agora: number, horaMs: number, origem?: OrigemDoLink): number {
+    return this.itens.filter((x) => agora - x.em < horaMs && (origem === undefined || (x.origem ?? 'conector') === origem)).length;
   }
 
   igual(chave: string, agora: number, janelaMs: number): ItemDoLivro | undefined {
@@ -124,6 +142,10 @@ export interface PedidoDeReserva {
   validoAte: Date;
   criadoPor: string;
   agora: number;
+  /** a referência de quem pediu (única por unidade): o armazém recusa uma segunda reserva viva com a mesma */
+  origemRef?: string;
+  /** quem pediu (conector, caixa, sofia): cada origem tem o seu livro e os seus tetos */
+  origem: OrigemDoLink;
   /** recebe o livro lido DENTRO da trava; lança ErroDeEntrada para recusar */
   conferir(livro: LivroDeLinks): void;
 }
@@ -149,6 +171,8 @@ export interface EventoDoLink {
 export interface ArmazemDeEscrita extends ArmazemDeLinks {
   /** leitura sem trava (consumo do dia; conferência prévia): o que vale é a leitura feita dentro de `reservar` */
   ler(unidade: string, agora: number): Promise<LivroDeLinks>;
+  /** o link pedido com esta referência de origem (o mais recente que não foi recusado), ou null */
+  porOrigemRef(unidade: string, origemRef: string): Promise<LinkGuardado | null>;
   /** numa trava única por unidade: lê o livro, deixa `conferir` recusar e grava a INTENÇÃO. `orderNsu` repetido na unidade é recusado. */
   reservar(p: PedidoDeReserva): Promise<void>;
   resolver(unidade: string, orderNsu: string, r: ResultadoDaCriacao): Promise<void>;
@@ -162,9 +186,9 @@ export const FALHA_DO_BANCO_INFINITEPAY = 'não consegui conferir nem registrar 
 
 export interface EstadoEscritaInfinitepay {
   agora: () => number;
-  tetoLink: () => number;
-  tetoDia: () => number;
-  porHora: () => number;
+  tetoLink: (origem?: OrigemDoLink) => number;
+  tetoDia: (origem?: OrigemDoLink) => number;
+  porHora: (origem?: OrigemDoLink) => number;
   unidades: () => Set<string>;
   /** a URL do aviso (webhook) deste link, assinada por nós; ausente = o link nasce sem aviso automático */
   urlDoWebhook?: (unidade: string, orderNsu: string) => string;
@@ -185,6 +209,9 @@ const SEM_ARMAZEM: ArmazemDeEscrita = {
   async ler() {
     throw new ErroDeEntrada('o conector subiu sem o banco dos links: a criação de link está desligada');
   },
+  async porOrigemRef() {
+    throw new ErroDeEntrada('o conector subiu sem o banco dos links: a criação de link está desligada');
+  },
   async reservar() {
     throw new ErroDeEntrada('o conector subiu sem o banco dos links: a criação de link está desligada');
   },
@@ -201,9 +228,9 @@ export function criarEscritaInfinitepay(
 ): EstadoEscritaInfinitepay {
   return {
     agora: o.agora ?? Date.now,
-    tetoLink: o.tetoLink ?? (() => tetoPorLink()),
-    tetoDia: o.tetoDia ?? (() => tetoPorDiaInfinitepay()),
-    porHora: o.porHora ?? (() => linksPorHora()),
+    tetoLink: o.tetoLink ?? ((origem = 'conector') => tetoPorLink(process.env, origem)),
+    tetoDia: o.tetoDia ?? ((origem = 'conector') => tetoPorDiaInfinitepay(process.env, origem)),
+    porHora: o.porHora ?? ((origem = 'conector') => linksPorHora(process.env, origem)),
     unidades: o.unidades ?? (() => unidadesComEscritaInfinitepay()),
     ...(o.urlDoWebhook ? { urlDoWebhook: o.urlDoWebhook } : {}),
     // o servidor passa o Telegram de verdade (producao.ts); sem isso o aviso não sai
@@ -297,37 +324,41 @@ const referenciaNova = (agora: number) => `dd-${diaLocal(agora).replace(/-/g, ''
 
 // ----------------------------------------------------------------- criar link
 
-function verificar(esc: EstadoEscritaInfinitepay, livro: LivroDeLinks, o: { valor: number; chave: string }): void {
+function verificar(esc: EstadoEscritaInfinitepay, livro: LivroDeLinks, o: { valor: number; chave: string; origem: OrigemDoLink; temOrigemRef?: boolean }): void {
   const t = esc.agora();
-  const igual = livro.igual(o.chave, t, LIMITES_INFINITEPAY.duplicataMs);
+  // «link igual em 10 minutos» protege quem não tem identidade própria (o conector). Com `origemRef` o PEDIDO já se identifica (um por lançamento/cobrança): dois pacientes com o mesmo valor e a
+  // mesma descrição genérica NÃO são duplicata, e a mensagem não pode mostrar o link de outro paciente a quem pediu o seu.
+  const igual = o.temOrigemRef ? undefined : livro.igual(o.chave, t, LIMITES_INFINITEPAY.duplicataMs);
   if (igual) {
     throw new ErroDeEntrada(
       `link igual (mesmo valor e descrição) feito há menos de 10 minutos: ${igual.orderNsu}${igual.url ? ` — ${igual.url}` : ''}. Não criei outro. Se for de propósito, mude a descrição ou espere 10 minutos.`,
     );
   }
-  if (esc.porHora() <= 0) throw new ErroDeEntrada('a criação de link pelo conector está DESLIGADA: configure INFINITEPAY_LINKS_POR_HORA com o limite por hora (maior que 0)');
-  const naHora = livro.naHora(t, LIMITES_INFINITEPAY.horaMs);
-  if (naHora >= esc.porHora()) throw new ErroDeEntrada(`limite de ${esc.porHora()} links por hora nesta unidade já foi atingido (${naHora}); tente mais tarde ou crie no app da InfinitePay`);
-  const tetoLink = esc.tetoLink();
-  if (o.valor > tetoLink) throw new ErroDeEntrada(`o valor ${dinheiro(o.valor)} passa do teto por link (${dinheiro(tetoLink)}). Só o João sobe o teto, no servidor (INFINITEPAY_TETO_OPERACAO_REAIS). Nada foi criado.`);
-  const usado = livro.somaDoDia(t);
-  const tetoDia = esc.tetoDia();
+  const porHora = esc.porHora(o.origem);
+  if (porHora <= 0) throw new ErroDeEntrada(`a criação de link por ${o.origem} está DESLIGADA: configure ${nomeDaVariavel('INFINITEPAY_LINKS_POR_HORA', o.origem)} com o limite por hora (maior que 0)`);
+  const naHora = livro.naHora(t, LIMITES_INFINITEPAY.horaMs, o.origem);
+  if (naHora >= porHora) throw new ErroDeEntrada(`limite de ${porHora} links por hora (${o.origem}) nesta unidade já foi atingido (${naHora}); tente mais tarde ou crie no app da InfinitePay`);
+  const tetoLink = esc.tetoLink(o.origem);
+  if (o.valor > tetoLink) throw new ErroDeEntrada(`o valor ${dinheiro(o.valor)} passa do teto por link de ${o.origem} (${dinheiro(tetoLink)}). Só o João sobe o teto, no servidor (${nomeDaVariavel('INFINITEPAY_TETO_OPERACAO_REAIS', o.origem)}). Nada foi criado.`);
+  const usado = livro.somaDoDia(t, undefined, o.origem);
+  const tetoDia = esc.tetoDia(o.origem);
   if (arredondar(usado + o.valor) > tetoDia) {
-    throw new ErroDeEntrada(`passaria do teto do dia desta unidade (${dinheiro(tetoDia)}; já usado hoje ${dinheiro(usado)}; este link ${dinheiro(o.valor)}). Só o João sobe o teto, no servidor (INFINITEPAY_TETO_DIA_REAIS). Nada foi criado.`);
+    throw new ErroDeEntrada(`passaria do teto do dia de ${o.origem} nesta unidade (${dinheiro(tetoDia)}; já usado hoje ${dinheiro(usado)}; este link ${dinheiro(o.valor)}). Só o João sobe o teto, no servidor (${nomeDaVariavel('INFINITEPAY_TETO_DIA_REAIS', o.origem)}). Nada foi criado.`);
   }
 }
 
-export async function consumoDoDiaInfinitepay(esc: EstadoEscritaInfinitepay, unidade: string) {
+export async function consumoDoDiaInfinitepay(esc: EstadoEscritaInfinitepay, unidade: string, origem: OrigemDoLink = 'conector') {
   const agora = esc.agora();
   const livro = await esc.armazem.ler(unidade, agora);
-  const usado = livro.somaDoDia(agora);
+  const usado = livro.somaDoDia(agora, undefined, origem);
   return {
-    tetoPorLink: dinheiro(esc.tetoLink()),
-    tetoDoDia: dinheiro(esc.tetoDia()),
+    origem,
+    tetoPorLink: dinheiro(esc.tetoLink(origem)),
+    tetoDoDia: dinheiro(esc.tetoDia(origem)),
     usadoHoje: dinheiro(usado),
-    restanteHoje: dinheiro(Math.max(0, arredondar(esc.tetoDia() - usado))),
-    linksPorHora: esc.porHora(),
-    linksNaUltimaHora: livro.naHora(agora, LIMITES_INFINITEPAY.horaMs),
+    restanteHoje: dinheiro(Math.max(0, arredondar(esc.tetoDia(origem) - usado))),
+    linksPorHora: esc.porHora(origem),
+    linksNaUltimaHora: livro.naHora(agora, LIMITES_INFINITEPAY.horaMs, origem),
   };
 }
 
@@ -357,6 +388,47 @@ export interface ArgsCriarLink {
   /** SÓ para quem chama pelo servidor (a Sofia): a ferramenta do conector não tem estes campos. Nome e telefone vão para a página de pagamento, nunca para o livro nem para o log. */
   cliente?: ClienteDoLink;
   semEndereco?: boolean;
+  /** QUEM pede (padrão `conector`). A ferramenta do claude.ai NUNCA a repete do pedido: a origem é decidida por quem chama pelo servidor (a Sofia: `sofia`; o Caixa: `caixa`). */
+  origem?: OrigemDoLink;
+  /** SÓ para quem chama pelo servidor (o Caixa): pedir de novo com a mesma referência devolve o MESMO link, sem criar outro (clique duplo, nova tentativa). Fica fora da ferramenta do conector. */
+  origemRef?: string;
+}
+
+/** A referência de origem é nossa (não vai à InfinitePay nem a tela nenhuma): letras, números, `-`, `_`, `:` (até 80). */
+export const ORIGEM_REF = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,79}$/;
+
+/**
+ * O link de uma referência de origem que já NÃO vale: recusado (`falhou`) ou vencido sem pagamento. Só ele libera a referência para um link novo (o resto é devolvido, nunca duplicado).
+ * `cancelado` NÃO libera: o aviso de cancelamento da InfinitePay não é confirmado pela API e o webhook ainda aceita `pago` depois dele; liberar criaria 2 links pagáveis para o mesmo pedido.
+ */
+export function origemSubstituivel(l: { status: string; validoAte: string | Date | null }, agora: number): boolean {
+  if (l.status === 'falhou') return true;
+  return l.status === 'criado' && l.validoAte !== null && new Date(l.validoAte).getTime() < agora;
+}
+
+/** O que se devolve quando a referência de origem já tem link: o que existe, sem tocar na InfinitePay (mesmos campos da criação, para quem chama não ter dois formatos). */
+async function linkJaExistente(esc: EstadoEscritaInfinitepay, conta: ContaInfinitepay, l: LinkGuardado, origem: OrigemDoLink) {
+  const consumo = await consumoDoDiaInfinitepay(esc, conta.slug, origem).catch(() => ({ indisponivel: 'não consegui ler os limites agora.' }));
+  return {
+    unidade: conta.slug,
+    criado: false,
+    jaExistia: true,
+    status: l.status,
+    url: l.url ?? '',
+    orderNsu: l.orderNsu,
+    valor: reais(l.valorCentavos),
+    descricao: l.descricao,
+    // sempre texto (quem chama usa `.slice`): um link sem validade gravada (não nasce assim) ganha a padrão a partir da criação
+    validoAte: l.validoAte ?? validoAteDe(Date.parse(l.criadoEm), LIMITES_INFINITEPAY.validadePadraoDias).iso,
+    pagamentoUnico: true,
+    // não é guardado no livro: quem precisa saber olha a página do link
+    formas: [] as string[],
+    parcelasSemTaxaParaAClinica: 0,
+    avisoAutomatico: 'este link já existia (mesma referência de origem): nada novo foi criado',
+    aviso: 'A InfinitePay não deixa cancelar link pela API: este vale até a data acima (ou até o primeiro pagamento).',
+    atencao: undefined as string | undefined,
+    consumoDoDia: consumo,
+  };
 }
 
 export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfinitepay, quem: QuemInfinitepay, a: ArgsCriarLink) {
@@ -376,6 +448,9 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
   if (a.referencia !== undefined && !REFERENCIA.test(a.referencia.trim())) throw new ErroDeEntrada('referencia: use letras, números, "-" e "_" (até 60), sem espaço');
   // a referência vai no endereço do aviso (log do proxy), no Telegram e no painel da InfinitePay: nada de CPF ou telefone
   if (a.referencia !== undefined && temDigitosSeguidos(a.referencia, 10)) throw new ErroDeEntrada('referencia: não use CPF, telefone ou outro número longo (10 dígitos seguidos ou mais); ela aparece em avisos e no painel da InfinitePay');
+  const origem: OrigemDoLink = a.origem ?? 'conector';
+  if (!ORIGENS_DO_LINK.includes(origem)) throw new ErroDeEntrada(`origem desconhecida: ${String(origem)}`);
+  if (a.origemRef !== undefined && !ORIGEM_REF.test(a.origemRef)) throw new ErroDeEntrada('origemRef: use letras, números, "-", "_" e ":" (até 80), sem espaço');
   const agora = esc.agora();
   const orderNsu = a.referencia?.trim() || referenciaNova(agora);
   const chave = chaveDeDuplicata(conta.slug, centavos, descricao);
@@ -385,11 +460,36 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
   const webhookUrl = esc.urlDoWebhook?.(conta.slug, orderNsu);
 
   return umPorVez(esc, conta.slug, async () => {
+    // idempotência por origem: a MESMA referência de quem pediu devolve o link que já existe (clique duplo, tentativa repetida), sem passar pelos tetos nem pela InfinitePay.
+    // Um link ainda em «intencao» é de resultado incerto (pode existir lá): não se cria outro por cima. Só a recusa certa (falhou) libera a referência.
+    if (a.origemRef !== undefined) {
+      const antigo = await esc.armazem.porOrigemRef(conta.slug, a.origemRef);
+      if (antigo && !origemSubstituivel(antigo, esc.agora())) {
+        if (antigo.status === 'intencao') {
+          throw new ErroDeEntrada(`a referência de origem ${a.origemRef} já tem um link (${antigo.orderNsu}) cujo resultado não ficou claro: confira no app da InfinitePay antes de repetir. Nada foi criado.`);
+        }
+        if (antigo.valorCentavos !== centavos) {
+          throw new ErroDeEntrada(`a referência de origem ${a.origemRef} já tem um link de ${dinheiro(antigo.valorCentavos / 100)}, diferente do valor pedido (${dinheiro(valor)}). Nada foi criado.`);
+        }
+        return linkJaExistente(esc, conta, antigo, origem);
+      }
+    }
     // a reserva que vale: dentro da trava da unidade, relê o banco, confere tudo e grava a INTENÇÃO antes de qualquer chamada à InfinitePay
-    await esc.armazem.reservar({
-      unidade: conta.slug, orderNsu, chave, valorCentavos: centavos, descricao, validoAte: validoAteData, criadoPor, agora,
-      conferir: (livro) => verificar(esc, livro, { valor, chave }),
-    });
+    try {
+      await esc.armazem.reservar({
+        unidade: conta.slug, orderNsu, chave, valorCentavos: centavos, descricao, validoAte: validoAteData, criadoPor, agora,
+        origem,
+        ...(a.origemRef !== undefined ? { origemRef: a.origemRef } : {}),
+        conferir: (livro) => verificar(esc, livro, { valor, chave, origem, temOrigemRef: a.origemRef !== undefined }),
+      });
+    } catch (e) {
+      // corrida entre duas instâncias (ou depois da conferência acima): quem chegou segundo recebe o link que o primeiro criou, não um erro
+      if (a.origemRef !== undefined && e instanceof ErroDeEntrada) {
+        const l = await esc.armazem.porOrigemRef(conta.slug, a.origemRef).catch(() => null);
+        if (l && !origemSubstituivel(l, esc.agora()) && l.status !== 'intencao' && l.valorCentavos === centavos) return linkJaExistente(esc, conta, l, origem);
+      }
+      throw e;
+    }
     const pedido: PedidoDeLink = {
       orderNsu,
       itens: [{ quantidade: 1, precoCentavos: centavos, descricao }],
@@ -422,10 +522,10 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
     // o link JÁ existe na InfinitePay: se o banco falhar ao anotar a URL, a URL não pode se perder (vai no aviso do João e na resposta)
     const anotou = await esc.armazem.resolver(conta.slug, orderNsu, { status: 'criado', url, ...(invoiceSlug ? { invoiceSlug } : {}) }).then(() => true, () => false);
     if (!anotou) void esc.alertar(`⚠️ InfinitePay (${conta.nome}): criei o link ${orderNsu} de ${dinheiro(valor)} mas o banco não anotou a URL: ${url}. Ele conta no teto como intenção.`).catch(() => false);
-    if (valor > esc.tetoLink() / 2) {
-      void esc.alertar(`🔗 InfinitePay (${conta.nome}): link de ${dinheiro(valor)} criado por ${criadoPor} (acima de 50% do teto de ${dinheiro(esc.tetoLink())}). Ref ${orderNsu}.`).catch(() => false);
+    if (valor > esc.tetoLink(origem) / 2) {
+      void esc.alertar(`🔗 InfinitePay (${conta.nome}): link de ${dinheiro(valor)} (${origem}) criado por ${criadoPor} (acima de 50% do teto de ${dinheiro(esc.tetoLink(origem))}). Ref ${orderNsu}.`).catch(() => false);
     }
-    const consumo = await consumoDoDiaInfinitepay(esc, conta.slug).catch(() => ({ indisponivel: 'não consegui ler os limites agora; o link JÁ foi criado.' }));
+    const consumo = await consumoDoDiaInfinitepay(esc, conta.slug, origem).catch(() => ({ indisponivel: 'não consegui ler os limites agora; o link JÁ foi criado.' }));
     return {
       unidade: conta.slug,
       criado: true,
@@ -497,7 +597,11 @@ export function registrarEscritaInfinitepay(server: McpServer, ctx: ContextoInfi
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
-    (args) => executar('infinitepay_criar_link', args, auditar, () => criarLink(ctx, esc, quem, args as ArgsCriarLink)),
+    (args) => {
+      // a ferramenta do claude.ai é SEMPRE a origem `conector`, e os campos que só o servidor usa (origem, origemRef, cliente, semEndereco) nunca vêm do pedido dela
+      const { origem: _o, origemRef: _r, cliente: _c, semEndereco: _s, ...seguros } = args as ArgsCriarLink;
+      return executar('infinitepay_criar_link', args, auditar, () => criarLink(ctx, esc, quem, { ...seguros, origem: 'conector' }));
+    },
   );
 }
 

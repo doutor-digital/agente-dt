@@ -43,6 +43,8 @@ export interface LinkGuardado {
   liquidadoEm: string | null;
   ultimoEvento: string | null;
   erro: string | null;
+  /** a referência de quem pediu o link (o Caixa); nula nos links do conector e da Sofia */
+  origemRef?: string | null;
 }
 
 export interface FiltroDeLinks {
