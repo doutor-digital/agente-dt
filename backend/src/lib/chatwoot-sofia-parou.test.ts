@@ -23,6 +23,7 @@ const doPaciente = (minAtras: number) => ({ message_type: 0, private: false, con
 function deps(o: { estado?: Estado; sofia?: Estado; mensagens?: any[]; lida?: ConversaLida | null; unidade?: Partial<Unit>; env?: Record<string, string>; envio?: 'ok' | 'recusado' | 'incerto'; agora?: () => number } = {}) {
   const enviados: Array<{ numero: string; texto: string }> = [];
   const simulados: unknown[] = [];
+  const registrados: Array<{ slug: string; conversa: number; desfecho: string }> = [];
   const d: DepsDoVigia = {
     estado: () => o.estado ?? 'ligado',
     estadoDaSofia: () => o.sofia ?? 'ligado',
@@ -34,8 +35,9 @@ function deps(o: { estado?: Estado; sofia?: Estado; mensagens?: any[]; lida?: Co
     env: o.env ?? ENV,
     enviar: async (a) => (enviados.push({ numero: a.numero, texto: a.texto }), o.envio ?? 'ok'),
     simular: ((_u: unknown, _id: unknown, s: unknown) => void simulados.push(s)) as never,
+    registrarAviso: async (slug, conversa, desfecho) => void registrados.push({ slug, conversa, desfecho }),
   };
-  return { d, enviados, simulados };
+  return { d, enviados, simulados, registrados };
 }
 const M = { slug: 'doutor-hernia-parauapebas', conversa: 12 };
 
@@ -402,4 +404,68 @@ test('o servidor REINICIA no meio da noite: a lista é reconstruída do Registro
   assert.match(t, /conversa 41 /);
   assert.match(t, /conversa 43 /);
   assert.doesNotMatch(t, /conversa 42 /, 'a que a recepção atendeu sai');
+});
+
+test('o aviso que SAIU vai para o Registro (`alerta-parou`): a retomada do boot não o repete; o «só no papel» não grava; uma falha NOVA depois do aviso volta à lista', async () => {
+  const a = deps();
+  assert.equal(await conferirSofiaParou(M, 'falhou', a.d), 'avisou');
+  assert.deepEqual(a.registrados, [{ slug: M.slug, conversa: 12, desfecho: 'falhou' }]);
+  const s = deps({ estado: 'seco' });
+  assert.equal(await conferirSofiaParou({ ...M, conversa: 13 }, 'falhou', s.d), 'simulado');
+  assert.deepEqual(s.registrados, []);
+  // Registro depois do aviso: o último evento é o aviso → não é «parado»
+  const parados = (evs: EventoDoRegistro[]) => paradosDoRegistro(evs).map((p) => p.conversa);
+  assert.deepEqual(parados([ev(12, 'decisao', 'falhou', '2026-11-27T01:00:00Z'), ev(12, 'alerta-parou', 'falhou', '2026-11-27T01:16:00Z')]), []);
+  assert.deepEqual(parados([ev(12, 'decisao', 'falhou', '2026-11-27T01:00:00Z'), ev(12, 'alerta-parou', 'falhou', '2026-11-27T01:16:00Z'), ev(12, 'decisao', 'teto', '2026-11-27T03:00:00Z')]), [12], 'falha nova depois do aviso');
+  // o resumo também grava, uma linha por conversa
+  let agora = Date.parse('2026-11-27T01:00:00Z');
+  const r = deps({ agora: () => agora });
+  r.d.mensagens = async () => [{ message_type: 0, private: false, content: 'oi', created_at: Math.floor((agora - 40 * 60_000) / 1000) }];
+  await conferirSofiaParou({ ...M, conversa: 51 }, 'falhou', r.d);
+  await conferirSofiaParou({ ...M, conversa: 52 }, 'falhou', r.d);
+  agora = Date.parse('2026-11-27T12:00:00Z');
+  assert.equal(await descarregarPendentes(), 1);
+  assert.deepEqual(r.registrados.map((x) => [x.conversa, x.desfecho]).sort(), [[51, 'resumo'], [52, 'resumo']]);
+});
+
+test('o pendente reconstruído conta as 24 h da FALHA, não do boot: o de 23 h atrás é largado 1 h depois, não 24 h depois', async () => {
+  const falhou = Date.parse('2026-11-27T01:00:00Z');
+  let agora = falhou + 23 * 3600_000; // sexta 23h (SP): equipe fechada
+  const a = deps({ agora: () => agora });
+  a.d.mensagens = async () => [{ message_type: 0, private: false, content: 'oi', created_at: Math.floor(falhou / 1000) }];
+  assert.equal(await conferirSofiaParou(M, 'falhou', a.d, falhou), 'acumulada');
+  agora = falhou + 25 * 3600_000;
+  await descarregarPendentes();
+  assert.equal(pendentesDoVigia(), 0, 'passou de 24 h da falha');
+});
+
+test('a retomada roda UMA vez por processo e só arma unidade que o servidor conhece, na conta DELA (ambiente = a do ambiente); chave desligada não arma', async () => {
+  const { retomarVigiasDoRegistro, esquecerRetomadaDaVigia } = await import('./chatwoot-ia.js');
+  esquecerRetomadaDaVigia();
+  const armadas: Array<{ conta: number; slug: string; conversa: number; esperaMs: number; falhouEm: number }> = [];
+  const portas = (conta: number) => ({ portas: { vigiarSofiaParou: (m: { slug: string; conversa: number }, _d: string, r: { esperaMs: number; falhouEm: number }) => void armadas.push({ conta, slug: m.slug, conversa: m.conversa, esperaMs: r.esperaMs, falhouEm: r.falhouEm }) } }) as never;
+  const eventos = async () => [
+    ev(1, 'decisao', 'falhou', new Date(Date.now() - 5 * 60_000).toISOString(), 'u-ambiente'),
+    ev(2, 'decisao', 'falhou', new Date(Date.now() - 5 * 60_000).toISOString(), 'u-propria'),
+    ev(3, 'decisao', 'falhou', new Date(Date.now() - 5 * 60_000).toISOString(), 'u-desconhecida'),
+    ev(4, 'decisao', 'falhou', new Date(Date.now() - 5 * 60_000).toISOString(), 'u-desligada'),
+  ];
+  const e = { CHATWOOT_URL: 'https://crm.exemplo', CHATWOOT_CONTA_ID: '1', CHATWOOT_API_TOKEN: 'x' } as NodeJS.ProcessEnv;
+  const dep = {
+    eventos,
+    estadoDaChave: (slug: string): Estado => (slug === 'u-desligada' ? 'desligado' : 'seco'),
+    contaDaUnidade: ((slug: string) => (slug === 'u-ambiente' ? null : slug === 'u-propria' ? 7 : undefined)) as never,
+    estadoDoReceptor: ((conta: number) => portas(conta)) as never,
+  };
+  const n = await retomarVigiasDoRegistro(e, dep);
+  assert.equal(n, 4, 'as 4 passam pela retomada; quem arma é o «armar»');
+  const por = Object.fromEntries(armadas.map((x) => [x.slug, x.conta]));
+  assert.equal(por['u-propria'], 7, 'a conta DA unidade');
+  assert.equal(por['u-ambiente'], 1, 'unidade do ambiente: a conta do ambiente (CHATWOOT_CONTA_ID)');
+  assert.ok(!('u-desconhecida' in por), 'unidade que o servidor não conhece: nunca cai na conta de outra clínica');
+  assert.ok(!('u-desligada' in por), 'chave desligada não arma');
+  for (const x of armadas) assert.ok(x.esperaMs > 8 * 60_000 && x.esperaMs <= 10 * 60_000, `faltam ~10 min dos 15 (5 min atrás): ${x.esperaMs}`);
+  // segunda chamada no mesmo processo: nada
+  assert.equal(await retomarVigiasDoRegistro(e, dep), 0);
+  esquecerRetomadaDaVigia();
 });

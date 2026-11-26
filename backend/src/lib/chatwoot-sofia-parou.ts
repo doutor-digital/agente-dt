@@ -17,8 +17,10 @@
  * memória e, quando a clínica ABRE (ou a janela de 30 min acaba), sai UM resumo com quem AINDA está sem resposta (relido na hora: quem a equipe já
  * atendeu sai da lista).
  *
- * Limite honesto: o relógio da espera e a lista de pendentes são em memória (como o resto da IA do CRM): se o servidor reinicia, o que estava na espera não é
- * avisado. Se a Evolution recusa o aviso que reservou a janela, a unidade libera a janela mas as conversas já seguradas esperam o próximo resumo. O destino é
+ * Limite honesto: o relógio da espera e a lista de pendentes são em memória (como o resto da IA do CRM), mas um deploy NÃO os perde: 90 s depois de subir o servidor reconstrói
+ * a lista do Registro (`sofia_evento`, últimas 24 h, o último evento de cada conversa — `retomarDoRegistro`). O aviso que SAIU também é gravado no Registro
+ * (`alerta-parou`), então a retomada não o repete. As janelas de «já avisada» e da unidade (2 h, 30 min) continuam em memória: um deploy dentro de 30 min de um aviso pode
+ * mandar mais um aviso individual da unidade. Se a Evolution recusa o aviso que reservou a janela, a unidade libera a janela mas as conversas já seguradas esperam o próximo resumo. O destino é
  * `AVISO_CLINICA_AGENDAMENTO_DESTINOS` (JSON por unidade) e a instância é a do mesmo aviso; sem destino não manda e diz no log.
  */
 import type { Unit } from '@prisma/client';
@@ -113,6 +115,8 @@ export interface DepsDoVigia {
   env?: Partial<NodeJS.ProcessEnv>;
   enviar?: typeof enviarPelaEvolutionComResultado;
   simular?: typeof registrarSimulacao;
+  /** grava no Registro que o aviso desta conversa saiu (tipo `alerta-parou`): a retomada do boot não o repete, nem o outro servidor numa troca de líder. Melhor-esforço. */
+  registrarAviso?(slug: string, conversa: number, desfecho: string): Promise<void>;
 }
 
 export type ResultadoDoVigia =
@@ -204,7 +208,7 @@ async function avaliar(m: { slug: string; conversa: number }, deps: DepsDoVigia,
  * Confere AGORA se o paciente segue sem resposta e, se sim, avisa — na hora (horário da equipe e janela da unidade livre) ou deixa para o resumo.
  * Roda `minutos` depois da falha (quem agenda é a porta do chatwoot-ia). Nunca lança.
  */
-export async function conferirSofiaParou(m: { slug: string; conversa: number }, desfecho: string, deps: DepsDoVigia): Promise<ResultadoDoVigia> {
+export async function conferirSofiaParou(m: { slug: string; conversa: number }, desfecho: string, deps: DepsDoVigia, falhouEm?: number): Promise<ResultadoDoVigia> {
   try {
     const env = deps.env ?? process.env;
     const estado = deps.estado(m.slug);
@@ -239,7 +243,7 @@ export async function conferirSofiaParou(m: { slug: string; conversa: number }, 
     const unidadeRecente = daUnidade !== undefined && deps.agora() - daUnidade < ENTRE_AVISOS_DA_UNIDADE_MS;
     if (!dentroDoHorario(unit, new Date(deps.agora())) || unidadeRecente) {
       if (pendentes.size >= MAX_PENDENTES) for (const k of [...pendentes.keys()].slice(0, MAX_PENDENTES / 5)) pendentes.delete(k);
-      pendentes.set(`${prefixo}${m.slug}|${m.conversa}`, { slug: m.slug, conversa: m.conversa, desfecho, deps, desde: deps.agora(), ate: unidadeRecente ? daUnidade! + ENTRE_AVISOS_DA_UNIDADE_MS : 0 });
+      pendentes.set(`${prefixo}${m.slug}|${m.conversa}`, { slug: m.slug, conversa: m.conversa, desfecho, deps, desde: falhouEm ?? deps.agora(), ate: unidadeRecente ? daUnidade! + ENTRE_AVISOS_DA_UNIDADE_MS : 0 });
       agendarVarredura();
       logger.info({ unit: m.slug, conversa: m.conversa, desfecho, motivo: unidadeRecente ? 'a unidade já foi avisada por este motivo há menos de 30 min' : 'fora do horário da equipe' }, `${ID_SOFIA_PAROU}: aviso fica para o resumo`);
       return 'acumulada';
@@ -248,6 +252,7 @@ export async function conferirSofiaParou(m: { slug: string; conversa: number }, 
     const texto = textoDoAviso({ nome: nomeDeGente(lida?.nome), minutos: passou, desfecho, conversa: m.conversa, link: deps.link(m.conversa) });
     const r = await enviarOuSimular({ unit, slug: m.slug, conversas: [m.conversa], texto, estado, destino, deps, env, chaves: [chave, chaveDaUnidade] });
     if (r === 'avisou' || r === 'simulado') pendentes.delete(`${prefixo}${m.slug}|${m.conversa}`);
+    if (r === 'avisou') await deps.registrarAviso?.(m.slug, m.conversa, desfecho).catch(() => undefined);
     if (r === 'avisou') logger.info({ unit: m.slug, conversa: m.conversa, desfecho }, `${ID_SOFIA_PAROU}: aviso enviado`);
     return r;
   } catch (err) {
@@ -378,6 +383,7 @@ export async function descarregarPendentes(): Promise<number> {
         if (r !== 'recusado') {
           resumos++;
           for (const k of chavesDoResumo) pendentes.delete(k);
+          if (r === 'avisou') for (const i of aindaEsperam) await deps.registrarAviso?.(slug, i.conversa, 'resumo').catch(() => undefined);
         }
       } catch (err) {
         logger.warn({ err: String(err) }, `${ID_SOFIA_PAROU}: não consegui montar o resumo`);
@@ -437,7 +443,7 @@ export function paradosDoRegistro(eventos: readonly EventoDoRegistro[]): Array<{
  */
 export async function retomarDoRegistro(d: {
   eventos(desde: Date): Promise<EventoDoRegistro[]>;
-  armar(p: { slug: string; conversa: number; desfecho: string }, esperaMs: number): void | Promise<void>;
+  armar(p: { slug: string; conversa: number; desfecho: string; em: number }, esperaMs: number): void | Promise<void>;
   agora(): number;
   env?: Partial<NodeJS.ProcessEnv>;
 }): Promise<number> {
