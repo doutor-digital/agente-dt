@@ -60,6 +60,7 @@ import { aceitouEsteHorario, ID_SO_COM_SIM, recusaDeAceite } from './chatwoot-ag
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { fusoDaUnidade } from './fuso.js';
+import { ID_PRECO_UNICO, textoDosValores, valoresForaDaConfiguracao } from './chatwoot-preco-unico.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -578,14 +579,19 @@ export interface ResultadoDaSofia {
   agendou?: { data: string; hora: string } | null;
   /** o modelo falhou ou não escreveu resposta, mas as ferramentas já tinham agido: nada a enviar, equipe avisada */
   semResposta?: boolean;
+  /** a etapa em que a conversa ficou no FIM da rodada (a Sofia pode ter marcado: «Agendado»); quem passa para a equipe depois usa esta, não a lida antes */
+  etapa?: string;
+  /** «preço único» LIGADO: a fala do modelo trazia R$ que não é da unidade — NÃO sai; `texto` é o que ela ia dizer (vai na nota para a equipe) */
+  precoSegurado?: { valores: number[]; texto: string } | null;
 }
 
 export interface DepsDaRodada {
   rodarTeste: typeof rodarTesteDaSofia;
   ferramentas?: DepsDasFerramentas;
-  /** só o teste: a chave «só agenda com sim» e o relógio */
+  /** só o teste: a chave «só agenda com sim», o relógio e a chave «preço único» da unidade */
   soComSim?: Estado;
   agora?: () => Date;
+  precoUnico?: Estado;
 }
 
 export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada): Promise<ResultadoDaSofia | null> {
@@ -626,6 +632,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
       passouParaEquipe: estado.passouParaEquipe,
       motivoDaPassagem: estado.motivoDaPassagem ?? null,
       agendou: p.modo === 'ligado' ? estado.agendou : null,
+      etapa: estado.etapa,
       semResposta: true,
     };
   }
@@ -633,6 +640,18 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
 
   // a mesma limpeza da saída que o Kommo faz: sem botões (não há aqui) e com o guardrail de preço, tom e pronto-socorro
   const semBotoes = extrairBotoes(r.reply).texto;
+  // PREÇO ÚNICO (chatwoot-preco-unico.ts): R$ na fala do MODELO que não é da unidade. Ligado: a mensagem é segurada (quem chama avisa a equipe);
+  // «só no papel»: anota o que seguraria e a mensagem sai como sempre; desligado (o padrão): nada.
+  let precoSegurado: ResultadoDaSofia['precoSegurado'] = null;
+  const estadoDoPreco: Estado = deps.precoUnico ?? estadoDaAutomacao(p.unit.slug, ID_PRECO_UNICO, process.env.CHATWOOT_PRECO_UNICO_SLUGS);
+  if (estadoDoPreco !== 'desligado') {
+    const fora = valoresForaDaConfiguracao(semBotoes, p.unit);
+    if (fora.length) {
+      logger.warn({ conversa: p.conversa, unit: p.unit.slug, valores: fora, modo: estadoDoPreco }, 'chatwoot-sofia: preço único — a Sofia citou valor que não é da unidade');
+      if (estadoDoPreco === 'ligado') precoSegurado = { valores: fora, texto: semBotoes };
+      else registrarSimulacao(p.unit, ID_PRECO_UNICO, { leadId: leadDaConversaChatwoot(p.conversa), acao: 'pularia', alvo: 'mensagem', valor: textoDosValores(fora), motivo: 'valor fora da configuração de preços da unidade' });
+    }
+  }
   const resposta = aplicarGuardrail(semBotoes, p.unit, {
     mensagensDoPaciente: p.falas.filter((f) => f.role === 'user').map((f) => f.content),
     consultaMarcada: !!estado.agendou,
@@ -642,7 +661,10 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
   if (!estado.passouParaEquipe && !estado.agendou && (estado.etapa === '' || estado.etapa === 'Novo lead')) {
     try {
       if ((await p.chat.valoresDoAtributo('etapa')).includes('Sofia qualifica')) {
-        if (p.modo === 'ligado') await p.chat.gravarAtributos(p.conversa, { etapa: 'Sofia qualifica' });
+        if (p.modo === 'ligado') {
+          await p.chat.gravarAtributos(p.conversa, { etapa: 'Sofia qualifica' });
+          estado.etapa = 'Sofia qualifica'; // a etapa do fim da rodada (`ResultadoDaSofia.etapa`)
+        }
         acoes.push({ tool: 'mover_etapa', args: { etapa: 'Sofia qualifica', automatico: true } });
       }
     } catch (err) {
@@ -659,5 +681,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
     passouParaEquipe: estado.passouParaEquipe,
     motivoDaPassagem: estado.motivoDaPassagem ?? null,
     agendou: ligado ? estado.agendou : null,
+    etapa: estado.etapa,
+    precoSegurado,
   };
 }

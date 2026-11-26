@@ -33,6 +33,7 @@ export const DESFECHOS: Readonly<Record<string, string>> = {
   'unidade-pausada': 'Não respondeu: a Sofia está desligada nesta unidade',
   'pausada-pela-unidade': 'Não respondeu: a Sofia está pausada na clínica (pausa da recepção ou do painel)',
   'fora-do-horario': 'Não respondeu: fora do horário da Sofia nesta clínica (expediente, feriado ou janela de atendimento)',
+  'preco-segurado': 'Passou para a equipe: a Sofia ia citar um valor fora da tabela da clínica (mensagem segurada)',
 };
 /** motivo de ficar calada (chatwoot-sofia.ts `motivoDeNaoResponder`) → o que a equipe lê */
 export const MOTIVOS: Readonly<Record<string, string>> = {
