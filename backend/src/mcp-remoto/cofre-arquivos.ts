@@ -130,7 +130,7 @@ const comeca = (b: Buffer, ...bytes: number[]) => b.length >= bytes.length && by
  *    nem como script (`#!`). Texto só entra com a extensão .txt (ou sem extensão): ver `validarArquivo`. O download sai como
  *    text/plain com `nosniff`.
  */
-export function detectarTipo(b: Buffer): TipoDeArquivo | null {
+export function detectarTipo(b: Buffer, permitirOfx = true): TipoDeArquivo | null {
   if (comeca(b, 0x25, 0x50, 0x44, 0x46, 0x2d)) return 'pdf';
   if (comeca(b, 0xff, 0xd8, 0xff)) return 'jpg';
   if (comeca(b, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
@@ -147,7 +147,7 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
   }
   const midia = detectarMidia(b);
   if (midia) return midia;
-  if (ehOfx(b)) return 'ofx';
+  if (permitirOfx && ehOfx(b)) return 'ofx';
   if (b.length > 0 && ehTexto(b) && !comecaComoMarcacaoOuScript(b)) return 'txt';
   return null;
 }
@@ -227,7 +227,7 @@ export function nomeSeguro(bruto: string | undefined, tipo: TipoDeArquivo): stri
 }
 
 /** Confere nome + conteúdo. Devolve o tipo e o nome a guardar, ou lança a razão da recusa (em português, para a pessoa). */
-export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffer, tamanhoMax: number): { tipo: TipoDeArquivo; nome: string } {
+export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffer, tamanhoMax: number, permitirOfx = true): { tipo: TipoDeArquivo; nome: string } {
   if (conteudo.length === 0) throw new ErroDeCofre('tipo', 'O arquivo está vazio.', 400);
   if (conteudo.length > tamanhoMax) throw new ErroDeCofre('tamanho', `O arquivo passa do limite de ${Math.floor(tamanhoMax / 1024 / 1024)} MB.`, 413);
   const ultimo = (nomeOriginal ?? '').split(/[\\/]/).pop() ?? '';
@@ -236,7 +236,7 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   const depois = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
   const ext = /^[a-z][a-z0-9]{1,4}$/.test(depois) ? depois : '';
   const extConhecida = Object.hasOwn(TIPO_DA_EXTENSAO, ext);
-  let tipo = detectarTipo(conteudo);
+  let tipo = detectarTipo(conteudo, permitirOfx);
   // CSV é texto: o conteúdo não o distingue de um .txt, então só a extensão .csv (e texto de verdade por baixo) o faz CSV
   if (tipo === 'txt' && ext === 'csv') tipo = 'csv';
   if (!tipo) {
@@ -477,7 +477,8 @@ export class CofreDeArquivos {
     if (!e || e.estado !== 'enviando') throw new ErroDeCofre('estado', 'Este envio não está mais aberto.', 409);
     let caminho: string | undefined;
     try {
-      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, e.tamanhoMax);
+      // o OFX só é reconhecido como tal no envio que o pede: nos demais o arquivo é tratado como sempre foi (texto .txt aceito, XML recusado)
+      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, e.tamanhoMax, Boolean(e.tipos?.includes('ofx')));
       if (e.tipos && !e.tipos.includes(tipo)) {
         throw new ErroDeCofre('tipo', `Para este envio só aceitamos ${e.tipos.map((x) => TIPOS[x].legivel).join(', ')}. Este arquivo é ${TIPOS[tipo].legivel}.`, 415);
       }

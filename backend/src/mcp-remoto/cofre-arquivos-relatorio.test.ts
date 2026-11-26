@@ -38,6 +38,12 @@ test('.ofx com conteúdo que não é OFX e OFX com extensão trocada são recusa
   assert.throws(() => validarArquivo('extrato.pdf', OFX, 1e6), /diz ser \.pdf, mas o conteúdo é extrato OFX/);
 });
 
+test('o envio comum trata o OFX como sempre tratou: .txt com texto é aceito; OFX em XML (marcação) segue recusado', () => {
+  assert.deepEqual(validarArquivo('extrato.txt', OFX, 1e6, false), { tipo: 'txt', nome: 'extrato.txt' });
+  assert.equal(detectarTipo(OFX_XML, false), null);
+  assert.equal(detectarTipo(OFX, false), 'txt');
+});
+
 test('o envio COMUM (sem lista de tipos) não aceita CSV nem OFX, e eles não aparecem entre as extensões aceitas', async () => {
   assert.equal(EXTENSOES_ACEITAS.includes('csv'), false);
   assert.equal(EXTENSOES_ACEITAS.includes('ofx'), false);
@@ -46,7 +52,8 @@ test('o envio COMUM (sem lista de tipos) não aceita CSV nem OFX, e eles não ap
     const cofre = new CofreDeArquivos({ dir: path.join(dir, 'cofre') });
     const p = cofre.pedirEnvio({ userId: 'u', finalidade: 'contrato' });
     const r = cofre.reservar(p.token);
-    await assert.rejects(() => cofre.guardar(r, 'x.ofx', OFX), (e: unknown) => e instanceof ErroDeCofre && /não é aceito neste envio/.test(e.message));
+    // no envio comum o OFX nem é reconhecido como OFX: continua sendo o que sempre foi (texto), e com a extensão .ofx é recusado
+    await assert.rejects(() => cofre.guardar(r, 'x.ofx', OFX), (e: unknown) => e instanceof ErroDeCofre && /diz ser \.ofx, mas o conteúdo é texto/.test(e.message));
     const p2 = cofre.pedirEnvio({ userId: 'u', finalidade: 'contrato' });
     await assert.rejects(() => cofre.guardar(cofre.reservar(p2.token), 'x.csv', CSV), /não é aceito neste envio/);
   } finally {

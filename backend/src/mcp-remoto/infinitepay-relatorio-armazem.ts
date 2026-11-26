@@ -3,6 +3,7 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import type { ArmazemDeRelatorios, ImportacaoGuardada, MovimentoGuardado, NovaImportacao, TipoDeRelatorio, VendaGuardada } from './infinitepay-relatorio.js';
 
 const dia = (d: Date) => d.toISOString().slice(0, 10);
+const dia3 = (isoUtc: string) => new Date(Date.parse(isoUtc) - 3 * 3_600_000).toISOString().slice(0, 10);
 const comoData = (d: string) => new Date(`${d}T00:00:00.000Z`);
 export const FALHA_DO_BANCO_RELATORIO = 'não consegui gravar nem ler os relatórios no banco; nada foi gravado, tente em instantes';
 
@@ -147,7 +148,7 @@ export function relatoriosEmMemoria(): ArmazemDeRelatorios & { importacoesGravad
       return movimentos.filter((m) => m.unidade === f.unidade && (!f.tipo || m.tipo === f.tipo) && (!f.de || m.data >= f.de) && (!f.ate || m.data <= f.ate)).slice(0, f.limite);
     },
     async vendas(f) {
-      return vendas.filter((v) => v.unidade === f.unidade && (!f.de || v.quando.slice(0, 10) >= f.de) && (!f.ate || v.quando.slice(0, 10) <= f.ate)).slice(0, f.limite);
+      return vendas.filter((v) => v.unidade === f.unidade && (!f.de || dia3(v.quando) >= f.de) && (!f.ate || dia3(v.quando) <= f.ate)).slice(0, f.limite);
     },
     async importacoes(u, relatorio) {
       return importacoesGravadas.filter((i) => unidadeDa.get(i.id) === u && (!relatorio || i.relatorio === relatorio)).map((i) => ({ ...i }));

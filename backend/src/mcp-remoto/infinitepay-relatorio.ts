@@ -47,15 +47,22 @@ export interface LinhaDeVenda {
 
 // ----------------------------------------------------------------- texto e números
 
-/** "1.234,56", "1234.56", "-12,5", "R$ 10,00" → centavos; undefined se não for número. */
-export function centavosDoTexto(bruto: string): number | undefined {
+/**
+ * "1.234,56", "1234.56", "-12,5", "R$ 10,00" → centavos; undefined se não for número. Um texto só com PONTO é decimal ("1500.50", como o OFX escreve);
+ * num CSV em português o ponto sozinho é MILHAR ("1.500" = mil e quinhentos): o leiaute de CSV passa `{ pontoEhMilhar: true }`.
+ */
+export function centavosDoTexto(bruto: string, o: { pontoEhMilhar?: boolean } = {}): number | undefined {
   let t = bruto.replace(/[R$\s]/g, '');
   if (!t) return undefined;
   const negativoPorParenteses = /^\(.*\)$/.test(t);
   t = t.replace(/[()]/g, '');
   const temVirgula = t.includes(',');
   const temPonto = t.includes('.');
-  if (temVirgula && temPonto) t = t.lastIndexOf(',') > t.lastIndexOf('.') ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
+  if (o.pontoEhMilhar && temPonto && !temVirgula) {
+    // pt-BR sem vírgula: o ponto só pode ser separador de milhar (grupos de 3 dígitos); "12.5" não é número neste formato
+    if (!/^[+-]?\d{1,3}(\.\d{3})+$/.test(t)) return undefined;
+    t = t.replace(/\./g, '');
+  } else if (temVirgula && temPonto) t = t.lastIndexOf(',') > t.lastIndexOf('.') ? t.replace(/\./g, '').replace(',', '.') : t.replace(/,/g, '');
   else if (temVirgula) t = /^[+-]?\d{1,3}(,\d{3})+$/.test(t) ? t.replace(/,/g, '') : t.replace(',', '.');
   if (!/^[+-]?\d+(\.\d{1,4})?$/.test(t)) return undefined;
   const n = Math.round(Number(t) * 100);
@@ -75,7 +82,7 @@ function diaValido(a: string, m: string, d: string): string | undefined {
 /** O que sai do texto do arquivo e vai para o banco: sem documento, telefone nem e-mail, sem quebra de linha, até 200 caracteres. */
 export function descricaoSegura(bruto: string): string {
   const t = bruto.replace(/\s+/g, ' ').trim().replace(/[^\s@"',;]+@[^\s@"',;]+\.[^\s@"',;]+/g, '[e-mail]');
-  return mascararDigitosSeguidos(t, 10, '[número]').slice(0, 200);
+  return mascararDigitosSeguidos(t, 8, '[número]').slice(0, 200);
 }
 
 // ----------------------------------------------------------------- OFX
@@ -86,6 +93,15 @@ export interface ResultadoDoOfx {
   periodoFim?: string;
   /** lançamentos que o leitor não entendeu (sem data ou valor válidos): contados, nunca adivinhados */
   ignoradas: number;
+}
+
+/** UTF-8 se for UTF-8 válido; senão Windows-1252 (o que o OFX v1 de `CHARSET:1252` e o CSV do Excel usam): os acentos não viram lixo. */
+export function decodificar(b: Buffer): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(b);
+  } catch {
+    return new TextDecoder('windows-1252').decode(b);
+  }
 }
 
 const campoOfx = (bloco: string, tag: string): string | undefined => {
@@ -206,14 +222,28 @@ export interface RelatorioLido {
   periodoFim?: string;
 }
 
-export type LeituraDoArquivo = { reconhecido: true; lido: RelatorioLido } | { reconhecido: false; formato: 'csv'; delimitador: string; cabecalho: string[]; linhasNoArquivo: number };
+export type LeituraDoArquivo =
+  | { reconhecido: true; lido: RelatorioLido }
+  | { reconhecido: false; formato: 'csv'; delimitador: string; cabecalho: string[]; linhasNoArquivo: number; semCabecalho: boolean };
+
+/**
+ * A primeira linha de um CSV desconhecido volta ao chat para o leiaute ser escrito. Se o arquivo NÃO tem cabeçalho (ou tem uma linha de título antes), essa
+ * linha é DADO (nome, documento, valor): então só passam células que parecem nome de coluna (curtas, sem 4 dígitos seguidos nem e-mail, sem número), e se
+ * metade ou mais não parece, nenhuma célula volta e `semCabecalho` diz isso.
+ */
+function cabecalhoParaMostrar(cel: string[]): { cabecalho: string[]; semCabecalho: boolean } {
+  const parece = (c: string) => c.length > 0 && c.length <= 40 && !/\d{4,}/.test(c) && !/@/.test(c) && !/^[-+R$\s\d.,/:()%]+$/.test(c);
+  const boas = cel.filter(parece).length;
+  if (cel.length === 0 || boas * 2 < cel.length) return { cabecalho: [], semCabecalho: true };
+  return { cabecalho: cel.map((c) => (parece(c) ? c : '(coluna sem nome)')).slice(0, 60), semCabecalho: false };
+}
 
 /**
  * Lê o arquivo que chegou. `esperado` é o relatório que a pessoa disse que é: um OFX só pode ser extrato; um CSV só é lido por um leiaute do MESMO
  * relatório. Formato que não se reconhece NÃO vira erro mudo: volta `reconhecido: false` com o cabeçalho.
  */
 export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esperado: TipoDeRelatorio): LeituraDoArquivo {
-  const texto = conteudo.toString('utf8');
+  const texto = decodificar(conteudo);
   if (tipoDoCofre === 'ofx') {
     if (esperado !== 'extrato') throw new ErroDeEntrada(`para ${esperado} use o CSV: o OFX é uma lista de lançamentos (data e valor) e não traz forma de pagamento, parcelas nem taxa. Para o OFX, escolha relatorio="extrato".`);
     const o = lerOfx(texto);
@@ -223,7 +253,7 @@ export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esper
   const csv = lerCsv(texto);
   const cab = csv.cabecalho.map(semAcento);
   const leiaute = LEIAUTES_CSV.find((l) => l.relatorio === esperado && l.reconhece(cab));
-  if (!leiaute) return { reconhecido: false, formato: 'csv', delimitador: csv.delimitador === '\t' ? 'tab' : csv.delimitador, cabecalho: csv.cabecalho.map((c) => c.slice(0, 60)).slice(0, 60), linhasNoArquivo: csv.linhas.length };
+  if (!leiaute) return { reconhecido: false, formato: 'csv', delimitador: csv.delimitador === '\t' ? 'tab' : csv.delimitador, ...cabecalhoParaMostrar(csv.cabecalho), linhasNoArquivo: csv.linhas.length };
   const r = leiaute.ler(csv);
   return {
     reconhecido: true,
@@ -235,11 +265,14 @@ export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esper
 export function chavesDosMovimentos(linhas: LinhaDeMovimento[]): string[] {
   const vistas = new Map<string, number>();
   return linhas.map((l) => {
-    if (l.idExterno) return `id:${l.idExterno}`;
-    const base = createHash('sha256').update([l.data, l.valorCentavos, l.descricao].join('|')).digest('hex').slice(0, 24);
+    // o FITID só é único POR CONTA e por emissor (um contador que recomeça todo mês é comum): a chave leva também a data e o valor, então dois lançamentos
+    // diferentes com o mesmo FITID não se apagam; o mesmo lançamento que reaparece num arquivo que se sobrepõe continua igual e é reconhecido como repetido
+    const base = l.idExterno
+      ? `id:${l.idExterno}|${l.data}|${l.valorCentavos}`
+      : `h:${createHash('sha256').update([l.data, l.valorCentavos, l.descricao].join('|')).digest('hex').slice(0, 24)}`;
     const n = (vistas.get(base) ?? 0) + 1;
     vistas.set(base, n);
-    return `h:${base}#${n}`;
+    return n === 1 && l.idExterno ? base : `${base}#${n}`;
   });
 }
 
@@ -314,8 +347,8 @@ export interface ArmazemDeRelatorios {
 
 export type ResultadoDaImportacao =
   | { importado: false; motivo: 'ja_importado'; aviso: string }
-  | { importado: false; motivo: 'leiaute_desconhecido'; formato: 'csv'; delimitador: string; cabecalho: string[]; linhasNoArquivo: number; aviso: string; proximoPasso: string }
-  | { importado: true; importacao: { id: string; relatorio: TipoDeRelatorio; formato: string; leiaute: string; periodoInicio: string | null; periodoFim: string | null; linhasLidas: number; linhasNovas: number; linhasRepetidas: number; linhasIgnoradas: number }; totais: Record<string, unknown> };
+  | { importado: false; motivo: 'leiaute_desconhecido'; formato: 'csv'; delimitador: string; cabecalho: string[]; semCabecalho: boolean; linhasNoArquivo: number; aviso: string; proximoPasso: string }
+  | { importado: true; aviso?: string; importacao: { id: string; relatorio: TipoDeRelatorio; formato: string; leiaute: string; periodoInicio: string | null; periodoFim: string | null; linhasLidas: number; linhasNovas: number; linhasRepetidas: number; linhasIgnoradas: number }; totais: Record<string, unknown> };
 
 const reais = (c: number) => Math.round(c) / 100;
 
@@ -335,8 +368,11 @@ export async function importarRelatorio(
       formato: 'csv',
       delimitador: leitura.delimitador,
       cabecalho: leitura.cabecalho,
+      semCabecalho: leitura.semCabecalho,
       linhasNoArquivo: leitura.linhasNoArquivo,
-      aviso: 'Não conheço o leiaute deste CSV (nenhum leiaute da InfinitePay está cadastrado ainda). NADA foi gravado e as linhas do arquivo não foram lidas nem guardadas; só o cabeçalho aparece aqui.',
+      aviso: leitura.semCabecalho
+        ? 'Não conheço o leiaute deste CSV (nenhum leiaute da InfinitePay está cadastrado ainda) e a primeira linha NÃO parece um cabeçalho (parece dado), então nem ela aparece aqui. NADA foi gravado. Peça o relatório de novo e confira se o arquivo tem a linha de títulos.'
+        : 'Não conheço o leiaute deste CSV (nenhum leiaute da InfinitePay está cadastrado ainda). NADA foi gravado e as linhas do arquivo não foram lidas nem guardadas; só os nomes das colunas aparecem aqui.',
       proximoPasso: 'Passe este cabeçalho ao João: com ele (e um arquivo de exemplo SEM dados de paciente) o leiaute é cadastrado em LEIAUTES_CSV, e o mesmo arquivo é importado de novo (como nada foi gravado, não conta como repetido).',
     };
   }
@@ -352,6 +388,13 @@ export async function importarRelatorio(
     movimentos: l.movimentos.map((m, i) => ({ ...m, tipo: tipoMov as 'extrato' | 'recebivel', chave: chavesM[i]! })),
     vendas: l.vendas.map((v, i) => ({ ...v, chave: chavesV[i]! })),
   });
+  const repetidas = total - r.novas;
+  let avisoRepetidas: string | undefined;
+  if (repetidas > 0) {
+    const antes = (await armazem.importacoes(a.unidade, a.relatorio)).filter((i) => i.id !== r.id);
+    const sobrepoe = antes.some((i) => i.periodoInicio && i.periodoFim && l.periodoInicio && l.periodoFim && i.periodoInicio <= l.periodoFim && i.periodoFim >= l.periodoInicio);
+    if (!sobrepoe) avisoRepetidas = `${repetidas} linha(s) foram tratadas como repetidas SEM que o período do arquivo encontre outro já importado: pode ser um identificador de lançamento reaproveitado pelo emissor. Confira o total com o app antes de confiar.`;
+  }
   const entradas = l.movimentos.filter((m) => m.valorCentavos > 0).reduce((s, m) => s + m.valorCentavos, 0);
   const saidas = l.movimentos.filter((m) => m.valorCentavos < 0).reduce((s, m) => s + m.valorCentavos, 0);
   const bruto = l.vendas.reduce((s, v) => s + v.valorBrutoCentavos, 0);
@@ -362,6 +405,7 @@ export async function importarRelatorio(
       linhasLidas: total, linhasNovas: r.novas, linhasRepetidas: total - r.novas, linhasIgnoradas: l.ignoradas,
     },
     totais: l.movimentos.length ? { entradas: reais(entradas), saidas: reais(saidas), liquido: reais(entradas + saidas) } : { vendas: l.vendas.length, bruto: reais(bruto) },
+    ...(avisoRepetidas ? { aviso: avisoRepetidas } : {}),
   };
 }
 

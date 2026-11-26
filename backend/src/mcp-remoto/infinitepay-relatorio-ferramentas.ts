@@ -74,6 +74,8 @@ export interface DepsRelatorio {
 }
 
 const iso = (ms: number) => new Date(ms).toISOString();
+/** O dia em Brasília (UTC-3) de um instante ISO: venda das 22h30 de 30/11 grava 01/12 em UTC e é do dia 30. */
+export const diaDeBrasilia = (isoUtc: string): string => new Date(Date.parse(isoUtc) - 3 * 3_600_000).toISOString().slice(0, 10);
 
 function periodo(inicio: string, fim: string) {
   const i = validarData(inicio, 'inicio');
@@ -87,14 +89,21 @@ const unidadeArg = z.string().optional().describe('unidade com InfinitePay (slug
 
 // ----------------------------------------------------------------- leitura
 
-export async function infinitepayExtrato(ctx: ContextoInfinitepay, armazem: ArmazemDeRelatorios, a: { unidade?: string; inicio: string; fim: string; tipo?: 'extrato' | 'recebivel'; maxItens?: number }) {
+export async function infinitepayExtrato(
+  ctx: ContextoInfinitepay,
+  armazem: ArmazemDeRelatorios,
+  a: { unidade?: string; inicio: string; fim: string; tipo?: 'extrato' | 'recebivel'; maxItens?: number },
+  opc: { descricoes?: boolean } = {},
+) {
   const conta = resolverContaInfinitepay(ctx, a.unidade);
   const p = periodo(a.inicio, a.fim);
-  const lidos = await armazem.movimentos({ unidade: conta.slug, ...(a.tipo ? { tipo: a.tipo } : {}), de: p.inicio, ate: p.fim, limite: MAX_LEITURA + 1 });
+  // extrato e recebível NUNCA se misturam num total: o recebível é o dinheiro que depois cai no extrato (somar os dois conta duas vezes)
+  const tipo = a.tipo ?? 'extrato';
+  const lidos = await armazem.movimentos({ unidade: conta.slug, tipo, de: p.inicio, ate: p.fim, limite: MAX_LEITURA + 1 });
   const cortou = lidos.length > MAX_LEITURA;
   const linhas = cortou ? lidos.slice(0, MAX_LEITURA) : lidos;
   const max = Math.min(Math.max(a.maxItens ?? 50, 0), 500);
-  const importacoes = await armazem.importacoes(conta.slug, a.tipo === 'recebivel' ? 'recebiveis' : 'extrato');
+  const importacoes = await armazem.importacoes(conta.slug, tipo === 'recebivel' ? 'recebiveis' : 'extrato');
   const porDia: Record<string, { entradas: number; saidas: number }> = {};
   for (const l of linhas) {
     const g = (porDia[l.data] ??= { entradas: 0, saidas: 0 });
@@ -107,7 +116,9 @@ export async function infinitepayExtrato(ctx: ContextoInfinitepay, armazem: Arma
     periodo: { ...p, dias: diasNoPeriodo(p.inicio, p.fim) },
     resumo: totaisDoExtrato(linhas),
     porDia: Object.fromEntries(Object.entries(porDia).sort(([x], [y]) => (x < y ? -1 : 1))),
-    itens: linhas.slice(0, max).map((l) => ({ data: l.data, ...(l.dataPrevista ? { dataPrevista: l.dataPrevista } : {}), tipo: l.tipo, valor: l.valorCentavos / 100, descricao: l.descricao })),
+    tipo,
+    itens: linhas.slice(0, max).map((l) => ({ data: l.data, ...(l.dataPrevista ? { dataPrevista: l.dataPrevista } : {}), tipo: l.tipo, valor: l.valorCentavos / 100, ...(opc.descricoes ? { descricao: l.descricao } : {}) })),
+    ...(opc.descricoes ? {} : { descricoes: 'omitidas: a descrição do lançamento pode ter o nome de quem pagou e só quem tem permissão de escrita no conector a vê' }),
     itensOmitidos: Math.max(linhas.length - max, 0),
     cobertura: coberturaDoPeriodo(importacoes, p.inicio, p.fim),
     ...(cortou ? { truncado: true, aviso: `mais de ${MAX_LEITURA} lançamentos: divida o período. Os totais estão INCOMPLETOS.` } : {}),
@@ -125,7 +136,7 @@ export async function infinitepayVendas(ctx: ContextoInfinitepay, armazem: Armaz
   const importacoes = await armazem.importacoes(conta.slug, 'vendas');
   const chave: Record<Agrupar, (v: VendaGuardada) => string> = {
     forma: (v) => (v.forma === 'credito' && (v.parcelas ?? 1) > 1 ? 'credito parcelado' : v.forma),
-    dia: (v) => v.quando.slice(0, 10),
+    dia: (v) => diaDeBrasilia(v.quando),
     bandeira: (v) => v.bandeira ?? '(sem bandeira)',
     status: (v) => v.status ?? '(sem status)',
   };
@@ -200,6 +211,8 @@ export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatori
   try {
     guardado = deps.cofre.destinoDe(quem.id, a.envio);
     if (!guardado || guardado.tipo !== DESTINO_RELATORIO) throw new ErroDeEntrada('esse envio não foi pedido por infinitepay_pedir_relatorio: não sei de que unidade é o arquivo. Peça um novo link.');
+    // a unidade é conferida ANTES de abrir: abrir marca o envio como em uso, e uma unidade que saiu do ar não pode deixá-lo preso até vencer
+    resolverContaInfinitepay(ctx, guardado.unidade);
     // `abrir` marca o envio como em uso antes de qualquer espera: uma segunda chamada ao mesmo tempo é recusada (nada de importação em dobro)
     d = await deps.cofre.abrir(quem.id, a.envio);
   } catch (e) {
@@ -227,7 +240,8 @@ export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatori
 
 // ----------------------------------------------------------------- registro
 
-export function registrarLeituraRelatorios(server: McpServer, ctx: ContextoInfinitepay, armazem: ArmazemDeRelatorios, auditar?: Auditar): void {
+/** `descricoes`: quem pode ver a descrição dos lançamentos (pode ter o nome de quem pagou): só quem escreve no conector. Os números todos saem para qualquer um. */
+export function registrarLeituraRelatorios(server: McpServer, ctx: ContextoInfinitepay, armazem: ArmazemDeRelatorios, auditar?: Auditar, opc: { descricoes?: boolean } = {}): void {
   const ro = { readOnlyHint: true, openWorldHint: false };
   server.registerTool(
     'infinitepay_extrato',
@@ -236,17 +250,17 @@ export function registrarLeituraRelatorios(server: McpServer, ctx: ContextoInfin
       description:
         'Lançamentos do EXTRATO (ou dos recebíveis) da InfinitePay de uma unidade num período, com entradas, saídas, líquido e por dia. Vem de relatório que a clínica ' +
         'exportou do app e foi importado (a API da InfinitePay não lê extrato): NÃO é o saldo ao vivo, e todo total traz a COBERTURA: só vale para os períodos importados, ' +
-        'com as lacunas listadas. Sem importação, os números são zero por falta de dado. A descrição pode conter o nome de quem pagou.',
+        'com as lacunas listadas. Sem importação, os números são zero por falta de dado. A descrição do lançamento (pode ter o nome de quem pagou) só aparece para quem tem permissão de escrita.',
       inputSchema: {
         unidade: unidadeArg,
         inicio: z.string().describe('primeiro dia, AAAA-MM-DD'),
         fim: z.string().describe('último dia (incluso), AAAA-MM-DD; até 366 dias'),
-        tipo: z.enum(['extrato', 'recebivel']).optional().describe('padrão: os dois'),
+        tipo: z.enum(['extrato', 'recebivel']).optional().describe('padrão: extrato. Extrato e recebível nunca são somados juntos (o recebível é o dinheiro que depois cai no extrato)'),
         maxItens: z.number().int().min(0).max(500).optional().describe('quantos lançamentos listar (padrão 50; 0 = só os números)'),
       },
       annotations: ro,
     },
-    (args) => executar('infinitepay_extrato', args, auditar, () => infinitepayExtrato(ctx, armazem, args)),
+    (args) => executar('infinitepay_extrato', args, auditar, () => infinitepayExtrato(ctx, armazem, args, opc)),
   );
   server.registerTool(
     'infinitepay_vendas',

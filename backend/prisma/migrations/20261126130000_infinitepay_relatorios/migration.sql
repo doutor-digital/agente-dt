@@ -64,10 +64,16 @@ CREATE INDEX "infinitepay_movimentos_unit_slug_data_idx" ON "infinitepay_movimen
 CREATE UNIQUE INDEX "infinitepay_movimentos_unit_slug_tipo_chave_key" ON "infinitepay_movimentos"("unit_slug", "tipo", "chave");
 
 -- CreateIndex
+CREATE INDEX "infinitepay_movimentos_importacao_id_idx" ON "infinitepay_movimentos"("importacao_id");
+
+-- CreateIndex
 CREATE INDEX "infinitepay_vendas_unit_slug_quando_idx" ON "infinitepay_vendas"("unit_slug", "quando");
 
 -- CreateIndex
 CREATE UNIQUE INDEX "infinitepay_vendas_unit_slug_chave_key" ON "infinitepay_vendas"("unit_slug", "chave");
+
+-- CreateIndex
+CREATE INDEX "infinitepay_vendas_importacao_id_idx" ON "infinitepay_vendas"("importacao_id");
 
 -- AddForeignKey
 ALTER TABLE "infinitepay_movimentos" ADD CONSTRAINT "infinitepay_movimentos_importacao_id_fkey" FOREIGN KEY ("importacao_id") REFERENCES "infinitepay_importacoes"("id") ON DELETE CASCADE ON UPDATE CASCADE;

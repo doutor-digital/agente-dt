@@ -6,7 +6,7 @@ import path from 'node:path';
 import { CofreDeArquivos } from './cofre-arquivos.js';
 import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import {
-  LEIAUTES_CSV, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
+  LEIAUTES_CSV, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, decodificar, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
   type ImportacaoGuardada, type LeiauteCsv,
 } from './infinitepay-relatorio.js';
 import { relatoriosEmMemoria } from './infinitepay-relatorio-armazem.js';
@@ -66,6 +66,19 @@ test('centavosDoTexto: formatos brasileiro e americano, sinal, parênteses e lix
   assert.equal(centavosDoTexto('99999999999'), undefined, 'valor absurdo é recusado');
 });
 
+test('centavosDoTexto com pontoEhMilhar (CSV em português): "1.500" é mil e quinhentos, "12.5" não é número; sem a opção o ponto continua decimal (OFX)', () => {
+  assert.equal(centavosDoTexto('1.500', { pontoEhMilhar: true }), 150000);
+  assert.equal(centavosDoTexto('1.234.567', { pontoEhMilhar: true }), 123456700);
+  assert.equal(centavosDoTexto('12.5', { pontoEhMilhar: true }), undefined);
+  assert.equal(centavosDoTexto('1.500,50', { pontoEhMilhar: true }), 150050);
+  assert.equal(centavosDoTexto('1.500'), 150, 'sem a opção: o ponto é decimal, como o OFX escreve');
+});
+
+test('texto em Windows-1252 (OFX com CHARSET:1252, CSV do Excel) não vira lixo; UTF-8 continua UTF-8', () => {
+  assert.equal(decodificar(Buffer.from([0x54, 0x72, 0x61, 0x6e, 0x73, 0x66, 0x65, 0x72, 0xea, 0x6e, 0x63, 0x69, 0x61])), 'Transferência');
+  assert.equal(decodificar(Buffer.from('Transferência José', 'utf8')), 'Transferência José');
+});
+
 test('descrição: CPF, telefone e e-mail saem mascarados; texto longo é cortado', () => {
   const d = descricaoSegura('PIX de MARIA CPF 529.982.247-25 fone 63 99999-8888 maria@exemplo.com');
   assert.equal(d.includes('52998'), false);
@@ -103,6 +116,15 @@ test('OFX: lançamento sem data ou sem valor é CONTADO como ignorado, nunca adi
   assert.equal(r.linhas.length, 1);
   assert.equal(r.ignoradas, 2);
   assert.throws(() => lerOfx('data;valor\n2026-11-01;10'), /não parece um arquivo OFX/);
+});
+
+test('FITID repetido em lançamentos DIFERENTES (contador que recomeça todo mês) não os apaga; o mesmo lançamento que reaparece continua sendo reconhecido', () => {
+  const nov = lerOfx(OFX_V1.replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'));
+  const dez = lerOfx(OFX_V1.replace(/20261103/, '20261203').replace(/20261104/, '20261204').replace(/20261110/, '20261210').replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'));
+  const kNov = chavesDosMovimentos(nov.linhas);
+  const kDez = chavesDosMovimentos(dez.linhas);
+  assert.equal(kNov.filter((k) => kDez.includes(k)).length, 0, 'mesmo FITID, outro dia: chaves diferentes');
+  assert.deepEqual(chavesDosMovimentos(nov.linhas), kNov, 'o mesmo arquivo dá as mesmas chaves');
 });
 
 test('OFX sem FITID: a chave é o hash da linha com a ORDEM entre linhas iguais, então duas vendas iguais no mesmo dia não viram uma', () => {
@@ -190,8 +212,22 @@ test('CSV de leiaute DESCONHECIDO: nada é gravado, só o cabeçalho volta (nunc
   assert.deepEqual(r.cabecalho, ['Data', 'Valor bruto', 'Taxa', 'Pagador']);
   assert.equal(r.linhasNoArquivo, 2);
   assert.equal(JSON.stringify(r).includes('MARIA'), false, 'nenhuma linha de dados vai na resposta');
+  assert.equal(r.semCabecalho, false);
   assert.equal(arm.importacoesGravadas.length, 0);
   assert.equal(arm.shas.size, 0, 'não conta como importado: depois do leiaute cadastrado entra normalmente');
+});
+
+test('CSV SEM cabeçalho: a primeira linha é dado e NÃO volta ao chat (nem nome, nem documento, nem valor)', async () => {
+  const arm = relatoriosEmMemoria();
+  const csv = '2026-11-03;Maria Souza;123.456.789-01;150,00\n2026-11-04;José Lima;987.654.321-00;80,00';
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(csv), importadoPor: 'x' });
+  assert.equal(r.importado, false);
+  if (r.importado || r.motivo !== 'leiaute_desconhecido') throw new Error('esperava leiaute_desconhecido');
+  assert.equal(r.semCabecalho, true);
+  assert.deepEqual(r.cabecalho, []);
+  const tudo = JSON.stringify(r);
+  for (const dado of ['Maria', '123.456', '150,00', '2026-11-03']) assert.equal(tudo.includes(dado), false, dado);
+  assert.match(r.aviso, /NÃO parece um cabeçalho/);
 });
 
 test('CSV com um leiaute cadastrado: vendas por forma, bruto, líquido e taxa (leiaute de TESTE, não da InfinitePay)', async () => {
@@ -227,6 +263,69 @@ test('CSV com um leiaute cadastrado: vendas por forma, bruto, líquido e taxa (l
     LEIAUTES_CSV.splice(LEIAUTES_CSV.indexOf(fake), 1);
   }
   assert.equal(LEIAUTES_CSV.length, 0, 'o registro de leiautes volta a ficar vazio');
+});
+
+test('vendas por dia usam o dia de BRASÍLIA: a venda das 22h30 de 30/11 (01:30 UTC de 01/12) é do dia 30', async () => {
+  const arm = relatoriosEmMemoria();
+  await arm.gravar({
+    unidade: UNI, relatorio: 'vendas', formato: 'csv', leiaute: 't', sha256: 'x', bytes: 1, periodoInicio: '2026-11-01', periodoFim: '2026-11-30', importadoPor: 'x', movimentos: [],
+    vendas: [{ quando: '2026-12-01T01:30:00.000Z', valorBrutoCentavos: 10000, forma: 'pix', chave: 'v1' }, { quando: '2026-12-01T03:30:00.000Z', valorBrutoCentavos: 500, forma: 'pix', chave: 'v2' }],
+  });
+  const r = await infinitepayVendas(ctxCom(), arm, { inicio: '2026-11-01', fim: '2026-11-30', agruparPor: 'dia' });
+  assert.deepEqual(Object.keys(r.grupos), ['2026-11-30'], 'a venda das 00:30 de 01/12 em Brasília fica de fora do período');
+  assert.equal(r.resumo.bruto, 100);
+});
+
+test('extrato: o padrão é SÓ extrato (recebível nunca soma junto) e a descrição só aparece para quem tem permissão', async () => {
+  const arm = relatoriosEmMemoria();
+  await arm.gravar({
+    unidade: UNI, relatorio: 'extrato', formato: 'ofx', leiaute: 'ofx', sha256: 'a', bytes: 1, periodoInicio: '2026-11-01', periodoFim: '2026-11-30', importadoPor: 'x', vendas: [],
+    movimentos: [{ tipo: 'extrato', data: '2026-11-03', valorCentavos: 10000, descricao: 'PIX MARIA SOUZA', chave: 'a' }],
+  });
+  await arm.gravar({
+    unidade: UNI, relatorio: 'recebiveis', formato: 'csv', leiaute: 't', sha256: 'b', bytes: 1, periodoInicio: '2026-11-01', periodoFim: '2026-11-30', importadoPor: 'x', vendas: [],
+    movimentos: [{ tipo: 'recebivel', data: '2026-11-03', valorCentavos: 10000, descricao: 'mesmo dinheiro', chave: 'b' }],
+  });
+  const padrao = await infinitepayExtrato(ctxCom(), arm, { inicio: '2026-11-01', fim: '2026-11-30' });
+  assert.equal(padrao.resumo.entradas, 100, 'não somou o recebível por cima do extrato');
+  assert.equal(padrao.tipo, 'extrato');
+  assert.equal(JSON.stringify(padrao).includes('MARIA'), false, 'sem permissão de escrita a descrição não sai');
+  assert.match(String(padrao.descricoes), /omitidas/);
+  const dono = await infinitepayExtrato(ctxCom(), arm, { inicio: '2026-11-01', fim: '2026-11-30' }, { descricoes: true });
+  assert.equal(dono.itens[0]!.descricao, 'PIX MARIA SOUZA');
+  const rec = await infinitepayExtrato(ctxCom(), arm, { inicio: '2026-11-01', fim: '2026-11-30', tipo: 'recebivel' });
+  assert.equal(rec.resumo.entradas, 100);
+  assert.equal(rec.cobertura.arquivosImportados, 1, 'a cobertura é a dos arquivos do MESMO tipo');
+});
+
+test('linhas repetidas sem sobreposição de período: a importação avisa (FITID pode ter sido reaproveitado)', async () => {
+  const arm = relatoriosEmMemoria();
+  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  // mesmo conteúdo de linhas, mas num arquivo que declara OUTRO período (dezembro) e portanto não se sobrepõe
+  const outro = OFX_V1.replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215');
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(outro), importadoPor: 'x' });
+  assert.ok(r.importado);
+  if (!r.importado) return;
+  assert.equal(r.importacao.linhasRepetidas, 3);
+  assert.match(String(r.aviso), /SEM que o período do arquivo encontre outro/);
+  const sobreposto = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1.replace('<MEMO>Transferencia enviada', '<MEMO>Transferencia enviada 2')), importadoPor: 'x' });
+  assert.ok(sobreposto.importado);
+  if (sobreposto.importado) assert.equal(sobreposto.aviso, undefined, 'sobreposição legítima não avisa');
+});
+
+test('importar com a unidade fora do ar NÃO deixa o envio preso: o arquivo continua disponível para nova tentativa', async () => {
+  const c = await cenario();
+  try {
+    const ctx = ctxCom();
+    const p = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'extrato' });
+    await c.enviar(p.linkDeEnvio.split('/').pop()!, 'e.ofx', buf(OFX_V1));
+    const semConta = criarContextoInfinitepay(new Map(), { async listar() { return []; }, async porOrderNsu() { return null; } });
+    await assert.rejects(() => importarEnvio(semConta, c.deps, QUEM, { envio: p.envio }), /nenhuma unidade com a InfinitePay/);
+    const r = await importarEnvio(ctx, c.deps, QUEM, { envio: p.envio });
+    assert.ok(r.importado, 'a segunda tentativa funciona: o envio não ficou "em uso"');
+  } finally {
+    c.limpar();
+  }
 });
 
 test('o registro de leiautes de CSV nasce VAZIO: nenhum leiaute da InfinitePay é inventado', () => {
@@ -321,7 +420,8 @@ test('o envio de relatório aceita só os tipos pedidos: PDF, texto qualquer e o
     const vendas = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'vendas' });
     assert.deepEqual(vendas.aceita, ['csv']);
     const t = vendas.linkDeEnvio.split('/').pop()!;
-    await assert.rejects(() => c.enviar(t, 'vendas.ofx', buf(OFX_V1)), /só aceitamos planilha CSV/);
+    // no pedido de vendas (só CSV) o OFX nem é reconhecido como OFX: continua sendo "texto" e a extensão .ofx o recusa
+    await assert.rejects(() => c.enviar(t, 'vendas.ofx', buf(OFX_V1)), /diz ser \.ofx, mas o conteúdo é texto/);
     const ext = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'extrato' });
     await assert.rejects(() => c.enviar(ext.linkDeEnvio.split('/').pop()!, 'x.pdf', Buffer.from('%PDF-1.7\nx')), /só aceitamos extrato OFX/);
   } finally {

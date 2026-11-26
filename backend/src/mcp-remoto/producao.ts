@@ -735,7 +735,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasInfinitepay(server, infinitepay, auditar);
       // criar link da InfinitePay: só quem está na lista de escrita E só se alguma unidade está em INFINITEPAY_ESCRITA_UNIDADES (vazio = a ferramenta nem existe)
       registrarEscritaInfinitepaySePermitido(server, infinitepay, escritaInfinitepay, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
-      registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar);
+      // a descrição do lançamento pode ter o nome de quem pagou: só quem escreve no conector a vê (os números saem para todos)
+      registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar, { descricoes: escritores.has(quem.userId) });
       registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
