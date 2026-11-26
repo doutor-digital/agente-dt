@@ -361,7 +361,7 @@ export function oQueAContabilidadeInforma(perfil?: PerfilFiscal): string[] {
   return [
     ...(perfil ? [] : ['codigoTributacaoNacional (cTribNac, 6 dígitos), a descrição do serviço e, se a prefeitura exigir, a inscrição municipal do prestador']),
     'tributacaoIss e tipoRetencaoIss: o ISS é devido? (1 = operação tributável) e é retido pelo tomador? (1 = não retido, 2 = retido pelo tomador)',
-    'aliquotaIss: a alíquota do ISS em %, ou "parametrizada" se o município está no Sistema Nacional e a alíquota vem de lá (PENDENTE com a contabilidade)',
+    ...(perfil?.aliquotaIss !== undefined ? [] : ['aliquotaIss: a alíquota do ISS em %, ou "parametrizada" se o município está no Sistema Nacional e a alíquota vem de lá (sem ela a nota NÃO sai)']),
     ...(perfil ? [] : ['opcaoSimplesNacional (1 não optante, 2 MEI, 3 ME/EPP)']),
     'regimeApuracaoSimples (regime de apuração do Simples, se ME/EPP) e regimeEspecialTributacao',
     'ibsCbs.situacaoTributaria e ibsCbs.classificacaoTributaria: a Focus os marca como obrigatórios (Reforma Tributária) na documentação do DPS',

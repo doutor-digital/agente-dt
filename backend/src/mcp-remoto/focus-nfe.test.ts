@@ -70,7 +70,7 @@ test('focus_dados_fiscais: ambiente em maiúsculas, token aceito, perfil, o que 
   assert.equal(r.tokenNaFocus, 'aceito');
   assert.deepEqual(r.webhook, { segredoConfigurado: true, cadastradoNaFocus: true });
   assert.ok(JSON.stringify(r).includes('040802'));
-  assert.ok((r.oQueAContabilidadeInforma as string[]).some((x) => /aliquotaIss.*PENDENTE/.test(x)));
+  assert.ok(!(r.oQueAContabilidadeInforma as string[]).some((x) => /aliquotaIss/.test(x)), 'Açailândia tem a alíquota 0 no perfil (decisão do João)');
   assert.ok(!(r.oQueAContabilidadeInforma as string[]).some((x) => /codigoTributacaoNacional/.test(x)), 'o perfil já traz o cTribNac');
   assert.ok(!JSON.stringify(r).includes('/focus-nfe/webhook/') && !JSON.stringify(r).includes('x.exemplo.com'), 'a URL do gatilho (com o segredo) nunca sai');
   assert.equal(m.focus.emitidas.length + m.focus.cancelamentos.length, 0);

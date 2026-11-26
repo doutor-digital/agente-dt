@@ -3,10 +3,12 @@
  * municipal, código de tributação nacional, NBS, texto do serviço). Não é segredo: é o cadastro público da clínica. Fica no código (e não no .env) para a revisão do PR
  * conferir cada dado.
  *
- * O que NÃO está aqui de propósito, e a emissão PEDE a cada nota enquanto a contabilidade não informar: alíquota do ISS, retenção, regime de apuração do Simples,
- * regime especial, situação/classificação do IBS-CBS, consumidor final e indicador do destinatário. Nunca se supõe alíquota nem retenção.
+ * O que NÃO está aqui de propósito, e a emissão PEDE a cada nota enquanto a contabilidade não informar: retenção, regime de apuração do Simples, regime especial,
+ * situação/classificação do IBS-CBS, consumidor final e indicador do destinatário. Nunca se supõe alíquota nem retenção: a alíquota do ISS só tem valor padrão quando a unidade a
+ * traz AQUI, por decisão registrada (Açailândia: 0, decisão do João por ser Simples Nacional); unidade sem `aliquotaIss` no perfil nunca emite sem alíquota informada.
  *
- * Quem informou (26/11/2026): o João, com os dados do cadastro da clínica na Focus/Asaas. A alíquota do ISS segue PENDENTE com a contabilidade.
+ * Quem informou (26/11/2026): o João, com os dados do cadastro da clínica na Focus/Asaas. A alíquota 0 de Açailândia também é decisão do João (Simples Nacional: o ISS vai no DAS);
+ * a contabilidade ainda pode confirmar ou trocar.
  */
 export interface PerfilFiscal {
   cnpj: string;
@@ -24,6 +26,8 @@ export interface PerfilFiscal {
   cnae: string;
   /** codigo_opcao_simples_nacional: 3 = optante ME/EPP (a clínica é do Simples Nacional e, no cadastro público do CNPJ, não é MEI) */
   opcaoSimplesNacional: 1 | 2 | 3;
+  /** alíquota do ISS em % (ou "parametrizada"): só existe quando a unidade a decidiu e registrou aqui; a pessoa pode trocar a cada nota */
+  aliquotaIss?: number | 'parametrizada';
 }
 
 export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
@@ -38,6 +42,8 @@ export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
     descricaoDoServico: 'Serviços de fisioterapia',
     cnae: '8650-0/04',
     opcaoSimplesNacional: 3,
+    // decisão do João (26/11/2026): a clínica é Simples Nacional, então a alíquota do ISS informada na nota é 0 (o ISS é recolhido no DAS)
+    aliquotaIss: 0,
   },
 };
 

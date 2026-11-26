@@ -286,9 +286,12 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     if (retencao === undefined) throw new ErroDeEntrada('fiscal.tipoRetencaoIss: use 1 (não retido) ou 2 (retido pelo tomador)');
     if (retencao === 3) throw new ErroDeEntrada('fiscal.tipoRetencaoIss: retenção pelo intermediário pede os dados do intermediário, que esta versão não integra. Nada foi preparado.');
   }
+  // a alíquota do ISS NUNCA é suposta: vem da pessoa, ou do perfil da unidade quando a unidade a decidiu e registrou lá (Açailândia: 0, Simples Nacional)
   let aliq: number | 'parametrizada' | undefined;
-  if (f.aliquotaIss === undefined) faltam.push('fiscal.aliquotaIss: a alíquota do ISS em % (a contabilidade informa), ou "parametrizada" se a alíquota vem do Sistema Nacional');
-  else aliq = f.aliquotaIss === 'parametrizada' ? 'parametrizada' : aliquota(f.aliquotaIss);
+  const aliqDoPerfil = perfil?.aliquotaIss;
+  const aliqBruta = f.aliquotaIss !== undefined ? f.aliquotaIss : aliqDoPerfil;
+  if (aliqBruta === undefined) faltam.push('fiscal.aliquotaIss: a alíquota do ISS em % (a contabilidade informa), ou "parametrizada" se a alíquota vem do Sistema Nacional');
+  else aliq = aliqBruta === 'parametrizada' ? 'parametrizada' : aliquota(aliqBruta);
 
   const opcaoDada = f.opcaoSimplesNacional !== undefined;
   const opcao = opcaoDada ? inteiroEm(f.opcaoSimplesNacional, [1, 2, 3]) : perfil?.opcaoSimplesNacional;
@@ -401,7 +404,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
       tributacao: 'operação tributável',
       retencao: NOMES_DA_RETENCAO[retencao!],
       aliquota: aliq === 'parametrizada' ? 'PARAMETRIZADA: não enviada; o ambiente nacional define a alíquota' : pct(aliq!),
-      origem: DE_QUEM_PEDIU,
+      origem: f.aliquotaIss !== undefined ? DE_QUEM_PEDIU : `${DO_PERFIL}: decisão registrada para esta unidade (Simples Nacional)`,
     },
     simplesNacional: {
       opcao: `${opcao} — ${NOMES_DA_OPCAO_SIMPLES[opcao!]}`,

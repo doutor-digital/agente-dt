@@ -89,25 +89,34 @@ test('o preparar lista TUDO o que falta de uma vez e não grava nada (alíquota,
     () => prepararNota(m.ctx, m.esc, QUEM, { acao: 'emitir', tomador: { cpf: CPF, nome: NOME }, valor: 100, dataCompetencia: '2026-11-25' }),
     (e: unknown) => {
       assert.ok(e instanceof ErroDeEntrada);
-      for (const campo of ['tributacaoIss', 'tipoRetencaoIss', 'aliquotaIss', 'regimeApuracaoSimples', 'regimeEspecialTributacao', 'ibsCbs.situacaoTributaria', 'ibsCbs.classificacaoTributaria', 'consumidorFinal', 'indicadorDestinatario', 'naoInformarTotalTributos']) {
+      for (const campo of ['tributacaoIss', 'tipoRetencaoIss', 'regimeApuracaoSimples', 'regimeEspecialTributacao', 'ibsCbs.situacaoTributaria', 'ibsCbs.classificacaoTributaria', 'consumidorFinal', 'indicadorDestinatario', 'naoInformarTotalTributos']) {
         assert.ok(e.message.includes(campo), `deveria pedir ${campo}: ${e.message}`);
       }
       assert.match(e.message, /Nada foi preparado/);
       // o que o perfil da unidade já traz NÃO é pedido de novo
       assert.ok(!e.message.includes('codigoTributacaoNacional'));
+      assert.ok(!e.message.includes('aliquotaIss'), 'Açailândia tem a alíquota (0) no perfil por decisão do João');
       return true;
     },
   );
+  // unidade SEM perfil: a alíquota também é perguntada
+  const sem = montar({ semPerfil: true });
+  await assert.rejects(() => prepararNota(sem.ctx, sem.esc, QUEM, { acao: 'emitir', tomador: { cpf: CPF, nome: NOME }, valor: 100, dataCompetencia: '2026-11-25' }), (e: unknown) => /aliquotaIss/.test((e as Error).message) && /codigoTributacaoNacional/.test((e as Error).message));
   assert.equal(m.esc.pendentes.pendentes, 0);
   assert.equal(m.armazem.linhas.length, 0);
   assert.equal(m.focus.emitidas.length, 0);
 });
 
-test('alíquota do ISS: nunca é suposta (sem ela recusa); "parametrizada" não manda alíquota nenhuma; número vai em percentual_aliquota_relativa_municipio', async () => {
-  const m = montar();
-  const semAliquota = pedido();
+// um pedido que dispensa o perfil: unidade SEM perfil fiscal, com tudo o que o perfil traria informado à mão
+const pedidoSemPerfil = (fiscal: Record<string, unknown> = {}): PedidoDePreparo => pedido({ descricao: 'Serviços de fisioterapia', fiscal: { ...pedido().fiscal, codigoTributacaoNacional: '040802', opcaoSimplesNacional: 3, ...fiscal } });
+
+test('alíquota do ISS: unidade SEM alíquota no perfil nunca emite sem ela; "parametrizada" não manda alíquota nenhuma; número vai em percentual_aliquota_relativa_municipio', async () => {
+  const sem = montar({ semPerfil: true });
+  const semAliquota = pedidoSemPerfil();
   delete semAliquota.fiscal!.aliquotaIss;
-  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, semAliquota), /aliquotaIss/);
+  await assert.rejects(() => prepararNota(sem.ctx, sem.esc, QUEM, semAliquota), /aliquotaIss/);
+  assert.equal(sem.focus.emitidas.length, 0);
+  const m = montar();
   const par = await prepararEConfirmar(m, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: 'parametrizada' } }));
   assert.match(JSON.stringify(par.prep.resumo), /PARAMETRIZADA/);
   assert.equal('percentual_aliquota_relativa_municipio' in m.focus.emitidas[0]!.corpo, false);
@@ -115,6 +124,20 @@ test('alíquota do ISS: nunca é suposta (sem ela recusa); "parametrizada" não 
   await prepararEConfirmar(m2, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: 3.5 } }));
   assert.equal(m2.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 3.5);
   for (const ruim of [-1, 101, 2.00001] as number[]) await assert.rejects(() => prepararNota(montar().ctx, montar().esc, QUEM, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: ruim } })), /aliquotaIss|0 a 100|casas/);
+});
+
+test('Açailândia: a alíquota do ISS é 0 por decisão do João (Simples Nacional), vem do perfil, aparece no resumo com a origem e a pessoa pode trocar', async () => {
+  const m = montar();
+  const f = pedido().fiscal!;
+  delete f.aliquotaIss;
+  const { prep } = await prepararEConfirmar(m, pedido({ fiscal: f }));
+  assert.equal(m.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 0);
+  const iss = (prep.resumo as { iss: { aliquota: string; origem: string } }).iss;
+  assert.equal(iss.aliquota, '0%');
+  assert.match(iss.origem, /perfil fiscal.*Simples Nacional/);
+  const outra = montar();
+  await prepararEConfirmar(outra, pedido({ fiscal: { ...f, aliquotaIss: 2 } }));
+  assert.equal(outra.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 2, 'quem pede pode trocar');
 });
 
 test('retenção e tributação: só os valores documentados; o que esta versão não integra é recusado em português', async () => {
@@ -157,7 +180,8 @@ test('o perfil de Açailândia tem os dados que o João e a contabilidade inform
     { cnpj: p.cnpj, ibge: p.municipioIbge, im: p.inscricaoMunicipal, cTribNac: p.codigoTributacaoNacional, nbs: p.codigoNbs, texto: p.descricaoDoServico, cnae: p.cnae },
     { cnpj: '63130582000140', ibge: '2100055', im: '1000000007142', cTribNac: '040802', nbs: '123019200', texto: 'Serviços de fisioterapia', cnae: '8650-0/04' },
   );
-  assert.ok(!JSON.stringify(p).toLowerCase().includes('aliquota'), 'a alíquota do ISS NÃO está no perfil: segue pendente com a contabilidade');
+  assert.equal(p.aliquotaIss, 0, 'alíquota 0: decisão do João (Simples Nacional)');
+  assert.deepEqual(Object.keys(PERFIS_FISCAIS), [UNI], 'só Açailândia tem perfil: as outras unidades nunca emitem sem alíquota informada');
 });
 
 // ----------------------------------------------------------------- ambiente
