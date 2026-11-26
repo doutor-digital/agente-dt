@@ -45,10 +45,10 @@ const D = String.raw`(?![\p{L}\p{N}_])`;
 const HORA_DEPOIS = String.raw`(?![ \t]*,?[ \t]+(?:(?:[àa]s?|por[ \t]+volta[ \t]+d[ae]s?|pelas?)[ \t]+\d{1,2}|\d{1,2}[ \t]*(?:h|:|horas?)|\d{1,2}[ \t]+da[ \t]+(?:manh[ãa]|tarde|noite)))`;
 
 /**
- * "Quando" do adiamento que não deixa dúvida: "mais tarde", "depois", "daqui a pouco", "em 2 horas", "quando puder".
+ * "Quando" do adiamento que não deixa dúvida: "mais tarde", "depois", "daqui a pouco", "em 2 horas", "quando puder". "Te aviso quando chegar aí" NÃO é adiamento (é aviso de chegada); "quando chegar eu retorno" e "aviso quando chegar o momento" são.
  * "Confirmo na quinta" / "confirmo à tarde" NÃO entram aqui: podem ser a confirmação do próprio horário.
  */
-const QUANDO = String.raw`(?:mais[ \t]+tarde|mais[ \t]+pra[ \t]+frente|depois|logo[ \t]+mais|daqui[ \t]+(?:a[ \t]+)?(?:pouco|\d+|uma?|duas?|alguns?)|em[ \t]+(?:\d+|uma?|duas?|alguns?)[ \t]+(?:minutos?|horas?|dias?)|ainda[ \t]+hoje|hoje[ \t]+mais[ \t]+tarde|quando[ \t]+(?:eu[ \t]+)?(?:puder|der|souber|chegar|ver|sair|conseguir))`;
+const QUANDO = String.raw`(?:mais[ \t]+tarde|mais[ \t]+pra[ \t]+frente|depois|logo[ \t]+mais|daqui[ \t]+(?:a[ \t]+)?(?:pouco|\d+|uma?|duas?|alguns?)|em[ \t]+(?:\d+|uma?|duas?|alguns?)[ \t]+(?:minutos?|horas?|dias?)|ainda[ \t]+hoje|hoje[ \t]+mais[ \t]+tarde|quando[ \t]+(?:eu[ \t]+)?(?:puder|der|souber|ver|sair|conseguir)|quando[ \t]+chegar[ \t]+(?:o[ \t]+momento|a[ \t]+hora|o[ \t]+dia))`;
 /** O mesmo, mais o dia/período — só quando é ELE avisando a ELA ("te confirmo na parte da tarde"): o "te" mostra que a resposta é uma promessa. */
 const QUANDO_PERIODO = String.raw`(?:${QUANDO}|amanh[ãa]|(?:nesta|nessa|na)[ \t]+semana|na[ \t]+parte[ \t]+d[ae][ \t]+(?:manh[ãa]|tarde|noite)|(?:[àa]|na|no|ao|pela)[ \t]+(?:tarde|noite|manh[ãa])|(?:no|ao)[ \t]+(?:fim|final)[ \t]+d[oae][ \t]+(?:dia|tarde|manh[ãa]))${HORA_DEPOIS}`;
 
@@ -57,8 +57,8 @@ const QUANDO_PERIODO = String.raw`(?:${QUANDO}|amanh[ãa]|(?:nesta|nessa|na)[ \t
  * Depois do "quando" ("depois QUE eu falar com meu marido", "depois DE ver a agenda", "depois DO almoço") a oração é só o quando: não bloqueia.
  */
 const DETALHE_DEPOIS_DO_VERBO = String.raw`(?![ \t]+(?:se|sobre|quanto|qual|quais|quem|como|onde|que|o|a|os|as|do|da|dos|das|de|pelo|pela)${D})`;
-// "te confirmo depois SE DER", "…se puder", "…se eu conseguir" são o quando (condicional), não um detalhe: adiam.
-const DETALHE_DEPOIS_DO_QUANDO = String.raw`(?![ \t]+(?:se(?![ \t]+(?:der|puder|conseguir|eu[ \t]+(?:puder|conseguir)|poss[ií]vel|tiver|dar))|sobre|quanto|qual|quais|quem|como|onde)${D})`;
+// "te confirmo depois SE DER", "…se puder", "…se eu conseguir" são o quando (condicional), não um detalhe: adiam. "…se tiver dúvida" é detalhe ("Te chamo depois se tiver dúvida" não adia).
+const DETALHE_DEPOIS_DO_QUANDO = String.raw`(?![ \t]+(?:se(?![ \t]+(?:der|puder|conseguir|eu[ \t]+(?:puder|conseguir)|poss[ií]vel|dar))|sobre|quanto|qual|quais|quem|como|onde)${D})`;
 
 /** "ver/olhar/conferir/checar" + isto NÃO é adiar a confirmação: é olhar uma coisa concreta ("vou ver o caminho", "vou ver vocês quinta"). */
 const OBJETO_CONCRETO = String.raw`(?![ \t]+(?:(?:o|a|os|as|um|uma|meu|minha)[ \t]+)?(?:endere[çc]o|mapa|local|localiza|valor|pre[çc]o|pix|chave|link|exames?|rua|cl[ií]nica|fotos?|v[ií]deos?|site|instagram|whatsapp|n[uú]mero|pagamento|comprovante|caminho|[ôo]nibus|hor[áa]rio\s+d[oe]|voc[eê]s?|vcs?|sinal|boleto|dinheiro)${D})`;
@@ -71,7 +71,7 @@ const ADIA = new RegExp(
     // "confirmo depois", "vou confirmar mais tarde", "posso confirmar depois?", "retorno mais tarde", "dou um retorno daqui a pouco"
     `${E}(?:confirmo|confirmar|aviso|avisar|falo|retorno|respondo|responder|chamo|dou[ \\t]+(?:um[ \\t]+)?retorno)[ \\t]+(?:aqui[ \\t]+|de[ \\t]+novo[ \\t]+|ainda[ \\t]+)?${QUANDO}${DETALHE_DEPOIS_DO_QUANDO}`,
     // "depois te falo", "mais tarde te confirmo", "amanhã eu te aviso" (não "amanhã às 15h te aviso")
-    `${E}(?:${QUANDO}|amanh[ãa]${HORA_DEPOIS})[ \\t]+(?:eu[ \\t]+)?(?:te[ \\t]+|lhe[ \\t]+)?(?:confirmo|aviso|falo|retorno|respondo|chamo|confirmar|avisar)${DETALHE_DEPOIS_DO_VERBO}${D}`,
+    `${E}(?:${QUANDO}|quando[ \\t]+(?:eu[ \\t]+)?chegar|amanh[ãa]${HORA_DEPOIS})[ \\t]+(?:eu[ \\t]+)?(?:te[ \\t]+|lhe[ \\t]+)?(?:confirmo|aviso|falo|retorno|respondo|chamo|confirmar|avisar)${DETALHE_DEPOIS_DO_VERBO}${D}`,
     // "vou confirmar com meu marido" (pessoa, não "com vocês")
     `${E}(?:vou|vamos|irei|preciso|tenho[ \\t]+que|tenho[ \\t]+de)[ \\t]+(?:s[oó][ \\t]+|antes[ \\t]+)?confirmar[ \\t]+com[ \\t]+(?:o|a|os|as|meu|minha|ele|ela)${D}`,
     // "vou ver e te aviso", "vou conferir", "vou ver com meu marido", "vou ver aqui", "preciso checar" (não "vou ver o endereço")
@@ -86,26 +86,32 @@ const ADIA = new RegExp(
 );
 
 /**
- * COMO ELE DIZ QUE CONFIRMOU (no que sobra da mensagem depois de tirar o trecho que adia):
+ * COMO ELE DIZ QUE CONFIRMOU (no que sobra da mensagem depois de tirar o trecho que adia). O aceite fraco NUNCA vence uma DECISÃO de ver
+ * ("Beleza, vou ver com meu marido e te confirmo", "Ótimo!!! Já vou ver e dou o retorno", "Show, deixa eu ver aqui" adiam), só com dia/hora:
  *  - FORTE ("sim", "confirmo", "confirmado", "fechado", "pode ser", "pode marcar", "marca", "paguei", "comprovante", o botão "Confirmar"):
- *    vence em qualquer caso. "confirmo" NÃO vale depois de "te/lhe/não" ("e TE confirmo" é o adiamento que sobrou; "NÃO confirmo" é recusa)
- *    e "pode ser?" com interrogação é pergunta, não aceite.
+ *    vence em qualquer caso (e "te/lhe confirmo" + dia da semana ou hora é o aceite do horário). "confirmo" NÃO vale depois de "te/lhe/não" ("e TE confirmo" é o adiamento que sobrou; "NÃO confirmo" é recusa)
+ *    e "pode ser quinta 15h?" com interrogação é pergunta, não aceite.
  *  - AFIRMAÇÃO ("beleza", "ótimo", "perfeito", "tudo certo", "pode deixar", "isso mesmo"; e no começo da mensagem "tá bom", "certo", "isso",
- *    "show", "bora", "uhum"): vence o adiamento de DETALHE ("Beleza! Te aviso quando chegar", "Ótimo! Vou ver se consigo chegar mais cedo"),
- *    mas NÃO o adiamento da própria confirmação ("Beleza, te confirmo mais tarde" continua adiando).
- *  - OK ("ok", "okay", "combinado", 👍): só vence junto com o dia ou a hora ("Ok 👍 quinta 15h. Vou ver aqui no trabalho"); "Ok, vou ver
- *    aqui e te retorno" adia.
+ *    "show", "bora", "uhum"): só vence COM dia da semana ou hora na mesma mensagem ("Perfeito, quinta 15h. Depois te retorno com o nome"), e nunca
+ *    a promessa de confirmar depois ("Beleza, te confirmo mais tarde"). Sem horário, "Beleza, vou ver com meu marido e te confirmo" adia.
+ *  - OK ("ok", "okay", "combinado" no começo da mensagem, 👍): igual à afirmação, e SEM negação ("Ok, hoje não dá" não é aceite).
  */
 const FORTE = new RegExp(
-  `${E}(?:sim|(?<!(?:te|lhe|n[ãa]o)[ \\t]+)confirmo|confirmad[oa]|fechad[oa]|pode[ \\t]+ser(?![ \\t]*\\?)|pode[ \\t]+(?:marcar|agendar|reservar|confirmar|fechar)|marca|paguei|comprovante)${D}|^[ \\t]*confirmar[ \\t]*[.!]*[ \\t]*$`,
+  `${E}(?:sim|(?<!(?:te|lhe|n[ãa]o)[ \\t]+)confirmo|confirmad[oa]|fechad[oa]|pode[ \\t]+ser(?![^\\n]*\\?)|pode[ \\t]+(?:marcar|agendar|reservar|confirmar|fechar)|marca|paguei|comprovante)${D}|^[ \\t]*confirmar[ \\t]*[.!]*[ \\t]*$`,
   'iu',
 );
+/** "Te/lhe confirmo" + um DIA da semana ou uma HORA ("Te confirmo quinta 15h", "Lhe confirmo para quinta", "Te confirmo amanhã às 15h") é o aceite do horário. "Te confirmo amanhã" sozinho continua adiando. */
+const CONFIRMO_COM_HORARIO = new RegExp(
+  `${E}(?:te|lhe)[ \\t]+confirmo[ \\t]+(?:(?:para|pra|na|no|em|d[oa]|[àa]s?)[ \\t]+)?(?:(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)(?:-feira)?|dia[ \\t]+\\d{1,2}|(?:amanh[ãa][ \\t]*,?[ \\t]+)?(?:[àa]s?[ \\t]+)?\\d{1,2}(?:[ \\t]*(?:h|:\\d\\d|horas?)${D})?)`,
+  'iu',
+);
+const NEGA = new RegExp(`${E}n[ãa]o${D}`, 'iu');
 const AFIRMA_EM_QUALQUER_LUGAR = new RegExp(`${E}(?:beleza|blz|[óo]timo|perfeito|tudo[ \\t]+certo|isso[ \\t]+mesmo|pode[ \\t]+deixar)${D}`, 'iu');
 const AFIRMA_NO_COMECO = new RegExp(`^[^\\p{L}\\p{N}]*(?:t[áa][ \\t]+bom|certo|isso|show|bora|uhum)${D}`, 'iu');
-const OK = new RegExp(`${E}(?:ok|okay|combinado)${D}|👍`, 'iu');
-/** Um dia ou uma hora: "quinta", "amanhã", "dia 27", "15h", "15:30", "às 3". */
+const OK = new RegExp(`^[^\\p{L}\\p{N}]*(?:ok|okay|combinado)${D}|👍`, 'iu');
+/** Um dia da semana ou uma hora: "quinta", "dia 27", "15h", "15:30", "às 3". "Amanhã" e "hoje" sozinhos NÃO contam ("vou ver e amanhã cedo te mando mensagem, blz"). */
 const DIA_OU_HORA = new RegExp(
-  `${E}(?:(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)(?:-feira)?|amanh[ãa]|hoje|dia[ \\t]+\\d{1,2}|\\d{1,2}[ \\t]*(?:h|:\\d\\d|horas?)|[àa]s[ \\t]+\\d{1,2})${D}`,
+  `${E}(?:(?:segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado|domingo)(?:-feira)?|dia[ \\t]+\\d{1,2}|\\d{1,2}[ \\t]*(?:h|:\\d\\d|horas?)|[àa]s[ \\t]+\\d{1,2})${D}`,
   'iu',
 );
 
@@ -124,16 +130,21 @@ export function adiouConfirmacao(falaDoPaciente: string | null | undefined): str
     const achados = [...linha.matchAll(ADIA)];
     const resto = achados.reduce((txt, m) => txt.replace(m[0], ' '), linha);
     const adiaAConfirmacao = achados.some((m) => /confirm/i.test(m[0]));
-    const forte = FORTE.test(resto);
-    const afirma = !adiaAConfirmacao && (AFIRMA_EM_QUALQUER_LUGAR.test(resto) || AFIRMA_NO_COMECO.test(resto));
-    const ok = !adiaAConfirmacao && OK.test(resto);
     const comHorario = DIA_OU_HORA.test(resto);
-    if (forte || afirma || (ok && comHorario)) {
+    const nega = NEGA.test(resto);
+    const forte = FORTE.test(resto) || CONFIRMO_COM_HORARIO.test(resto);
+    // Aceite FRACO ("beleza", "ótimo", "tá bom", "ok", 👍…): só vale com dia da semana ou hora na mesma mensagem ("Ok 👍 quinta 15h. Vou ver aqui no
+    // trabalho"), sem negação ("Ok, hoje não dá") e sem ser a própria promessa de confirmar depois ("Beleza, te confirmo mais tarde"). Sem horário,
+    // "Beleza, vou ver com meu marido e te confirmo" / "Blz vou ver aqui a situação" são adiamento, e um "ótimo dia" no fim da conversa não desfaz o que veio antes.
+    const fraco =
+      !adiaAConfirmacao && !nega && comHorario && (AFIRMA_EM_QUALQUER_LUGAR.test(resto) || AFIRMA_NO_COMECO.test(resto) || OK.test(resto));
+    if (forte || fraco) {
       adiou = null; // ele confirmou (nesta mensagem, ou depois de adiar numa anterior)
       if (comHorario) aceitouComHorario = true;
       continue;
     }
-    if (achados.length > 0 && !aceitouComHorario) adiou = achados[0][0].slice(0, 80);
+    // O aceite anterior COM horário vence um "vou ver…" posterior, mas não uma nova promessa de confirmar depois ("Ah, espera, te confirmo mais tarde").
+    if (achados.length > 0 && (!aceitouComHorario || adiaAConfirmacao)) adiou = achados[0][0].slice(0, 80);
   }
   return adiou;
 }
@@ -172,7 +183,7 @@ export function travarAgendamentoAdiado(
       const modo = estado();
       if (modo === 'desligado' || !turno.adiou) return original(args as never, ...(resto as never[]));
       if (modo === 'seco') {
-        // A marcação começa ANTES de esperar o registro: o gravador lento (ou que falha) não atrasa nem derruba a consulta.
+        // A marcação começa ANTES do registro e o retorno não o espera: o gravador lento (ou que falha) não atrasa nem derruba a consulta.
         const marcando = original(args as never, ...(resto as never[]));
         const registro = Promise.resolve()
           .then(() =>
@@ -183,11 +194,8 @@ export function travarAgendamentoAdiado(
             }),
           )
           .catch(() => undefined);
-        try {
-          return await marcando;
-        } finally {
-          await registro;
-        }
+        void registro; // o retorno NÃO espera o gravador: lento ou fora do ar, a consulta já foi marcada e o histórico entra quando puder
+        return marcando;
       }
       await recorder.step({
         kind: 'ERROR',

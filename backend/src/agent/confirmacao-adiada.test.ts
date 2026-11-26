@@ -270,10 +270,8 @@ test('sondas novas do sênior: aceite sem "sim/confirmo/pode ser" + "vou ver…"
   for (const fala of [
     'Beleza! Te aviso quando chegar aí',
     'Ok, combinado, quinta às 15h. Qualquer coisa depois te chamo',
-    'Ótimo! Vou ver se consigo chegar mais cedo',
     'Tá bom, quinta 15h. Vou olhar aqui como faço com as crianças',
     'Show, quinta 15h. Vou checar a rota',
-    'Tudo certo! Preciso ver se tenho exames, mas eu vou',
     'Pode deixar, quinta estarei aí. Vou ver com meu marido quem me leva',
     'Perfeito, quinta 15h então. Depois te retorno com o nome completo',
     'Isso, 15h. Te falo amanhã o nome da minha mãe',
@@ -295,6 +293,9 @@ test('sondas novas do sênior: aceite sem "sim/confirmo/pode ser" + "vou ver…"
     'Vou conferir minha agenda e te aviso',
     'Preciso ver com meu chefe primeiro',
     'Ok, vou ver isso depois',
+    // aceite no começo + "vou ver…" SEM dia nem hora: a decisão de ver vence (3ª rodada do sênior, #490)
+    'Ótimo! Vou ver se consigo chegar mais cedo',
+    'Tudo certo! Preciso ver se tenho exames, mas eu vou',
   ]) {
     assert.ok(adiouConfirmacao(fala), fala);
   }
@@ -332,4 +333,84 @@ test('seco: a marcação começa ANTES do registro; gravador lento ou que falha 
     () => 'seco',
   );
   assert.equal(await falha.func({ hora: '15:00' } as never), 'Consulta marcada');
+});
+
+// ── 3ª rodada do sênior (#490): a camada de afirmação abriu buraco para adiamento real ───────────────────────────────────────────────
+
+test('aceite fraco + "vou ver/preciso/tenho/deixa…" sem dia nem hora ADIA (reais de 90 dias e sondas do sênior)', () => {
+  for (const fala of [
+    'Blz vou ver aqui a situação',
+    'Ta bom vou ver',
+    'Ótimo!!! Já vou ver e dou o retorno assim que possível',
+    'Então está ótimo vou ver o que eu faço aqui aí eu aviso vocês',
+    'Beleza, vou ver com meu marido e te confirmo',
+    'Ótimo, vou ver aqui e te retorno',
+    'Perfeito, vou ver minha agenda e te aviso',
+    'Tá bom, deixa eu ver com meu chefe e te falo',
+    'Certo, vou ver e te confirmo mais tarde',
+    'Tudo certo, só vou ver com meu marido e já te falo',
+    'Isso mesmo, vou conferir minha agenda e te aviso',
+    'Show, deixa eu ver aqui',
+    'Pode deixar, preciso ver com meu marido primeiro',
+    'Ok, vou ver aqui e te retorno',
+    'Não confirmo agora, te falo depois',
+    'Te confirmo depois se der',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+});
+
+test('o aceite anterior com horário NÃO anula uma nova promessa de confirmar depois', () => {
+  for (const fala of [
+    'Quinta 15h ótimo\nTe confirmo na parte da tarde',
+    'Sim, quinta às 15h\nAh, espera, te confirmo mais tarde',
+    'Pode ser quinta 15h?\nVou ver com meu marido e te aviso', // pergunta, não aceite
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+});
+
+test('"te/lhe confirmo" + dia ou hora é aceite; "Te chamo depois se tiver dúvida" é detalhe', () => {
+  for (const fala of [
+    'Vou ver com meu marido e te aviso\nTe confirmo quinta 15h',
+    'Vou ver\nLhe confirmo para quinta',
+    'Vou ver com meu marido\nTe confirmo amanhã às 15h',
+    'Quinta 15h\nTe chamo depois se tiver dúvida',
+    'Te chamo depois se tiver dúvida',
+  ]) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+  assert.ok(adiouConfirmacao('Te confirmo amanhã')); // sem dia da semana nem hora: adia
+});
+
+test('"Ok/👍 + dia" com negação não é aceite', () => {
+  assert.ok(adiouConfirmacao('Ok, hoje não dá\nVou ver com meu chefe'));
+  assert.ok(adiouConfirmacao('Ok 👍 quinta não dá, vou ver com meu chefe'));
+  assert.equal(adiouConfirmacao('Ok 👍 quinta 15h\nVou ver com meu chefe'), null);
+});
+
+test('seco: o retorno NÃO espera o gravador lento (a consulta já foi marcada)', async () => {
+  const tool = new DynamicStructuredTool({ name: 'agendar_consulta', description: 't', schema: z.object({ hora: z.string() }), func: async () => 'Consulta marcada' });
+  const [t] = travarAgendamentoAdiado(
+    [tool],
+    { adiou: 'vou confirmar mais tarde' },
+    { step: () => new Promise<void>((r) => setTimeout(r, 1500)) } as never,
+    () => 'seco',
+  );
+  const t0 = Date.now();
+  assert.equal(await t.func({ hora: '15:00' } as never), 'Consulta marcada');
+  assert.ok(Date.now() - t0 < 500, `levou ${Date.now() - t0} ms`);
+});
+
+test('"quando chegar": "te aviso quando chegar aí" é aviso de chegada; "quando chegar eu retorno" e "quando chegar o momento" adiam', () => {
+  assert.equal(adiouConfirmacao('Beleza! Te aviso quando chegar aí'), null);
+  assert.ok(adiouConfirmacao('Eu vô ver cm ele quando chegar eu retorno obrigada'));
+  assert.ok(adiouConfirmacao('Eu aviso quando chegar o momento certo'));
+});
+
+test('"amanhã cedo" sozinho não é horário; "um ótimo dia" no fim não desfaz o adiamento anterior', () => {
+  assert.ok(adiouConfirmacao('Faz assim eu vou ver e amanhã cedo te mando mensagem blz'));
+  assert.ok(adiouConfirmacao('Ok, obrigada!\nÉ para mim mesma.\nMas vou ver qdo posso ir e ligo para marcarmos\nGrata pelo retorno e um ótimo dia!'));
+  assert.ok(adiouConfirmacao('Antes da sexta vou decidir o dia pois tenho que ver umas coisa aqui ainda, mais vamos nos falando ok'));
+  assert.ok(adiouConfirmacao('Tá bom porque com meu esposo depois te falo'));
 });
