@@ -61,6 +61,7 @@ import { aoLinkPago, emitirLinkPago } from '../lib/link-pago.js';
 import { configAvisoRhDoAmbiente, ouvinteDoCaixa } from '../lib/caixa-aviso-rh.js';
 import { montarRotasDoCaixa, tokenDoServicoDoAmbiente } from './caixa-interno.js';
 import { JanelaDeContagem } from './limites.js';
+import { montarRotasDaNotaDoCaixa } from './caixa-interno-nota.js';
 import { registrarInfinitepayDoServidor } from '../lib/infinitepay-servidor.js';
 import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from './infinitepay-escrita.js';
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
@@ -669,9 +670,11 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // a Sofia cobra o sinal por este MESMO contexto e estado (mesma trava por unidade, mesmo armazém), mas com a origem `sofia`: livro, tetos e limite por hora PRÓPRIOS (ver infinitepay-escrita.ts e lib/sinal-infinitepay.ts)
   registrarInfinitepayDoServidor({ ctx: infinitepay, esc: escritaInfinitepay });
   // O Caixa (a função do RH em sistemas-dd) pede link por aqui (a nota fiscal, em outro PR). Tudo desligado por padrão: sem CAIXA_SERVICO_TOKEN as rotas não existem; sem CAIXA_LINK_UNIDADES nenhuma unidade cria link (o status e o aviso de links já enviados seguem valendo); sem CAIXA_RH_WEBHOOK_URL + CAIXA_RH_WEBHOOK_SEGREDO o pagamento não é avisado ao RH (ele puxa o status ao abrir o lançamento). Ver mcp-remoto/caixa-interno.ts.
-  // UM contador de erros de assinatura por IP para todas as portas do Caixa (link e, em outro PR, nota)
+  // UM contador de erros de assinatura por IP para todas as portas do Caixa (link e nota)
   const falhasDoCaixa = new JanelaDeContagem(30, 10 * 60_000);
   const rotasDoCaixa = montarRotasDoCaixa(app, { token: tokenDoServicoDoAmbiente(), alertar: (texto) => enviarTelegram(texto), log: logger }, { falhasPorIp: falhasDoCaixa });
+  // a NOTA fiscal do Caixa (CAIXA_NOTA_UNIDADES + um emissor registrado; sem emissor responde 501): mesma porta de serviço e mesmo contador
+  if (rotasDoCaixa) montarRotasDaNotaDoCaixa(app, { token: tokenDoServicoDoAmbiente(), alertar: (texto) => enviarTelegram(texto), log: logger }, { falhasPorIp: falhasDoCaixa });
   const avisoRh = configAvisoRhDoAmbiente();
   if (rotasDoCaixa && avisoRh) {
     aoLinkPago(ouvinteDoCaixa({ config: avisoRh, armazem: escritaInfinitepay.armazem, alertar: (texto) => enviarTelegram(texto), log: logger }));
