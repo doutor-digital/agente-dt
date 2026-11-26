@@ -659,6 +659,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sinal-pix-worker.ts',
   },
   {
+    id: 'sinal-confirmacao-paciente',
+    chave: 'SINAL_CONFIRMACAO_PACIENTE_SLUGS',
+    nome: 'Confirmação do sinal ao paciente (Sofia)',
+    oQueFaz:
+      'Quando o sinal de R$ 50 é pago (pelo Pix do Asaas ou pelo link da InfinitePay), a Sofia manda UMA mensagem curta pelo Kommo: «Recebemos seu sinal de R$ 50 ✅ Sua consulta está confirmada para <dia, data> às <hora> na Doutor Hérnia <cidade>. Até lá!». Sem a data da consulta, a frase sai sem essa parte.',
+    pegadinha:
+      'Texto livre só dentro das 24 h da última mensagem do paciente: fora delas NÃO envia nada (nem modelo) e deixa a nota «confirmação não enviada: fora da janela de 24 h» no cartão. Com a IA pausada (unidade, «Pausar IA» ou pausa com data) também não envia e deixa a nota. Uma por sinal pago, mesmo com o aviso da InfinitePay e a varredura chegando juntos. Só no Kommo (conversa do Chatwoot não recebe). Pagamento de mais de 12 h atrás não gera mensagem. Em «Só no papel» a tela mostra o texto que mandaria (ou o motivo de não mandar) e nada sai. Sem a variável, toda unidade fica em «só no papel»: a variável lista quem está LIGADO.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/sinal-confirmacao-paciente.ts',
+  },
+  {
     id: 'sugestao-motivo',
     chave: 'SUGESTAO_MOTIVO_SLUGS',
     nome: 'IA sugere o motivo do não agendamento (widget)',

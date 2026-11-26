@@ -52,6 +52,9 @@ export interface LinhaDoSinal {
   avisadoEm: Date | null;
   /** 'asaas' (o Pix de sempre) ou 'infinitepay'; ausente = asaas */
   via?: string;
+  /** a confirmação do sinal ao paciente já foi reservada/feita (lib/sinal-confirmacao-paciente.ts) */
+  confirmacaoEm?: Date | null;
+  confirmacao?: string | null;
 }
 
 export interface DadosDoSinal {

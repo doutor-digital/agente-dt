@@ -2549,6 +2549,10 @@ model SinalPix {
   avisadoEm     DateTime? @map("avisado_em")
   /// por onde o sinal é cobrado: asaas (o Pix de sempre) | infinitepay (link da InfinitePay; `linkId` = order_nsu em `infinitepay_links`, baixa pelo aviso assinado dela)
   via           String    @default("asaas")
+  /// a confirmação do sinal ao paciente (lib/sinal-confirmacao-paciente.ts): reservada UMA vez por sinal (UPDATE condicionado a nulo) ANTES de qualquer envio, para webhook, varredura e retry não mandarem duas
+  confirmacaoEm DateTime? @map("confirmacao_em")
+  /// o desfecho: enviada | fora-da-janela | pausada | sem-rota | erro (a nota no cartão diz o porquê quando não foi enviada)
+  confirmacao   String?
 
   unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
 

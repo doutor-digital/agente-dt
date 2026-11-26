@@ -29,6 +29,7 @@ import { conversaDoLeadChatwoot } from './chatwoot-lead.js';
 import { contextoDaUnidade, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
 import { portaDoChatwoot } from './chatwoot-porta.js';
 import { aoLinkPago, type LinkPago } from './link-pago.js';
+import { confirmarSinalDaUnidade, VALE_A_CONFIRMACAO_MS } from './sinal-confirmacao-paciente.js';
 import { infinitepayDoServidor } from './infinitepay-servidor.js';
 import type { LinkGuardado } from '../mcp-remoto/infinitepay.js';
 
@@ -44,6 +45,10 @@ export const DIAS_PARA_DESISTIR = 30;
 /** Chave que o Asaas recusa (401/403) não adianta tentar de 5 em 5 minutos: espera isto antes de tentar de novo. */
 const ESPERA_CHAVE_RECUSADA_MS = 60 * 60_000;
 const chaveRecusadaAte = new Map<string, number>();
+/** Só para teste: esquece as chaves que o Asaas recusou. */
+export function _esquecerChavesRecusadas(): void {
+  chaveRecusadaAte.clear();
+}
 export const CAMPO_PAGO = '✓ Consulta pg antecipado';
 const STATUS_QUE_PAGAM = new Set(['RECEIVED', 'CONFIRMED']);
 
@@ -219,6 +224,13 @@ export async function notaNoCartao(deps: DepsDaBaixa, leadId: number, nota: stri
   await deps.kommo.addLeadNote(leadId, nota);
 }
 
+/** O que a varredura precisa ler: pendentes, os que mudaram de status sem nota no cartão e os pagos há pouco que ainda não tiveram a confirmação ao paciente. */
+const precisaDeAtencao = () => [
+  { status: 'pendente' },
+  { status: { in: ['pago', 'expirado'] }, avisadoEm: null },
+  { status: 'pago', confirmacaoEm: null, pagoEm: { gte: new Date(Date.now() - VALE_A_CONFIRMACAO_MS) } },
+];
+
 let timer: NodeJS.Timeout | null = null;
 let pararDeOuvir: (() => void) | null = null;
 let primeira: NodeJS.Timeout | null = null;
@@ -230,7 +242,7 @@ const estado = (slug: string) => estadoDaAutomacao(slug, ID_SINAL_PIX, process.e
  * Aplica uma decisão (pago/expirou) no banco e no cartão. Uma só implementação para a varredura e para o aviso imediato do link pago da InfinitePay.
  * Seco: só registra «gravaria». Falha do cartão não lança: a linha já mudou de status sem `avisadoEm`, e a varredura seguinte refaz a nota.
  */
-function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBaixa['kommo'] = createKommoClient(unit)) {
+function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBaixa['kommo'] = createKommoClient(unit), confirmar: (linha: LinhaDoSinal) => Promise<unknown> = (l) => confirmarSinalDaUnidade(unit, l)) {
   const aplicar = async (linha: LinhaDoSinal, nota: string, pago: boolean) => {
     const leadId = Number(linha.leadId);
     const conversa = conversaDoLeadChatwoot(leadId);
@@ -258,6 +270,8 @@ function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBai
         if (mudou.count !== 1) return;
         await aplicar(d.linha, notaDoPagamento(d.linha, d.paymentId), true);
         logger.info({ unit: unit.slug, leadId, paymentId: d.paymentId }, `${ID_SINAL_PIX}: sinal pago — cartão atualizado`);
+        // o paciente recebe a confirmação (uma só por sinal, qualquer que seja a rota de pagamento); nunca derruba a baixa
+        await confirmar({ ...d.linha, status: 'pago', pagoEm: new Date(), paymentId: d.paymentId }).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_SINAL_PIX}: a confirmação ao paciente falhou`));
       } else {
         const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: 'pendente' }, data: { status: 'expirado' } });
         if (mudou.count !== 1) return;
@@ -276,7 +290,7 @@ function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBai
  * Os mesmos portões do worker: automação `sinal-pix` desligada não faz nada, seca só registra. Link que não é sinal (criado pelo conector) é ignorado.
  * Valor: o evento já vem de um pagamento conferido no /payment_check contra o valor do link; aqui só se exige que o link valesse pelo menos o sinal.
  */
-export async function baixarSinalDoLinkPago(e: LinkPago, chatwoot: BaixaNoChatwoot | null = null, kommo?: DepsDaBaixa['kommo']): Promise<void> {
+export async function baixarSinalDoLinkPago(e: LinkPago, chatwoot: BaixaNoChatwoot | null = null, kommo?: DepsDaBaixa['kommo'], confirmar?: (linha: LinhaDoSinal) => Promise<unknown>): Promise<void> {
   const unit = await prisma.unit.findUnique({ where: { slug: e.unidade } });
   if (!unit) return;
   const linha = (await prisma.sinalPix.findFirst({ where: { unitId: unit.id, linkId: e.orderNsu, via: 'infinitepay' } })) as LinhaDoSinal | null;
@@ -296,13 +310,19 @@ export async function baixarSinalDoLinkPago(e: LinkPago, chatwoot: BaixaNoChatwo
     logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link da InfinitePay foi pago depois de dado como vencido — baixa dada mesmo assim`);
     linha.status = 'pendente';
   }
-  await baixador(unit, chatwoot, kommo).executar({ tipo: 'pago', linha, paymentId: e.transactionNsu ?? e.orderNsu }, est === 'seco');
+  await baixador(unit, chatwoot, kommo, confirmar).executar({ tipo: 'pago', linha, paymentId: e.transactionNsu ?? e.orderNsu }, est === 'seco');
 }
 
-export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNoChatwoot | null = baixaDoChatwootDaUnidade(unit.slug)): Promise<void> {
+export async function varrerUnidade(
+  unit: Unit,
+  seco: boolean,
+  chatwoot: BaixaNoChatwoot | null = baixaDoChatwootDaUnidade(unit.slug),
+  confirmar: (linha: LinhaDoSinal) => Promise<unknown> = (l) => confirmarSinalDaUnidade(unit, l),
+  kommo?: DepsDaBaixa['kommo'],
+): Promise<void> {
   // Pendentes + os que já mudaram de status mas ainda não deixaram a nota no cartão (o Kommo falhou na vez anterior).
   const linhas = (await prisma.sinalPix.findMany({
-    where: { unitId: unit.id, OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },
+    where: { unitId: unit.id, OR: precisaDeAtencao() },
     orderBy: { criadoEm: 'asc' },
     take: MAX_PENDENTES_POR_UNIDADE,
   })) as LinhaDoSinal[];
@@ -345,16 +365,24 @@ export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNo
 
   if (pendentesIp.length > 0) decisoes = decisoes.concat(await decidirInfinitepay(unit.slug, pendentesIp, hoje));
 
-  const { aplicar, executar } = baixador(unit, chatwoot);
+  const { aplicar, executar } = baixador(unit, chatwoot, kommo, confirmar);
   for (const d of decisoes) await executar(d, seco);
 
   // Cartões que já mudaram de status e ficaram sem nota (Kommo fora do ar na vez anterior).
-  for (const l of linhas.filter((x) => x.status !== 'pendente')) {
+  for (const l of linhas.filter((x) => x.status !== 'pendente' && !x.avisadoEm)) {
     if (seco) continue;
     try {
       await aplicar(l, l.status === 'pago' ? notaDoPagamento(l, l.paymentId ?? '') : notaDoVencimento(l), l.status === 'pago');
     } catch (err) {
       logger.warn({ err: String(err), unit: unit.slug, leadId: l.leadId }, `${ID_SINAL_PIX}: o cartão ainda não aceitou a nota do sinal`);
+    }
+  }
+
+  // A confirmação ao paciente dos sinais já pagos que ainda não a tiveram (o aviso falhou, o paciente estava fora da janela quando o Kommo caiu, a chave foi ligada agora…).
+  // É a MESMA reserva do aviso imediato: quem já confirmou não confirma de novo.
+  if (!seco) {
+    for (const l of linhas.filter((x) => x.status === 'pago' && !x.confirmacaoEm)) {
+      await confirmar(l).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: l.leadId }, `${ID_SINAL_PIX}: a confirmação ao paciente falhou`));
     }
   }
 }
@@ -365,7 +393,7 @@ export async function varrerUnidade(unit: Unit, seco: boolean, chatwoot: BaixaNo
  */
 export async function unidadesComBaixaPendente(): Promise<Unit[]> {
   const comSinal = await prisma.sinalPix.findMany({
-    where: { OR: [{ status: 'pendente' }, { status: { in: ['pago', 'expirado'] }, avisadoEm: null }] },
+    where: { OR: precisaDeAtencao() },
     distinct: ['unitId'],
     select: { unitId: true },
   });
