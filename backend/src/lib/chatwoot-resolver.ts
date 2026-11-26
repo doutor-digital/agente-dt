@@ -66,7 +66,7 @@ export function portasDoResolver(ctx: ContextoChatwoot): PortasDoResolver {
   };
 }
 
-/** Desliga com CHATWOOT_RESOLVER_OBRIGATORIO=0 (o mesmo interruptor da janela). Não lança. */
+/** Desliga com CHATWOOT_RESOLVER_OBRIGATORIO=0 (o mesmo interruptor da janela). Com =lembrete a etiqueta segue (é o lembrete) e a janela deixa resolver sem preencher. Não lança. */
 export async function aplicarResolucao(e: EventoDeResolucao, p: PortasDoResolver, env: NodeJS.ProcessEnv = process.env): Promise<'nada' | 'pos' | 'tirou'> {
   if (env.CHATWOOT_RESOLVER_OBRIGATORIO === '0' || !e.acao) return 'nada';
   const lista = e.acao === 'por' ? [...e.etiquetas, ETIQUETA_FALTA] : e.etiquetas.filter((x) => x !== ETIQUETA_FALTA);

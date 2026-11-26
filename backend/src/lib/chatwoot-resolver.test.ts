@@ -78,3 +78,57 @@ test('janela do menu: parseia, mesma regra, só o botão «Resolver», deixa res
   assert.ok(bloco.includes("Object.assign({}, base, novos)"), 'manda TODOS os atributos (o Chatwoot troca o conjunto inteiro)');
   assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
 });
+
+// O JavaScript que a MAIN de ed0aa089 entrega (assistenteJs com o __AGENTE__ ainda no lugar), por variável: tamanho e SHA-256 medidos no código de main.
+// Sem a variável nova, o menu.js tem de sair BYTE A BYTE igual: é o que diz que Parauapebas não mudou. Se alguém mexer DE PROPÓSITO no JS da assistente,
+// estes números mudam junto (o teste diz qual).
+const DE_MAIN: Array<[Record<string, string>, number, string]> = [
+  [{}, 37041, 'b394eb04120607c43da78507e3cd4cace19eaa83af61b6c1a8d047ab747c9fb0'],
+  [{ CHATWOOT_RESOLVER_OBRIGATORIO: '0' }, 37042, 'c6c4e0a3489547e9e847faf0378d2e587a06e3f0805c1492c9d96b2e7e229ed8'],
+  [{ CHATWOOT_ATALHOS: '0' }, 37042, '4e71c32a3313035daed303a3b85edfab27f82c9462aa8a64baeacb394d0f7c74'],
+];
+
+test('SEM «lembrete» o JS da janela sai BYTE A BYTE igual ao de main (tamanho e SHA-256); «1» e variável ausente idênticos', async () => {
+  const { createHash } = await import('node:crypto');
+  for (const [env, tamanho, sha] of DE_MAIN) {
+    const js = assistenteJs(env);
+    assert.equal(js.length, tamanho, `tamanho de ${JSON.stringify(env)} mudou: ${js.length} (main: ${tamanho})`);
+    assert.equal(createHash('sha256').update(js).digest('hex'), sha, `o JS de ${JSON.stringify(env)} não é o de main`);
+  }
+  assert.equal(assistenteJs({ CHATWOOT_RESOLVER_OBRIGATORIO: '1' }), assistenteJs({}));
+  for (const v of ['lembrete ', 'lembretes', 'soft']) assert.equal(assistenteJs({ CHATWOOT_RESOLVER_OBRIGATORIO: v }).includes('Resolver sem preencher'), v === 'lembrete ', v);
+  const off = assistenteJs({});
+  assert.ok(!off.includes('LEMBRETE') && !off.includes('__LEMBRETE') && !off.includes('Resolver sem preencher') && !off.includes('flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:4px'), 'nada do modo lembrete vaza para o JS padrão');
+});
+
+test('modo lembrete (=lembrete, maiúsculas e espaço tolerados): a janela ganha «Resolver sem preencher» que libera e some enquanto salva; o resto é o JS de sempre', () => {
+  const lembrete = assistenteJs({ CHATWOOT_RESOLVER_OBRIGATORIO: 'lembrete' });
+  for (const v of ['Lembrete', ' LEMBRETE ']) assert.equal(assistenteJs({ CHATWOOT_RESOLVER_OBRIGATORIO: v }), lembrete, `«${v}» também vale`);
+  const base = assistenteJs({});
+  assert.ok(lembrete.length > base.length);
+  assert.ok(lembrete.includes('var OBRIGATORIOS = true;'), 'continua pedindo os campos');
+  const js = lembrete.split('__AGENTE__').join(JSON.stringify('https://agente.exemplo.test'));
+  assert.doesNotThrow(() => new Function(js));
+  // tirando só o que o modo acrescenta, volta exatamente ao JS padrão
+  const volta = lembrete
+    .replace('display:flex;flex-wrap:wrap;justify-content', 'display:flex;justify-content')
+    .replace(/\{\n      var pular = [\s\S]*?bs\.appendChild\(pular\);\n    \}\n    /, '')
+    .replace(' pular.disabled = true;', '')
+    .replace(' pular.disabled = false;', '');
+  assert.equal(volta, base, 'o lembrete só ACRESCENTA: o botão, o flex-wrap e o travar-enquanto-salva');
+  const ini = lembrete.indexOf("var pular = document.createElement('button')");
+  const bloco = lembrete.slice(ini, lembrete.indexOf('cancelar.onclick', ini));
+  assert.ok(bloco.includes("'Resolver sem preencher'"), 'o botão de pular existe');
+  assert.ok(bloco.includes('pular.onclick = function(){ fecharJanelaResolver(); liberarResolver(); };'), 'pular fecha a janela e resolve de verdade');
+  assert.equal((bloco.match(/innerHTML/g) ?? []).length, 0);
+  // enquanto «Salvando…» o pular fica desabilitado, e volta se o salvar falhar
+  assert.ok(lembrete.includes("ok.disabled = true; pular.disabled = true; ok.textContent = 'Salvando…'"));
+  assert.ok(lembrete.includes("ok.disabled = false; pular.disabled = false; ok.textContent = 'Salvar e resolver'"));
+});
+
+test('modo lembrete: o servidor continua pondo a etiqueta falta-etapa (é o lembrete); só «0» desliga', async () => {
+  const chamadas: Array<[number, string[]]> = [];
+  const p = { etiquetas: async (c: number, l: string[]) => { chamadas.push([c, l]); } };
+  assert.equal(await aplicarResolucao(eventoDeResolucao(conv(), CAIXAS)!, p, { CHATWOOT_RESOLVER_OBRIGATORIO: 'lembrete' }), 'pos');
+  assert.deepEqual(chamadas[0], [500, [ETIQUETA_FALTA]]);
+});
