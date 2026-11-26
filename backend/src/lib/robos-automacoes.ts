@@ -64,7 +64,7 @@ export const DO_CATALOGO: Readonly<Record<string, GrupoDaAutomacao>> = {
 };
 
 /** Do catálogo da Sofia que NÃO vale no caminho do Chatwoot (o teste confere que o código do Chatwoot não os usa). */
-export const SO_NO_KOMMO: readonly string[] = ['sofia-calada', 'calar-paciente-em-tratamento', 'perdido-responde-reabre', 'calar-cliente-do-escritorio', 'ia-so-numeros-de-teste', 'sofia-so-whatsapp', 'pausa-equipe', 'sem-carinha', 'teto-mensal', 'cache-conversa', 'exame-de-imagem-pausa-alerta', 'cache-agenda'];
+export const SO_NO_KOMMO: readonly string[] = ['sofia-calada', 'calar-paciente-em-tratamento', 'perdido-responde-reabre', 'calar-cliente-do-escritorio', 'ia-so-numeros-de-teste', 'sofia-so-whatsapp', 'confirmacao-adiada', 'pausa-equipe', 'sem-carinha', 'teto-mensal', 'cache-conversa', 'exame-de-imagem-pausa-alerta', 'cache-agenda'];
 
 /** «Não tem volta»: o que a automação faz não se desfaz (junta e apaga contato; manda dado para a Meta). Pede confirmação explícita para LIGAR. */
 export function semVolta(a: Pick<Automacao, 'pegadinha' | 'risco'>): boolean {
