@@ -25,6 +25,7 @@ import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { ajustesDaUnidade, bancoDosRobos, SEM_AJUSTES, type AjustesDaUnidade } from './robos-estado.js';
 import { precosDaConsulta } from '../agent/prompt-composer.js';
+import { unidadeSemAntecipado, type FlagsDePagamento } from '../agent/pagamento-da-unidade.js';
 import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
@@ -683,7 +684,7 @@ export function chatDaCaixa(ctx: ContextoChatwoot, caixa: number): Chat | null {
  * O que a régua precisa saber da unidade (nome, Pix, valor antecipado, textos e prefixo dos modelos DESTA unidade). Uma função só: o ciclo da régua e o
  * preenchimento do modelo mandado à mão pela atendente usam a MESMA montagem, para nunca divergirem.
  */
-export function dadosDaUnidadeDaRegua(unit: Parameters<typeof precosDaConsulta>[0] & { name: string; pixKey: string | null }, slug: string): DadosDaUnidade {
+export function dadosDaUnidadeDaRegua(unit: Parameters<typeof precosDaConsulta>[0] & { name: string; pixKey: string | null } & FlagsDePagamento, slug: string): DadosDaUnidade {
   return {
     nome: unit.name,
     pixKey: unit.pixKey,
@@ -691,6 +692,8 @@ export function dadosDaUnidadeDaRegua(unit: Parameters<typeof precosDaConsulta>[
     // textos e prefixo dos modelos DESTA unidade (configuração por unidade); Parauapebas: idênticos aos de sempre
     textos: textosDoSlug(slug),
     prefixoModelos: configDaUnidade(slug)?.prefixoModelos,
+    // unidade que só recebe no dia: a régua não cobra Pix (nenhuma outra unidade muda: o campo só aparece quando é verdade)
+    ...(unidadeSemAntecipado(unit) ? { semAntecipado: true } : {}),
   };
 }
 
