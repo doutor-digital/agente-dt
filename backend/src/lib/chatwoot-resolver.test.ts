@@ -86,6 +86,7 @@ test('modo lembrete (CHATWOOT_RESOLVER_OBRIGATORIO=lembrete): a janela ganha «R
   assert.ok(padrao.includes('var LEMBRETE = false;') && padrao.includes('var OBRIGATORIOS = true;'), 'sem configuração nova: nada muda (continua pedindo)');
   assert.ok(lembrete.includes('var LEMBRETE = true;') && lembrete.includes('var OBRIGATORIOS = true;'), 'lembrete: continua pedindo os campos');
   assert.ok(montar({ CHATWOOT_RESOLVER_OBRIGATORIO: '0' }).includes('var LEMBRETE = false;'));
+  for (const v of ['Lembrete', ' LEMBRETE ']) assert.ok(montar({ CHATWOOT_RESOLVER_OBRIGATORIO: v }).includes('var LEMBRETE = true;'), `«${v}» também vale (não vira o modo mais duro por erro de caixa)`);
   assert.doesNotThrow(() => new Function(lembrete));
   const ini = lembrete.indexOf('if (LEMBRETE) {');
   const bloco = lembrete.slice(ini, lembrete.indexOf('cancelar.onclick', ini));

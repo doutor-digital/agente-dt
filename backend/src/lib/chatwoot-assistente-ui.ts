@@ -431,14 +431,14 @@ const BOTAO_JS = String.raw`(function(){
     var erro = document.createElement('div'); erro.setAttribute('role', 'alert'); erro.style.cssText = 'color:#c53030;font-size:12.5px;min-height:16px;margin-bottom:6px'; cx.appendChild(erro);
     function mostrar(){ lMotivo.style.display = etapa.value === 'Perdido' ? 'block' : 'none'; lValor.style.display = etapa.value === 'Fechou' ? 'block' : 'none'; }
     etapa.onchange = mostrar; mostrar();
-    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:4px';
+    var bs = document.createElement('div'); bs.style.cssText = 'display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;margin-top:4px';
     var cancelar = document.createElement('button'); cancelar.type = 'button'; cancelar.textContent = 'Cancelar';
     var ok = document.createElement('button'); ok.type = 'button'; ok.textContent = 'Salvar e resolver';
     cancelar.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
     ok.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:0;background:#2781f6;color:#fff;font:inherit;font-weight:600;cursor:pointer';
     if (LEMBRETE) {
       var pular = document.createElement('button'); pular.type = 'button'; pular.textContent = 'Resolver sem preencher'; pular.setAttribute('data-dd-resolver-pular', '1');
-      pular.style.cssText = 'height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
+      pular.style.cssText = 'white-space:nowrap;height:32px;padding:0 12px;border-radius:8px;border:1px solid #d9d9e0;background:#fff;color:#1c2024;font:inherit;cursor:pointer';
       pular.onclick = function(){ fecharJanelaResolver(); liberarResolver(); };
       bs.appendChild(pular);
     }
@@ -512,7 +512,7 @@ export function assistenteJs(env: NodeJS.ProcessEnv = process.env): string {
   return BOTAO_JS.split('__ATALHOS__').join(String(env.CHATWOOT_ATALHOS !== '0'))
     // CHATWOOT_RESOLVER_OBRIGATORIO=0 desliga a janela de campos obrigatórios ao «Resolver»; =lembrete mantém a janela mas deixa resolver sem preencher
     .split('__OBRIGATORIOS__').join(String(env.CHATWOOT_RESOLVER_OBRIGATORIO !== '0'))
-    .split('__LEMBRETE__').join(String(env.CHATWOOT_RESOLVER_OBRIGATORIO === 'lembrete'));
+    .split('__LEMBRETE__').join(String(String(env.CHATWOOT_RESOLVER_OBRIGATORIO ?? '').trim().toLowerCase() === 'lembrete'));
 }
 
 /** A página do painel (iframe). `__ORIGEM_CW__` = a origem do Chatwoot (JSON). */
