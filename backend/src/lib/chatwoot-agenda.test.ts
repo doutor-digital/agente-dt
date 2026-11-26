@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { SpineSchedule } from '../services/spine.service.js';
-import { agendamentoQueVale, casar, categoriaDoChatwoot, descricao, desejadoDe, etapaDaConsulta, mudancas, situacaoDoChatwoot, whatsDoCadastro, type ConversaDaCaixa } from './chatwoot-agenda.js';
+import { agendamentoQueVale, atributosDaGravacaoDaAgenda, casar, categoriaDoChatwoot, descricao, desejadoDe, etapaDaConsulta, mudancas, situacaoDoChatwoot, whatsDoCadastro, type ConversaDaCaixa } from './chatwoot-agenda.js';
 
 const ag = (o: Partial<SpineSchedule>): SpineSchedule => ({
   idSchedule: 1,
@@ -194,4 +194,18 @@ test('casar: SESSÃO de pé (paciente em tratamento, funil vazio) não ganha eta
   const avaliacao = casar([ag({ dayLocal: '2026-11-27', categoryName: 'Avaliação' })], [{ id: 18, telefone: '+5594999745062', attrs: {}, atividade: 1 }], () => ['5594999745062'], HOJE);
   assert.equal(avaliacao[0]!.muda.etapa, 'Agendado');
   assert.equal(avaliacao[0]!.porCategoria, undefined);
+});
+
+test('a varredura da agenda promove «Resgate» → «Agendado» e LIMPA a marca «resgate da Sofia» na mesma gravação; sem a marca, a gravação é a de sempre', () => {
+  const resgatada = { etapa: 'Resgate', resgate_da_sofia: 'sim', motivo_nao_agendamento: 'Não interagiu', queixa: 'x' };
+  // o plano da agenda para uma conversa em «Resgate» com consulta de pé: etapa «Agendado»
+  const plano = casar([ag({ dayLocal: '2026-11-27', statusName: 'Agendado' })], [{ id: 1, telefone: '+5594999745062', attrs: resgatada, atividade: 1 }], () => ['5594999745062'], '2026-11-26');
+  assert.equal(plano[0]!.muda.etapa, 'Agendado');
+  const gravado = atributosDaGravacaoDaAgenda(resgatada, plano[0]!.muda);
+  assert.equal(gravado.etapa, 'Agendado');
+  assert.equal(gravado.resgate_da_sofia, 'nao', 'a marca sai junto da etapa');
+  assert.equal(gravado.queixa, 'x', 'o resto da conversa fica como está');
+  // etapa que não muda, ou conversa sem marca: nada é acrescentado
+  assert.deepEqual(atributosDaGravacaoDaAgenda({ etapa: 'Agendado', resgate_da_sofia: 'sim' }, { situacao_consulta: 'Confirmado' }), { etapa: 'Agendado', resgate_da_sofia: 'sim', situacao_consulta: 'Confirmado' });
+  assert.deepEqual(atributosDaGravacaoDaAgenda({ etapa: 'Sofia qualifica' }, { etapa: 'Agendado' }), { etapa: 'Agendado' });
 });

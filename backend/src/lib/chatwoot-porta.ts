@@ -73,6 +73,13 @@ export interface PortaDoChatwoot {
   destinoDaPassagem?(id: number): Promise<{ id: number; nome: string } | null>;
 }
 
+/**
+ * Atributo oculto da conversa: «sim» = a Sofia pôs esta conversa em «Resgate» (a etapa também é de trabalho da equipe: sem a marca o prompt de resgate não vale lá).
+ * A marca só vale com a conversa ainda na etapa que a Sofia pôs: QUALQUER gravação de `etapa` por esta porta (marcar consulta, «Sofia qualifica», passar à equipe,
+ * mover_etapa…) a limpa na mesma gravação.
+ */
+export const MARCA_DO_RESGATE = 'resgate_da_sofia';
+
 /** O usuário «Conector Claude» (por onde saem Sofia e régua): nunca é quem vai atender. */
 const USUARIO_DA_INTEGRACAO = 2;
 
@@ -114,7 +121,11 @@ export function portaDoChatwoot(ctx: ContextoChatwoot): PortaDoChatwoot {
       const atual = await lerCrua(id);
       if (!atual) throw new Error(`conversa ${id} não encontrada no Chatwoot`);
       // papel → nome da conta; papel que a conta não tem sai da gravação (a etapa de agora fica); sem mapa, `parcial` segue igual
-      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...atributosParaGravar(mapa(), parcial) } } });
+      const gravar = atributosParaGravar(mapa(), parcial);
+      // a marca sai só quando a etapa MUDA de verdade (já traduzida para o nome da conta): regravar a mesma etapa, ou uma que a conta não tem, não a tira
+      const mudouDeEtapa = typeof gravar.etapa === 'string' && gravar.etapa !== texto(atual.attrs.etapa);
+      const limpaMarca = mudouDeEtapa && !(MARCA_DO_RESGATE in parcial) && texto(atual.attrs[MARCA_DO_RESGATE]) === 'sim' ? { [MARCA_DO_RESGATE]: 'nao' } : {};
+      await chamar(ctx, 'POST', `conversations/${id}/custom_attributes`, { corpo: { custom_attributes: { ...atual.attrs, ...gravar, ...limpaMarca } } });
     },
     adicionarEtiquetas: (id, etiquetas) => mudarEtiquetas(ctx, id, etiquetas),
     removerEtiquetas: (id, etiquetas) => mudarEtiquetas(ctx, id, [], etiquetas),

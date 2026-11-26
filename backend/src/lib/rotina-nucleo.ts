@@ -40,6 +40,7 @@ import type { fichaDoPaciente } from '../services/spine.service.js';
 import { dentroDoHorario } from './sla-alert-worker.js';
 import { emPausa } from './pausa-unidade.js';
 import { normalizarNome } from './kommo-schema.js';
+import { MOTIVOS_MORTOS } from './motivos-mortos.js';
 import { CAMPOS_SYNC } from './franquia-sync.js';
 import { valorDoCampo } from './ponte-fila.js';
 import { comConsultaFutura } from './trava-perda.js';
@@ -156,25 +157,6 @@ const NAO_CONTATAR = [
   TAG_SEM_REGUA,
   ETIQUETA_CURRICULO,
   'Fora do escopo',
-].map(normalizarNome);
-
-/**
- * Motivos de perda que a SDR ou a IA escolhem quando o caso ESTÁ ENCERRADO — insistir é spam. Os cinco do João (06/11/2026)
- * mais os de risco que o resto da casa já trata como intocáveis. "Sem condições financeiras" NÃO está aqui: a perda-ia a trata
- * como trabalhável (decisão de 02/10).
- */
-const MOTIVOS_MORTOS = [
-  'Outra cidade',
-  'Mora em outra cidade',
-  'Clicou por engano',
-  'Outra patologia',
-  'Plano de Saúde',
-  'Sem interesse',
-  'Bandeira vermelha',
-  'Financeiramente vulnerável',
-  'Assinou contrato',
-  'Caso enviado para a franquia',
-  'Informação para terceiro',
 ].map(normalizarNome);
 
 export type Cartao = Pick<KommoLead, 'custom_fields_values' | '_embedded' | 'loss_reason_id'>;

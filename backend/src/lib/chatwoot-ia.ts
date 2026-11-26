@@ -53,7 +53,7 @@ import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, di
 import { SpineService } from '../services/spine.service.js';
 import { fusoDaUnidade } from './fuso.js';
 import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
-import { ETAPAS_PROTEGIDAS, motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
+import { ETAPAS_PROTEGIDAS, gravarEtapaDoResgate, motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
 export type { Fala };
 
@@ -222,6 +222,8 @@ export interface PortasDaIa {
   hoje(): string;
   /** o instante de agora (horário da clínica, feriado); opcional: o teste fixa, o real usa o relógio */
   agora?(): Date;
+  /** grava a etapa da conversa (o resgate de «Perdido» → «Resgate», depois de a resposta sair); opcional: os testes que não tratam disso não precisam */
+  gravarEtapa?(conversa: number, etapa: string, opcoes?: { semFollowUp?: boolean }): Promise<void>;
   /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
   abrirParaEquipe?(conversa: number): Promise<void>;
   /**
@@ -338,6 +340,8 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     encerrarAtendimento: async (conversa) => void (await encerrarAtendimento(conversa, atendimento)),
     conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
     atendimentoAtivo,
+    // a marca diz que a etapa «Resgate» desta conversa é da Sofia (a que a equipe move à mão não leva o prompt de resgate); «Perdido» de volta a desfaz
+    gravarEtapa: (conversa, etapa, opcoes) => gravarEtapaDoResgate(chat, conversa, etapa, opcoes),
     vigiarSofiaParou: (m, desfecho, retomada) => {
       // chave desta unidade desligada: nem arma o relógio (o padrão do catálogo é «só no papel», então quem não mexeu em nada ainda anota)
       if (estadoDoAlerta(m.slug) === 'desligado') return;
@@ -857,6 +861,18 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     logger.error({ err: String(err), conversa: m.conversa, gravou }, `${ID_IA}: não consegui mandar a resposta da Sofia`);
     if (gravou) await p.nota(m.conversa, alerta('o Chatwoot recusou a mensagem')).catch(() => undefined);
     throw err;
+  }
+  // RESGATE: a resposta saiu — agora o lead que voltou de «Perdido» passa para «Resgate». Confere a etapa de AGORA (a equipe pode ter mexido enquanto a Sofia pensava).
+  // E o que a Sofia tinha posto em «Resgate» e recusou de vez («não quero mais») volta para «Perdido».
+  const etapaDeAgora = agoraLida ? String(agoraLida.attrs.etapa ?? '').trim() : null;
+  const mudanca = r.resgatar && etapaDeAgora === 'Perdido' ? { de: 'Perdido', para: 'Resgate' } : r.devolverAPerdido && etapaDeAgora === 'Resgate' ? { de: 'Resgate', para: 'Perdido' } : null;
+  if (mudanca && p.gravarEtapa) {
+    try {
+      await p.gravarEtapa(m.conversa, mudanca.para, mudanca.para === 'Perdido' ? { semFollowUp: true } : undefined);
+      r.acoes.push({ tool: 'mover_etapa', args: { etapa: mudanca.para, de: mudanca.de, automatico: true } });
+    } catch (err) {
+      logger.warn({ err: String(err), conversa: m.conversa }, `${ID_IA}: respondi o paciente, mas não consegui pôr a conversa em «${mudanca.para}»`);
+    }
   }
   // o Pix e o endereço são mensagens à parte: falhar nelas não desfaz o que já foi
   for (const extra of [r.pix, r.cartao]) {

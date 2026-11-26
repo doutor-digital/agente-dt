@@ -21,6 +21,7 @@ import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot
 import { ATRIBUTO_OUTROS_HORARIOS, CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
+import { MARCA_DO_RESGATE } from './chatwoot-porta.js';
 import { normalizar } from './franquia-sync.js';
 import { desfechoDaAgenda } from './franquia-calendario.js';
 import { searchClients, searchSchedules, somarDias, type SpineSchedule } from '../services/spine.service.js';
@@ -296,7 +297,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
         });
         notasFeitas.add(chave);
       } else {
-        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: { ...(conversa.attrsDaConta ?? conversa.attrs), ...atributosParaGravar(etapasDoContexto(ctx), muda) } } });
+        await chamar(ctx, 'POST', `conversations/${conversa.id}/custom_attributes`, { corpo: { custom_attributes: atributosDaGravacaoDaAgenda(conversa.attrsDaConta ?? conversa.attrs, atributosParaGravar(etapasDoContexto(ctx), muda)) } });
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
           corpo: { content: `📅 Agenda da franquia: ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
@@ -308,6 +309,17 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
   }
   logger.info({ slug, caixa, modo, agenda: agenda.length, casadas: plano.length, gravadas }, `${ID_AGENDA}: ciclo`);
   return { agenda: agenda.length, casadas: plano.length, gravadas };
+}
+
+/**
+ * Os atributos que o ciclo grava: os que a conversa TEM (o Chatwoot troca o objeto inteiro) mais o que a agenda muda. A varredura promove «Resgate» → «Agendado» sem
+ * passar pela porta do Chatwoot, então a marca «resgate da Sofia» sai AQUI quando a etapa muda (senão a conversa volta a «Resgate» pela equipe, meses depois, e a Sofia diz
+ * «foi dada como Perdido»).
+ */
+export function atributosDaGravacaoDaAgenda(atuais: Record<string, unknown>, muda: Record<string, unknown>): Record<string, unknown> {
+  const mudouDeEtapa = typeof muda.etapa === 'string' && muda.etapa !== atuais.etapa;
+  const limpaMarca = mudouDeEtapa && atuais[MARCA_DO_RESGATE] === 'sim' && !(MARCA_DO_RESGATE in muda) ? { [MARCA_DO_RESGATE]: 'nao' } : {};
+  return { ...atuais, ...muda, ...limpaMarca };
 }
 
 let timer: NodeJS.Timeout | null = null;

@@ -22,6 +22,8 @@
 import { categoriaDoMotivo, type CodigoDoMotivo, type OrigemDaPassagem } from './motivo-da-passagem.js';
 import { notaComMencao } from './crm-tarefas/regras.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
+import { MOTIVOS_MORTOS } from './motivos-mortos.js';
+import { classificarFala, falasDoUltimoTurno } from './sofia-fecha-quente-morno.js';
 import { z } from 'zod';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import type { Unit } from '@prisma/client';
@@ -53,7 +55,7 @@ import { consultaMarcadaNoTurno, legendaDoCartao } from './cartao-de-chegada.js'
 import { extrairBotoes } from './botoes.js';
 import { SpineService } from '../services/spine.service.js';
 import { AgendaReconcileService } from '../services/agenda-reconcile.service.js';
-import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
+import { MARCA_DO_RESGATE, texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
 import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import { aceitouEsteHorario, ID_SO_COM_SIM, recusaDeAceite } from './chatwoot-agenda-so-com-sim.js';
@@ -99,6 +101,81 @@ export function motivoDeNaoResponder(c: ConversaLida): string | null {
   if (texto(c.attrs.funil) === 'Tratamento' || texto(c.attrs.etapa_tratamento)) return 'em-tratamento';
   return null;
 }
+
+/**
+ * Motivos de «Perdido» em que a conversa que VOLTA a escrever não é resgate de venda. Duas fontes, nenhuma inventada aqui:
+ *  1. a lista de motivos MORTOS que a casa já usa (`motivos-mortos.ts`: os 5 do João de 06/11 — outra cidade, clicou por engano, outra
+ *     patologia, plano de saúde, sem interesse — mais bandeira vermelha, caso enviado à franquia, informação para terceiro…);
+ *  2. os que são DA EQUIPE no CRM e não estão nela: cancelamento de tratamento, currículo, fornecedor/propaganda, «não perturbar» (o paciente
+ *     pediu para não ser incomodado) e «lead morto».
+ * Nesses a Sofia segue como sempre seguiu (responde, sem mexer na etapa).
+ */
+const MOTIVOS_DA_EQUIPE = /cancelamento de tratamento|curriculo|fornecedor|propaganda|nao perturbar|lead morto/;
+const semAcento = (t: string): string => t.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+/** O motivo registrado deixa o caso com a equipe? (a grafia varia na conta: «Caso enviado à franquia», «Currículo / vaga», espaço duplo) */
+export function motivoSemResgate(motivo: string): boolean {
+  const sem = semAcento(motivo);
+  const compacto = sem.replace(/[^a-z0-9]/g, '');
+  return MOTIVOS_DA_EQUIPE.test(sem) || MOTIVOS_MORTOS.some((m) => compacto.includes(m)) || /caso enviado/.test(sem);
+}
+
+export const ETAPA_RESGATE = 'Resgate';
+/** a chave por unidade (catálogo): desligada = a Sofia como sempre; «só no papel» (o padrão) = só anota o que faria; ligada = o resgate de verdade */
+export const ID_RESGATE = 'chatwoot-sofia-resgate';
+export { MARCA_DO_RESGATE };
+
+/**
+ * A conversa estava em «Perdido» e o paciente voltou a escrever (a caixa trava em conversa única: a mensagem reabre a conversa): a Sofia atende
+ * como RESGATE — sabe que ele já foi dado como perdido, não recomeça do zero e a conversa sai de «Perdido». Devolve o motivo da perda, ou null
+ * quando não é resgate (outra etapa, motivo que fica com a equipe, ou desligado por `CHATWOOT_SOFIA_RESGATE=0`).
+ * Quem está em tratamento ou com a equipe nem chega aqui (`motivoDeNaoResponder` calou antes).
+ *
+ * «Resgate» é uma etapa de TRABALHO da equipe (chatwoot-guia-etapas.ts): o prompt só vale ali quando foi a Sofia quem pôs a conversa lá
+ * (`MARCA_DO_RESGATE`); a que a equipe moveu à mão não ganha o «foi dada como Perdido».
+ */
+export function resgateDaConversa(attrs: Record<string, unknown>, env: NodeJS.ProcessEnv = process.env): { motivo: string; mover: boolean; devolver: boolean } | null {
+  if (env.CHATWOOT_SOFIA_RESGATE === '0') return null;
+  const etapa = texto(attrs.etapa);
+  const daSofia = texto(attrs[MARCA_DO_RESGATE]) === 'sim';
+  if (etapa !== 'Perdido' && !(etapa === ETAPA_RESGATE && daSofia)) return null;
+  const motivo = texto(attrs.motivo_nao_agendamento);
+  if (motivo && motivoSemResgate(motivo)) return null;
+  return { motivo, mover: etapa === 'Perdido', devolver: etapa === ETAPA_RESGATE };
+}
+
+/**
+ * Grava a etapa do resgate (e a marca «resgate da Sofia»). Quem recusou de vez volta para «Perdido» COM `sem-follow-up`: a etiqueta entra ANTES da etapa, para a
+ * régua nunca ver «Perdido» sem ela e mandar os follow-ups de 48/96/120 h a quem pediu para parar.
+ */
+export async function gravarEtapaDoResgate(chat: PortaDoChatwoot, conversa: number, etapa: string, opcoes?: { semFollowUp?: boolean }): Promise<void> {
+  if (opcoes?.semFollowUp) await chat.adicionarEtiquetas(conversa, ['sem-follow-up']);
+  try {
+    await chat.gravarAtributos(conversa, { etapa, [MARCA_DO_RESGATE]: etapa === ETAPA_RESGATE ? 'sim' : 'nao' });
+  } catch (err) {
+    // a etapa não foi gravada: a etiqueta que acabou de entrar não pode ficar numa conversa que segue em «Resgate»
+    if (opcoes?.semFollowUp) await chat.removerEtiquetas?.(conversa, ['sem-follow-up']).catch(() => undefined);
+    throw err;
+  }
+}
+
+const NAO_SECO = /^[\s\W]*(?:n[aã]o|nao)[\s,.!]*(?:obrigad[oa])?[\s.!]*$/i;
+
+/**
+ * O paciente recusou de vez («não quero mais», «pare de me mandar», «não tenho interesse») na última fala dele? Aí o resgate NÃO o tira de «Perdido».
+ * Óbito («minha mãe faleceu») NÃO é recusa: é caso sensível para a equipe (a Sofia não mexe na etapa para nenhum lado — ver `falouDeLuto`).
+ * `forte`: sem o «não» seco — para DEVOLVER a «Perdido» quem já está conversando em «Resgate», onde um «não» solto costuma ser a resposta a uma pergunta da
+ * Sofia («já fez fisioterapia?»), não recusa. Para NÃO tirar de «Perdido» quem acabou de voltar, o «não» seco conta (lado seguro).
+ */
+export function recusouDeVez(falas: readonly Fala[], forte = false): boolean {
+  const turno = falasDoUltimoTurno(falas);
+  const classe = classificarFala(turno);
+  if (classe === 'parar-contato') return true;
+  if (classe !== 'recusa') return false;
+  return !(forte && turno.length > 0 && turno.every((t) => NAO_SECO.test(t)));
+}
+
+/** o paciente falou de falecimento/luto: caso para a equipe, a etapa não anda (nem para «Resgate», nem de volta a «Perdido») */
+export const falouDeLuto = (falas: readonly Fala[]): boolean => classificarFala(falasDoUltimoTurno(falas)) === 'obito';
 
 /**
  * Passa a conversa para a equipe: etiqueta `esperando-humano`, etapa «Esperando humano» e uma nota com o motivo. Etapa não é campo: quem
@@ -239,6 +316,8 @@ export interface EstadoDaRodada {
   passouParaEquipe: boolean;
   /** por que passou (categoria do painel Agente, `motivo-da-passagem.ts`); o 1º motivo da rodada vale */
   motivoDaPassagem?: CodigoDoMotivo | null;
+  /** o modelo mexeu na etapa nesta rodada (`mover_etapa`): o resgate automático não passa por cima do que ele decidiu */
+  etapaMexida?: boolean;
 }
 
 export interface PedidoDasFerramentas {
@@ -457,6 +536,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       }
       if (!seco) await chat.gravarAtributos(conversa, attrs);
       estado.etapa = etapa;
+      estado.etapaMexida = true;
       return `${seco ? '[SECO] ' : ''}Etapa → ${etapa}.`;
     },
   });
@@ -544,14 +624,14 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
 
 // ── a rodada ───────────────────────────────────────────────────────────────────────────────────────
 
-export function preambuloDoChatwoot(a: { modo: ModoDaSofia; unitNome: string; telefone: string | null }): string {
+export function preambuloDoChatwoot(a: { modo: ModoDaSofia; unitNome: string; telefone: string | null; resgate?: { motivo: string } | null }): string {
   return `# CONTEXTO DESTE ATENDIMENTO
 Você está respondendo uma conversa REAL de WhatsApp da ${a.unitNome}, que chegou pelo Chatwoot. Aqui NÃO existe Kommo, cartão nem leadId: não cite nada disso ao paciente.
 ${a.telefone ? `O telefone do paciente (o WhatsApp desta conversa) é ${a.telefone}: use este em buscar_paciente e cadastrar_paciente, a menos que ele diga outro.` : ''}
 Ferramentas deste canal: consultar_horarios, buscar_paciente, cadastrar_paciente, agendar_consulta, remarcar_consulta, cancelar_consulta, gerar_sinal_pix (se a unidade usa sinal), aplicar_tag, mover_etapa, registrar_qualificacao e pausar_ia. Não existem ferramentas de campos do cartão nem de título do lead: o que o paciente contar (queixa, cidade…) fica só na conversa.
 - Não escreva a linha [[botoes: …]]: aqui não há botões. Ofereça as opções no próprio texto, em frase curta.
 - A etapa «Agendado» e a data da consulta são gravadas sozinhas quando agendar_consulta dá certo. Para passar o paciente à equipe use pausar_ia.
-${a.modo === 'seco' ? '- MODO DE OBSERVAÇÃO: as ferramentas que gravam estão simuladas; a sua mensagem NÃO chega ao paciente. Aja exatamente como agiria de verdade.' : '- Sua mensagem vai direto ao paciente, e as ferramentas gravam de verdade.'}`;
+${a.resgate ? `- RESGATE: esta conversa foi dada como «Perdido»${a.resgate.motivo ? ` (motivo registrado: ${a.resgate.motivo})` : ''} e o paciente VOLTOU a escrever. Não recomece do zero nem repita a abertura: leia a conversa, reconheça que ele voltou e retome de onde parou, sem cobrar nem lembrar que ele sumiu. Se ele disser que não quer, respeite e encerre sem insistir. Se ele quer marcar, conduza normalmente.\n` : ''}${a.modo === 'seco' ? '- MODO DE OBSERVAÇÃO: as ferramentas que gravam estão simuladas; a sua mensagem NÃO chega ao paciente. Aja exatamente como agiria de verdade.' : '- Sua mensagem vai direto ao paciente, e as ferramentas gravam de verdade.'}`;
 }
 
 export interface PedidoDaSofia {
@@ -583,21 +663,36 @@ export interface ResultadoDaSofia {
   etapa?: string;
   /** «preço único» LIGADO: a fala do modelo trazia R$ que não é da unidade — NÃO sai; `texto` é o que ela ia dizer (vai na nota para a equipe) */
   precoSegurado?: { valores: number[]; texto: string } | null;
+  /** só no LIGADO: o paciente voltou de «Perdido» e a conversa deve ir para «Resgate» DEPOIS de a resposta sair (quem envia grava) */
+  resgatar?: boolean;
+  /** só no LIGADO: a conversa que a Sofia pôs em «Resgate» e o paciente recusou de vez volta para «Perdido» DEPOIS de a resposta sair (quem envia grava) */
+  devolverAPerdido?: boolean;
 }
 
 export interface DepsDaRodada {
   rodarTeste: typeof rodarTesteDaSofia;
   ferramentas?: DepsDasFerramentas;
-  /** só o teste: a chave «só agenda com sim», o relógio e a chave «preço único» da unidade */
+  /** só o teste: a chave «só agenda com sim», o relógio, a chave «preço único» e a do resgate da unidade */
   soComSim?: Estado;
   agora?: () => Date;
   precoUnico?: Estado;
+  resgate?: Estado;
+  /** só o teste: onde o «só no papel» anota */
+  simular?: typeof registrarSimulacao;
 }
 
 export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada): Promise<ResultadoDaSofia | null> {
   const recorder = new RastroEmMemoria(`cw-${p.conversa}-${Date.now()}`, p.unit.id);
   const estado: EstadoDaRodada = { etapa: texto(p.lida.attrs.etapa), agendou: null, passouParaEquipe: false, motivoDaPassagem: null };
   const feitas: SandboxAction[] = [];
+  // a chave da unidade: desligada = nada (como antes do resgate); «só no papel» = só anota o que faria (sem prompt novo, sem mexer em etapa); ligada = resgate de verdade
+  const chave: Estado = deps.resgate ?? estadoDaAutomacao(p.unit.slug, ID_RESGATE, process.env.CHATWOOT_SOFIA_RESGATE_SLUGS);
+  const resgate = chave === 'desligado' ? null : resgateDaConversa(p.lida.attrs);
+  const valendo = chave === 'ligado';
+  // a marca «resgate da Sofia» de uma conversa que já saiu de «Resgate» (a equipe moveu, a Sofia marcou consulta…) não pode ficar «sim»
+  if (valendo && p.modo === 'ligado' && texto(p.lida.attrs[MARCA_DO_RESGATE]) === 'sim' && texto(p.lida.attrs.etapa) !== ETAPA_RESGATE) {
+    await p.chat.gravarAtributos(p.conversa, { [MARCA_DO_RESGATE]: 'nao' }).catch((err: unknown) => logger.warn({ err: String(err), conversa: p.conversa }, 'chatwoot-sofia: não consegui limpar a marca velha do resgate'));
+  }
   const r = await deps.rodarTeste(p.unit, p.falas, {
     ferramentas: ({ onCall }) =>
       montarFerramentas({
@@ -617,7 +712,8 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
         },
         deps: deps.ferramentas,
       }),
-    preambulo: preambuloDoChatwoot({ modo: p.modo, unitNome: p.unit.name, telefone: p.lida.telefone }),
+    // o «VOLTOU a escrever… reconheça» é só da 1ª rodada (a conversa ainda em «Perdido»); em «Resgate» a Sofia já o acolheu e não repete
+    preambulo: preambuloDoChatwoot({ modo: p.modo, unitNome: p.unit.name, telefone: p.lida.telefone, resgate: valendo && resgate?.mover ? resgate : null }),
     maxVoltas: 8,
   });
   if (!r.ok) {
@@ -672,6 +768,40 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
     }
   }
 
+  // RESGATE: o paciente que estava em «Perdido» voltou e a Sofia respondeu — a conversa deixa de ser «Perdido» (o funil e a régua não podem seguir tratando
+  // como perdido quem está conversando). Só se a rodada não a levou para outro lugar (equipe, consulta marcada, outra etapa que o modelo escolheu).
+  // No LIGADO quem grava é quem envia a resposta, DEPOIS de ela sair (`resgatar`): resposta descartada ou que não saiu não tira ninguém de «Perdido».
+  // RECUSA («não quero mais», «pare de me mandar»): NÃO é resgate — fica em «Perdido» (e quem a Sofia já tinha posto em «Resgate» volta para lá).
+  let resgatar = false;
+  let devolverAPerdido = false;
+  if (resgate && !estado.passouParaEquipe && !estado.agendou && !estado.etapaMexida) {
+    const recusou = recusouDeVez(p.falas);
+    const luto = falouDeLuto(p.falas);
+    /** «só no papel» da chave: anota o que faria e não muda nada */
+    const anota = (de: string, para: string) => {
+      try {
+        (deps.simular ?? registrarSimulacao)(p.unit, ID_RESGATE, { leadId: leadDaConversaChatwoot(p.conversa), acao: 'moveria', alvo: `etapa → ${para}`, valor: para, deEtapa: de, motivo: de === 'Perdido' ? 'o paciente voltou de «Perdido»: a Sofia o atenderia como resgate' : 'o paciente que estava em «Resgate» recusou de vez: voltaria para «Perdido» (sem follow-up)' });
+      } catch (err) {
+        logger.warn({ err: String(err), conversa: p.conversa }, 'chatwoot-sofia: não consegui anotar o «só no papel» do resgate');
+      }
+    };
+    try {
+      if (resgate.mover && estado.etapa === 'Perdido' && !recusou && !luto) {
+        if ((await p.chat.valoresDoAtributo('etapa')).includes(ETAPA_RESGATE)) {
+          if (!valendo) anota('Perdido', ETAPA_RESGATE);
+          else if (p.modo === 'ligado') resgatar = true;
+          else acoes.push({ tool: 'mover_etapa', args: { etapa: ETAPA_RESGATE, de: 'Perdido', automatico: true } });
+        }
+      } else if (resgate.devolver && estado.etapa === ETAPA_RESGATE && recusouDeVez(p.falas, true)) {
+        if (!valendo) anota(ETAPA_RESGATE, 'Perdido');
+        else if (p.modo === 'ligado') devolverAPerdido = true;
+        else acoes.push({ tool: 'mover_etapa', args: { etapa: 'Perdido', de: ETAPA_RESGATE, automatico: true } });
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), conversa: p.conversa }, 'chatwoot-sofia: não consegui conferir a etapa «Resgate» na conta');
+    }
+  }
+
   const ligado = p.modo === 'ligado';
   return {
     resposta,
@@ -683,5 +813,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
     agendou: ligado ? estado.agendou : null,
     etapa: estado.etapa,
     precoSegurado,
+    resgatar,
+    devolverAPerdido,
   };
 }
