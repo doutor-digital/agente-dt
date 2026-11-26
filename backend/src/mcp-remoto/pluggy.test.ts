@@ -319,6 +319,23 @@ test('resumo por semana: segunda a domingo, rótulo da segunda', async () => {
   assert.match(r.observacao, /segunda a domingo/);
 });
 
+test('o documento do pagador (lido para o casamento interno) NUNCA sai no extrato nem no resumo', async () => {
+  const f = fonteFalsa({
+    itens: { [ITEM_A]: itemOk(ITEM_A) },
+    contas: { [ITEM_A]: [conta(CONTA_CC)] },
+    lancamentos: { [CONTA_CC]: [lanc('p1', '2026-11-10', 250, { descricao: 'Pix FULANA TESTE', pagador: 'Fulana Teste', pagadorDocumento: { tipo: 'CPF', numero: '11122233344' } })] },
+  });
+  const c = ctx(f, [itensDe[0]!]);
+  const e = await pluggyExtrato(c, { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30' });
+  const r = await pluggyResumo(c, { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30' });
+  for (const saida of [tudo(e), tudo(r)]) {
+    assert.equal(saida.includes('11122233344'), false);
+    assert.equal(saida.includes('111.222'), false);
+    assert.equal(saida.includes('documento'), false);
+  }
+  assert.equal(e.itens[0]!.pagador, 'Fulana Teste', 'o nome continua saindo, como antes');
+});
+
 // ------------------------------------------------------------------ permissão
 
 async function sessao(userId: string, escritores: Set<string>, contexto: ContextoPluggy) {

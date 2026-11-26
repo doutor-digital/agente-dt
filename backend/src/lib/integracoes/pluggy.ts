@@ -182,6 +182,11 @@ export interface LancamentoPluggy {
   categoria: string | null;
   status: string | null;
   pagador?: string;
+  /**
+   * O documento de quem pagou (Pix/TED recebido), SÓ dígitos. SENSÍVEL: serve para o casamento interno (`pix-casamento.ts`) e NUNCA sai em resposta de ferramenta,
+   * log nem mensagem (`pluggy_extrato` monta cada item campo a campo e não o inclui). Pode vir mascarado pelo banco: só vale com 11 (CPF) ou 14 (CNPJ) dígitos inteiros.
+   */
+  pagadorDocumento?: { tipo: 'CPF' | 'CNPJ'; numero: string };
   recebedor?: string;
   motivo?: string;
 }
@@ -392,6 +397,11 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
     const pagador = texto(objeto(pd?.payer)?.name);
     const recebedor = texto(objeto(pd?.receiver)?.name);
     const motivo = texto(pd?.reason);
+    const doc = objeto(objeto(pd?.payer)?.documentNumber);
+    const digitos = (texto(doc?.value) ?? '').replace(/\D/g, '');
+    const tipoDoc = texto(doc?.type)?.toUpperCase();
+    const pagadorDocumento: LancamentoPluggy['pagadorDocumento'] | null =
+      tipoDoc === 'CPF' && digitos.length === 11 ? { tipo: 'CPF', numero: digitos } : tipoDoc === 'CNPJ' && digitos.length === 14 ? { tipo: 'CNPJ', numero: digitos } : null;
     return {
       id,
       data,
@@ -401,6 +411,7 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
       categoria: texto(j.category),
       status: texto(j.status),
       ...(pagador ? { pagador } : {}),
+      ...(pagadorDocumento ? { pagadorDocumento } : {}),
       ...(recebedor ? { recebedor } : {}),
       ...(motivo ? { motivo } : {}),
     };

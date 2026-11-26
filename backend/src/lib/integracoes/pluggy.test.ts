@@ -304,9 +304,35 @@ test('lançamentos: usa a /v2 (a /transactions sai do ar em 31/12/2026), manda d
   assert.equal(chamadas[1]!.query.get('after'), 'ABC==', 'só o valor de `after`, já decodificado, nunca o `next` inteiro');
   assert.equal(p.chamadas.some((x) => x.caminho === '/transactions'), false, 'a rota obsoleta não é usada');
   const t2 = r.lancamentos[1]!;
-  assert.deepEqual(t2, { id: 't2', data: '2026-11-02', descricao: 'desc t2', valor: 200, tipo: 'entrada', categoria: 'Transfers', status: 'POSTED', pagador: 'Maria Souza', recebedor: 'Doutor Digital', motivo: 'Consulta' });
-  assert.equal(JSON.stringify(r).includes('666.666'), false, 'o documento do pagador nunca é lido');
+  // o documento do pagador agora É lido (só dígitos, e só com 11 ou 14 inteiros) para o casamento interno Pix × paciente; quem o MOSTRA é outra conversa (ver o teste do extrato)
+  assert.deepEqual(t2, { id: 't2', data: '2026-11-02', descricao: 'desc t2', valor: 200, tipo: 'entrada', categoria: 'Transfers', status: 'POSTED', pagador: 'Maria Souza', pagadorDocumento: { tipo: 'CPF', numero: '66666666666' }, recebedor: 'Doutor Digital', motivo: 'Consulta' });
+  assert.equal(JSON.stringify(r).includes('666.666'), false, 'o documento não fica no formato de tela');
   assert.equal(r.lancamentos[0]!.tipo, 'saida');
+});
+
+test('lançamentos: documento do pagador só vale inteiro (CPF 11, CNPJ 14 dígitos); mascarado, de tipo desconhecido ou ausente não vira documento', async () => {
+  const pg = (value: unknown, type: unknown = 'CPF') => ({ paymentData: { payer: { name: 'Fulana Teste', documentNumber: { type, value } }, receiver: {}, paymentMethod: 'PIX' } });
+  const p = pluggyFalso({
+    'POST /auth': () => auth(),
+    'GET /v2/transactions': () => ({
+      json: {
+        results: [
+          tx('cpf', '2026-11-02', 10, 'CREDIT', pg('111.222.333-44')),
+          tx('cnpj', '2026-11-02', 10, 'CREDIT', pg('12.345.678/0001-90', 'CNPJ')),
+          tx('mascarado', '2026-11-02', 10, 'CREDIT', pg('***.222.333-**')),
+          tx('curto', '2026-11-02', 10, 'CREDIT', pg('12345')),
+          tx('tipo', '2026-11-02', 10, 'CREDIT', pg('11122233344', 'RG')),
+          tx('sem', '2026-11-02', 10, 'CREDIT'),
+        ],
+        next: null,
+      },
+    }),
+  });
+  const r = await cliente(p.fetcher).transacoes(CONTA, '2026-11-01', '2026-11-30');
+  const doc = (id: string) => r.lancamentos.find((l) => l.id === id)!.pagadorDocumento;
+  assert.deepEqual(doc('cpf'), { tipo: 'CPF', numero: '11122233344' });
+  assert.deepEqual(doc('cnpj'), { tipo: 'CNPJ', numero: '12345678000190' });
+  for (const id of ['mascarado', 'curto', 'tipo', 'sem']) assert.equal(doc(id), undefined, id);
 });
 
 test('lançamentos: o `type` manda; sem ele vale o sinal; lançamento sem id/data/valor é descartado; cursor repetido e teto de páginas marcam truncado', async () => {

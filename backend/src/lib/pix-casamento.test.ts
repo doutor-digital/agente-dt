@@ -1,0 +1,68 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { chaveDoNome, compararNomes, entradasDoBanco, nivelPixPessoa, nomeDaDescricao, tokensDoNome, valoresDaUnidade } from './pix-casamento.js';
+import type { LancamentoPluggy } from './integracoes/pluggy.js';
+
+// nomes e documentos INVENTADOS (o repositório é público)
+const lanc = (id: string, descricao: string, valor: number, o: Partial<LancamentoPluggy> & { contaTipo?: string } = {}): LancamentoPluggy & { contaTipo?: string } => ({
+  id, data: '2026-11-25', descricao, valor, tipo: valor < 0 ? 'saida' : 'entrada', categoria: null, status: 'POSTED', ...o,
+});
+
+test('nome: sem acento, sem «da/de/do», sem inicial solta; uma palavra só nunca identifica ninguém', () => {
+  assert.deepEqual(tokensDoNome('MARIA da Conceição  d. Silva'), ['maria', 'conceicao', 'silva']);
+  assert.equal(chaveDoNome('MARIA DA CONCEIÇÃO SILVA'), 'maria silva');
+  assert.equal(chaveDoNome('Maria'), null);
+  assert.equal(chaveDoNome(null), null);
+  assert.equal(chaveDoNome('Lead 123'), null);
+});
+
+test('comparar nomes: primeiro + último iguais é «igual» (o meio e o acento não contam); nome cortado pelo banco é «parecido»; o resto é «nenhum»', () => {
+  assert.equal(compararNomes('MARIA CONCEICAO SILVA', 'Maria da Conceição Alves Silva'), 'igual');
+  assert.equal(compararNomes('Joao Pedro Santos', 'JOÃO SANTOS'), 'igual');
+  assert.equal(compararNomes('MARIA CONCEICAO SIL', 'Maria Conceição Silva'), 'parecido', 'o banco cortou o último nome');
+  assert.equal(compararNomes('Maria Silva', 'Maria Souza'), 'nenhum');
+  assert.equal(compararNomes('Maria Silva', 'Mariana Silva'), 'nenhum', 'primeiro nome diferente nunca casa');
+  assert.equal(compararNomes('Maria', 'Maria Silva'), 'nenhum', 'um nome sem sobrenome nunca casa');
+  assert.equal(compararNomes('Maria', 'Maria'), 'nenhum');
+});
+
+test('Pix: o nome vem do campo do pagador E da descrição; descrição de empresa (número) não dá nome', () => {
+  assert.equal(nomeDaDescricao('Pix MARIA SILVA'), 'MARIA SILVA');
+  assert.equal(nomeDaDescricao('pix recebido Ana Souza'), 'Ana Souza');
+  assert.equal(nomeDaDescricao('Pix 12.345.678 EMPRESA LTDA'), null);
+  assert.equal(nomeDaDescricao('Vendas Mastercard'), null);
+  assert.equal(nivelPixPessoa({ nomes: ['Fulana Outra', 'MARIA SILVA'] }, 'Maria Aparecida Silva'), 'igual');
+  assert.equal(nivelPixPessoa({ nomes: [] }, 'Maria Silva'), 'nenhum');
+});
+
+test('entradas do banco: Pix com nome, vendas de maquininha e o resto separados; pendente, saída e cartão de crédito ficam de fora', () => {
+  const r = entradasDoBanco([
+    lanc('p1', 'Pix MARIA SILVA', 250, { pagadorDocumento: { tipo: 'CPF', numero: '11122233344' } }),
+    lanc('p2', 'Pix JOAO SOUZA', 50.5, { pagador: 'João Souza' }),
+    lanc('p3', 'Pix 12.345.678 CLINICA TESTE LTDA', 100, { pagadorDocumento: { tipo: 'CNPJ', numero: '12345678000190' } }),
+    lanc('v1', 'Vendas Mastercard Crédito', 800),
+    lanc('v2', 'Vendas Visa Débito', 200.1),
+    lanc('t1', 'TED recebida', 1000),
+    lanc('x1', 'Pix ANA PENDENTE', 250, { status: 'PENDING' }),
+    lanc('s1', 'Pix enviado FULANO', -250),
+    lanc('c1', 'Pix CARTAO', 250, { contaTipo: 'CREDIT' }),
+  ]);
+  assert.deepEqual(r.pix.map((p) => p.id), ['p1', 'p2', 'p3']);
+  assert.deepEqual(r.pix[0], { id: 'p1', dia: '2026-11-25', centavos: 25000, nomes: ['MARIA SILVA'], cpf: '11122233344', empresa: false });
+  assert.deepEqual(r.pix[1]!.nomes, ['João Souza'], 'o mesmo nome (sem acento/caixa) no campo do pagador e na descrição vale uma vez');
+  assert.equal(r.pix[1]!.centavos, 5050, 'centavos exatos, sem erro de ponto flutuante');
+  assert.equal(r.pix[2]!.empresa, true);
+  assert.equal(r.pix[2]!.cpf, null);
+  assert.deepEqual(r.cartaoVendas, { lancamentos: 2, centavos: 100010 });
+  assert.deepEqual(r.outras, { lancamentos: 1, centavos: 100000 });
+});
+
+test('valores da unidade: o sinal cadastrado + os R$ do texto de produtos (20 a 1000); a lista da operação manda; nada fora da faixa', () => {
+  const texto = 'A CONSULTA presencial: R$ 350 no dia, ou R$ 250 com pagamento antecipado do sinal de R$ 50 (R$ 50 agora por Pix + R$ 200 no dia). Pacote de sessões: R$ 3.500,00. Taxa R$ 5.';
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: texto }), [5000, 20000, 25000, 35000]);
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', sinalPixCentavos: 7500, textoDeProdutos: 'consulta R$ 150,50' }), [7500, 15050]);
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: texto, env: '{"a":[50,250.5],"b":[10]}' }), [5000, 25050], 'a lista da operação troca tudo');
+  assert.deepEqual(valoresDaUnidade({ slug: 'c', textoDeProdutos: 'R$ 100', env: '{"a":[50]}' }), [10000], 'unidade fora da lista cai no texto');
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', env: 'isto não é json' }), []);
+  assert.deepEqual(valoresDaUnidade({ slug: 'a' }), []);
+});

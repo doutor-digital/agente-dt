@@ -1,0 +1,168 @@
+/**
+ * Casar Pix recebido no banco (Pluggy) com PESSOAS (paciente da agenda, paciente da Sofia). Peça comum de duas funções: a lista matinal «agendados sem Pix»
+ * (`agendados-sem-pix.ts`) e a ferramenta «quanto a Sofia rendeu» (`mcp-remoto/pluggy-rendimento.ts`).
+ *
+ * O QUE O BANCO DÁ (medido em Açailândia, 14 dias, só contagens): o Pix recebido traz o nome de quem pagou na descrição («Pix NOME SOBRENOME») e o documento do
+ * pagador em `paymentData.payer.documentNumber` (CPF inteiro, 12 de 12; CNPJ em 7 dos 19 Pix). A venda de maquininha chega AGREGADA («Vendas…»), sem nome: não
+ * se atribui a ninguém. O cadastro de paciente da franquia NÃO tem CPF (nem na lista nem na ficha), então o CPF só entra no casamento quando a fonte da pessoa o
+ * trouxer; hoje o casamento real é por NOME + VALOR + DATA.
+ *
+ * REGRA DA CASA: palpite não vira dado. Nome igual (primeiro + último) com valor e data compatíveis é casamento; qualquer coisa a menos é «parecido» e quem chama
+ * trata como «a conferir», nunca como «pagou» nem como «não pagou». Nome de uma palavra só nunca casa.
+ */
+import type { LancamentoPluggy } from './integracoes/pluggy.js';
+
+/** Sem acento, minúsculo. */
+export const semAcento = (s: string): string => s.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
+
+const LIGACAO = new Set(['de', 'da', 'do', 'das', 'dos', 'e']);
+
+/** «MARIA da Conceição  Silva» → ['maria', 'conceicao', 'silva']: sem acento, sem «da/de/do…», sem inicial solta. */
+export function tokensDoNome(nome: string | null | undefined): string[] {
+  return semAcento(String(nome ?? ''))
+    .replace(/[^a-z\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length >= 2 && !LIGACAO.has(t));
+}
+
+/** «primeiro último» normalizado; null se o nome não tem pelo menos duas palavras (uma palavra só não identifica ninguém). */
+export function chaveDoNome(nome: string | null | undefined): string | null {
+  const t = tokensDoNome(nome);
+  return t.length >= 2 ? `${t[0]} ${t[t.length - 1]}` : null;
+}
+
+export type NivelDeNome = 'igual' | 'parecido' | 'nenhum';
+
+/**
+ * - `igual`: primeiro e último nome iguais (o meio pode faltar ou diferir: o banco corta e a ficha abrevia);
+ * - `parecido`: primeiro nome igual e o último de um é o começo (3+ letras) de uma palavra do outro (nome cortado pelo banco), ou as duas têm 3+ palavras em comum;
+ * - `nenhum`: o resto, e qualquer nome de uma palavra só.
+ */
+export function compararNomes(a: string | null | undefined, b: string | null | undefined): NivelDeNome {
+  const ta = tokensDoNome(a);
+  const tb = tokensDoNome(b);
+  if (ta.length < 2 || tb.length < 2) return 'nenhum';
+  if (ta[0] !== tb[0]) return 'nenhum';
+  if (ta[ta.length - 1] === tb[tb.length - 1]) return 'igual';
+  const corta = (curto: string, longo: string[]) => curto.length >= 3 && longo.slice(1).some((t) => t.startsWith(curto) || (t.length >= 3 && curto.startsWith(t)));
+  if (corta(ta[ta.length - 1]!, tb) || corta(tb[tb.length - 1]!, ta)) return 'parecido';
+  const comuns = ta.filter((t) => tb.includes(t)).length;
+  return comuns >= 3 ? 'parecido' : 'nenhum';
+}
+
+const ORDEM: Record<NivelDeNome, number> = { nenhum: 0, parecido: 1, igual: 2 };
+export const melhorNivel = (a: NivelDeNome, b: NivelDeNome): NivelDeNome => (ORDEM[a] >= ORDEM[b] ? a : b);
+
+// ----------------------------------------------------------------------------------------------------------------- o Pix
+
+export interface PixRecebido {
+  id: string;
+  /** AAAA-MM-DD, como o banco lançou */
+  dia: string;
+  centavos: number;
+  /** os nomes que o banco deu para quem pagou (campo do pagador e descrição); nunca vazio com nome conhecido */
+  nomes: string[];
+  /** CPF do pagador (11 dígitos) quando o banco o deu inteiro; vale só para casar, nunca sai em texto */
+  cpf: string | null;
+  /** o pagador é empresa (CNPJ): não é paciente */
+  empresa: boolean;
+}
+
+export interface EntradasNaoPix {
+  lancamentos: number;
+  centavos: number;
+}
+
+export interface EntradasDoBanco {
+  pix: PixRecebido[];
+  /** «Vendas…» da maquininha: agregado do dia, sem nome */
+  cartaoVendas: EntradasNaoPix;
+  /** TED, boleto, depósito, transferência: entrada que não é Pix nem venda */
+  outras: EntradasNaoPix;
+}
+
+const centavosDe = (v: number): number => Math.round(Math.abs(v) * 100);
+
+/** «Pix NOME SOBRENOME» → «NOME SOBRENOME». Descrição de pessoa jurídica («Pix 12.345.678 EMPRESA LTDA») não tem nome de paciente. */
+export function nomeDaDescricao(descricao: string | null | undefined): string | null {
+  const m = /^\s*pix(?:\s+(?:recebido|enviado))?\s+(.+)$/i.exec(descricao ?? '');
+  const resto = m?.[1]?.trim();
+  if (!resto || /\d/.test(resto)) return null;
+  return resto;
+}
+
+type LancamentoComConta = LancamentoPluggy & { contaTipo?: string | null };
+
+/**
+ * Separa o que entrou no banco em Pix (com nome), venda de maquininha e o resto. Só conta entrada efetivada em conta bancária: pendente (o banco ainda pode trocar)
+ * e cartão de crédito ficam de fora, como nos totais da `pluggy_extrato`.
+ */
+export function entradasDoBanco(lancamentos: ReadonlyArray<LancamentoComConta>): EntradasDoBanco {
+  const out: EntradasDoBanco = { pix: [], cartaoVendas: { lancamentos: 0, centavos: 0 }, outras: { lancamentos: 0, centavos: 0 } };
+  for (const l of lancamentos) {
+    if (l.tipo !== 'entrada' || l.status === 'PENDING' || l.contaTipo === 'CREDIT') continue;
+    const centavos = centavosDe(l.valor);
+    if (/^\s*pix\b/i.test(l.descricao)) {
+      const nomes = [l.pagador, nomeDaDescricao(l.descricao)].filter((n): n is string => !!n && tokensDoNome(n).length > 0);
+      const unicos = nomes.filter((n, i) => nomes.findIndex((m) => semAcento(m) === semAcento(n)) === i);
+      out.pix.push({
+        id: l.id,
+        dia: l.data,
+        centavos,
+        nomes: unicos,
+        cpf: l.pagadorDocumento?.tipo === 'CPF' ? l.pagadorDocumento.numero : null,
+        empresa: l.pagadorDocumento?.tipo === 'CNPJ',
+      });
+    } else if (/^\s*vendas\b/i.test(l.descricao)) {
+      out.cartaoVendas.lancamentos += 1;
+      out.cartaoVendas.centavos += centavos;
+    } else {
+      out.outras.lancamentos += 1;
+      out.outras.centavos += centavos;
+    }
+  }
+  return out;
+}
+
+/** O melhor nível de nome entre uma pessoa e os nomes que o banco deu para o pagador. */
+export function nivelPixPessoa(pix: Pick<PixRecebido, 'nomes'>, nomeDaPessoa: string | null | undefined): NivelDeNome {
+  let melhor: NivelDeNome = 'nenhum';
+  for (const n of pix.nomes) melhor = melhorNivel(melhor, compararNomes(n, nomeDaPessoa));
+  return melhor;
+}
+
+// ----------------------------------------------------------------------------------------------------------------- valores da unidade
+
+/** `R$ 250`, `R$ 1.250,00`, `R$50` → centavos. */
+const REAIS_NO_TEXTO = /R\$\s?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?/g;
+/** Fora desta faixa não é sinal nem consulta: é pacote de tratamento, mensalidade ou lixo. */
+const MIN_REAIS = 20;
+const MAX_REAIS = 1000;
+
+/**
+ * Os valores de Pix que valem como «pagou a consulta/sinal» numa unidade, em centavos, do mais barato para o mais caro.
+ * Ordem das fontes: a lista da própria operação (`AGENDADOS_SEM_PIX_VALORES`, JSON `{"<slug>": [50, 250]}` em reais) → o sinal cadastrado
+ * (`sinalPixCentavos`) + os valores em reais que o texto de produtos da unidade cita (a mesma fonte que a Sofia lê: «R$ 350 no dia, ou R$ 250 com sinal de R$ 50»).
+ * Nada de número no código: mudou o texto da unidade, mudou a lista.
+ */
+export function valoresDaUnidade(a: { slug: string; sinalPixCentavos?: number | null; textoDeProdutos?: string | null; env?: string | undefined }): number[] {
+  const bruto = (a.env ?? '').trim().replace(/^'|'$/g, '');
+  if (bruto) {
+    try {
+      const lista = (JSON.parse(bruto) as Record<string, unknown>)?.[a.slug];
+      if (Array.isArray(lista)) {
+        const v = lista.map((x) => Math.round(Number(x) * 100)).filter((c) => Number.isInteger(c) && c > 0);
+        if (v.length) return [...new Set(v)].sort((x, y) => x - y);
+      }
+    } catch {
+      // JSON ruim: cai nas outras fontes (o worker avisa no log uma vez)
+    }
+  }
+  const valores = new Set<number>();
+  if (typeof a.sinalPixCentavos === 'number' && Number.isInteger(a.sinalPixCentavos) && a.sinalPixCentavos > 0) valores.add(a.sinalPixCentavos);
+  for (const m of (a.textoDeProdutos ?? '').matchAll(REAIS_NO_TEXTO)) {
+    const reais = Number(`${m[1]!.replace(/\./g, '')}.${(m[2] ?? '0').padEnd(2, '0')}`);
+    if (Number.isFinite(reais) && reais >= MIN_REAIS && reais <= MAX_REAIS) valores.add(Math.round(reais * 100));
+  }
+  return [...valores].sort((x, y) => x - y);
+}

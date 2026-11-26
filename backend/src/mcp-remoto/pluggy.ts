@@ -160,13 +160,13 @@ export async function pluggyContas(ctx: ContextoPluggy, a: { empresa?: string; t
 
 // ----------------------------------------------------------------- leitura comum (extrato e resumo)
 
-interface LancamentoDaConta extends LancamentoPluggy {
+export interface LancamentoDaConta extends LancamentoPluggy {
   contaId: string;
   conta: string;
   contaTipo: string | null;
 }
 
-interface Leitura {
+export interface Leitura {
   empresa: string;
   inicio: string;
   fim: string;
@@ -185,7 +185,7 @@ function validarPeriodo(inicio: string, fim: string): void {
   if (diasNoPeriodo(inicio, fim) > MAX_DIAS) throw new ErroDeEntrada(`período de até ${MAX_DIAS} dias; peça em partes (recebi ${diasNoPeriodo(inicio, fim)} dias)`);
 }
 
-async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: string; inicio: string; fim: string }): Promise<Leitura> {
+export async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: string; inicio: string; fim: string }): Promise<Leitura> {
   const fonte = fonteDe(ctx);
   validarPeriodo(a.inicio, a.fim);
   const empresa = resolverEmpresa(ctx, a.empresa);
