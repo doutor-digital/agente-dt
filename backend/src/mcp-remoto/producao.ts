@@ -56,6 +56,8 @@ import { entityIdDaConta, lerConfigZenfisio, zenfisioGet } from '../lib/integrac
 import { lerContasDoAmbiente as lerContasInfinitepay } from '../lib/integracoes/infinitepay.js';
 import { contaInfinitepayDaConfig, criarContextoInfinitepay, registrarFerramentasInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import { armazemDeLinksPrisma } from './infinitepay-armazem.js';
+import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
+import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -280,6 +282,32 @@ async function contasInfinitepayDoAmbiente(): Promise<Map<string, ContaInfinitep
   for (const c of lido.contas.values()) contas.set(c.slug, contaInfinitepayDaConfig(c));
   logger.debug({ contas: contas.size }, 'mcp-remoto: contas da InfinitePay carregadas');
   return contas;
+}
+
+/**
+ * Itens da Pluggy (leitura bancária) no AMBIENTE do servidor: PLUGGY_ITENS="<empresa>:<itemId>[:<apelido>],...". A empresa tem de ser o slug EXATO de uma
+ * unidade ativa; entrada malformada, empresa desconhecida e item repetido são puladas com aviso no log (só o final do id), nunca adivinhadas.
+ * Sem a variável não consulta o banco nem registra nada.
+ */
+const pluggyAvisadas = new Set<string>();
+async function itensPluggyDoAmbiente(): Promise<ItemConfigurado[]> {
+  const lido = lerItensDoAmbiente(process.env.PLUGGY_ITENS);
+  const avisar = (chave: string, o: object) => {
+    if (pluggyAvisadas.has(chave)) return;
+    pluggyAvisadas.add(chave);
+    logger.warn(o, 'mcp-remoto: entrada da Pluggy ignorada');
+  };
+  for (const i of lido.ignoradas) avisar(`${i.posicao}:${i.motivo}`, i);
+  if (!lido.entradas.length) return [];
+  if (!clienteCompartilhado()) {
+    avisar('sem-credenciais', { motivo: 'PLUGGY_ITENS está preenchida mas faltam PLUGGY_CLIENT_ID e PLUGGY_CLIENT_SECRET: a leitura bancária fica desligada' });
+    return [];
+  }
+  const unidades = await prisma.unit.findMany({ select: { slug: true, name: true, isActive: true } });
+  const r = resolverEmpresas(lido.entradas, unidades.map((u) => ({ slug: u.slug, nome: u.name, ativa: u.isActive })));
+  for (const i of r.ignoradas) avisar(`${i.item}:${i.motivo}`, i);
+  logger.debug({ itens: r.itens.length }, 'mcp-remoto: itens da Pluggy carregados');
+  return r.itens;
 }
 
 /** Contas com o token do Tiquetaque (ponto) no painel de integrações. O token fica só em memória, decifrado aqui. */
@@ -611,6 +639,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
   const infinitepay = criarContextoInfinitepay(new Map(), armazemDeLinksPrisma(prisma));
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
+  // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
+  const pluggy = criarContextoPluggy([], clienteCompartilhado());
   const tramitacao = criarContextoTramitacao(new Map());
   manterAtualizado(contasTramitacaoDoBanco, (contas) => (tramitacao.contas = contas), 'as contas da Tramitação');
   // o teto anti-ban conta o que saiu nas últimas 24 h, inclusive antes desta subida do servidor (lido no 1º envio)
@@ -627,6 +657,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   let operadoresChatwoot = new Set<string>();
   const primeirasCargas: Array<Promise<void>> = [];
   if (chatwoot.conta) primeirasCargas.push(manterAtualizado(operadoresDoChatwoot, (s) => (operadoresChatwoot = s), 'quem mexe no Chatwoot'));
+  // a lista de itens da Pluggy entra na 1ª carga: quem conecta logo após um reinício já vê as ferramentas (se tiver permissão)
+  primeirasCargas.push(manterAtualizado(itensPluggyDoAmbiente, (itens) => (pluggy.itens = itens), 'os itens da Pluggy'));
   let escolhedoresDeConta = new Set<string>();
   if (chatwoot.conta) primeirasCargas.push(manterAtualizado(escolhedoresDeContaDoChatwoot, (s) => (escolhedoresDeConta = s), 'quem escolhe a conta do Chatwoot'));
   const sistemas = criarContextoSistemas();
@@ -688,6 +720,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       // Asaas: cliente, cobrança (boleto/Pix/cartão/parcelado), editar, cancelar, estornar e transferir, DIRETO, só para quem está na lista de
       // escrita E só nas unidades de ASAAS_ESCRITA_UNIDADES, com tetos, lista de destinos e aviso no Telegram. O portão fica numa função testada.
       registrarEscritaAsaasSePermitido(server, asaas, escritaAsaas, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
+      // Pluggy (leitura bancária, SENSÍVEL): só para quem está na lista de quem altera cartões e só com a Pluggy ligada; leitor comum nem vê as ferramentas
+      registrarPluggySePermitido(server, pluggy, quem.userId, escritores, auditar);
       const quemSistemas = { usuario: quem.userId, nome: quem.email || `usuario:${quem.userId}` };
       registrarLeituraSistemas(server, sistemas, quemSistemas, auditar);
       if (escritores.has(quem.userId)) {
@@ -714,7 +748,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, () => escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, infinitepay: infinitepay.contas, gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, infinitepay: infinitepay.contas, ...(escritores.has(quem.userId) && pluggy.fonte ? { pluggy: empresasDoPluggy(pluggy) } : {}), gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };
