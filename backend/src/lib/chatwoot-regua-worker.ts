@@ -391,7 +391,7 @@ export function quemFalaPorTelefone(lista: ReadonlyArray<{ c: ConversaRegua; ati
   return saida;
 }
 
-async function lerConversas(chat: Chat, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; atividades: Map<number, number>; truncada: boolean }> {
+export async function lerConversas(chat: Pick<Chat, 'pagina'>, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; atividades: Map<number, number>; truncada: boolean }> {
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
   const atividades = new Map<number, number>();
