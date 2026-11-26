@@ -161,8 +161,11 @@ export interface ArmazemDaLista {
   contarDoDia(unitId: string, modo: string, dia: string): Promise<number>;
   /** os agendamentos que ficaram «pendente» hoje (a Evolution recusou e nada saiu) */
   pendentesDoDia(unitId: string, modo: string, dia: string): Promise<number[]>;
-  /** quem já foi listado desde `desde` (menos o que ficou pendente): por agendamento e por paciente */
-  jaListados(unitId: string, modo: string, desde: Date): Promise<Array<{ idSchedule: number; pacienteChave: string }>>;
+  /**
+   * quem já foi listado desde `desde` (menos o que ficou pendente), por agendamento e por paciente, em QUALQUER modo: quem entrou na lista «só no papel»
+   * (o grupo de comparação) não é listado de novo quando a chave passa a ligada, nem conta nos dois grupos.
+   */
+  jaListados(unitId: string, desde: Date): Promise<Array<{ idSchedule: number; pacienteChave: string }>>;
   /** grava um item; false = já existia (outro processo ou rodada) */
   reivindicar(item: ItemParaGravar): Promise<boolean>;
   concluir(unitId: string, idSchedule: number, modo: string, envio: string): Promise<void>;
@@ -177,9 +180,9 @@ export const armazemDaLista: ArmazemDaLista = {
   async pendentesDoDia(unitId, modo, dia) {
     return (await prisma.agendaRecuperacaoItem.findMany({ where: { unitId, modo, dia, envio: 'pendente' }, select: { idSchedule: true } })).map((i) => i.idSchedule);
   },
-  async jaListados(unitId, modo, desde) {
+  async jaListados(unitId, desde) {
     return prisma.agendaRecuperacaoItem.findMany({
-      where: { unitId, modo, listadoEm: { gte: desde }, NOT: { envio: { in: ['pendente', 'sem_destino'] } } },
+      where: { unitId, listadoEm: { gte: desde }, NOT: { envio: { in: ['pendente', 'sem_destino'] } } },
       select: { idSchedule: true, pacienteChave: true },
     });
   },
@@ -415,7 +418,7 @@ async function rodada(
     logger.warn({ err: String(err), unit: unit.slug }, `${ID_RECUPERACAO}: não li a hora dos desmarques no histórico — vale a última alteração da franquia`);
   }
   const { candidatos, saidas } = candidatosDaLista({ unitId: unit.id, agendamentos: ag.agendamentos, emTratamento, hoje, agora, dias: limites.dias, lancamentos });
-  const listados = await armazem.jaListados(unit.id, modoDaLinha, new Date(agora.getTime() - limites.dias * 86_400_000));
+  const listados = await armazem.jaListados(unit.id, new Date(agora.getTime() - limites.dias * 86_400_000));
   const idsListados = new Set(listados.map((l) => l.idSchedule));
   const chavesListadas = new Set(listados.map((l) => l.pacienteChave));
   const novos = candidatos.filter((c) => !idsListados.has(c.idSchedule) && !chavesListadas.has(c.pacienteChave) && (!pendentesHoje || pendentesHoje.has(c.idSchedule)));

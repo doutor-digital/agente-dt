@@ -67,6 +67,17 @@ test('quem marcou de novo para o MESMO dia (outro horário) também voltou', () 
   assert.deepEqual(nomes(r), []);
 });
 
+test('remarcou para ANTES do horário original: cancelou (lançou) no dia 25 e foi atendido no dia 22 — também voltou; o que foi ANTES do lançamento não vale', () => {
+  const cancelada = ag('FULANA ADIANTOU', '2026-11-25', DESMARCADO, { modifiedUtc: '2026-11-20T12:00:00.000Z' }); // consulta dia 25, desmarcada dia 20
+  const adiantou = ag('FULANA ADIANTOU', '2026-11-22', ATENDIDO);
+  assert.deepEqual(nomes(lista([cancelada, adiantou], [], {})), [], 'atendida no dia 22, depois do lançamento do dia 20');
+  const antiga = ag('FULANA ADIANTOU', '2026-11-18', ATENDIDO);
+  assert.deepEqual(nomes(lista([cancelada, antiga])), ['FULANA ADIANTOU'], 'atendimento de ANTES do lançamento não é volta');
+  // com a hora do histórico em vez do `modified`
+  const lanc = new Map([[cancelada.idSchedule as number, new Date('2026-11-20T12:00:00.000Z')]]);
+  assert.deepEqual(nomes(lista([{ ...cancelada, modifiedUtc: '2026-11-26T09:00:00.000Z' }, adiantou], [], { lancamentos: lanc })), []);
+});
+
 test('um novo desmarcado depois NÃO é ter voltado: continua na lista (uma vez só, a mais recente)', () => {
   const r = lista([ag('FULANA', '2026-11-18', DESMARCADO), ag('FULANA', '2026-11-24', FALTOU)]);
   assert.equal(r.candidatos.length, 1);
