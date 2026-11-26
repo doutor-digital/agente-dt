@@ -28,6 +28,7 @@ import { preencherModelo, type Preenchimento } from '../lib/modelo-preenchido.js
 import { modeloPreenchidoLigado } from '../lib/chatwoot-modelo-preenchido-ui.js';
 import { unidadesDaConta } from '../lib/chatwoot-unidades.js';
 import { diaEmBelem } from '../lib/chatwoot-hoje.js';
+import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { gradeDoDia, hojeLocal } from '../agent/agenda-tools.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { rodarTesteDaSofia } from './playground.controller.js';
@@ -397,6 +398,7 @@ export function paginaAssistenteHandler(_req: Request, res: Response): void {
  *  - GET  /api/public/assistente/estado    — o botão aparece?
  *  - GET  /api/public/funil/gestao         — o menu mostra «Marketing» e «Gestor»?
  *  - GET  /api/public/assistente/respostas — quais balões da conversa são da Sofia (👍/👎 no balão, 13/11)
+ *  - GET/POST /api/public/assistente/pausa — o botão «Pausar Sofia» da conversa (menu.js, chatwoot-botao-pausar.ts)
  *  - POST /api/public/assistente/avaliar   — o 👍/👎 do balão
  *  - POST /api/public/assistente/modelo-preenchido — os parâmetros sugeridos do modelo do WhatsApp mandado à mão
  */
@@ -404,6 +406,7 @@ const ROTAS_DO_BOTAO: Readonly<Record<string, readonly string[]>> = {
   '/api/public/assistente/estado': ['GET'],
   '/api/public/funil/gestao': ['GET'],
   '/api/public/assistente/respostas': ['GET'],
+  '/api/public/assistente/pausa': ['GET', 'POST'],
   '/api/public/assistente/avaliar': ['POST'],
   '/api/public/assistente/modelo-preenchido': ['POST'],
 };
@@ -459,11 +462,14 @@ async function conversaDaAtendente(req: Request, res: Response, idBruto: unknown
   return { a, conversa, slug, porta: portaDaPausaDoChatwoot(a.c, a.sessao) };
 }
 
+/** A Sofia (IA do CRM) está ligada para esta unidade? O botão «Pausar Sofia» da conversa só aparece com ela (o painel ignora o campo). «Só no papel» conta: ela decide, só não envia. */
+export const sofiaDoCrmAtiva = (slug: string, env: NodeJS.ProcessEnv = process.env): boolean => estadoDaAutomacao(slug, 'chatwoot-ia', env.CHATWOOT_IA_SLUGS) !== 'desligado';
+
 export async function assistentePausaEstadoHandler(req: Request, res: Response): Promise<void> {
   const r = await conversaDaAtendente(req, res, req.query.conversa);
   if (!r) return;
   try {
-    res.json(estadoDaPausa(await r.porta.conversa(r.conversa)));
+    res.json({ ...estadoDaPausa(await r.porta.conversa(r.conversa)), sofia: sofiaDoCrmAtiva(r.slug) });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa }, 'assistente: estado da pausa falhou');
     res.status(502).json({ error: 'não consegui ler a conversa' });
@@ -489,7 +495,7 @@ export async function assistentePausaAcaoHandler(req: Request, res: Response): P
         ? await pausar(r.conversa, { tipo: 'pessoa', id: eu!, nome: r.a.nome }, r.porta)
         : await reativar(r.conversa, r.a.nome, r.porta);
     logger.info({ conversa: r.conversa, acao, feito, quem: r.a.id }, 'assistente: pausa da IA');
-    res.json({ ok: true, feito, ...estadoDaPausa(await r.porta.conversa(r.conversa)) });
+    res.json({ ok: true, feito, ...estadoDaPausa(await r.porta.conversa(r.conversa)), sofia: sofiaDoCrmAtiva(r.slug) });
   } catch (e) {
     logger.warn({ err: String(e), conversa: r.conversa, acao }, 'assistente: pausa da IA falhou');
     res.status(502).json({ error: 'não consegui mudar a pausa agora' });

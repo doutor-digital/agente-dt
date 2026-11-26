@@ -50,6 +50,7 @@ import { TELAS_CSS, TELAS_JS } from '../lib/chatwoot-telas-ui.js';
 import { instanteNoFuso, searchTreatments } from '../services/spine.service.js';
 import { arquivoComEtapa, CAIXAS_HISTORICO, CAIXAS_REGUA, CAMPO_PARTIDA, ehArquivo } from '../lib/chatwoot-regua.js';
 import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
+import { botaoPausarJs } from '../lib/chatwoot-botao-pausar.js';
 import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, semArquivo, type Arquivo, type LeituraCrua } from '../lib/funil-leitura.js';
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
@@ -1880,7 +1881,9 @@ export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly
   const cartao = cartaoEnxutoJs(process.env, contasDoGuiaSemAntecipado); // as mesmas contas sem antecipado do guia (banco)
   // o modelo do WhatsApp com os parâmetros preenchidos (mandado à mão): só preenche as caixinhas vazias, nunca envia; falhou, o resto segue
   const modelo = modeloPreenchidoJs(agente);
-  const opcionais = [guia, selo, dominio, rotulo, cartao, modelo].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
+  // o botão «Pausar Sofia» na conversa: pausa/reativa pelos mesmos endpoints do painel da assistente; só visual até o clique; desligado por padrão (CHATWOOT_BOTAO_PAUSAR=1)
+  const pausar = botaoPausarJs(origem);
+  const opcionais = [guia, selo, dominio, rotulo, cartao, modelo, pausar].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
   return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
 }
 
