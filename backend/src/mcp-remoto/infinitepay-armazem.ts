@@ -190,6 +190,7 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
       }
       if (!mudou) await db.infinitepayLink.updateMany({ where: alvo, data: registro });
       // a marca de revisão ACUMULA (compara e troca, até 5 tentativas): nunca apaga a que já estava
+      let marcou = false;
       if (e.revisao) {
         for (let tentativa = 0; tentativa < 5; tentativa++) {
           const atual = await db.infinitepayLink.findUnique({ where: { unitSlug_orderNsu: alvo as { unitSlug: string; orderNsu: string } } });
@@ -197,11 +198,14 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
           const novo = acumularRevisao(atual.revisao, e.revisao);
           if (novo === atual.revisao) break;
           const r = await db.infinitepayLink.updateMany({ where: { ...alvo, revisao: atual.revisao }, data: { revisao: novo } });
-          if (r.count > 0) break;
+          if (r.count > 0) {
+            marcou = true;
+            break;
+          }
         }
       }
       const l = await db.infinitepayLink.findUnique({ where: { unitSlug_orderNsu: alvo as { unitSlug: string; orderNsu: string } } });
-      return { mudou, atual: l ? comoLinkGuardado(l) : null };
+      return { mudou, marcou, atual: l ? comoLinkGuardado(l) : null };
     },
   };
 }

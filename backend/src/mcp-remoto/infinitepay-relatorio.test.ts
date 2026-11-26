@@ -358,6 +358,44 @@ test('bloco BANKACCTFROM grande (até 4.000 caracteres) é lido; maior que o lim
   assert.throws(() => lerOfx(OFX_V1.replace('<ACCTID>987654321', '<ACCTTYPE>X'), SEGREDO), /não consegui ler o ACCTID/);
 });
 
+test('um arquivo de 10 MB feito só de <BANKACCTFROM> repetido é recusado em menos de 200 ms (antes: 4.000 posições por marca, 19 s)', async () => {
+  const cabeca = 'OFXHEADER:100\nDATA:OFXSGML\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS>';
+  const marca = '<BANKACCTFROM>';
+  const malicioso = cabeca + marca.repeat(Math.floor((10 * 1024 * 1024) / marca.length));
+  assert.ok(malicioso.length > 10_000_000);
+  let t0 = performance.now();
+  assert.throws(() => lerOfx(malicioso, SEGREDO), /marcas de conta/);
+  assert.ok(performance.now() - t0 < 200, `lerOfx levou ${(performance.now() - t0).toFixed(0)} ms`);
+  // o mesmo, pelo caminho da importação (com o decodificador de bytes), e a variante com cartão de crédito
+  t0 = performance.now();
+  t0 = performance.now();
+  await assert.rejects(() => importarRelatorio(relatoriosEmMemoria(), { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: Buffer.from(malicioso), importadoPor: 'x', segredoDaConta: SEGREDO }), /marcas de conta/);
+  assert.ok(performance.now() - t0 < 200, `importar levou ${(performance.now() - t0).toFixed(0)} ms`);
+  t0 = performance.now();
+  assert.throws(() => lerOfx(cabeca + '<CCACCTFROM>x'.repeat(800_000), SEGREDO), /marcas de conta/);
+  assert.ok(performance.now() - t0 < 200);
+  // um extrato normal (1 ou 2 marcas de conta) segue lendo
+  assert.equal(lerOfx(OFX_V1, SEGREDO).conta?.final, '4321');
+});
+
+test('outros arquivos de 10 MB feitos para travar (só <STMTTRN>, só <ACCTID>, blocos abertos) também são recusados ou lidos em tempo curto', () => {
+  const cabeca = 'OFXHEADER:100\nDATA:OFXSGML\n\n<OFX><BANKMSGSRSV1><STMTTRNRS><STMTRS>';
+  const casos: Record<string, string> = {
+    'só STMTTRN': cabeca + '<STMTTRN>'.repeat(1_200_000),
+    'só ACCTID': cabeca + '<BANKACCTFROM><ACCTID>1'.repeat(1) + '<ACCTID>'.repeat(1_300_000),
+    'um bloco gigante aberto': cabeca + '<BANKACCTFROM>' + 'x'.repeat(10_000_000),
+  };
+  for (const [nome, texto] of Object.entries(casos)) {
+    const t0 = performance.now();
+    try {
+      lerOfx(texto, SEGREDO);
+    } catch {
+      // recusar também vale: o que importa é não travar
+    }
+    assert.ok(performance.now() - t0 < 1000, `${nome}: ${(performance.now() - t0).toFixed(0)} ms`);
+  }
+});
+
 test('arquivo sem ACCTID: importa, mas avisa que não deu para conferir a conta', async () => {
   const arm = relatoriosEmMemoria();
   const sem = OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '');

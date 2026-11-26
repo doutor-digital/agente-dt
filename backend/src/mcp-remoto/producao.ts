@@ -646,7 +646,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // O segredo do endereço do webhook vem SÓ de INFINITEPAY_WEBHOOK_SEGREDO (32+ caracteres), sem derivar do segredo do console: o endereço de cada link vale por até 90 dias e girar
   // SESSION_JWT_SECRET faria os avisos dos links vivos darem 404. Sem o segredo: nenhum link é criado e a rota nem é montada (ver ligar-infinitepay-acailandia.sh, que o gera uma vez).
   const segredoDoAviso = segredoDoAvisoDoAmbiente();
-  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook não é montado');
+  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook responde 503');
   const escritaInfinitepay = criarEscritaInfinitepay({
     armazem: armazemDeEscritaPrisma(prisma as never),
     alertar: (texto) => enviarTelegram(texto),
@@ -656,7 +656,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     },
   });
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
-  if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  // a rota é montada SEMPRE: sem o segredo ela responde 503 e avisa o João (um 404 faria a InfinitePay desistir de avisar o pagamento de links vivos)
+  montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
   // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
   const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
   // o hash da conta do extrato é um HMAC com este segredo (INFINITEPAY_CONTA_SEGREDO, 32+ caracteres, SÓ do ambiente: sem ele a importação recusa)

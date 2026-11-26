@@ -99,6 +99,12 @@ export function descricaoSegura(bruto: string): string {
 
 // ----------------------------------------------------------------- OFX
 
+/** O teto de lançamentos num arquivo OFX. */
+const MAX_LANCAMENTOS = 200_000;
+
+/** Quantas marcas de conta (BANKACCTFROM/CCACCTFROM) um arquivo pode ter antes de ser recusado sem varredura. */
+const MAX_MARCAS_DE_CONTA = 4;
+
 /** O segredo do servidor que faz do hash da conta um HMAC: no mínimo 32 caracteres, SÓ do ambiente (INFINITEPAY_CONTA_SEGREDO), sem derivar de nada. */
 export const SEGREDO_DA_CONTA_MINIMO = 32;
 
@@ -140,8 +146,12 @@ export function decodificar(b: Buffer): string {
   }
 }
 
+const regexDoCampo = new Map<string, RegExp>();
 const campoOfx = (bloco: string, tag: string): string | undefined => {
-  const m = new RegExp(`<${tag}>\\s*([^<\\r\\n]*)`, 'i').exec(bloco);
+  // uma expressão por marca, criada uma vez (antes se criava uma por lançamento e por marca)
+  let re = regexDoCampo.get(tag);
+  if (!re) regexDoCampo.set(tag, (re = new RegExp(`<${tag}>\\s*([^<\\r\\n]*)`, 'i')));
+  const m = re.exec(bloco);
   const v = m?.[1]?.trim();
   return v ? v : undefined;
 };
@@ -175,6 +185,9 @@ export function lerOfx(texto: string, segredoDaConta: string): ResultadoDoOfx {
   if (!/<OFX>/i.test(texto)) throw new ErroDeEntrada('isto não parece um arquivo OFX (não achei a marca <OFX>)');
   const linhas: LinhaDeMovimento[] = [];
   let ignoradas = 0;
+  // um extrato de verdade tem milhares de lançamentos, não milhões: acima do teto o arquivo é recusado sem ser varrido
+  let marcasDeLancamento = 0;
+  for (const _ of texto.matchAll(/<STMTTRN>/gi)) if (++marcasDeLancamento > MAX_LANCAMENTOS) throw new ErroDeEntrada(`o arquivo tem mais de ${MAX_LANCAMENTOS} lançamentos: peça o extrato por períodos menores. Nada foi gravado.`);
   const blocos = texto.match(/<STMTTRN>[\s\S]*?(?=<\/STMTTRN>|<STMTTRN>|<\/BANKTRANLIST>|<\/STMTRS>|<\/CCSTMTRS>|<\/OFX>|$)/gi) ?? [];
   for (const b of blocos) {
     const data = dataDoOfx(campoOfx(b, 'DTPOSTED'));
@@ -194,7 +207,13 @@ export function lerOfx(texto: string, segredoDaConta: string): ResultadoDoOfx {
   // a conta do arquivo: a identificação é lida só para CONFERIR se o arquivo é da mesma conta já importada da unidade; guarda-se o hash e o final
   // SÓ a conta DONA do extrato (BANKACCTFROM / CCACCTFROM, que vêm antes da lista de lançamentos): um TED traz a conta de destino em BANKACCTTO dentro do lançamento, e isso
   // não é "outra conta" do arquivo. O bloco vai até a lista de lançamentos, com ou sem a marca de fechamento (OFX v1 pode omiti-la).
-  const donos = [...texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>([\s\S]{0,4000}?)(?=<BANKTRANLIST>|<LEDGERBAL>|<STMTTRN>|<\/STMTRS>|<\/CCSTMTRS>|$)/gi)];
+  // ANTES de varrer: conta as aberturas e recusa se passam de um punhado (um extrato tem UMA; um arquivo feito só dessa marca repetida custava 4.000 posições por marca: 9,8 MB = 19 s)
+  let abertas = 0;
+  for (const _ of texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>/gi)) {
+    if (++abertas > MAX_MARCAS_DE_CONTA) throw new ErroDeEntrada(`o arquivo tem mais de ${MAX_MARCAS_DE_CONTA} marcas de conta (BANKACCTFROM/CCACCTFROM): um extrato tem uma. Arquivo recusado, nada foi gravado.`);
+  }
+  // cada bloco acaba na lista de lançamentos OU na próxima abertura de conta (nunca atravessa uma marca vizinha)
+  const donos = [...texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>([\s\S]{0,4000}?)(?=<BANKTRANLIST>|<LEDGERBAL>|<STMTTRN>|<BANKACCTFROM>|<CCACCTFROM>|<\/STMTRS>|<\/CCSTMTRS>|$)/gi)];
   const contas = new Map<string, string>();
   for (const d of donos) {
     const acct = /<ACCTID>\s*([^<\r\n]{1,64})/i.exec(d[1]!)?.[1]?.trim();
@@ -202,7 +221,6 @@ export function lerOfx(texto: string, segredoDaConta: string): ResultadoDoOfx {
   }
   // um bloco de conta que não rendeu ACCTID (formato fora do padrão, ou maior que o limite de leitura) NÃO pode passar em silêncio: sem a conta, as checagens de conta ficariam de fora
   // (o bloco que passa do limite de leitura nem casa a expressão: por isso conta-se as MARCAS de abertura e exige-se um bloco lido para cada uma)
-  const abertas = (texto.match(/<(?:BANKACCTFROM|CCACCTFROM)>/gi) ?? []).length;
   if (abertas > 0 && (donos.length !== abertas || contas.size === 0)) throw new ErroDeEntrada('não consegui ler o ACCTID da conta do arquivo (bloco BANKACCTFROM/CCACCTFROM fora do padrão ou grande demais). Nada foi gravado: sem a conta não dá para conferir de qual unidade é.');
   if (contas.size > 1) throw new ErroDeEntrada('o arquivo tem lançamentos de MAIS DE UMA conta (BANKACCTFROM diferentes). Peça o extrato de uma conta por arquivo. Nada foi gravado.');
   const [dono, acct] = [...contas.entries()][0] ?? [];

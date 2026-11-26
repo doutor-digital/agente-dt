@@ -4,6 +4,7 @@ import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { criarContextoInfinitepay, infinitepayLinks, type ContaInfinitepay } from './infinitepay.js';
+import { MARCA, temMarca } from './infinitepay-escrita.js';
 import { armazemEmMemoria } from './infinitepay-falso.js';
 import { assinaturaDoAviso, eventoDoCorpo, montarRotaDoWebhookInfinitepay, processarAviso, urlDoAviso, type DepsDoAviso } from './infinitepay-webhook.js';
 import { mascararUrlDoLog } from '../lib/mascara-url-log.js';
@@ -322,12 +323,57 @@ test('as marcas de revisão ACUMULAM: estorno e depois cancelamento no mesmo pag
   assert.equal((await infinitepayLinks(n.deps.ctx, {})).resumo.valorPago, 0);
 });
 
+test('a marca do pagamento-depois-de-cancelamento NÃO engole um cancelamento novo (comparação pela etiqueta exata, não por pedaço do texto)', async () => {
+  const m = montar({ status: 'cancelado' });
+  await processarAviso(m.deps, m.p, PAGO);
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
+  assert.equal(m.avisos.length, 1);
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  const rev = m.armazem.linhas[0]!.revisao ?? '';
+  assert.match(rev, /\[pagamento depois de cancelamento\]/);
+  assert.match(rev, /\[cancelamento avisado\]/, 'o cancelamento novo foi marcado');
+  assert.equal(m.avisos.length, 2, 'e avisou');
+  assert.equal(temMarca(rev, MARCA.cancelamento), true);
+  assert.equal(temMarca(rev, MARCA.estorno), false);
+});
+
+test('duas entregas QUASE JUNTAS do mesmo aviso avisam uma vez só (estorno, cancelamento de pago e cancelamento de link não pago)', async () => {
+  for (const [status, evento] of [['pago', 'refunded'], ['pago', 'canceled'], ['criado', 'canceled']] as const) {
+    const m = montar({ status });
+    await Promise.all([processarAviso(m.deps, m.p, { order_nsu: REF, event: evento }), processarAviso(m.deps, m.p, { order_nsu: REF, event: evento })]);
+    assert.equal(m.avisos.length, 1, `${status}/${evento}: ${m.avisos.length} alertas`);
+  }
+  // e o pagamento depois de cancelamento, entregue duas vezes juntas
+  const p = montar({ status: 'cancelado' });
+  await Promise.all([processarAviso(p.deps, p.p, PAGO), processarAviso(p.deps, p.p, PAGO)]);
+  assert.equal(p.avisos.length, 1);
+});
+
+test('sem INFINITEPAY_WEBHOOK_SEGREDO a rota EXISTE e responde 503 (nunca 404) com alerta ao João limitado a 1 por 15 min', async () => {
+  let agora = Date.parse('2026-11-26T15:00:00Z');
+  const m = montar();
+  const deps: DepsDoAviso = { ...m.deps, segredo: undefined, agora: () => agora };
+  assert.deepEqual(await processarAviso(deps, m.p, PAGO), { http: 503, resultado: 'sem segredo do webhook' });
+  await processarAviso(deps, m.p, PAGO);
+  assert.equal(m.avisos.length, 1);
+  assert.match(m.avisos[0]!, /INFINITEPAY_WEBHOOK_SEGREDO não está configurado/);
+  agora += 16 * 60_000;
+  await processarAviso(deps, m.p, PAGO);
+  assert.equal(m.avisos.length, 2);
+  assert.equal(m.armazem.linhas[0]!.status, 'criado', 'nada foi marcado');
+  await comServidor(deps, async (base) => {
+    const r = await fetch(`${base}/infinitepay/webhook/${UNI}/${REF}/${'0'.repeat(32)}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
+    assert.equal(r.status, 503, 'mesmo com assinatura qualquer: sem segredo é 503, não 404');
+  });
+});
+
 test('pagamento confirmado depois de um cancelamento avisado: vira pago, avisa E fica com marca de revisão', async () => {
   const m = montar({ status: 'cancelado' });
   await processarAviso(m.deps, m.p, PAGO);
   const l = m.armazem.linhas[0]!;
   assert.equal(l.status, 'pago');
-  assert.match(l.revisao ?? '', /pagamento confirmado depois de cancelamento avisado/);
+  assert.match(l.revisao ?? '', /\[pagamento depois de cancelamento\] pagamento CONFIRMADO pela API/);
+  assert.doesNotMatch(l.revisao ?? '', /NÃO confirmado pela API \(o \/payment_check/, 'a marca do pagamento não diz que o PAGAMENTO é não confirmado');
   const r = await infinitepayLinks(m.deps.ctx, {});
   assert.equal(r.resumo.emRevisao, 1);
   assert.equal(r.resumo.valorPago, 151.5, 'a marca de pagamento-depois-de-cancelamento não desconta o dinheiro');
