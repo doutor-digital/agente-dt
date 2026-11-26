@@ -97,6 +97,12 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     );
   }
   // falhou: a Sofia nunca fala do erro nem inventa um Pix
+  if (r.motivo === 'incerto') {
+    return (
+      'NÃO consegui gerar o pagamento do sinal agora. NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ' +
+      (tarefaAberta ? 'Diga em UMA frase que a equipe confirma o pagamento do sinal por aqui em instantes (sem prometer prazo exato).' : 'O aviso à equipe NÃO saiu: NÃO prometa que a equipe envia. Diga em UMA frase que vai verificar e já retorna.')
+    );
+  }
   return (
     `NÃO consegui gerar o Pix do sinal agora. NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ` +
     (tarefaAberta
@@ -165,7 +171,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {
-        const detalhe = `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
+        const detalhe = `Motivo: ${r.motivo === 'incerto' ? r.detalhe : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
         if (kommo) {
           const t = await abrirTarefaParaEquipe({
             slug: fresca.slug,
@@ -173,7 +179,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
             leadId,
             kommo,
             recorder,
-            motivo: 'sinal_pix_falhou',
+            motivo: r.motivo === 'incerto' ? 'sinal_incerto' : 'sinal_pix_falhou',
             detalhe,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');

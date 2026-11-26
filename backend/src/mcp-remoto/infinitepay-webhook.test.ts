@@ -484,6 +484,7 @@ test('link pago: o evento sai UMA vez, só depois do /payment_check com o valor 
   assert.equal(eventos[0]!.invoiceSlug, 'fat-1');
   assert.equal(eventos[0]!.valorPagoCentavos, 15150);
   assert.equal(eventos[0]!.forma, 'credit_card');
+  assert.equal('reciboUrl' in eventos[0]!, false, 'o link do recibo traz nome e CPF: não vai no evento');
   assert.ok(eventos[0]!.pagoEm instanceof Date);
   // a InfinitePay repete o aviso (no pagamento de teste de hoje ele chegou duas vezes): continua 200 e NÃO há segundo evento
   assert.equal((await processarAviso(m.deps, m.p, PAGO)).http, 200);

@@ -175,10 +175,10 @@ Object.defineProperty(prisma, 'sinalPix', {
   value: {
     findMany: async (a: any) => {
       consultasAoBanco.push({ model: 'sinalPix', where: a.where });
-      return a.distinct ? sinaisNoBanco.filter((l) => l.status === 'pendente').map((l) => ({ unitId: l.unitId })) : sinaisNoBanco.filter((l) => l.unitId === a.where.unitId && (l.status === 'pendente' || (l.avisadoEm === null && l.status !== 'criando') || (l.status === 'pago' && !l.confirmacaoEm))).map((l) => ({ ...l }));
+      return a.distinct ? sinaisNoBanco.filter((l) => l.status === 'pendente').map((l) => ({ unitId: l.unitId })) : sinaisNoBanco.filter((l) => l.unitId === a.where.unitId && (l.status === 'pendente' || l.status === 'incerto' || (l.avisadoEm === null && l.status !== 'criando') || (l.status === 'pago' && !l.confirmacaoEm) || (l.status === 'expirado' && l.via === 'infinitepay' && l.venceEm >= new Date(Date.now() - 10 * 86_400_000).toISOString().slice(0, 10)))).map((l) => ({ ...l }));
     },
     updateMany: async ({ where, data }: any) => {
-      const l = sinaisNoBanco.find((x) => x.id === where.id && (!where.status || x.status === where.status) && (!('confirmacaoEm' in where) || (x.confirmacaoEm ?? null) === where.confirmacaoEm));
+      const l = sinaisNoBanco.find((x) => x.id === where.id && (!where.status || (typeof where.status === 'string' ? x.status === where.status : where.status.in.includes(x.status))) && (!('confirmacaoEm' in where) || (x.confirmacaoEm ?? null) === where.confirmacaoEm));
       if (l) Object.assign(l, data);
       return { count: l ? 1 : 0 };
     },
@@ -511,3 +511,101 @@ test('só no papel (padrão): o sinal é baixado normalmente, a confirmação é
   assert.equal(k.notas.length, 1, 'só a nota de pagamento de sempre');
 });
 
+
+
+// ── o conserto do sênior (#501): link pago sem linha, pago depois do «venceu», Asaas fora não derruba a InfinitePay, link incerto ─────
+
+const semConfirmar = async () => undefined;
+const HOJE_ISO = new Date().toISOString().slice(0, 10);
+
+test('link de SINAL pago sem linha em sinais_pix: avisa a equipe (Telegram + tarefa no cartão) em vez de ficar calado; link do conector (sem «sinal-») segue ignorado', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  const telegram: string[] = [];
+  const tarefas: Array<{ leadId: number; texto: string }> = [];
+  const alertas = { telegram: async (t: string) => void telegram.push(t), tarefa: async (_u: Unit, leadId: number, texto: string) => void tarefas.push({ leadId, texto }) };
+  const k = kommoFalso();
+  const ref = `sinal-${(5829035).toString(36)}-abcd1234`;
+  await baixarSinalDoLinkPago(evento({ orderNsu: ref }), null, k.deps.kommo, semConfirmar, alertas);
+  assert.equal(telegram.length, 1);
+  assert.match(telegram[0]!, /foi PAGO na InfinitePay, mas não há sinal registrado/);
+  assert.match(telegram[0]!, /cartão 5829035/);
+  assert.deepEqual(tarefas.map((t) => t.leadId), [5829035]);
+  assert.match(tarefas[0]!.texto, /^CONFERIR SINAL PAGO/);
+  assert.equal(k.gravou.length + k.notas.length, 0, 'não escreve no cartão sem saber de quem é');
+  await baixarSinalDoLinkPago(evento({ orderNsu: 'dd-20261126-817b591793' }), null, k.deps.kommo, semConfirmar, alertas);
+  assert.equal(telegram.length, 1, 'link criado pelo conector não é sinal');
+});
+
+test('pago DEPOIS de dado como vencido e o Kommo falha: a linha vira pago com avisadoEm LIMPO, e a varredura refaz a nota', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ status: 'expirado', avisadoEm: new Date(), criadoEm: new Date() }));
+  const falha = kommoFalso({ lead: new Error('Kommo 502') });
+  await baixarSinalDoLinkPago(evento(), null, falha.deps.kommo, semConfirmar);
+  assert.equal(sinaisNoBanco[0]!.status, 'pago');
+  assert.equal(sinaisNoBanco[0]!.avisadoEm ?? null, null, 'a nota do vencimento não conta como a do pagamento');
+  const bom = kommoFalso();
+  await varrerUnidade(UNIDADE, false, null, semConfirmar, bom.deps.kommo);
+  assert.equal(bom.gravou.length, 1);
+  assert.match(bom.notas[0]!.texto, /pago no InfinitePay/);
+  assert.ok(sinaisNoBanco[0]!.avisadoEm);
+});
+
+test('a varredura olha também o link da InfinitePay dado como vencido há pouco: pagamento atrasado dá a baixa sem depender de um único aviso (e o antigo demais, não)', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ id: 'exp-recente', status: 'expirado', avisadoEm: new Date(), venceEm: somarDias(HOJE_ISO, -4), criadoEm: new Date() }));
+  sinaisNoBanco.push(ip({ id: 'exp-antigo', status: 'expirado', avisadoEm: new Date(), venceEm: somarDias(HOJE_ISO, -9), linkId: 'sinal-velho-1', criadoEm: new Date() }));
+  registrarInfinitepayDoServidor({ ctx: {} as never, esc: { armazem: { porOrderNsu: async () => doLivro({ orderNsu: 'x' }) } } as never });
+  const k = kommoFalso();
+  try {
+    await varrerUnidade(UNIDADE, false, null, semConfirmar, k.deps.kommo);
+  } finally {
+    registrarInfinitepayDoServidor(null);
+  }
+  assert.equal(sinaisNoBanco.find((l) => l.id === 'exp-recente')!.status, 'pago');
+  assert.equal(sinaisNoBanco.find((l) => l.id === 'exp-antigo')!.status, 'expirado');
+  assert.equal(k.notas.length, 1);
+});
+
+test('o Asaas fora do ar (500) NÃO derruba a baixa da InfinitePay da mesma unidade', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(linha({ id: 'asaas-x', venceEm: somarDias(HOJE_ISO, 3), criadoEm: new Date() }));
+  sinaisNoBanco.push(ip({ id: 'ip-x', criadoEm: new Date() }));
+  registrarInfinitepayDoServidor({ ctx: {} as never, esc: { armazem: { porOrderNsu: async () => doLivro() } } as never });
+  _esquecerChavesRecusadas();
+  const antes = globalThis.fetch;
+  globalThis.fetch = (async () => new Response('erro', { status: 500 })) as typeof fetch;
+  const k = kommoFalso();
+  try {
+    await assert.doesNotReject(() => varrerUnidade(UNIDADE, false, null, semConfirmar, k.deps.kommo));
+  } finally {
+    globalThis.fetch = antes;
+    registrarInfinitepayDoServidor(null);
+  }
+  assert.equal(sinaisNoBanco.find((l) => l.id === 'ip-x')!.status, 'pago');
+  assert.equal(sinaisNoBanco.find((l) => l.id === 'asaas-x')!.status, 'pendente', 'o do Asaas espera a próxima varredura');
+  assert.equal(k.notas.length, 1);
+});
+
+test('link INCERTO (a criação ficou em dúvida): se o aviso de pagamento dele chega, dá a baixa; se vence sem pagar, expira como os outros', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ id: 'inc-1', status: 'incerto', url: '', criadoEm: new Date() }));
+  const k = kommoFalso();
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo, semConfirmar);
+  assert.equal(sinaisNoBanco[0]!.status, 'pago');
+  assert.equal(k.gravou.length, 1);
+  // vencido: o livro mostra criado (nunca pago) e passou da carência
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ id: 'inc-2', status: 'incerto', url: '', venceEm: somarDias(HOJE_ISO, -5), criadoEm: new Date() }));
+  registrarInfinitepayDoServidor({ ctx: {} as never, esc: { armazem: { porOrderNsu: async () => doLivro({ status: 'criado', transactionNsu: null }) } } as never });
+  try {
+    await varrerUnidade(UNIDADE, false, null, semConfirmar, kommoFalso().deps.kommo);
+  } finally {
+    registrarInfinitepayDoServidor(null);
+  }
+  assert.equal(sinaisNoBanco[0]!.status, 'expirado');
+});

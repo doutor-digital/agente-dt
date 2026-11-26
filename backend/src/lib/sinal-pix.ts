@@ -25,6 +25,7 @@ import { asaasGet } from './integracoes/asaas.js';
 import { chaveDaUnidade } from './integracoes/chaves.js';
 import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { unidadeDona } from '../agent/rede-doutor-hernia.js';
+import { mascararPii } from './pii.js';
 
 /** Id da automação no catálogo (tela de Automações; variável SINAL_PIX_SLUGS): liga a BAIXA do sinal (`sinal-pix-worker.ts`). */
 export const ID_SINAL_PIX = 'sinal-pix';
@@ -75,7 +76,7 @@ export interface BancoDoSinal {
   findMany(args: { where: { clinica: string; leadId: string; status: { in: string[] }; criadoEm: { gte: Date } }; orderBy: { criadoEm: 'desc' } }): Promise<LinhaDoSinal[]>;
   count(args: { where: { clinica: string; criadoEm: { gte: Date } } }): Promise<number>;
   create(args: { data: DadosDoSinal }): Promise<LinhaDoSinal>;
-  updateMany(args: { where: { id: string }; data: Partial<Pick<LinhaDoSinal, 'linkId' | 'url' | 'status' | 'consultaEm' | 'via'>> }): Promise<{ count: number }>;
+  updateMany(args: { where: { id: string }; data: Partial<Pick<LinhaDoSinal, 'linkId' | 'url' | 'status' | 'consultaEm' | 'via' | 'venceEm'>> }): Promise<{ count: number }>;
   deleteMany(args: { where: { id: string } }): Promise<{ count: number }>;
 }
 
@@ -155,9 +156,24 @@ export interface PedidoDeLinkDoSinal {
   /** "AAAA-MM-DDTHH:mm" da consulta que o sinal garante, ou null */
   consultaEm: string | null;
 }
-export type CriadorDeLinkDoSinal = (p: PedidoDeLinkDoSinal) => Promise<{ url: string; orderNsu: string }>;
+/**
+ * `venceEm` = o último dia em que o link REALMENTE aceita pagamento (a API conta validade em dias inteiros, então pode ser depois do pedido). É ele que vai para a linha e para
+ * o paciente: o link aberto é reaproveitado até esse dia, nunca se cria um segundo enquanto o primeiro ainda pode ser pago.
+ */
+export type CriadorDeLinkDoSinal = (p: PedidoDeLinkDoSinal) => Promise<{ url: string; orderNsu: string; venceEm?: string }>;
 
-export type MotivoDaFalha = 'sem-chave' | 'teto' | 'asaas' | 'baixa-desligada' | 'em-andamento';
+/**
+ * A criação do link NÃO teve resposta clara (timeout, 5xx, resposta sem URL): ele PODE existir na InfinitePay. Quem cria lança isto (e NÃO um erro comum) para que o sinal
+ * NÃO caia no Pix do Asaas: com um link possivelmente pagável por aí, um 2º meio de pagamento é cobrança em dobro. Cai no Asaas só a recusa CERTA.
+ */
+export class LinkIncertoDoSinal extends Error {
+  constructor(msg: string, readonly orderNsu: string) {
+    super(msg);
+  }
+}
+
+/** `incerto`: a InfinitePay não respondeu com clareza e o link do sinal PODE existir: a equipe confere no app antes de cobrar de novo */
+export type MotivoDaFalha = 'sem-chave' | 'teto' | 'asaas' | 'baixa-desligada' | 'em-andamento' | 'incerto';
 
 export type ResultadoDoSinal =
   /** `registrado` = false: o link existe no Asaas mas NÃO ficou gravado no banco (a baixa automática não o enxerga) */
@@ -257,7 +273,8 @@ async function umPorVez<T>(chave: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /** Reserva de outra geração em curso: depois disto ela é tida como morta (o processo caiu no meio). */
-const RESERVA_VALE_MS = 2 * 60_000;
+// (5 min: o pior caso do caminho da InfinitePay é ~6 s para ler o contato + 2 × 15 s de criação + o Asaas de reserva, até 30 s por chamada; 2 min era apertado)
+const RESERVA_VALE_MS = 5 * 60_000;
 const ESPERA_MAXIMA_VOLTAS = 45; // x 1 s
 
 type Fase1 = { tipo: 'pronto'; resultado: ResultadoDoSinal } | { tipo: 'espera' } | { tipo: 'reservado'; reserva: LinhaDoSinal };
@@ -292,11 +309,14 @@ export async function gerarSinalPix(
       const agoraLocal = instanteLocal(agora, fuso);
       const venceEm = validadeDoLink(hoje, dia);
       const desde = new Date(agora.getTime() - VALIDADE_DO_SINAL_DIAS * 86_400_000);
-      const linhas = await banco.findMany({ where: { clinica, leadId: String(leadId), status: { in: ['pago', 'pendente', 'criando'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
+      const linhas = await banco.findMany({ where: { clinica, leadId: String(leadId), status: { in: ['pago', 'pendente', 'criando', 'incerto'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
       // só conta o que é da consulta de agora: sinal de consulta que já passou não vale para uma consulta nova
       const vigentes = linhas.filter((l) => (l.status === 'criando' ? agora.getTime() - l.criadoEm.getTime() < RESERVA_VALE_MS : l.consultaEm >= agoraLocal));
       if (vigentes.some((l) => l.status === 'pago')) return { tipo: 'pronto', resultado: { tipo: 'ja-pago' } };
       if (vigentes.some((l) => l.status === 'criando')) return { tipo: 'espera' };
+      // Um link da InfinitePay que talvez exista (ver `LinkIncertoDoSinal`) segura o sinal até a equipe conferir ou até ele vencer de vez (fim + carência): nem outro link, nem o Pix do Asaas.
+      const incerto = vigentes.find((l) => l.status === 'incerto' && somarDias(l.venceEm, 2) >= hoje);
+      if (incerto) return { tipo: 'pronto', resultado: { tipo: 'falhou', motivo: 'incerto', detalhe: `um link da InfinitePay (${incerto.linkId}) pode já existir: conferir no app antes de cobrar de novo` } };
       // Link pendente que ainda vale é SEMPRE reaproveitado, mesmo que acabe antes da (nova) consulta: o Asaas não deixa cancelar link por aqui
       // (DELETE/PUT de link são rotas proibidas), então um segundo link deixaria dois Pix pagáveis para o mesmo paciente. Venceu, aí sim um novo.
       const pendente = vigentes.find((l) => l.status === 'pendente' && l.venceEm >= hoje && l.valorCentavos === centavos);
@@ -344,19 +364,29 @@ export async function gerarSinalPix(
   if (deps.infinitepay) {
     try {
       const l = await deps.infinitepay({ slug: unit.slug, nomeDaClinica: nomeDaClinica(unit.name), leadId, valorCentavos: centavos as number, venceEm, hoje: diaNoFuso(deps.agora(), fuso), consultaEm: quando });
+      // o dia em que o link REALMENTE vence (pode passar do pedido: a API conta em dias inteiros) é o da linha e o que o paciente ouve
+      const venceDeVerdade = l.venceEm ?? venceEm;
       let registradoIp = true;
       try {
-        const r = await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: l.orderNsu, url: l.url, status: 'pendente', via: 'infinitepay' } });
+        const r = await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: l.orderNsu, url: l.url, status: 'pendente', via: 'infinitepay', venceEm: venceDeVerdade } });
         if (r.count !== 1) throw new Error('a reserva sumiu');
       } catch (err) {
         registradoIp = false;
         logger.error({ err: String(err), unit: unit.slug, leadId, orderNsu: l.orderNsu }, 'sinal-pix: link da InfinitePay criado mas NÃO gravado no banco — sem baixa automática');
       }
-      logger.info({ unit: unit.slug, clinica, leadId, orderNsu: l.orderNsu, venceEm }, 'sinal-pix: link da InfinitePay criado');
-      return { tipo: 'link', url: l.url, novo: true, valor: (centavos as number) / 100, venceEm, registrado: registradoIp, via: 'infinitepay' };
+      logger.info({ unit: unit.slug, clinica, leadId, orderNsu: l.orderNsu, venceEm: venceDeVerdade }, 'sinal-pix: link da InfinitePay criado');
+      return { tipo: 'link', url: l.url, novo: true, valor: (centavos as number) / 100, venceEm: venceDeVerdade, registrado: registradoIp, via: 'infinitepay' };
     } catch (err) {
-      fallback = (err instanceof Error ? err.message : String(err)).slice(0, 300);
-      logger.warn({ unit: unit.slug, leadId, motivo: fallback }, 'sinal-pix: a InfinitePay não criou o link — sigo para o Pix do Asaas (fallback)');
+      if (err instanceof LinkIncertoDoSinal) {
+        // NÃO vai para o Asaas: o link pode existir. A linha guarda a referência (`incerto`) para o aviso de pagamento dele ainda dar a baixa e para um novo pedido não criar outro.
+        const motivo = mascararPii(err.message).slice(0, 300);
+        await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: err.orderNsu, url: '', status: 'incerto', via: 'infinitepay' } }).catch((e: unknown) => logger.error({ err: String(e), unit: unit.slug, leadId, orderNsu: err.orderNsu }, 'sinal-pix: não consegui guardar a referência do link incerto'));
+        logger.error({ unit: unit.slug, leadId, orderNsu: err.orderNsu, motivo }, 'sinal-pix: a InfinitePay não respondeu com clareza — o link PODE existir; NÃO mando o Pix do Asaas (cobrança em dobro) e a equipe é avisada');
+        return { tipo: 'falhou', motivo: 'incerto', detalhe: `a InfinitePay não respondeu com clareza e o link ${err.orderNsu} pode existir: conferir no app antes de cobrar de novo (${motivo})`.slice(0, 500) };
+      }
+      // recusa CERTA (400/422, criação desligada na unidade, teto, portão, conector não carregado): nada foi criado, o Asaas segue
+      fallback = mascararPii(err instanceof Error ? err.message : String(err)).slice(0, 300);
+      logger.warn({ unit: unit.slug, leadId, motivo: fallback }, 'sinal-pix: a InfinitePay recusou/não criou o link (certo de que nada foi criado) — sigo para o Pix do Asaas (fallback)');
     }
   }
 

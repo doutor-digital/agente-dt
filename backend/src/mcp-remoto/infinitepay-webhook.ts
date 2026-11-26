@@ -243,7 +243,12 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
         orderNsu: p.orderNsu,
         valorCentavos: link.valorCentavos,
         descricao: link.descricao,
-        ...pagamento,
+        // só o identificador interno do pagamento: o link do recibo traz o nome e o CPF de quem pagou, e o evento não carrega dado pessoal
+        invoiceSlug: pagamento.invoiceSlug,
+        transactionNsu: pagamento.transactionNsu,
+        ...(pagamento.forma ? { forma: pagamento.forma } : {}),
+        ...(pagamento.parcelas !== undefined ? { parcelas: pagamento.parcelas } : {}),
+        ...(pagamento.valorPagoCentavos !== undefined ? { valorPagoCentavos: pagamento.valorPagoCentavos } : {}),
         pagoEm: new Date((deps.agora ?? Date.now)()),
       })
       .catch((e: unknown) => deps.log?.warn({ unidade: p.unidade, orderNsu: p.orderNsu, erro: e instanceof Error ? e.message : String(e) }, 'infinitepay: o ouvinte do link pago falhou'));

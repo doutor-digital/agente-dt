@@ -11,10 +11,11 @@
 import { randomBytes } from 'node:crypto';
 import type { KommoClient } from '../services/kommo.service.js';
 import { logger } from './logger.js';
-import { criarLink } from '../mcp-remoto/infinitepay-escrita.js';
+import { criarLink, LinkIncertoInfinitepay } from '../mcp-remoto/infinitepay-escrita.js';
+import { mascararPii } from './pii.js';
 import type { ClienteDoLink } from './integracoes/infinitepay.js';
 import { infinitepayDoServidor } from './infinitepay-servidor.js';
-import { depsReais, type CriadorDeLinkDoSinal, type DepsDoSinal } from './sinal-pix.js';
+import { depsReais, LinkIncertoDoSinal, type CriadorDeLinkDoSinal, type DepsDoSinal } from './sinal-pix.js';
 import { sinalViaDaUnidade } from './sinal-via.js';
 
 const AGUARDA_CONTATO_MS = 6_000;
@@ -82,7 +83,7 @@ export function criadorDeLinkDoSinal(kommo: Pick<KommoClient, 'getLead' | 'getCo
     if (!srv) throw new Error('a InfinitePay deste servidor ainda não foi carregada');
     const cliente = d.cliente ? await d.cliente(p.leadId) : kommo ? await clienteDoCartao(kommo, p.leadId) : {};
     // vale até o fim do dia do vencimento do sinal (a véspera da consulta); a API não cancela link, então ele PRECISA vencer
-    // (a API conta validade em dias inteiros, no mínimo 1: sinal gerado no próprio dia do vencimento vale até o fim do dia seguinte; a baixa já tem 2 dias de carência)
+    // (a API conta validade em dias inteiros, no mínimo 1: o link pode valer até o dia SEGUINTE ao pedido; quem manda é o `validoAte` que o `criarLink` devolve, e é ele que vira o `venceEm` do sinal)
     const validadeDias = Math.min(90, Math.max(1, diasEntre(p.hoje, p.venceEm)));
     const pedido = {
       unidade: p.slug,
@@ -93,18 +94,27 @@ export function criadorDeLinkDoSinal(kommo: Pick<KommoClient, 'getLead' | 'getCo
     const criar = d.criar ?? criarLink;
     const referencia = () => `sinal-${p.leadId.toString(36)}-${randomBytes(4).toString('hex')}`;
     const quem = { id: 'sofia-sinal' };
-    const extras = !!(cliente.nome || cliente.telefone);
+    const levaNomeOuTelefone = !!(cliente.nome || cliente.telefone);
+    const tentar = async (comExtras: boolean) => {
+      try {
+        return await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia(), ...(comExtras ? { ...(levaNomeOuTelefone ? { cliente } : {}), semEndereco: true } : {}) });
+      } catch (err) {
+        // criação sem resposta clara: o link PODE existir. Sobe com a referência para o sinal não cair em outra forma de cobrança (ver LinkIncertoDoSinal).
+        if (err instanceof LinkIncertoInfinitepay) throw new LinkIncertoDoSinal(err.message, err.orderNsu);
+        throw err;
+      }
+    };
     let r;
     try {
-      r = await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia(), ...(extras ? { cliente } : {}), semEndereco: true });
+      r = await tentar(true);
     } catch (err) {
-      // A InfinitePay RECUSOU o pedido (400/422): pode ser ela não aceitar nome/telefone/endereço. Tenta UMA vez sem eles antes de desistir, para o campo extra nunca tirar o sinal da
-      // InfinitePay. Qualquer outra falha (timeout/5xx, chave, nosso teto ou portão) não repete: o resultado é o fallback para o Asaas.
-      if (!(err instanceof Error) || !/^a InfinitePay respondeu (400|422)\b/.test(err.message)) throw err;
-      logger.warn({ unit: p.slug, motivo: err.message.slice(0, 200) }, 'sinal-infinitepay: a InfinitePay recusou o pedido com nome/telefone — tento de novo sem eles');
-      r = await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia() });
+      // A InfinitePay RECUSOU o pedido (400/422) e ele levava nome/telefone: pode ser ela não aceitar esses campos. Tenta UMA vez sem eles (e sem o endereço) antes de desistir, para o campo
+      // extra nunca tirar o sinal da InfinitePay. Sem nome nem telefone no pedido não há o que tirar. Outra falha (timeout/5xx, chave, nosso teto ou portão) não repete.
+      if (!levaNomeOuTelefone || !(err instanceof Error) || err instanceof LinkIncertoDoSinal || !/^a InfinitePay respondeu (400|422)\b/.test(err.message)) throw err;
+      logger.warn({ unit: p.slug, motivo: mascararPii(err.message).slice(0, 200) }, 'sinal-infinitepay: a InfinitePay recusou o pedido com nome/telefone — tento de novo sem eles');
+      r = await tentar(false);
     }
-    return { url: r.url, orderNsu: r.orderNsu };
+    return { url: r.url, orderNsu: r.orderNsu, venceEm: r.validoAte.slice(0, 10) };
   };
 }
 

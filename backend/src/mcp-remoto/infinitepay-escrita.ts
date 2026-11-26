@@ -26,6 +26,16 @@ import { FUSO_PADRAO, arredondar, diaLocal, dinheiro, positivo } from './asaas-l
 import { executar } from './ferramenta.js';
 import { resolverContaInfinitepay, reais, type ArmazemDeLinks, type ContaInfinitepay, type ContextoInfinitepay, type LinkGuardado } from './infinitepay.js';
 
+/**
+ * A criação NÃO teve resposta clara (timeout, 5xx, resposta sem URL): o link PODE existir na InfinitePay. É um ErroDeEntrada como os outros (o conector mostra a mesma mensagem), mas leva a
+ * referência, para quem cobra em nome de um paciente (a Sofia) NÃO cair em outra forma de cobrança sem antes saber se o paciente já tem um link pagável.
+ */
+export class LinkIncertoInfinitepay extends ErroDeEntrada {
+  constructor(msg: string, readonly orderNsu: string) {
+    super(msg);
+  }
+}
+
 export const LIMITES_INFINITEPAY = {
   duplicataMs: 10 * 60_000,
   horaMs: 3_600_000,
@@ -405,7 +415,7 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       await esc.armazem.resolver(conta.slug, orderNsu, recusa ? { status: 'falhou', erro: msg.slice(0, 300) } : { status: 'intencao', erro: msg.slice(0, 300) }).catch(() => undefined);
       if (!recusa) {
         void esc.alertar(`⚠️ InfinitePay (${conta.nome}): criei o link ${orderNsu} de ${dinheiro(valor)} e a resposta não veio clara (${msg.slice(0, 120)}). Ele PODE existir. Confira no app antes de repetir.`).catch(() => false);
-        throw new ErroDeEntrada(`${msg} Referência ${orderNsu} (${dinheiro(valor)}): o link pode ter sido criado; confira no app da InfinitePay antes de repetir.`);
+        throw new LinkIncertoInfinitepay(`${msg} Referência ${orderNsu} (${dinheiro(valor)}): o link pode ter sido criado; confira no app da InfinitePay antes de repetir.`, orderNsu);
       }
       throw new ErroDeEntrada(`${msg} Nada foi criado.`);
     }

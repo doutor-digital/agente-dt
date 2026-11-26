@@ -23,7 +23,6 @@ export interface LinkPago {
   forma?: string;
   parcelas?: number;
   valorPagoCentavos?: number;
-  reciboUrl?: string;
   pagoEm: Date;
 }
 

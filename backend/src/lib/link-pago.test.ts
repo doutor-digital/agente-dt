@@ -28,7 +28,7 @@ test('ouvinte que lança (ou rejeita) não derruba os outros nem quem emite', as
 });
 
 test('o evento não carrega dado pessoal: só o que a InfinitePay confirmou do link', () => {
-  const campos = Object.keys({ ...EV, invoiceSlug: 'x', transactionNsu: 'y', forma: 'pix', parcelas: 1, valorPagoCentavos: 5000, reciboUrl: 'https://r' } satisfies LinkPago).sort();
-  assert.deepEqual(campos, ['descricao', 'forma', 'invoiceSlug', 'orderNsu', 'pagoEm', 'parcelas', 'reciboUrl', 'transactionNsu', 'unidade', 'valorCentavos', 'valorPagoCentavos']);
+  const campos = Object.keys({ ...EV, invoiceSlug: 'x', transactionNsu: 'y', forma: 'pix', parcelas: 1, valorPagoCentavos: 5000 } satisfies LinkPago).sort();
+  assert.deepEqual(campos, ['descricao', 'forma', 'invoiceSlug', 'orderNsu', 'pagoEm', 'parcelas', 'transactionNsu', 'unidade', 'valorCentavos', 'valorPagoCentavos']);
   for (const c of campos) assert.doesNotMatch(c, /nome|telefone|cpf|email|documento/i);
 });

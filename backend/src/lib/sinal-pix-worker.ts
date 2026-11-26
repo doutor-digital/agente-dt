@@ -30,6 +30,7 @@ import { contextoDaUnidade, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js
 import { portaDoChatwoot } from './chatwoot-porta.js';
 import { aoLinkPago, type LinkPago } from './link-pago.js';
 import { confirmarSinalDaUnidade, VALE_A_CONFIRMACAO_MS } from './sinal-confirmacao-paciente.js';
+import { enviarTelegramSofia } from './telegram.js';
 import { infinitepayDoServidor } from './infinitepay-servidor.js';
 import type { LinkGuardado } from '../mcp-remoto/infinitepay.js';
 
@@ -145,7 +146,8 @@ export async function decidirInfinitepay(
 ): Promise<Decisao[]> {
   const saida: Decisao[] = [];
   for (const linha of pendentes) {
-    if (linha.status !== 'pendente') continue;
+    // `incerto` (a criação não teve resposta clara) decide como `pendente`; `expirado` só pode virar PAGO (pagamento que chegou depois do «venceu»), nunca expira de novo
+    if (linha.status !== 'pendente' && linha.status !== 'incerto' && linha.status !== 'expirado') continue;
     let link: LinkGuardado | null;
     try {
       link = await buscar(unidade, linha.linkId);
@@ -154,7 +156,7 @@ export async function decidirInfinitepay(
       continue;
     }
     if (link?.status === 'pago' && link.valorCentavos >= linha.valorCentavos) saida.push({ tipo: 'pago', linha, paymentId: link.transactionNsu ?? linha.linkId });
-    else if (somarDias(linha.venceEm, CARENCIA_DO_LINK_DIAS) < hoje) saida.push({ tipo: 'expirou', linha });
+    else if (linha.status !== 'expirado' && somarDias(linha.venceEm, CARENCIA_DO_LINK_DIAS) < hoje) saida.push({ tipo: 'expirou', linha });
   }
   return saida;
 }
@@ -225,8 +227,11 @@ export async function notaNoCartao(deps: DepsDaBaixa, leadId: number, nota: stri
 }
 
 /** O que a varredura precisa ler: pendentes, os que mudaram de status sem nota no cartão e os pagos há pouco que ainda não tiveram a confirmação ao paciente. */
+const JANELA_DO_EXPIRADO_DIAS = 7;
 const precisaDeAtencao = () => [
-  { status: 'pendente' },
+  { status: { in: ['pendente', 'incerto'] } },
+  // link da InfinitePay dado como vencido há pouco: o pagamento pode chegar depois e não pode depender de um único aviso
+  { status: 'expirado', via: 'infinitepay', venceEm: { gte: new Date(Date.now() - (JANELA_DO_EXPIRADO_DIAS + 3) * 86_400_000).toISOString().slice(0, 10) } },
   { status: { in: ['pago', 'expirado'] }, avisadoEm: null },
   { status: 'pago', confirmacaoEm: null, pagoEm: { gte: new Date(Date.now() - VALE_A_CONFIRMACAO_MS) } },
 ];
@@ -266,14 +271,15 @@ function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBai
       // O banco primeiro (o dinheiro entrou: isso é fato); o cartão depois, e `avisadoEm` só quando o cartão foi atualizado.
       // O status só muda uma vez: `updateMany` condicionado a `pendente` (duas cópias do servidor no deploy não duplicam a nota).
       if (d.tipo === 'pago') {
-        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: 'pendente' }, data: { status: 'pago', paymentId: d.paymentId, pagoEm: new Date() } });
+        // `avisadoEm: null`: o pago que vem DEPOIS do «venceu» (a linha já estava avisada como vencida) precisa de nota de pagamento nova, e se o Kommo falhar a varredura a refaz
+        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: { in: ['pendente', 'incerto', 'expirado'] } }, data: { status: 'pago', paymentId: d.paymentId, pagoEm: new Date(), avisadoEm: null } });
         if (mudou.count !== 1) return;
         await aplicar(d.linha, notaDoPagamento(d.linha, d.paymentId), true);
         logger.info({ unit: unit.slug, leadId, paymentId: d.paymentId }, `${ID_SINAL_PIX}: sinal pago — cartão atualizado`);
         // o paciente recebe a confirmação (uma só por sinal, qualquer que seja a rota de pagamento); nunca derruba a baixa
         await confirmar({ ...d.linha, status: 'pago', pagoEm: new Date(), paymentId: d.paymentId }).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, `${ID_SINAL_PIX}: a confirmação ao paciente falhou`));
       } else {
-        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: 'pendente' }, data: { status: 'expirado' } });
+        const mudou = await prisma.sinalPix.updateMany({ where: { id: d.linha.id, status: { in: ['pendente', 'incerto'] } }, data: { status: 'expirado' } });
         if (mudou.count !== 1) return;
         await aplicar(d.linha, notaDoVencimento(d.linha), false);
         logger.info({ unit: unit.slug, leadId, linkId: d.linha.linkId }, `${ID_SINAL_PIX}: link vencido sem pagamento — nota no cartão`);
@@ -290,26 +296,52 @@ function baixador(unit: Unit, chatwoot: BaixaNoChatwoot | null, kommo: DepsDaBai
  * Os mesmos portões do worker: automação `sinal-pix` desligada não faz nada, seca só registra. Link que não é sinal (criado pelo conector) é ignorado.
  * Valor: o evento já vem de um pagamento conferido no /payment_check contra o valor do link; aqui só se exige que o link valesse pelo menos o sinal.
  */
-export async function baixarSinalDoLinkPago(e: LinkPago, chatwoot: BaixaNoChatwoot | null = null, kommo?: DepsDaBaixa['kommo'], confirmar?: (linha: LinhaDoSinal) => Promise<unknown>): Promise<void> {
+export interface AlertasDoSinalSemLinha {
+  telegram: (texto: string) => Promise<unknown>;
+  tarefa: (unit: Unit, leadId: number, texto: string) => Promise<unknown>;
+}
+const alertasReais: AlertasDoSinalSemLinha = {
+  telegram: (t) => enviarTelegramSofia(t),
+  tarefa: (unit, leadId, texto) => createKommoClient(unit).createTask({ leadId, text: texto, completeAt: Math.floor(Date.now() / 1000) + 3600 }),
+};
+
+/** O cartão de um link de sinal pela referência que ele leva: `sinal-<cartão em base 36>-<hex>` (lib/sinal-infinitepay.ts). null = não é referência de sinal. */
+export function leadDaReferenciaDoSinal(orderNsu: string): number | null {
+  const m = /^sinal-([0-9a-z]+)-[0-9a-f]+$/.exec(orderNsu);
+  const n = m ? parseInt(m[1]!, 36) : NaN;
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
+export async function baixarSinalDoLinkPago(
+  e: LinkPago,
+  chatwoot: BaixaNoChatwoot | null = null,
+  kommo?: DepsDaBaixa['kommo'],
+  confirmar?: (linha: LinhaDoSinal) => Promise<unknown>,
+  alertas: AlertasDoSinalSemLinha = alertasReais,
+): Promise<void> {
   const unit = await prisma.unit.findUnique({ where: { slug: e.unidade } });
   if (!unit) return;
   const linha = (await prisma.sinalPix.findFirst({ where: { unitId: unit.id, linkId: e.orderNsu, via: 'infinitepay' } })) as LinhaDoSinal | null;
-  if (!linha || (linha.status !== 'pendente' && linha.status !== 'expirado')) return;
+  if (!linha) {
+    // Link do conector (criado à mão pelo claude.ai) não tem sinal: é normal. Mas uma referência `sinal-…` é da Sofia: o dinheiro entrou e NENHUM cartão foi baixado. Ninguém pode ficar sem saber.
+    const lead = leadDaReferenciaDoSinal(e.orderNsu);
+    if (lead === null) return;
+    const texto = `⚠️ ${unit.slug}: o link do SINAL ${e.orderNsu} (R$ ${(e.valorCentavos / 100).toFixed(2).replace('.', ',')}) foi PAGO na InfinitePay, mas não há sinal registrado para ele no agente: o cartão ${lead} NÃO foi marcado e o paciente NÃO foi avisado. Conferir e marcar «✓ Consulta pg antecipado» à mão.`;
+    logger.error({ unit: unit.slug, orderNsu: e.orderNsu, leadId: lead }, `${ID_SINAL_PIX}: link de sinal PAGO sem linha em sinais_pix — avisei a equipe`);
+    await alertas.telegram(texto).catch(() => undefined);
+    await alertas.tarefa(unit, lead, texto.replace(/^⚠️ /, 'CONFERIR SINAL PAGO · ')).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId: lead }, `${ID_SINAL_PIX}: a tarefa do sinal pago sem linha não saiu`));
+    return;
+  }
+  if (linha.status !== 'pendente' && linha.status !== 'incerto' && linha.status !== 'expirado') return;
   const est = estado(unit.slug);
   if (est === 'desligado' || !unit.kommoAccessToken) return;
   if (e.valorCentavos < linha.valorCentavos) {
     logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link pago vale menos que o sinal — não dei a baixa`);
     return;
   }
-  // Pagou DEPOIS de a varredura dar o link como vencido (o aviso atrasou, ou o paciente pagou no último dia): o dinheiro entrou e foi conferido, então vale mais que o «venceu».
-  // Reabre a linha (só se ainda está `expirado`) e dá a baixa normal; a nota do vencimento que já está no cartão fica, e a nota do pagamento vem depois dela.
-  if (linha.status === 'expirado') {
-    if (est !== 'ligado') return;
-    const reaberta = await prisma.sinalPix.updateMany({ where: { id: linha.id, status: 'expirado' }, data: { status: 'pendente' } });
-    if (reaberta.count !== 1) return;
-    logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link da InfinitePay foi pago depois de dado como vencido — baixa dada mesmo assim`);
-    linha.status = 'pendente';
-  }
+  // `expirado` = pagou DEPOIS de a varredura dar o link como vencido (o aviso atrasou, ou o paciente pagou no último dia): o dinheiro entrou e foi conferido, então vale mais que o «venceu».
+  // `incerto` = o link que a criação deixou em dúvida existia mesmo. Nos dois casos a mesma baixa de sempre (a transição para `pago` limpa `avisadoEm`, e a nota do vencimento que já está no cartão fica).
+  if (linha.status === 'expirado') logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link da InfinitePay foi pago depois de dado como vencido — baixa dada mesmo assim`);
   await baixador(unit, chatwoot, kommo, confirmar).executar({ tipo: 'pago', linha, paymentId: e.transactionNsu ?? e.orderNsu }, est === 'seco');
 }
 
@@ -330,37 +362,45 @@ export async function varrerUnidade(
   const hoje = diaNoFuso(new Date(), fusoDaUnidade(unit));
 
   // Pendente que já passou da hora de desistir sai da fila (a leitura do Asaas pode estar falhando para sempre): expirado, sem nota.
-  const velhas = linhas.filter((l) => l.status === 'pendente' && somarDias(l.venceEm, DIAS_PARA_DESISTIR) < hoje);
+  const velhas = linhas.filter((l) => (l.status === 'pendente' || l.status === 'incerto') && somarDias(l.venceEm, DIAS_PARA_DESISTIR) < hoje);
   for (const l of velhas) {
     if (seco) continue;
-    await prisma.sinalPix.updateMany({ where: { id: l.id, status: 'pendente' }, data: { status: 'expirado', avisadoEm: new Date() } }).catch(() => undefined);
+    await prisma.sinalPix.updateMany({ where: { id: l.id, status: { in: ['pendente', 'incerto'] } }, data: { status: 'expirado', avisadoEm: new Date() } }).catch(() => undefined);
     logger.warn({ unit: unit.slug, leadId: l.leadId, linkId: l.linkId }, `${ID_SINAL_PIX}: link pendente há mais de ${DIAS_PARA_DESISTIR} dias do fim — desisti dele`);
   }
   const pendentes = linhas.filter((l) => l.status === 'pendente' && !velhas.includes(l) && !ehInfinitepay(l));
-  const pendentesIp = linhas.filter((l) => l.status === 'pendente' && !velhas.includes(l) && ehInfinitepay(l));
+  // links da InfinitePay: os abertos (pendente, ou incerto = a criação ficou em dúvida) e os dados como vencidos há pouco, para o pagamento atrasado não depender de um único aviso
+  const pendentesIp = linhas.filter(
+    (l) => ehInfinitepay(l) && !velhas.includes(l) && (l.status === 'pendente' || l.status === 'incerto' || (l.status === 'expirado' && l.venceEm >= somarDias(hoje, -JANELA_DO_EXPIRADO_DIAS))),
+  );
   let decisoes: Decisao[] = [];
-  if (pendentes.length > 0) {
-    const conta = await chaveDaClinica({ id: unit.id, slug: unit.slug });
-    if (!conta) {
-      logger.warn({ unit: unit.slug, pendentes: pendentes.length }, `${ID_SINAL_PIX}: a unidade tem sinais pendentes mas não tem chave do Asaas — nada a ler`);
-    } else if ((chaveRecusadaAte.get(conta.unitId) ?? 0) > Date.now()) {
-      // chave recusada há pouco: não insiste de 5 em 5 minutos (os cartões já pagos/vencidos abaixo seguem sendo atualizados)
-    } else {
-      const menor = pendentes.reduce((m, l) => (l.criadoEm < m ? l.criadoEm : m), pendentes[0]!.criadoEm);
-      const desde = menor.toISOString().slice(0, 10);
-      let lidos: Awaited<ReturnType<typeof pagamentosDesde>> | null = null;
-      try {
-        lidos = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
-      } catch (err) {
-        if (!(err instanceof ErroAsaas && (err.status === 401 || err.status === 403))) throw err;
-        chaveRecusadaAte.set(conta.unitId, Date.now() + ESPERA_CHAVE_RECUSADA_MS);
-        logger.warn({ unit: unit.slug, status: err.status }, `${ID_SINAL_PIX}: o Asaas recusou a chave — espero 1 h antes de tentar de novo (links pendentes ficam sem baixa até lá)`);
-      }
-      if (lidos) {
-        if (!lidos.completa) logger.warn({ unit: unit.slug }, `${ID_SINAL_PIX}: leitura do Asaas cortada no teto de páginas — só dá baixa nesta varredura, não vence link`);
-        decisoes = conciliar(pendentes, lidos.pagamentos, hoje, lidos.completa);
+  // As duas rotas são independentes: o Asaas fora do ar (5xx, rede, cofre) NÃO derruba a baixa da InfinitePay da mesma unidade, e o contrário também não.
+  try {
+    if (pendentes.length > 0) {
+      const conta = await chaveDaClinica({ id: unit.id, slug: unit.slug });
+      if (!conta) {
+        logger.warn({ unit: unit.slug, pendentes: pendentes.length }, `${ID_SINAL_PIX}: a unidade tem sinais pendentes mas não tem chave do Asaas — nada a ler`);
+      } else if ((chaveRecusadaAte.get(conta.unitId) ?? 0) > Date.now()) {
+        // chave recusada há pouco: não insiste de 5 em 5 minutos (os cartões já pagos/vencidos abaixo seguem sendo atualizados)
+      } else {
+        const menor = pendentes.reduce((m, l) => (l.criadoEm < m ? l.criadoEm : m), pendentes[0]!.criadoEm);
+        const desde = menor.toISOString().slice(0, 10);
+        let lidos: Awaited<ReturnType<typeof pagamentosDesde>> | null = null;
+        try {
+          lidos = await pagamentosDesde((caminho, query) => asaasGet(conta.unitId, conta.chave, caminho, query), somarDias(desde, -1));
+        } catch (err) {
+          if (!(err instanceof ErroAsaas && (err.status === 401 || err.status === 403))) throw err;
+          chaveRecusadaAte.set(conta.unitId, Date.now() + ESPERA_CHAVE_RECUSADA_MS);
+          logger.warn({ unit: unit.slug, status: err.status }, `${ID_SINAL_PIX}: o Asaas recusou a chave — espero 1 h antes de tentar de novo (links pendentes ficam sem baixa até lá)`);
+        }
+        if (lidos) {
+          if (!lidos.completa) logger.warn({ unit: unit.slug }, `${ID_SINAL_PIX}: leitura do Asaas cortada no teto de páginas — só dá baixa nesta varredura, não vence link`);
+          decisoes = conciliar(pendentes, lidos.pagamentos, hoje, lidos.completa);
+        }
       }
     }
+  } catch (err) {
+    logger.warn({ err: String(err), unit: unit.slug }, `${ID_SINAL_PIX}: não consegui ler o Asaas — os sinais do Asaas ficam para a próxima varredura (a InfinitePay e os cartões seguem)`);
   }
 
   if (pendentesIp.length > 0) decisoes = decisoes.concat(await decidirInfinitepay(unit.slug, pendentesIp, hoje));
@@ -369,7 +409,7 @@ export async function varrerUnidade(
   for (const d of decisoes) await executar(d, seco);
 
   // Cartões que já mudaram de status e ficaram sem nota (Kommo fora do ar na vez anterior).
-  for (const l of linhas.filter((x) => x.status !== 'pendente' && !x.avisadoEm)) {
+  for (const l of linhas.filter((x) => (x.status === 'pago' || x.status === 'expirado') && !x.avisadoEm)) {
     if (seco) continue;
     try {
       await aplicar(l, l.status === 'pago' ? notaDoPagamento(l, l.paymentId ?? '') : notaDoVencimento(l), l.status === 'pago');

@@ -185,8 +185,9 @@ test('pacientes diferentes no mesmo horário NÃO esbarram na trava de "link igu
 // ── o fallback: o paciente nunca fica sem como pagar ──────────────────────────────────────────────────────────────────────────
 
 const CASOS: Array<[string, Parameters<typeof montar>[0], RegExp]> = [
-  ['a InfinitePay responde 503', { criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 503', 503); } }, /503/],
-  ['a InfinitePay não responde a tempo', { criar: async () => { throw new ErroInfinitepay('a InfinitePay não respondeu a tempo'); } }, /a tempo/],
+  ['a InfinitePay RECUSA o pedido (422) mesmo sem nome e telefone', { cliente: {}, criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 422 (valor inválido)', 422); } }, /422/],
+  ['a InfinitePay recusa a chave (403)', { criar: async () => { throw new ErroInfinitepay('a InfinitePay recusou a chave (403)', 403); } }, /403/],
+  ['a InfinitePay pede para ir mais devagar (429)', { criar: async () => { throw new ErroInfinitepay('a InfinitePay pediu para ir mais devagar (429)', 429); } }, /429/],
   ['a criação de link NÃO está ligada na unidade (INFINITEPAY_ESCRITA_UNIDADES)', { unidades: [] }, /não está ligada na unidade/],
   ['o teto do dia da InfinitePay estoura', { tetoDia: 10 }, /teto do dia/],
   ['o limite de links por hora é 0 (criação desligada)', { porHora: 0 }, /DESLIGADA/],
@@ -210,8 +211,8 @@ for (const [nome, op, motivo] of CASOS) {
   });
 }
 
-test('fallback: se a InfinitePay E o Asaas falham, o resultado é a falha de sempre (a equipe envia o Pix)', async () => {
-  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 502', 502); }, asaasFalha: new Error('Asaas fora') });
+test('fallback: se a InfinitePay (recusa certa) E o Asaas falham, o resultado é a falha de sempre (a equipe envia o Pix)', async () => {
+  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 422', 422); }, asaasFalha: new Error('Asaas fora') });
   const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
   assert.equal(r.tipo, 'falhou');
   assert.equal(m.db.rows.length, 0, 'a reserva é largada');
@@ -247,23 +248,104 @@ test('a InfinitePay RECUSA o pedido com nome/telefone (400): tenta UMA vez sem e
 });
 
 test('só a recusa 400/422 repete sem nome e telefone: timeout, 5xx e chave recusada NÃO repetem (vão direto para o Asaas)', async () => {
-  for (const erro of [new ErroInfinitepay('a InfinitePay respondeu 503', 503), new ErroInfinitepay('a InfinitePay recusou a chave (403)', 403), new ErroInfinitepay('a InfinitePay não respondeu a tempo')]) {
+  for (const erro of [new ErroInfinitepay('a InfinitePay recusou a chave (403)', 403), new ErroInfinitepay('a InfinitePay respondeu 503', 503), new ErroInfinitepay('a InfinitePay não respondeu a tempo')]) {
     const m = montar({ criar: async () => { throw erro; } });
-    const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+    await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
     assert.equal(m.ip.pedidos.length, 1, erro.message);
-    assert.equal(r.tipo === 'link' && r.via, undefined);
-    assert.equal(r.tipo === 'link' && r.copiaECola, true);
   }
 });
 
+test('o retry sem nome/telefone SÓ acontece quando nome ou telefone foram mesmo enviados (sem eles, a recusa 400 vai direto para o fallback)', async () => {
+  const m = montar({ cliente: {}, criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 400 (x)', 400); } });
+  const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  assert.equal(m.ip.pedidos.length, 1, 'uma tentativa só');
+  assert.equal(r.tipo === 'link' && r.copiaECola, true);
+});
+
+// ── a criação SEM RESPOSTA CLARA: o link pode existir, então NÃO sai o Pix do Asaas (cobrança em dobro) ─────────────────────────────
+
+for (const [nome, erro] of [
+  ['5xx', () => new ErroInfinitepay('a InfinitePay respondeu 503', 503)],
+  ['timeout', () => new ErroInfinitepay('a InfinitePay não respondeu a tempo')],
+  ['resposta sem URL', () => new ErroInfinitepay('a InfinitePay respondeu sem a URL do link. O link PODE ter sido criado: confira no app da InfinitePay antes de repetir.', 200)],
+] as const) {
+  test(`criação incerta (${nome}): NÃO manda o Pix do Asaas nem cria outro link; guarda a referência como «incerto» e pede à equipe para conferir`, async () => {
+    const m = montar({ criar: async () => { throw erro(); } });
+    const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+    assert.equal(r.tipo, 'falhou');
+    if (r.tipo !== 'falhou') return;
+    assert.equal(r.motivo, 'incerto');
+    assert.match(r.detalhe, /pode existir: conferir no app antes de cobrar de novo/);
+    assert.equal(m.asaas.chamadas.length, 0, 'nenhum Pix do Asaas');
+    // a linha guarda a referência do link que talvez exista (o aviso de pagamento dele ainda dará a baixa)
+    assert.equal(m.db.rows.length, 1);
+    assert.equal(m.db.rows[0]!.status, 'incerto');
+    assert.equal(m.db.rows[0]!.via, 'infinitepay');
+    assert.equal(m.db.rows[0]!.linkId, m.ip.pedidos[0]!.orderNsu);
+    // «não recebi»: o pedido repetido NÃO cria link novo nem Pix — segue segurando o sinal
+    const de_novo = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+    assert.equal(de_novo.tipo === 'falhou' && de_novo.motivo, 'incerto');
+    assert.equal(m.ip.pedidos.length, 1);
+    assert.equal(m.asaas.chamadas.length, 0);
+    assert.equal(m.db.rows.length, 1);
+  });
+}
+
+test('criação incerta de UM paciente não segura o sinal de OUTRO', async () => {
+  let n = 0;
+  const m = montar({ criar: async (p) => { if (++n === 1) throw new ErroInfinitepay('a InfinitePay respondeu 503', 503); return { url: `https://checkout.infinitepay.io/x?lenc=${p.orderNsu}` }; } });
+  await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  const outro = await gerarSinalPix(UNIT, 6924325, CONSULTA, m.deps);
+  assert.equal(outro.tipo === 'link' && outro.via, 'infinitepay');
+});
+
+// ── a validade REAL do link é o vencimento do sinal: um link aberto nunca é duplicado ────────────────────────────────────────────────
+
+test('consulta AMANHÃ: o link vale até o fim do dia seguinte (a API conta em dias inteiros) e esse é o vencimento da linha e o que o paciente ouve — o «não recebi» no dia reaproveita o MESMO link', async () => {
+  const m = montar();
+  const consultaAmanha = '2026-11-27T09:00';
+  const a = await gerarSinalPix(UNIT, 5829035, consultaAmanha, m.deps);
+  assert.equal(a.tipo, 'link');
+  if (a.tipo !== 'link') return;
+  assert.equal(m.ip.pedidos[0]!.validoAte, '2026-11-27T23:59:59-03:00');
+  assert.equal(a.venceEm, '2026-11-27', 'o paciente ouve o dia em que o link REALMENTE vence');
+  assert.equal(m.db.rows[0]!.venceEm, '2026-11-27', 'e a linha também');
+  // no dia seguinte de manhã (ainda dentro da validade do link): o mesmo pedido devolve o mesmo link
+  const noDia = { ...m.deps, agora: () => new Date('2026-11-27T11:00:00Z') };
+  const b = await gerarSinalPix(UNIT, 5829035, consultaAmanha, noDia);
+  assert.equal(b.tipo === 'link' && b.novo, false);
+  assert.equal(b.tipo === 'link' && b.url, a.url);
+  assert.equal(m.ip.pedidos.length, 1, 'nenhum segundo link pagável');
+  assert.equal(m.db.rows.length, 1);
+});
+
+test('o telefone que a InfinitePay devolve numa recusa não vai para o log, nem para o motivo do fallback', async () => {
+  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 422 (telefone +5599981234567 inválido)', 422); }, cliente: {} });
+  const linhasDeLog: string[] = [];
+  const { logger } = await import('./logger.js');
+  const orig = { info: logger.info, warn: logger.warn, error: logger.error };
+  for (const nivel of ['info', 'warn', 'error'] as const) (logger as never as Record<string, unknown>)[nivel] = (...a: unknown[]) => void linhasDeLog.push(JSON.stringify(a));
+  let r;
+  try {
+    r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  } finally {
+    Object.assign(logger, orig);
+  }
+  assert.equal(r.tipo === 'link' && r.fallback?.includes('99981234567'), false);
+  assert.doesNotMatch(linhasDeLog.join('\n'), /99981234567/);
+  assert.ok(linhasDeLog.length > 0);
+});
+
+
+
 test('InfinitePay e Asaas falham: a falha diz que a InfinitePay também falhou (a equipe não caça só chave do Asaas)', async () => {
-  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 502', 502); } });
+  const m = montar({ cliente: {}, criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 422 (x)', 422); } });
   const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, { ...m.deps, chave: async () => null });
   assert.equal(r.tipo, 'falhou');
   if (r.tipo !== 'falhou') return;
   assert.equal(r.motivo, 'sem-chave');
-  assert.match(r.detalhe, /antes, a InfinitePay falhou: .*502/);
-  assert.match(r.fallback ?? '', /502/);
+  assert.match(r.detalhe, /antes, a InfinitePay falhou: .*422/);
+  assert.match(r.fallback ?? '', /422/);
 });
 
 // ── sem a opção (o padrão): igual ao de hoje ────────────────────────────────────────────────────────────────────────────────────

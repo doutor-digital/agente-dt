@@ -363,3 +363,14 @@ test('textoDoSinal: link da InfinitePay manda o link, na frase «por este link»
   assert.match(asaas, /Pix do sinal de R\$ 50 gerado\. Envie ao paciente ESTE link/);
   assert.doesNotMatch(asaas, /InfinitePay/);
 });
+
+test('textoDoSinal: link INCERTO (a InfinitePay não respondeu com clareza): a Sofia não inventa link nem Pix e diz que a equipe confirma; sem a tarefa, só «vou verificar»', () => {
+  const s = sinalDaUnidade(comSinal())!;
+  const incerto = { tipo: 'falhou', motivo: 'incerto', detalhe: 'link x pode existir' } as const;
+  const com = textoDoSinal(incerto, s, true);
+  assert.match(com, /NÃO invente link nem chave Pix/);
+  assert.match(com, /a equipe confirma o pagamento do sinal por aqui em instantes/);
+  assert.doesNotMatch(com, /enviar o Pix|envia o Pix/);
+  const sem = textoDoSinal(incerto, s, false);
+  assert.match(sem, /NÃO prometa que a equipe envia/);
+});
