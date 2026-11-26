@@ -54,6 +54,7 @@ import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, sem
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
+import { barraPorPapelJs } from '../lib/chatwoot-barra-papel.js';
 import { dominioContaJs } from '../lib/chatwoot-dominio-conta.js';
 import { dominiosDasClinicas } from '../lib/chatwoot-unidades.js';
 import { rotuloRoboJs } from '../lib/chatwoot-rotulo-robo.js';
@@ -1880,7 +1881,9 @@ export function montarMenuJs(agente: string, contasDoGuiaSemAntecipado: readonly
   const cartao = cartaoEnxutoJs(process.env, contasDoGuiaSemAntecipado); // as mesmas contas sem antecipado do guia (banco)
   // o modelo do WhatsApp com os parâmetros preenchidos (mandado à mão): só preenche as caixinhas vazias, nunca envia; falhou, o resto segue
   const modelo = modeloPreenchidoJs(agente);
-  const opcionais = [guia, selo, dominio, rotulo, cartao, modelo].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
+  // a barra lateral por papel (Hoje no topo; a atendente com a barra enxuta e o contador na pasta «A Sofia passou para mim»): só visual, só lê; vazia sem CHATWOOT_BARRA_POR_PAPEL=1
+  const barra = barraPorPapelJs();
+  const opcionais = [guia, selo, dominio, rotulo, cartao, modelo, barra].map((b) => (b ? `;try{\n${b}\n}catch(e){}\n` : '')).join('');
   return `${MENU_JS.split('__AGENTE__').join(origem)}\n;try{\n${assistenteJs().split('__AGENTE__').join(origem)}\n}catch(e){}\n${opcionais}`;
 }
 
