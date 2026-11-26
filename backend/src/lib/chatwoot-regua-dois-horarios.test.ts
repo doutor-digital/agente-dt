@@ -87,7 +87,7 @@ test('consulta de avaliação + o outro horário do dia: véspera, «hoje» e o 
 // ── a agenda é a única que escreve o campo ────────────────────────────────────────────────────────
 
 /** lidas do módulo (não importadas por nome): o arquivo roda igual no código antigo e mostra o que NÃO acontecia */
-const mudancas = agendaMod.mudancas as (a: Record<string, unknown>, d: Record<string, unknown>) => Record<string, string>;
+const mudancas = agendaMod.mudancas as unknown as (a: Record<string, unknown>, d: Record<string, unknown>) => Record<string, string>;
 const outrosHorariosDoDia = (agendaMod as unknown as { outrosHorariosDoDia: (v: SpineSchedule, l: SpineSchedule[], h: string) => string }).outrosHorariosDoDia;
 const ag = (o: Partial<SpineSchedule>): SpineSchedule => ({
   idSchedule: 1, idTreatment: null, idStatus: 1, statusName: 'Agendado', clientName: 'Maria da Silva', categoryName: 'Sessão', physicalTherapist: null,
