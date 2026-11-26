@@ -43,7 +43,7 @@ test('catálogo: chatwoot-vigia existe, tem seco, NASCE EM SECO em qualquer unid
   assert.equal(V.estadoDoVigia('qualquer-outra'), 'seco');
 });
 
-test('horário comercial: a janela de CADA dia da semana (spineDayHours), fora do almoço, sem feriado — a mesma fonte de retorno-da-equipe e agenda-tools', () => {
+test('horário comercial: a janela de CADA dia da semana (spineDayHours), sem feriado, almoço INCLUÍDO (a média do mesmo dia/hora já traz o dip) — a mesma fonte de retorno-da-equipe e agenda-tools', () => {
   const brt = (d: number, h: number) => new Date(Date.UTC(2026, 10, d, h + 3));
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(23, 8)), true);
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(23, 17)), true, '17h–18h cabe inteira');
@@ -52,7 +52,7 @@ test('horário comercial: a janela de CADA dia da semana (spineDayHours), fora d
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(22, 10)), false, 'domingo');
   assert.equal(V.horaCheiaComercial(UNIDADE, brt(20, 10)), false, '20/11 é feriado nacional');
   // Parauapebas de verdade (produção, 26/11): seg–sáb, semana 08:00–18:30 com almoço 12–13, sábado 07:00–13:00 SEM almoço
-  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(23, 12)), false, 'almoço da segunda');
+  assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(23, 12)), true, 'almoço da segunda: expectativa menor pela média, não hora desligada (sem ponto cego das 13h às 16h)');
   assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(23, 18)), false, '18h–19h passa das 18h30');
   assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 7)), true, 'sábado abre às 7h');
   assert.equal(V.horaCheiaComercial(PARAUAPEBAS, brt(21, 12)), true, 'sábado não tem almoço (lunchStart: null)');
@@ -168,7 +168,7 @@ test('Kapso: entregas — pede SÓ `status=failed` de `meta.messages` com `limit
     ], ...pag(null) },
   });
   const erros = await V.kapsoReal('chave-secreta-do-kapso-123', k.f).entregasComErro(agora - 3 * HORA);
-  assert.deepEqual([...erros!], [['111', 2], ['222', 1]]);
+  assert.deepEqual([...erros!].map(([k, v]) => [k, v.length]), [['111', 2], ['222', 1]]);
   assert.match(k.pedidos[0]!.url, /\/webhook_deliveries\?status=failed&event=meta\.messages&period=24h&limit=100$/);
   assert.ok(k.pedidos.every((p) => p.chave === 'chave-secreta-do-kapso-123' && !p.url.includes('chave-secreta')), 'a chave só no cabeçalho');
 });
@@ -194,7 +194,7 @@ test('Kapso: entregas — segue o CURSOR documentado (`paging.cursors.after`, en
     { data: [falha(30)], ...pag(null) },
   ] });
   const erros = await V.kapsoReal('chave-do-kapso-1234567', k.f).entregasComErro(agora - 3 * HORA);
-  assert.deepEqual([...erros!], [['111', 4]]);
+  assert.deepEqual([...erros!].map(([k, v]) => [k, v.length]), [['111', 4]]);
   assert.equal(k.pedidos.length, 3);
   assert.ok(k.pedidos[1]!.url.endsWith('&after=c1') && k.pedidos[2]!.url.endsWith('&after=c2'), 'o cursor de cada página vem do `paging` da anterior');
   const sempre = kapsoFalso({ '/webhook_deliveries': Array.from({ length: 9 }, (_, i) => ({ data: [falha(5)], ...pag(i + 1) })) });
@@ -230,16 +230,18 @@ test('Kapso: conta as mensagens de paciente recebidas na janela (`direction=inbo
 
 // ── o ciclo de uma caixa ──────────────────────────────────────────────────────────────────────────────────────
 
-function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, number> | Error; numero?: string | null; saude?: string[] | null; entregas?: Map<string, number> | null; entradas?: number | null; jaAvisou?: boolean; ignorada?: boolean; envia?: boolean; unidade?: typeof UNIDADE | null } = {}) {
-  const c = { enviados: [] as string[], marcas: [] as string[], leituras: 0, kapsoLeituras: 0, jaLogouSeco: false };
+function mundo(o: { modo?: 'ligado' | 'seco' | 'desligado'; serie?: Map<number, number> | Error; numero?: string | null; saude?: string[] | null; entregas?: Map<string, number[]> | null; entradas?: number | null; jaAvisou?: boolean; ultimoAviso?: number | null; ignorada?: boolean; envia?: boolean; unidade?: typeof UNIDADE | null } = {}) {
+  const c = { enviados: [] as string[], marcas: [] as string[], leituras: 0, kapsoLeituras: 0, jaLogouSeco: false, semAgenda: 0 };
   const deps = {
     estado: () => o.modo ?? 'ligado',
     unidade: async () => (o.unidade === undefined ? UNIDADE : o.unidade),
     serie: async () => { c.leituras++; if (o.serie instanceof Error) throw o.serie; return o.serie ?? serie(6, zeroNasUltimas3); },
     numeroKapso: () => (o.numero === undefined ? '111' : o.numero),
     kapso: { numeros: async () => new Map(), saude: async () => { c.kapsoLeituras++; return o.saude === undefined ? [] : o.saude; }, entregasComErro: async () => null, entradas: async () => { c.kapsoLeituras++; return o.entradas === undefined ? 0 : o.entradas; } },
-    cicloKapso: { numeros: new Map([['111', { id: '111', status: 'CONNECTED', recebimentoLigado: true }]]), entregas: o.entregas === undefined ? new Map<string, number>() : o.entregas },
+    cicloKapso: { numeros: new Map([['111', { id: '111', status: 'CONNECTED', recebimentoLigado: true }]]), entregas: o.entregas === undefined ? new Map<string, number[]>() : o.entregas },
     jaAvisou: async () => o.jaAvisou ?? false,
+    ultimoAviso: async (_c: number): Promise<number | null> => o.ultimoAviso ?? null,
+    semAgenda: async (_c: number, _s: string, _m: string): Promise<void> => { c.semAgenda++; },
     enviar: async (_s: string, t: string) => { c.enviados.push(t); return o.envia ?? true; },
     marcar: async (_c: number, _a: number, r: string) => { c.marcas.push(r); },
     secoRecente: () => c.jaLogouSeco,
@@ -270,7 +272,7 @@ test('ciclo: silêncio com o Kapso TAMBÉM sem receber → o diagnóstico é out
 });
 
 test('ciclo: erro de ENTREGA do Kapso avisa mesmo SEM silêncio; número com problema também', async () => {
-  const a = mundo({ serie: serie(6), entregas: new Map([['111', 2]]) });
+  const a = mundo({ serie: serie(6), entregas: new Map([['111', [AGORA - HORA, AGORA - 2 * HORA]]]) });
   assert.equal(await V.cicloDaCaixa(a.deps, 3, 'x'), 'avisou');
   assert.match(a.c.enviados[0]!, /2 mensagem\(ns\) de paciente não foram entregues ao CRM pelo Kapso/);
   const b = mundo({ serie: serie(6), saude: ['verificação do webhook falhando'] });
@@ -498,7 +500,7 @@ test('o ciclo: o Chatwoot respondendo e o Kapso fora → o SILÊNCIO continua se
 
 test('Kapso de madrugada NÃO acorda ninguém: problema do número / entrega só vira aviso no horário de atendimento da unidade (e é «ok» fora dele)', async () => {
   const mundoAs = (utc: number) => {
-    const m = mundo({ serie: serie(6), saude: ['verificação do webhook falhando'], entregas: new Map([['111', 3]]) });
+    const m = mundo({ serie: serie(6), saude: ['verificação do webhook falhando'], entregas: new Map([['111', [Date.UTC(2026, 10, 23, 22, 0), Date.UTC(2026, 10, 24, 1, 0), Date.UTC(2026, 10, 24, 5, 0)]]]) });
     (m.deps as any).agora = () => utc;
     return m;
   };
@@ -510,4 +512,84 @@ test('Kapso de madrugada NÃO acorda ninguém: problema do número / entrega só
   assert.match(dia.c.enviados[0]!, /Número do WhatsApp com problema/);
   assert.equal(V.emHorarioDeAtendimento(PARAUAPEBAS, Date.UTC(2026, 10, 21, 17, 0)), false, 'sábado 14:00: já fechou (13h)');
   assert.equal(V.emHorarioDeAtendimento(PARAUAPEBAS, Date.UTC(2026, 10, 21, 15, 0)), true, 'sábado 12:00');
+});
+
+// ── revisão 2 do sênior: Kapso desde o último FECHAMENTO, agenda desligada que avisa, almoço sem ponto cego ─────────────
+
+test('ultimoFechamento: ao abrir de manhã é o fim do expediente de ontem; no sábado à tarde, o fechamento das 13h; depois do fim de semana, o de sábado', () => {
+  const brt = (d: number, h: number, m = 0) => Date.UTC(2026, 10, d, h + 3, m);
+  const dentro = (t: number, de: number, ate: number) => t >= de && t <= ate;
+  // terça 24/11 08:05 — a clínica fechou segunda 18:30
+  assert.ok(dentro(V.ultimoFechamento(PARAUAPEBAS, brt(24, 8, 5)), brt(23, 18, 25), brt(23, 18, 50)));
+  // terça 24/11 14:00 (aberta): o fechamento de ontem, não o de hoje
+  assert.ok(dentro(V.ultimoFechamento(PARAUAPEBAS, brt(24, 14)), brt(23, 18, 25), brt(23, 18, 50)));
+  // sábado 21/11 14:00 (já fechou às 13h): o de sábado 13h
+  assert.ok(dentro(V.ultimoFechamento(PARAUAPEBAS, brt(21, 14)), brt(21, 12, 55), brt(21, 13, 20)));
+  // segunda 23/11 08:05 (depois do domingo): o de sábado 13h
+  assert.ok(dentro(V.ultimoFechamento(PARAUAPEBAS, brt(23, 8, 5)), brt(21, 12, 55), brt(21, 13, 20)));
+});
+
+test('entrega que falhou às 23h → o aviso sai NA ABERTURA da clínica (às 8h05), com a contagem desde o último fechamento; antes da abertura não acorda ninguém', async () => {
+  const falhas = [Date.UTC(2026, 10, 24, 2, 0)]; // terça 23/11... 23:00 BRT de segunda
+  const mundoAs = (utc: number, extra: Parameters<typeof mundo>[0] = {}) => {
+    const m = mundo({ serie: serie(6), entregas: new Map([['111', falhas]]), unidade: PARAUAPEBAS as never, ...extra });
+    (m.deps as any).agora = () => utc;
+    return m;
+  };
+  const antes = mundoAs(Date.UTC(2026, 10, 24, 10, 30)); // 07:30 de terça: ainda fechada
+  assert.equal(await V.cicloDaCaixa(antes.deps as never, 3, 'x'), 'ok');
+  assert.equal(antes.c.enviados.length, 0);
+  const abriu = mundoAs(Date.UTC(2026, 10, 24, 11, 5)); // 08:05 de terça: a janela de 3 h do silêncio NÃO veria 23h, o Kapso vê
+  assert.equal(await V.cicloDaCaixa(abriu.deps as never, 3, 'x'), 'avisou');
+  assert.match(abriu.c.enviados[0]!, /1 mensagem\(ns\) de paciente não foram entregues ao CRM pelo Kapso \(desde o último fechamento da clínica\)/);
+});
+
+test('depois de avisar, a falha antiga NÃO volta a ser contada: o Kapso conta a partir do ÚLTIMO AVISO quando ele é mais novo que o fechamento', async () => {
+  const falha = Date.UTC(2026, 10, 23, 10, 0); // segunda 07:00 BRT, antes de abrir (hoje é segunda 15:05: AGORA)
+  const rodar = async (ultimoAviso: number | null) => {
+    const m = mundo({ serie: serie(6, undefined, PARAUAPEBAS), entregas: new Map([['111', [falha]]]), unidade: PARAUAPEBAS as never, ultimoAviso });
+    return { r: await V.cicloDaCaixa(m.deps as never, 3, 'x'), m };
+  };
+  assert.equal((await rodar(null)).r, 'avisou', 'sem aviso anterior: a falha da madrugada conta');
+  const depois = await rodar(Date.UTC(2026, 10, 23, 11, 30)); // avisado segunda 08:30, 3 h+ atrás
+  assert.equal(depois.r, 'ok');
+  assert.equal(depois.m.c.enviados.length, 0);
+});
+
+test('agenda DESLIGADA (spineEnabled=false): o vigia não avalia, devolve «sem-agenda» e AVISA que não avalia (uma vez por dia) — nunca fica mudo', async () => {
+  const m = mundo({ unidade: { ...UNIDADE, spineEnabled: false } as never });
+  assert.equal(await V.cicloDaCaixa(m.deps as never, 3, 'x'), 'sem-agenda');
+  assert.equal(m.c.semAgenda, 1);
+  assert.equal(m.c.leituras + m.c.kapsoLeituras + m.c.enviados.length, 0);
+});
+
+test('semAgenda real: loga «caixa N sem agenda: vigia não avalia silêncio» UMA vez por dia (de 24 h); só o ligado manda ao João', async () => {
+  const { logger } = await import('./logger.js');
+  const w = mock.method(logger, 'warn', () => undefined);
+  const reais = V.depsReais({ conta: null } as never, null);
+  const salvo = { ...process.env };
+  for (const k of ['EVOLUTION_ALERT_URL', 'EVOLUTION_ALERT_HEADER', 'EVOLUTION_ALERT_VALUE', 'ALERTA_WHATSAPP_NUMERO']) delete process.env[k];
+  try {
+    await reais.semAgenda(3, 'doutor-hernia-parauapebas', 'seco');
+    await reais.semAgenda(3, 'doutor-hernia-parauapebas', 'seco');
+    const sem = w.mock.calls.filter((c) => String(c.arguments[1]).includes('sem agenda: vigia não avalia silêncio'));
+    assert.equal(sem.length, 1, 'uma vez por dia, não por varredura');
+    await reais.semAgenda(4, 'outra', 'ligado'); // outra caixa: o seu próprio aviso (sem Evolution configurada: só log, não lança)
+    assert.equal(w.mock.calls.filter((c) => String(c.arguments[1]).includes('sem agenda: vigia não avalia silêncio')).length, 2);
+  } finally {
+    Object.assign(process.env, salvo);
+    w.mock.restore();
+  }
+});
+
+test('ALMOÇO não abre ponto cego: às 14h05 (janela 11h–14h, com o almoço 12–13) o silêncio É avaliado, e com a média do almoço menor a expectativa cai (não zera)', () => {
+  const t = Date.UTC(2026, 10, 25, 17, 5); // quarta 14:05 BRT
+  const tAte = Math.floor(t / HORA) * HORA;
+  const dow = (h: number) => new Date(h - 3 * HORA).getUTCHours();
+  const comAlmoco = serie(10, (h, a) => (a === 0 ? 0 : dow(h) === 12 ? 1 : a), PARAUAPEBAS);
+  for (const h of [tAte - 3 * HORA, tAte - 2 * HORA, tAte - HORA]) comAlmoco.set(h, 0);
+  const d = V.decidirSilencio({ serie: comAlmoco, unidade: PARAUAPEBAS, agora: t });
+  assert.notEqual(d.veredito, 'fora-do-horario', 'antes: 12h–13h fora do horário = ninguém olhava de 13h às 16h');
+  assert.equal(d.veredito, 'silencio');
+  assert.equal(Math.round(d.esperado), 21, 'esperado = 10 (11h) + 1 (almoço) + 10 (13h)... a hora do almoço pesa pouco');
 });

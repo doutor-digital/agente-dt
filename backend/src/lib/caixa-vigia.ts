@@ -106,7 +106,7 @@ export function janelaDoDia(u: HorarioDaUnidade, dia: number): { inicio: number;
   return { inicio, fim, almoco: a !== null && b !== null && b > a ? [a, b] : null };
 }
 
-/** A HORA CHEIA que começa em `inicio` cabe inteira na janela de atendimento DAQUELE dia da semana, fora do almoço e sem feriado nacional? */
+/** A HORA CHEIA que começa em `inicio` cabe inteira na janela de atendimento DAQUELE dia da semana (almoço incluído: ver abaixo) e sem feriado nacional? */
 export function horaCheiaComercial(u: HorarioDaUnidade, inicio: Date): boolean {
   if (u.spineEnabled === false) return false;
   const tz = fusoDaUnidade({ businessHoursTimezone: u.businessHoursTimezone ?? undefined, spineTimezone: u.spineTimezone ?? undefined });
@@ -116,7 +116,8 @@ export function horaCheiaComercial(u: HorarioDaUnidade, inicio: Date): boolean {
   const p = partesNoFuso(inicio, tz);
   const min = p.hora * 60 + p.min;
   if (min < janela.inicio || min + 60 > janela.fim) return false;
-  return !(janela.almoco && min < janela.almoco[1] && min + 60 > janela.almoco[0]);
+  // o ALMOÇO não tira a hora do horário: a média é do MESMO dia e da MESMA hora, então o dip do almoço já está nela (expectativa menor, não zero) — excluí-lo abria um ponto cego das 13h às 16h
+  return true;
 }
 
 /** Série horária de mensagens de paciente: início da hora (ms, UTC) → quantidade. Hora ausente = 0. */
@@ -217,8 +218,8 @@ export interface PortaDoKapso {
   numeros(): Promise<Map<string, NumeroDoKapso>>;
   /** problemas de RECEBER (conexão, inscrição e verificação do webhook); [] = saudável; null = não deu para ler */
   saude(numero: string): Promise<string[] | null>;
-  /** entregas ao CRM que ficaram SEM entregar desde `desdeMs`, por número */
-  entregasComErro(desdeMs: number): Promise<Map<string, number> | null>;
+  /** quando (ms) cada entrega ao CRM ficou SEM entregar, desde `desdeMs`, por número (quem chama conta a partir do ponto que lhe serve) */
+  entregasComErro(desdeMs: number): Promise<Map<string, number[]> | null>;
   /** mensagens de paciente que o Kapso recebeu no intervalo; null = não deu para ler */
   entradas(numero: string, desdeMs: number, ateMs: number): Promise<number | null>;
 }
@@ -268,7 +269,7 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
     },
     async entregasComErro(desdeMs) {
       try {
-        const por = new Map<string, number>();
+        const por = new Map<string, number[]>();
         // GET /webhook_deliveries (docs.kapso.ai): filtros `status`, `event`, `period` (24h|7d|30d) e paginação por CURSOR (`limit` até 100, `after`, resposta `paging`).
         // Só as que falharam de vez, só mensagem de paciente (o eco do celular da equipe e outros eventos não são lead que deixou de entrar).
         let depois: string | null = null;
@@ -278,7 +279,7 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
             const quando = Date.parse(String(e?.created_at ?? ''));
             if (!Number.isFinite(quando) || quando < desdeMs || e?.event !== 'meta.messages' || !falhou(e)) continue;
             const n = String(e?.phone_number_id ?? '');
-            if (n) por.set(n, (por.get(n) ?? 0) + 1);
+            if (n) por.set(n, [...(por.get(n) ?? []), quando]);
           }
           depois = proximaPagina(j);
           if (!depois) break;
@@ -352,13 +353,17 @@ export interface DepsDoVigia {
   numeroKapso(slug: string, caixa: number): string | null;
   kapso: PortaDoKapso | null;
   /** o que já foi lido do Kapso NESTE ciclo (uma leitura para todas as caixas) */
-  cicloKapso: { numeros: Map<string, NumeroDoKapso>; entregas: Map<string, number> | null };
+  cicloKapso: { numeros: Map<string, NumeroDoKapso>; entregas: Map<string, number[]> | null };
   /** já avisou esta caixa nas últimas 3 h? */
   jaAvisou(caixa: number, agora: number): Promise<boolean>;
   /** manda aos destinos (João e, se houver, o grupo da unidade); true = ao menos um recebeu */
   enviar(slug: string, texto: string): Promise<boolean>;
   /** anota que avisou (só no ligado) */
   marcar(caixa: number, agora: number, resumo: string): Promise<void>;
+  /** quando foi o último aviso desta caixa (ms; banco e memória); null = nunca — o Kapso conta falhas a partir dele */
+  ultimoAviso(caixa: number): Promise<number | null>;
+  /** a unidade está com a agenda desligada: o horário não é confiável e o vigia não avalia silêncio — diz isso (log e, ligado, o João), no máximo uma vez por dia */
+  semAgenda(caixa: number, slug: string, modo: Estado): Promise<void>;
   /** só no seco: a trava de memória (o seco não grava no banco) — olhar e anotar são coisas separadas */
   secoRecente(caixa: number, agora: number): boolean;
   anotarSeco(caixa: number, agora: number): void;
@@ -372,7 +377,7 @@ export interface DepsDoVigia {
   agora(): number;
 }
 
-export type ResultadoDaCaixa = 'desligado' | 'sem-unidade' | 'sem-leitura' | 'ok' | 'ja-avisou' | 'seco' | 'avisou' | 'nao-saiu';
+export type ResultadoDaCaixa = 'desligado' | 'sem-unidade' | 'sem-agenda' | 'sem-leitura' | 'ok' | 'ja-avisou' | 'seco' | 'avisou' | 'nao-saiu';
 
 /** `agora` cai dentro do horário de atendimento do dia (sem a conta da hora cheia, sem almoço): é quando um problema do Kapso vale acordar alguém. */
 export function emHorarioDeAtendimento(u: HorarioDaUnidade, agora: number): boolean {
@@ -387,12 +392,34 @@ export function emHorarioDeAtendimento(u: HorarioDaUnidade, agora: number): bool
   return min >= janela.inicio && min < janela.fim;
 }
 
+/**
+ * O último FECHAMENTO da unidade antes de `agora`: o fim do último período de atendimento já terminado. É daí que o Kapso passa a contar falhas — de manhã, ao abrir, o que
+ * falhou das 22h às 5h tem de aparecer (a janela de 3 h do silêncio não o vê). Passo de 15 min, no máximo 72 h para trás (fim de semana + feriado); sem achar, 24 h.
+ */
+export function ultimoFechamento(u: HorarioDaUnidade, agora: number): number {
+  const PASSO = 15 * 60_000;
+  let t = agora;
+  let viuFechado = !emHorarioDeAtendimento(u, t);
+  for (let i = 0; i < (72 * 60) / 15; i++) {
+    t -= PASSO;
+    const aberto = emHorarioDeAtendimento(u, t);
+    if (viuFechado && aberto) return t + PASSO; // t é o último instante ABERTO: o fechamento é logo depois
+    if (!aberto) viuFechado = true;
+  }
+  return agora - 24 * HORA_MS;
+}
+
 export async function cicloDaCaixa(d: DepsDoVigia, caixa: number, slug: string, horas = horasDaJanela()): Promise<ResultadoDaCaixa> {
   const modo = d.estado(slug);
   if (modo === 'desligado' || d.ignorada(caixa, slug)) return 'desligado';
   const unit = await d.unidade(slug);
   if (!unit) return 'sem-unidade';
   const agora = d.agora();
+  // agenda desligada: os campos de horário guardam o padrão do banco, que ninguém conferiu — o vigia não avalia silêncio nem acorda ninguém pelo Kapso. Não fica mudo: diz isso, uma vez por dia
+  if (unit.spineEnabled === false) {
+    await d.semAgenda(caixa, slug, modo);
+    return 'sem-agenda';
+  }
   // já avisou nas últimas 3 h? Então nem lê o Chatwoot nem o Kapso (a leitura seria jogada fora)
   if (modo === 'ligado' ? await d.jaAvisou(caixa, agora) : d.secoRecente(caixa, agora)) return 'ja-avisou';
   const tz = fusoDaUnidade({ businessHoursTimezone: unit.businessHoursTimezone ?? undefined, spineTimezone: unit.spineTimezone ?? undefined });
@@ -425,8 +452,11 @@ export async function cicloDaCaixa(d: DepsDoVigia, caixa: number, slug: string, 
     if (emHorarioDeAtendimento(unit, agora)) {
       const doNumero = [...(saude ?? []), ...problemasDeReceber(null, info)].filter((v, i, l) => l.indexOf(v) === i);
       if (doNumero.length) problemas.push({ texto: `Número do WhatsApp com problema no Kapso: ${doNumero.join('; ')}.` });
-      const erros = d.cicloKapso.entregas?.get(numero) ?? 0;
-      if (erros > 0) problemas.push({ texto: `${erros} mensagem(ns) de paciente não foram entregues ao CRM pelo Kapso (últimas ${horas} h).` });
+      // falhas desde o ÚLTIMO FECHAMENTO da clínica (ou o último aviso, o que for mais novo): de manhã, o que falhou de madrugada aparece
+      const fechou = ultimoFechamento(unit, agora);
+      const desde = Math.max(fechou, (await d.ultimoAviso(caixa)) ?? 0);
+      const erros = (d.cicloKapso.entregas?.get(numero) ?? []).filter((t) => t >= desde).length;
+      if (erros > 0) problemas.push({ texto: `${erros} mensagem(ns) de paciente não foram entregues ao CRM pelo Kapso (desde ${desde === fechou ? 'o último fechamento da clínica' : 'o último aviso'}).` });
     }
     await d.cegueira(caixa, 'kapso', !leuKapso);
   }
@@ -489,12 +519,14 @@ export async function enviarOAviso(slug: string, texto: string, env: NodeJS.Proc
 const ultimoSeco = new Map<number, number>();
 const ultimoEnvio = new Map<number, number>();
 const cegas = new Map<string, number>();
+const semAgendaEm = new Map<number, number>();
 /** Varreduras seguidas sem ler uma FONTE da caixa até avisar que o vigia está cego nela (8 × 15 min = 2 h). */
 export const VARREDURAS_CEGAS = 8;
 export function esquecerOSeco(): void {
   ultimoSeco.clear();
   ultimoEnvio.clear();
   cegas.clear();
+  semAgendaEm.clear();
 }
 
 /** Unidades que o vigia NÃO vigia por padrão, sem ninguém configurar nada: a clínica cancelou (Timbó, 25/11/2026 — IA pausada até 2099, CRM com automações desligadas). */
@@ -540,6 +572,19 @@ export function depsReais(ctx: ContextoChatwoot, kapso: PortaDoKapso | null, env
       await prisma.chatwootReguaDisparo
         .create({ data: { caixa, conversationId: 0, regra: REGRA_VIGIA, chave: new Date(agora).toISOString(), modo: 'ligado', texto: resumo } })
         .catch((err: unknown) => logger.warn({ caixa, err: String(err) }, `${ID_VIGIA}: não consegui anotar o aviso no banco (vale a memória do processo)`));
+    },
+    ultimoAviso: async (caixa) => {
+      const memoria = Math.max(ultimoEnvio.get(caixa) ?? 0, ultimoSeco.get(caixa) ?? 0);
+      const noBanco = await prisma.chatwootReguaDisparo.findFirst({ where: { caixa, regra: REGRA_VIGIA }, orderBy: { criadoEm: 'desc' }, select: { criadoEm: true } }).catch(() => null);
+      const t = Math.max(memoria, noBanco?.criadoEm?.getTime() ?? 0);
+      return t > 0 ? t : null;
+    },
+    semAgenda: async (caixa, slug, modo) => {
+      const agora = Date.now();
+      if (agora - (semAgendaEm.get(caixa) ?? 0) < 24 * HORA_MS) return;
+      semAgendaEm.set(caixa, agora);
+      logger.warn({ caixa, slug }, `${ID_VIGIA}: caixa ${caixa} sem agenda: vigia não avalia silêncio (a agenda da unidade está desligada, o horário no cadastro não é confiável)`);
+      if (modo === 'ligado') await avisarJoao(`⚠️ Vigia: a caixa ${caixa} (${slug}) está sem agenda ligada — não avalio silêncio nem aviso de Kapso nela. Ligue a agenda da unidade ou ignore a caixa (CAIXA_VIGIA_IGNORAR).`, `vigia-sem-agenda:${caixa}`, 24 * HORA_MS);
     },
     secoRecente: (caixa, agora) => agora - (ultimoSeco.get(caixa) ?? 0) < INTERVALO_DO_AVISO_MS,
     anotarSeco: (caixa, agora) => void ultimoSeco.set(caixa, agora),
@@ -587,7 +632,7 @@ export async function varrer(ctx: ContextoChatwoot, env: NodeJS.ProcessEnv = pro
     const caixas = Object.entries(CAIXAS_REGUA).filter(([c]) => unidadeDaCaixa(Number(c)));
     const algumaLigadaOuSeca = caixas.some(([, slug]) => estadoDoVigia(slug) !== 'desligado');
     if (!algumaLigadaOuSeca) return;
-    const cicloKapso = kapso ? { numeros: await kapso.numeros(), entregas: await kapso.entregasComErro(agora - horas * HORA_MS) } : { numeros: new Map<string, NumeroDoKapso>(), entregas: null };
+    const cicloKapso = kapso ? { numeros: await kapso.numeros(), entregas: await kapso.entregasComErro(agora - 24 * HORA_MS) } : { numeros: new Map<string, NumeroDoKapso>(), entregas: null };
     for (const [caixaTxt, slug] of caixas) {
       try {
         const r = await cicloDaCaixa({ ...reais, cicloKapso }, Number(caixaTxt), slug, horas);
