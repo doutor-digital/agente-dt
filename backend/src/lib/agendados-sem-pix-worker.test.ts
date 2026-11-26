@@ -51,7 +51,7 @@ const sched = (id: number, nome: string, categoria: string, idStatus: number, da
 });
 const U: UnidadeDaLista = { id: 'u1', slug: SLUG, fuso: 'America/Sao_Paulo', hoje: HOJE, minutoDoDia: 12 * 60 + 20, diaDeTrabalho: true, agendadosDesde: '2026-11-25', valores: [25000] };
 
-test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde ontem; sessão, retorno, reavaliação, desmarcado e marcação antiga ficam de fora; hora na unidade', async () => {
+test('agenda: só avaliação/consulta AGENDADA e marcada desde o dia útil anterior; CONFIRMADA (a régua confirma os de amanhã toda manhã), sessão, retorno, reavaliação, desmarcado e marcação antiga ficam de fora; hora na unidade', async () => {
   pedidosDaAgenda.length = 0;
   totalDePaginas = 1;
   linhas = [
@@ -68,10 +68,9 @@ test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde on
   const r = await agendadosRecentes(unit() as never, { ...U, slug: 'a-agenda' }, Date.now());
   assert.deepEqual(r!.agendados, [
     { nome: 'Maria Silva', dia: '2026-11-27', hora: '08:30', agendadoEm: '2026-11-25' },
-    // CONFIRMADA: a última alteração é a confirmação, não a marcação — a data da marcação é desconhecida (o Pix vale desde 30 dias antes da consulta)
-    { nome: 'Joana Lima', dia: '2026-11-26', hora: '14:00', agendadoEm: null },
-  ]);
+  ].slice(0, 1), 'a Joana está CONFIRMADA: a «marcada hoje» seria a data da confirmação');
   // os conhecidos são todos os pacientes da agenda lida, de qualquer categoria, menos quem desmarcou
+  assert.equal(pedidosDaAgenda[0]!.pagination.rowsPerPage, 100, '100 por página: 66 dias de agenda de unidade cheia não estouram o teto de 40 páginas');
   assert.deepEqual(r!.conhecidos, ['Maria Silva', 'Joana Lima', 'Ana Antiga', 'Paulo Sessao', 'Rita Retorno', 'Rosa Reavalia', 'Sem Data', 'Ivo Atendido']);
   // a leitura vai de 21 dias atrás a 45 dias à frente, numa busca só (a franquia recusa mais de 100 dias)
   assert.deepEqual([pedidosDaAgenda[0]!.initialDate, pedidosDaAgenda[0]!.endDate], ['2026-11-05', '2027-01-11']);
@@ -81,7 +80,7 @@ test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde on
   assert.equal(pedidosDaAgenda.length, 1);
 });
 
-test('agenda: o corte é o DIA ÚTIL anterior (na segunda, desde a sexta; depois de feriado, desde o último dia útil), e marcação confirmada ontem entra com data de marcação desconhecida', async () => {
+test('agenda: o corte é o DIA ÚTIL anterior (na segunda, desde a sexta; depois de feriado, desde o último dia útil); confirmada na sexta NÃO entra como «marcada na sexta»', async () => {
   const semana = [1, 2, 3, 4, 5];
   assert.equal(diaUtilAnterior('2026-11-26', semana), '2026-11-25', 'quinta: quarta');
   assert.equal(diaUtilAnterior('2026-11-30', semana), '2026-11-27', 'segunda: sexta (não domingo)');
@@ -98,7 +97,7 @@ test('agenda: o corte é o DIA ÚTIL anterior (na segunda, desde a sexta; depois
     sched(3, 'Ana Velha', 'AVALIAÇÃO', 37, '2026-12-01T13:30:00.000Z', '2026-11-26T18:00:00.000Z'), // marcada antes do corte
   ];
   const r = await agendadosRecentes(unit() as never, { ...U, slug: 'a-segunda', hoje: '2026-11-30', agendadosDesde: '2026-11-27' }, Date.now());
-  assert.deepEqual(r!.agendados.map((a) => [a.nome, a.agendadoEm]), [['Maria Confirmada', null], ['Joana Marcada', '2026-11-27']]);
+  assert.deepEqual(r!.agendados.map((a) => [a.nome, a.agendadoEm]), [['Joana Marcada', '2026-11-27']]);
 });
 
 test('agenda: lista cortada no teto de páginas NÃO vira lista (melhor calar que afirmar «não achei» sobre metade da agenda)', async () => {

@@ -39,12 +39,15 @@ export type NivelDeNome = 'igual' | 'parecido' | 'nenhum';
  * - `nenhum`: o resto, e qualquer nome de uma palavra só.
  */
 export function compararNomes(a: string | null | undefined, b: string | null | undefined): NivelDeNome {
-  const ta = tokensDoNome(a);
-  const tb = tokensDoNome(b);
+  return compararTokens(tokensDoNome(a), tokensDoNome(b));
+}
+
+/** O mesmo que `compararNomes`, para quem já tokenizou (e indexou por primeiro nome) e compara muitas vezes. */
+export function compararTokens(ta: ReadonlyArray<string>, tb: ReadonlyArray<string>): NivelDeNome {
   if (ta.length < 2 || tb.length < 2) return 'nenhum';
   if (ta[0] !== tb[0]) return 'nenhum';
   if (ta[ta.length - 1] === tb[tb.length - 1]) return 'igual';
-  const corta = (curto: string, longo: string[]) => curto.length >= 3 && longo.slice(1).some((t) => t.startsWith(curto) || (t.length >= 3 && curto.startsWith(t)));
+  const corta = (curto: string, longo: ReadonlyArray<string>) => curto.length >= 3 && longo.slice(1).some((t) => t.startsWith(curto) || (t.length >= 3 && curto.startsWith(t)));
   if (corta(ta[ta.length - 1]!, tb) || corta(tb[tb.length - 1]!, ta)) return 'parecido';
   const comuns = ta.filter((t) => tb.includes(t)).length;
   return comuns >= 3 ? 'parecido' : 'nenhum';
@@ -133,17 +136,22 @@ export function nivelPixPessoa(pix: Pick<PixRecebido, 'nomes'>, nomeDaPessoa: st
 
 // ----------------------------------------------------------------------------------------------------------------- valores da unidade
 
-/** `R$ 250`, `R$ 1.250,00`, `R$50` → centavos. */
+/** `R$ 250`, `R$ 1.250,00`, `R$50` → centavos. A conta do texto separa por frase: a frase com «sessão» ou «pacote» não entra. */
 const REAIS_NO_TEXTO = /R\$\s?(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{1,2}))?/g;
 /** Fora desta faixa não é sinal nem consulta: é pacote de tratamento, mensalidade ou lixo. */
 const MIN_REAIS = 20;
 const MAX_REAIS = 1000;
 
+/** Frase do texto de produtos que fala da consulta ou do sinal (e não de sessão, pacote, retorno ou tratamento): só dela saem valores. */
+const FRASE_DA_CONSULTA = /consult|avalia|sinal|antecipad|reserv|taxa/i;
+const FRASE_DE_OUTRO_PRODUTO = /sess[ãa]o|sess[õo]es|pacote|retorno|tratamento|mensalidade|parcel|reavalia/i;
+
 /**
  * Os valores de Pix que valem como «pagou a consulta/sinal» numa unidade, em centavos, do mais barato para o mais caro.
  * Ordem das fontes: a lista da própria operação (`AGENDADOS_SEM_PIX_VALORES`, JSON `{"<slug>": [50, 250]}` em reais) → o sinal cadastrado
- * (`sinalPixCentavos`) + os valores em reais que o texto de produtos da unidade cita (a mesma fonte que a Sofia lê: «R$ 350 no dia, ou R$ 250 com sinal de R$ 50»).
- * Nada de número no código: mudou o texto da unidade, mudou a lista.
+ * (`sinalPixCentavos`) + os valores em reais das FRASES do texto de produtos da unidade que falam de consulta/sinal/antecipado/taxa (a mesma fonte que a Sofia lê: «R$ 350 no
+ * dia, ou R$ 250 com sinal de R$ 50»); frase que fala de sessão, pacote, retorno ou tratamento fica de fora. Nada de número no código: mudou o texto da unidade, mudou a lista.
+ * O worker registra no log, uma vez, a lista que usou (valores em reais, sem dado de paciente).
  */
 export function valoresDaUnidade(a: { slug: string; sinalPixCentavos?: number | null; textoDeProdutos?: string | null; env?: string | undefined }): number[] {
   const bruto = (a.env ?? '').trim().replace(/^'|'$/g, '');
@@ -160,9 +168,24 @@ export function valoresDaUnidade(a: { slug: string; sinalPixCentavos?: number | 
   }
   const valores = new Set<number>();
   if (typeof a.sinalPixCentavos === 'number' && Number.isInteger(a.sinalPixCentavos) && a.sinalPixCentavos > 0) valores.add(a.sinalPixCentavos);
-  for (const m of (a.textoDeProdutos ?? '').matchAll(REAIS_NO_TEXTO)) {
-    const reais = Number(`${m[1]!.replace(/\./g, '')}.${(m[2] ?? '0').padEnd(2, '0')}`);
-    if (Number.isFinite(reais) && reais >= MIN_REAIS && reais <= MAX_REAIS) valores.add(Math.round(reais * 100));
+  for (const frase of (a.textoDeProdutos ?? '').split(/(?<=[.!?;])\s+|\n+/)) {
+    if (!FRASE_DA_CONSULTA.test(frase) || FRASE_DE_OUTRO_PRODUTO.test(frase)) continue;
+    for (const m of frase.matchAll(REAIS_NO_TEXTO)) {
+      const reais = Number(`${m[1]!.replace(/\./g, '')}.${(m[2] ?? '0').padEnd(2, '0')}`);
+      if (Number.isFinite(reais) && reais >= MIN_REAIS && reais <= MAX_REAIS) valores.add(Math.round(reais * 100));
+    }
   }
   return [...valores].sort((x, y) => x - y);
+}
+
+/** A variável da operação está preenchida mas não é um JSON `{slug: [reais]}`? (o worker avisa no log, uma vez) */
+export function valoresDaOperacaoInvalidos(env: string | undefined): boolean {
+  const bruto = (env ?? '').trim().replace(/^'|'$/g, '');
+  if (!bruto) return false;
+  try {
+    const j = JSON.parse(bruto) as unknown;
+    return !j || typeof j !== 'object' || Array.isArray(j);
+  } catch {
+    return true;
+  }
 }

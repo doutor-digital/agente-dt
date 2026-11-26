@@ -41,6 +41,15 @@ test('marcação CONFIRMADA (data de marcação desconhecida): o Pix vale desde 
   assert.equal(conf([agendada], [px('p1', 'MARIA SILVA', 250, { dia: '2026-11-10' })])[0]!.motivo, 'data');
 });
 
+test('o motivo do «a conferir» é o indício mais forte, qualquer que seja a ordem dos Pix', () => {
+  const parecidoDepois = [px('p1', 'JOANA LIMA', 300), px('p2', 'JOANA LIM', 250)];
+  assert.equal(conf([ag('Joana Lima')], parecidoDepois)[0]!.motivo, 'valor');
+  assert.equal(conf([ag('Joana Lima')], [...parecidoDepois].reverse())[0]!.motivo, 'valor');
+  const dataEParecido = [px('p1', 'JOANA LIMA', 250, { dia: '2026-10-01' }), px('p2', 'JOANA LIM', 250)];
+  assert.equal(conf([ag('Joana Lima')], dataEParecido)[0]!.motivo, 'data');
+  assert.equal(conf([ag('Joana Lima')], [...dataEParecido].reverse())[0]!.motivo, 'data');
+});
+
 test('o mesmo paciente com DUAS marcações e um só Pix é UMA pessoa: pagou (não «Pix compartilhado»); homônimos de nome do meio diferente seguem ambíguos', () => {
   const r = conf([ag('Maria Santos Silva'), ag('Maria Santos Silva', { hora: '10:00', dia: '2026-11-28' })], [px('p1', 'MARIA SILVA', 250)]);
   assert.deepEqual(r.map((v) => v.resultado), ['pagou', 'pagou']);

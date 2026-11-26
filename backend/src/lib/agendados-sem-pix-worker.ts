@@ -14,7 +14,7 @@ import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { destinoDoAvisoClinica } from './aviso-clinica-agendamento.js';
 import { unidadeSemAntecipado } from '../agent/pagamento-da-unidade.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas } from './integracoes/pluggy.js';
-import { entradasDoBanco, semAcento, valoresDaUnidade } from './pix-casamento.js';
+import { entradasDoBanco, semAcento, valoresDaOperacaoInvalidos, valoresDaUnidade } from './pix-casamento.js';
 import {
   ID_DA_AUTOMACAO,
   cicloDaUnidade,
@@ -89,6 +89,7 @@ export const marcaNoBanco: MarcaDaLista = {
 // ----------------------------------------------------------------------------------------------------------------- fontes
 
 const jaDisse = new Set<string>();
+const valoresLogados = new Set<string>();
 function avisarUmaVez(chave: string, msg: string): void {
   if (jaDisse.has(chave)) return;
   jaDisse.add(chave);
@@ -129,32 +130,30 @@ const agendaGuardada = new Map<string, { ate: number; v: { agendados: Agendado[]
 /** A agenda lida para saber quem são os pacientes conhecidos: de três semanas atrás a 45 dias à frente (cabe numa busca só, o limite da franquia é 100 dias). */
 const CONHECIDOS_DESDE_DIAS = 21;
 
-/** Avaliação ou consulta (a que se paga antes) de hoje em diante, ainda AGENDADA ou CONFIRMADA, mexida desde o dia útil anterior. Sessão, retorno e reavaliação não entram. */
+/** Avaliação ou consulta (a que se paga antes) de hoje em diante, ainda AGENDADA, marcada desde o dia útil anterior. Sessão, retorno, reavaliação e marcação já CONFIRMADA não entram. */
 export async function agendadosRecentes(unit: UnidadeDoBanco, u: UnidadeDaLista, agora: number): Promise<{ agendados: Agendado[]; conhecidos: Array<string | null> } | null> {
   const chave = `${u.slug}:${u.hoje}`;
   const g = agendaGuardada.get(chave);
   if (g && g.ate > agora) return g.v;
-  const r = await searchSchedules(unit, { initialDate: somarDias(u.hoje, -CONHECIDOS_DESDE_DIAS), endDate: somarDias(u.hoje, HORIZONTE_DIAS) });
+  const r = await searchSchedules(unit, { initialDate: somarDias(u.hoje, -CONHECIDOS_DESDE_DIAS), endDate: somarDias(u.hoje, HORIZONTE_DIAS), rowsPerPage: 100 });
   if (!r.ok || !r.data) return null;
   // lista incompleta (teto de páginas): melhor não afirmar nada do que afirmar «não achei» sobre metade da agenda
   if (r.data.truncada) return null;
   const desde = u.agendadosDesde;
   const conhecidos = r.data.schedules.filter((s) => s.idStatus !== SPINE_STATUS.DESMARCADO).map((s) => s.clientName);
   const agendados = r.data.schedules
-    .filter((s) => s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO)
+    // só AGENDADO: nele a última alteração é a da MARCAÇÃO. Em CONFIRMADO ela é a da confirmação (a régua confirma os de amanhã toda manhã), e a lista inteira viraria «recém-marcados»
+    .filter((s) => s.idStatus === SPINE_STATUS.AGENDADO)
     .filter((s) => {
       const c = semAcento(s.categoryName ?? '');
       return c.startsWith('avaliacao') || c === 'consulta';
     })
     .filter((s) => s.dayLocal && s.timeLocal && s.dayLocal >= u.hoje)
-    .flatMap((s): Array<Agendado & { alteradoEm: string }> => {
+    .flatMap((s): Agendado[] => {
       if (!s.modifiedUtc) return []; // sem data nenhuma não dá para saber se é recente: fica de fora (a lista é de quem foi marcado agora, não de toda a agenda)
-      const alteradoEm = instanteNoFuso(new Date(s.modifiedUtc), u.fuso).slice(0, 10);
-      // a última alteração é a data da MARCAÇÃO só enquanto o registro está AGENDADO; em CONFIRMADO ela é a da confirmação (a régua e a recepção mexem no registro): a data da marcação é desconhecida
-      return [{ nome: s.clientName, dia: s.dayLocal!, hora: s.timeLocal!, agendadoEm: s.idStatus === SPINE_STATUS.AGENDADO ? alteradoEm : null, alteradoEm }];
+      return [{ nome: s.clientName, dia: s.dayLocal!, hora: s.timeLocal!, agendadoEm: instanteNoFuso(new Date(s.modifiedUtc), u.fuso).slice(0, 10) }];
     })
-    .filter((a) => a.alteradoEm >= desde)
-    .map(({ alteradoEm: _alteradoEm, ...a }): Agendado => a);
+    .filter((a) => a.agendadoEm! >= desde);
   const v = { agendados, conhecidos };
   for (const k of agendaGuardada.keys()) if (!k.endsWith(`:${u.hoje}`)) agendaGuardada.delete(k);
   agendaGuardada.set(chave, { ate: agora + AGENDA_GUARDADA_MS, v });
@@ -203,6 +202,7 @@ export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: numb
     if (!candidatos.length) return;
     const ctx = await contextoPluggyDoAmbiente(env);
     if (!ctx) return;
+    if (valoresDaOperacaoInvalidos(env.AGENDADOS_SEM_PIX_VALORES)) avisarUmaVez('valores-invalidos', `${ID_DA_AUTOMACAO}: AGENDADOS_SEM_PIX_VALORES não é um JSON {"<slug>": [reais]} — ignorada, valem os valores do cadastro e do texto da unidade`);
     const unidades = await prisma.unit.findMany({
       where: { slug: { in: candidatos }, isActive: true, spineEnabled: true },
       select: {
@@ -228,6 +228,10 @@ export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: numb
           agendadosDesde: diaUtilAnterior(hoje, unit.spineAgendaDays),
           valores: valoresDaUnidade({ slug: unit.slug, sinalPixCentavos: unit.sinalPixCentavos, textoDeProdutos: unit.sourceProdutos, env: env.AGENDADOS_SEM_PIX_VALORES }),
         };
+        if (!valoresLogados.has(`${u.slug}:${u.valores.join(',')}`)) {
+          valoresLogados.add(`${u.slug}:${u.valores.join(',')}`);
+          logger.info({ unidade: u.slug, valoresReais: u.valores.map((v) => v / 100) }, `${ID_DA_AUTOMACAO}: valores de Pix que valem como sinal/consulta nesta unidade`);
+        }
         const deps: DepsDoCiclo = {
           agendados: (x) => agendadosRecentes(unit, x, agoraMs).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li a agenda`), null)),
           banco: (x, desde, lerMesmo) => lerBancoDaUnidade(ctx, x, desde, lerMesmo, agora).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li o banco`), null)),

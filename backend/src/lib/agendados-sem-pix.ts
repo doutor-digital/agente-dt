@@ -2,7 +2,7 @@
  * «Agendados sem Pix»: a lista da manhã da recepção, depois da sincronização do banco.
  *
  * A clínica cobra antecipado (sinal ou consulta) por Pix. Quem marcou ontem/hoje e NÃO tem Pix no banco precisa de um toque da secretária ANTES do dia da consulta.
- * Esta lista cruza a agenda da franquia (quem foi marcado nos últimos 2 dias, avaliação, ainda AGENDADO/CONFIRMADO) com o que entrou no banco pela Pluggy
+ * Esta lista cruza a agenda da franquia (quem foi marcado desde o dia útil anterior: avaliação ou consulta, ainda AGENDADO) com o que entrou no banco pela Pluggy
  * (Open Finance, só leitura) e manda no grupo da recepção: primeiro nome, dia e hora da consulta e «não achei Pix». NUNCA vai CPF, sobrenome, valor nem saldo.
  *
  * COMO CASA (`pix-casamento.ts`): CPF do pagador, quando a agenda tem o CPF do paciente (a franquia não tem hoje); senão NOME (primeiro + último, sem acento) +
@@ -125,13 +125,14 @@ export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: Reado
       return { agendado: a, resultado: 'conferir', motivo: 'pix-compartilhado' };
     }
     // sem casamento forte: o melhor indício fraco
+    // o indício mais forte ganha, qualquer que seja a ordem dos Pix: valor diferente (nome certo, data certa) > data fora (nome certo) > nome parecido
+    const ranque: Partial<Record<Motivo, number>> = { valor: 3, data: 2, 'nome-parecido': 1 };
     let fraco: Motivo | null = null;
     for (const p of naoEmpresa) {
       const n = nivelDoPar(a, p);
       if (n === 'nenhum' || p.centavos < menor) continue;
-      if (n === 'parecido') fraco = fraco ?? 'nome-parecido';
-      else if (!dataOk(a, p)) fraco = fraco === 'valor' ? fraco : 'data';
-      else fraco = 'valor';
+      const m: Motivo = n === 'parecido' ? 'nome-parecido' : !dataOk(a, p) ? 'data' : 'valor';
+      if (!fraco || (ranque[m] ?? 0) > (ranque[fraco] ?? 0)) fraco = m;
     }
     if (fraco) return { agendado: a, resultado: 'conferir', motivo: fraco };
     if (!o.bancoConfiavel) return { agendado: a, resultado: 'conferir', motivo: 'banco-desatualizado' };

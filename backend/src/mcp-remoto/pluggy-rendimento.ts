@@ -24,7 +24,7 @@ import { ErroDeEntrada, somarDias } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { primeiroNome } from '../lib/aviso-clinica-agendamento.js';
 import { tirarSegredos } from '../lib/integracoes/pluggy.js';
-import { chaveDoNome, compararNomes, entradasDoBanco, tokensDoNome, type PixRecebido } from '../lib/pix-casamento.js';
+import { chaveDoNome, compararTokens, entradasDoBanco, tokensDoNome, type NivelDeNome, type PixRecebido } from '../lib/pix-casamento.js';
 import { AVISO_DE_FRESCOR, MAX_DIAS, lerPeriodo, type ContextoPluggy } from './pluggy.js';
 
 /** Quanto a agenda é lida antes do início e depois do fim do período (o paciente paga antes de vir e depois de começar o tratamento). */
@@ -81,14 +81,22 @@ export function montarPessoas(agenda: ReadonlyArray<PacienteDaAgenda>, conversas
     }
     porId.set(id, { id, nome: p.nome, origem: 'equipe', marcadaPelaSofia: marcada });
   }
+  // as conversas indexadas pelo primeiro nome: pessoa × conversa seria milhares × milhares de comparações
+  const conversasPorPrimeiroNome = new Map<string, string[][]>();
+  for (const c of conversas) {
+    const t = tokensDoNome(c.nome);
+    if (t.length < 2) continue;
+    conversasPorPrimeiroNome.set(t[0]!, [...(conversasPorPrimeiroNome.get(t[0]!) ?? []), t]);
+  }
   for (const pessoa of porId.values()) {
     if (pessoa.marcadaPelaSofia) {
       pessoa.origem = 'sofia';
       continue;
     }
-    let nivel: 'igual' | 'parecido' | 'nenhum' = 'nenhum';
-    for (const c of conversas) {
-      const n = compararNomes(c.nome, pessoa.nome);
+    const t = tokensDoNome(pessoa.nome);
+    let nivel: NivelDeNome = 'nenhum';
+    for (const c of conversasPorPrimeiroNome.get(t[0]!) ?? []) {
+      const n = compararTokens(c, t);
       if (n === 'igual') {
         nivel = 'igual';
         break;
@@ -132,6 +140,13 @@ export function atribuirPix(pix: ReadonlyArray<PixRecebido>, pessoas: ReadonlyAr
     r.semDono.motivos[m].pix += 1;
     r.semDono.motivos[m].centavos += p.centavos;
   };
+  // as pessoas tokenizadas UMA vez e indexadas pelo primeiro nome (800 Pix × milhares de pacientes não se comparam um a um)
+  const pessoasPorPrimeiroNome = new Map<string, Array<{ pessoa: Pessoa; tokens: string[] }>>();
+  for (const pessoa of pessoas) {
+    const tokens = tokensDoNome(pessoa.nome);
+    if (tokens.length < 2) continue;
+    pessoasPorPrimeiroNome.set(tokens[0]!, [...(pessoasPorPrimeiroNome.get(tokens[0]!) ?? []), { pessoa, tokens }]);
+  }
   for (const p of pix) {
     if (p.empresa) {
       semDono(p, 'pixDeEmpresa');
@@ -143,10 +158,11 @@ export function atribuirPix(pix: ReadonlyArray<PixRecebido>, pessoas: ReadonlyAr
     }
     const iguais = new Set<Pessoa>();
     let parecido = false;
-    for (const pessoa of pessoas) {
-      for (const n of p.nomes) {
-        const nivel = compararNomes(n, pessoa.nome);
-        if (nivel === 'igual') iguais.add(pessoa);
+    for (const nome of p.nomes) {
+      const t = tokensDoNome(nome);
+      for (const pessoa of pessoasPorPrimeiroNome.get(t[0] ?? '') ?? []) {
+        const nivel = compararTokens(t, pessoa.tokens);
+        if (nivel === 'igual') iguais.add(pessoa.pessoa);
         else if (nivel === 'parecido') parecido = true;
       }
     }
@@ -231,6 +247,7 @@ export async function pluggyRendimentoSofia(
       somaDosTresBlocos: reais(at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos),
       somaDoExtrato: reais(totalDoExtrato),
       igualAoQueEntrou: at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos === totalDoExtrato && totalEntrou === totalDoExtrato,
+      observacao: 'confere que a separação em blocos não perdeu nem repetiu lançamento; NÃO diz que todo o valor é receita: transferência entre contas próprias entra como entrada e cai em «não atribuído».',
     },
     pacientesNaAgenda: { total: pessoas.length, sofia: porOrigem('sofia'), equipe: porOrigem('equipe'), origemIncerta: porOrigem('incerta') },
     ...(a.detalhar

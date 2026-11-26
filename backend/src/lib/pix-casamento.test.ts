@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveDoNome, compararNomes, entradasDoBanco, nivelPixPessoa, nomeDaDescricao, tokensDoNome, valoresDaUnidade } from './pix-casamento.js';
+import { chaveDoNome, compararNomes, compararTokens, entradasDoBanco, nivelPixPessoa, nomeDaDescricao, tokensDoNome, valoresDaOperacaoInvalidos, valoresDaUnidade } from './pix-casamento.js';
 import type { LancamentoPluggy } from './integracoes/pluggy.js';
 
 // nomes e documentos INVENTADOS (o repositório é público)
@@ -62,7 +62,27 @@ test('valores da unidade: o sinal cadastrado + os R$ do texto de produtos (20 a 
   assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: texto }), [5000, 20000, 25000, 35000]);
   assert.deepEqual(valoresDaUnidade({ slug: 'a', sinalPixCentavos: 7500, textoDeProdutos: 'consulta R$ 150,50' }), [7500, 15050]);
   assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: texto, env: '{"a":[50,250.5],"b":[10]}' }), [5000, 25050], 'a lista da operação troca tudo');
-  assert.deepEqual(valoresDaUnidade({ slug: 'c', textoDeProdutos: 'R$ 100', env: '{"a":[50]}' }), [10000], 'unidade fora da lista cai no texto');
+  assert.deepEqual(valoresDaUnidade({ slug: 'c', textoDeProdutos: 'A consulta custa R$ 100.', env: '{"a":[50]}' }), [10000], 'unidade fora da lista cai no texto');
   assert.deepEqual(valoresDaUnidade({ slug: 'a', env: 'isto não é json' }), []);
   assert.deepEqual(valoresDaUnidade({ slug: 'a' }), []);
+});
+
+test('valores da unidade: só saem de frases de consulta/sinal/antecipado/taxa — sessão, pacote, retorno e tratamento ficam de fora', () => {
+  const texto = 'Sessão de fisioterapia: R$ 150. Pacote de 10 sessões: R$ 600. Consulta de retorno: R$ 100. A consulta custa R$ 300 no dia, ou R$ 200 antecipado.\nTratamento completo R$ 900.\nReserva do horário: R$ 50.';
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: texto }), [5000, 20000, 30000]);
+  assert.deepEqual(valoresDaUnidade({ slug: 'a', textoDeProdutos: 'Pacote R$ 600. Sessão R$ 150.' }), [], 'sem frase de consulta não sai valor nenhum');
+});
+
+test('variável da operação preenchida e quebrada é detectada (para o log avisar); vazia ou boa não', () => {
+  assert.equal(valoresDaOperacaoInvalidos(undefined), false);
+  assert.equal(valoresDaOperacaoInvalidos('  '), false);
+  assert.equal(valoresDaOperacaoInvalidos('{"a":[50,250]}'), false);
+  assert.equal(valoresDaOperacaoInvalidos('{"a":[50,250]'), true, 'faltou a chave');
+  assert.equal(valoresDaOperacaoInvalidos('[50,250]'), true, 'lista solta, sem unidade');
+});
+
+test('comparar por tokens dá o mesmo resultado que comparar por nome (a versão indexada do ROI)', () => {
+  for (const [a, b] of [['Maria da Silva Costa', 'MARIA COSTA'], ['Joao Souza', 'Joao Sousa'], ['Pedro Dias Henr', 'Pedro Henrique Dias'], ['Ana', 'Ana Lima']] as const) {
+    assert.equal(compararTokens(tokensDoNome(a), tokensDoNome(b)), compararNomes(a, b));
+  }
 });
