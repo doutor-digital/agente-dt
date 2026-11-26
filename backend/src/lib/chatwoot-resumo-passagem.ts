@@ -49,18 +49,21 @@ const PERIODO = /(?<!\p{L})(?:de\s+manh[ãa]|[àa]\s+tarde|[àa]\s+noite|cedo)(?
 /** a linha fala de MARCAR (horário, consulta, vaga…): só nela «quinta» ou «à noite» é preferência de agenda, não sintoma («a dor piora à noite») */
 const FALA_DE_AGENDA = /hor[aá]rio|consulta|marcar|agendar|agenda|vaga|posso ir|pode ser|dispon[ií]vel|encaix|\d\s*h(?![a-z])|\b[aà]s\s+\d/i;
 const NAO_E_DIA = /segunda\s+(?:opini|vez|via|parte)/i;
-const PRECO = /(?<![a-z])(?:preco|valor|valores|custa|custo|quanto\s+(?:custa|e|fica|sai|cobra))(?![a-z])|r\$/;
-// «quanto eu vou esperar?» / «quanto tempo demora?» não são pergunta de preço: o «quanto» só vale colado a custa/é/fica/sai/cobra
-const PERGUNTA_DE_PRECO = /quanto\s+(?:custa|e|fica|sai|cobra|vai\s+custar)(?![a-z])|qual\s+(?:e\s+)?(?:o\s+)?(?:valor|preco)(?![a-z])|(?:valor|preco|custa)\s*\?/;
+const PRECO = /(?<![a-z])(?:precos?|valor(?:es)?|cust(?:a|am|ou|o|os)|quanto\s+(?:custa|custam|e|fica|ficou|sai|cobra|cobram))(?![a-z])|(?<![a-z])r\$/;
+// «quanto eu vou esperar?» / «quanto tempo demora?» não são pergunta de preço: o «quanto» só vale colado a custa/é/fica/sai/cobra (e flexões)
+const PERGUNTA_DE_PRECO = /quanto\s+(?:vai\s+)?(?:cust\w*|cobr\w*|fic\w*|sai\w*|seria|sera|e)(?![a-z])|qual(?:is)?\s+(?:seria\s+|sera\s+|e\s+|sao\s+)?(?:o|os|a|as)?\s*(?:valor(?:es)?|preco(?:s)?)(?![a-z])|(?:valor(?:es)?|precos?|custa|custam)\s*\?/;
 const CONVENIO = /(?<![a-z])(?:convenio|plano\s+de\s+saude|unimed|hapvida|amil|bradesco\s+saude|sulamerica|carteirinha)(?![a-z])/;
 const EXAME = /(?<![a-z])(?:ressonancia|tomografia|raio[\s-]?x|exames?|laudo|eletroneuromiografia)(?![a-z])/;
 
 const ultimo = <T>(xs: T[]): T | undefined => xs[xs.length - 1];
 
-/** a última fala do paciente que tem TEXTO (as linhas dela sem «[áudio]»/«[anexo]»), juntas por « / »; dois áudios seguidos não viram «áudio / áudio» */
+/**
+ * a última fala do paciente que tem TEXTO, dentro do ÚLTIMO turno dele (as falas coladas, sem a Sofia no meio): as linhas dela juntas por « / ». Dois áudios seguidos
+ * não viram «áudio / áudio»; e áudio sem texto no fim NÃO traz de volta uma fala de antes da resposta da Sofia (sem texto no turno, sem «última fala»).
+ */
 function ultimaFalaComTexto(falas: readonly Fala[]): string {
   for (let i = falas.length - 1; i >= 0; i--) {
-    if (falas[i]!.role !== 'user') continue;
+    if (falas[i]!.role !== 'user') break;
     const linhas = falasDoPaciente([falas[i]!]);
     if (linhas.length) return neutro(linhas.join(' / '));
   }

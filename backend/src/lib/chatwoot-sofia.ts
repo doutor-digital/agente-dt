@@ -128,6 +128,7 @@ export async function passarParaEquipeNoChatwoot(chat: PortaDoChatwoot, a: {
   const destino = jaPassada || !chat.destinoDaPassagem ? null : await chat.destinoDaPassagem(a.conversa).catch(() => null);
   // sem a leitura de agora (o Chatwoot falhou) a consulta e a qualificação ficam de fora: melhor calar que mostrar o que a rodada já mudou
   let linha: string | null | undefined;
+  if (typeof a.resumo === 'function' && !deAgora) logger.warn({ conversa: a.conversa }, 'chatwoot-sofia: não consegui reler a conversa para o resumo da passagem — a nota sai sem consulta nem qualificação');
   try {
     linha = typeof a.resumo === 'function' ? a.resumo(deAgora?.attrs ?? {}) : a.resumo;
   } catch {
@@ -528,6 +529,8 @@ export interface PedidoDaSofia {
   modo: ModoDaSofia;
   lida: ConversaLida;
   chat: PortaDoChatwoot;
+  /** o relógio (só o teste fixa): a data de hoje na unidade decide se a consulta ainda vale no «Resumo» da passagem */
+  agora?: () => Date;
 }
 
 export interface ResultadoDaSofia {
@@ -566,6 +569,7 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
         recorder,
         estado,
         falas: p.falas,
+        agora: p.agora,
         onCall: (a) => {
           feitas.push(a);
           onCall(a);

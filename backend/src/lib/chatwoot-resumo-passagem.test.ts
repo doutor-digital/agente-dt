@@ -212,6 +212,8 @@ test('sem a leitura de agora (o Chatwoot falhou) a nota não arrisca consulta ne
 test('dois áudios seguidos não viram «áudio / áudio»; a última fala é a última COM texto', () => {
   assert.equal(resumoDaPassagem({ falas: [u('oi, tenho dor na lombar'), u('[áudio]\n[áudio]')] }), 'Resumo: dor na lombar · última fala: «oi, tenho dor na lombar»');
   assert.equal(resumoDaPassagem({ falas: [u('[áudio]\n[áudio]')] }), null);
+  // áudio sem texto DEPOIS da resposta da Sofia não traz de volta uma fala de antes dela
+  assert.equal(resumoDaPassagem({ falas: [u('oi, tenho dor na lombar'), s('Entendi!'), u('[áudio]')] }), 'Resumo: dor na lombar');
   assert.equal(resumoDaPassagem({ falas: [u('quero marcar\n[áudio]')] }), 'Resumo: última fala: «quero marcar»');
   assert.doesNotMatch(resumoDaPassagem({ falas: [u('[anexo]\n[áudio]'), u('ok')] })!, /áudio|anexo/);
 });
@@ -220,4 +222,10 @@ test('«quanto eu vou esperar?» e «quanto tempo demora?» NÃO são pergunta d
   for (const f of ['quanto eu vou esperar?', 'quanto tempo demora a consulta?', 'quanto estou devendo de espera', 'o valorizar do tratamento']) assert.doesNotMatch(resumoDaPassagem({ falas: [u(f)] })!, /preço/, f);
   for (const f of ['quanto custa?', 'quanto é a consulta', 'qual o valor?', 'qual é o preço', 'valor?']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /perguntou preço/, f);
   assert.match(resumoDaPassagem({ falas: [u('o valor é alto')] })!, /falou de preço/);
+});
+
+test('plural e flexão de preço continuam preço; «quanto cobram?», «quais os valores?» perguntam; «valor$»/«pagar$» não são preço', () => {
+  for (const f of ['quais os preços?', 'quanto custam as sessões?', 'isso custou caro', 'os valores são altos']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /preço/, f);
+  for (const f of ['quanto cobram pela avaliação?', 'quais os valores?', 'qual seria o valor?', 'quanto ficou?']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /perguntou preço/, f);
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('pagar$ agora')] })!, /preço/);
 });
