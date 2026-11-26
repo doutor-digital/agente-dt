@@ -227,6 +227,45 @@ test('sem os dados do paciente (o Kommo não respondeu) o link sai do mesmo jeit
   assert.equal(m.asaas.chamadas.length, 0);
 });
 
+test('a InfinitePay RECUSA o pedido com nome/telefone (400): tenta UMA vez sem eles e o sinal continua saindo pela InfinitePay', async () => {
+  let chamadas = 0;
+  const m = montar({
+    criar: async () => {
+      if (++chamadas === 1) throw new ErroInfinitepay('a InfinitePay respondeu 400 (customer inválido)', 400);
+      return { url: 'https://checkout.infinitepay.io/dhacailandia?lenc=segunda' };
+    },
+  });
+  const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  assert.equal(r.tipo === 'link' && r.via, 'infinitepay');
+  assert.equal(m.ip.pedidos.length, 2);
+  assert.ok(m.ip.pedidos[0]!.cliente, 'a primeira tentativa levava nome e telefone');
+  assert.equal(m.ip.pedidos[1]!.cliente, undefined, 'a segunda vai sem');
+  assert.notEqual(m.ip.pedidos[0]!.orderNsu, m.ip.pedidos[1]!.orderNsu);
+  assert.equal(m.asaas.chamadas.length, 0);
+  assert.equal(m.db.rows.length, 1);
+  assert.equal(m.db.rows[0]!.linkId, m.ip.pedidos[1]!.orderNsu, 'a linha do sinal é a do link que existe');
+});
+
+test('só a recusa 400/422 repete sem nome e telefone: timeout, 5xx e chave recusada NÃO repetem (vão direto para o Asaas)', async () => {
+  for (const erro of [new ErroInfinitepay('a InfinitePay respondeu 503', 503), new ErroInfinitepay('a InfinitePay recusou a chave (403)', 403), new ErroInfinitepay('a InfinitePay não respondeu a tempo')]) {
+    const m = montar({ criar: async () => { throw erro; } });
+    const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+    assert.equal(m.ip.pedidos.length, 1, erro.message);
+    assert.equal(r.tipo === 'link' && r.via, undefined);
+    assert.equal(r.tipo === 'link' && r.copiaECola, true);
+  }
+});
+
+test('InfinitePay e Asaas falham: a falha diz que a InfinitePay também falhou (a equipe não caça só chave do Asaas)', async () => {
+  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 502', 502); } });
+  const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, { ...m.deps, chave: async () => null });
+  assert.equal(r.tipo, 'falhou');
+  if (r.tipo !== 'falhou') return;
+  assert.equal(r.motivo, 'sem-chave');
+  assert.match(r.detalhe, /antes, a InfinitePay falhou: .*502/);
+  assert.match(r.fallback ?? '', /502/);
+});
+
 // ── sem a opção (o padrão): igual ao de hoje ────────────────────────────────────────────────────────────────────────────────────
 
 test('sem deps.infinitepay: o resultado é o do Asaas, sem via nem fallback nem chamada à InfinitePay (nada mudou)', async () => {

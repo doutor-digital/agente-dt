@@ -5,7 +5,7 @@
  * Contrato (Lei de Hyrum: quem escuta passa a depender disto):
  *  - dispara UMA vez por link, na transição para `pago` (a reentrega do mesmo aviso não repete);
  *  - dispara só com pagamento CONFIRMADO; nunca por aviso que o `/payment_check` não provou;
- *  - o evento NÃO carrega dado pessoal (nome, telefone, CPF): quem precisa dele busca no cartão/cadastro pelo `leadId` (ver `sinalDoLink` em sinal-infinitepay.ts);
+ *  - o evento NÃO carrega dado pessoal (nome, telefone, CPF): quem precisa dele busca no cartão/cadastro. Se o link foi o sinal de um paciente, o cartão está em `sinais_pix` (`via = 'infinitepay'` e `link_id` = o `orderNsu` do evento, na unidade do evento);
  *  - um ouvinte que lança não derruba o aviso (a InfinitePay já recebeu o 200) nem os outros ouvintes: o erro vai para o log, sem o evento dentro.
  */
 import { logger } from './logger.js';

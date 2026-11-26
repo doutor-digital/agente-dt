@@ -280,12 +280,21 @@ export async function baixarSinalDoLinkPago(e: LinkPago, chatwoot: BaixaNoChatwo
   const unit = await prisma.unit.findUnique({ where: { slug: e.unidade } });
   if (!unit) return;
   const linha = (await prisma.sinalPix.findFirst({ where: { unitId: unit.id, linkId: e.orderNsu, via: 'infinitepay' } })) as LinhaDoSinal | null;
-  if (!linha || linha.status !== 'pendente') return;
+  if (!linha || (linha.status !== 'pendente' && linha.status !== 'expirado')) return;
   const est = estado(unit.slug);
   if (est === 'desligado' || !unit.kommoAccessToken) return;
   if (e.valorCentavos < linha.valorCentavos) {
     logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link pago vale menos que o sinal — não dei a baixa`);
     return;
+  }
+  // Pagou DEPOIS de a varredura dar o link como vencido (o aviso atrasou, ou o paciente pagou no último dia): o dinheiro entrou e foi conferido, então vale mais que o «venceu».
+  // Reabre a linha (só se ainda está `expirado`) e dá a baixa normal; a nota do vencimento que já está no cartão fica, e a nota do pagamento vem depois dela.
+  if (linha.status === 'expirado') {
+    if (est !== 'ligado') return;
+    const reaberta = await prisma.sinalPix.updateMany({ where: { id: linha.id, status: 'expirado' }, data: { status: 'pendente' } });
+    if (reaberta.count !== 1) return;
+    logger.warn({ unit: unit.slug, leadId: linha.leadId, orderNsu: e.orderNsu }, `${ID_SINAL_PIX}: o link da InfinitePay foi pago depois de dado como vencido — baixa dada mesmo assim`);
+    linha.status = 'pendente';
   }
   await baixador(unit, chatwoot, kommo).executar({ tipo: 'pago', linha, paymentId: e.transactionNsu ?? e.orderNsu }, est === 'seco');
 }

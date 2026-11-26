@@ -10,9 +10,9 @@
  */
 import { randomBytes } from 'node:crypto';
 import type { KommoClient } from '../services/kommo.service.js';
+import { logger } from './logger.js';
 import { criarLink } from '../mcp-remoto/infinitepay-escrita.js';
 import type { ClienteDoLink } from './integracoes/infinitepay.js';
-import { prisma } from './prisma.js';
 import { infinitepayDoServidor } from './infinitepay-servidor.js';
 import { depsReais, type CriadorDeLinkDoSinal, type DepsDoSinal } from './sinal-pix.js';
 import { sinalViaDaUnidade } from './sinal-via.js';
@@ -82,16 +82,28 @@ export function criadorDeLinkDoSinal(kommo: Pick<KommoClient, 'getLead' | 'getCo
     if (!srv) throw new Error('a InfinitePay deste servidor ainda não foi carregada');
     const cliente = d.cliente ? await d.cliente(p.leadId) : kommo ? await clienteDoCartao(kommo, p.leadId) : {};
     // vale até o fim do dia do vencimento do sinal (a véspera da consulta); a API não cancela link, então ele PRECISA vencer
+    // (a API conta validade em dias inteiros, no mínimo 1: sinal gerado no próprio dia do vencimento vale até o fim do dia seguinte; a baixa já tem 2 dias de carência)
     const validadeDias = Math.min(90, Math.max(1, diasEntre(p.hoje, p.venceEm)));
-    const r = await (d.criar ?? criarLink)(srv.ctx, srv.esc, { id: 'sofia-sinal' }, {
+    const pedido = {
       unidade: p.slug,
       valor: p.valorCentavos / 100,
       descricao: descricaoDoSinal(p.nomeDaClinica, p.consultaEm, p.leadId),
-      referencia: `sinal-${p.leadId.toString(36)}-${randomBytes(4).toString('hex')}`,
       validadeDias,
-      ...(cliente.nome || cliente.telefone ? { cliente } : {}),
-      semEndereco: true,
-    });
+    };
+    const criar = d.criar ?? criarLink;
+    const referencia = () => `sinal-${p.leadId.toString(36)}-${randomBytes(4).toString('hex')}`;
+    const quem = { id: 'sofia-sinal' };
+    const extras = !!(cliente.nome || cliente.telefone);
+    let r;
+    try {
+      r = await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia(), ...(extras ? { cliente } : {}), semEndereco: true });
+    } catch (err) {
+      // A InfinitePay RECUSOU o pedido (400/422): pode ser ela não aceitar nome/telefone/endereço. Tenta UMA vez sem eles antes de desistir, para o campo extra nunca tirar o sinal da
+      // InfinitePay. Qualquer outra falha (timeout/5xx, chave, nosso teto ou portão) não repete: o resultado é o fallback para o Asaas.
+      if (!(err instanceof Error) || !/^a InfinitePay respondeu (400|422)\b/.test(err.message)) throw err;
+      logger.warn({ unit: p.slug, motivo: err.message.slice(0, 200) }, 'sinal-infinitepay: a InfinitePay recusou o pedido com nome/telefone — tento de novo sem eles');
+      r = await criar(srv.ctx, srv.esc, quem, { ...pedido, referencia: referencia() });
+    }
     return { url: r.url, orderNsu: r.orderNsu };
   };
 }
@@ -108,16 +120,3 @@ export function depsDoSinalPorVia(
   if (o.conversaGarantida || !o.kommo || sinalViaDaUnidade(slug, e) !== 'infinitepay') return undefined;
   return { ...depsReais(), infinitepay: criadorDeLinkDoSinal(o.kommo) };
 }
-
-/**
- * De que consulta e de que cartão é um link pago da InfinitePay? Para quem escuta o evento «link pago» (lib/link-pago.ts) e precisa saber se foi um sinal da Sofia
- * (a nota fiscal, por exemplo, busca nome/telefone no cartão por este `leadId`). null = o link não é de um sinal (foi criado pelo conector).
- */
-export async function sinalDoLink(unidadeSlug: string, orderNsu: string): Promise<{ leadId: number; clinica: string; consultaEm: string } | null> {
-  const u = await prisma.unit.findUnique({ where: { slug: unidadeSlug }, select: { id: true } });
-  if (!u) return null;
-  const l = await prisma.sinalPix.findFirst({ where: { unitId: u.id, linkId: orderNsu, via: 'infinitepay' }, select: { leadId: true, clinica: true, consultaEm: true } });
-  const leadId = l ? Number(l.leadId) : NaN;
-  return l && Number.isFinite(leadId) ? { leadId, clinica: l.clinica, consultaEm: l.consultaEm } : null;
-}
-

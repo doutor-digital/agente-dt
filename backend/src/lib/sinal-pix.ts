@@ -172,7 +172,8 @@ export type ResultadoDoSinal =
       fallback?: string;
     }
   | { tipo: 'ja-pago' }
-  | { tipo: 'falhou'; motivo: MotivoDaFalha; detalhe: string };
+  /** `fallback`: a InfinitePay também tinha falhado antes (o motivo dela), para a equipe não procurar o problema só no Asaas */
+  | { tipo: 'falhou'; motivo: MotivoDaFalha; detalhe: string; fallback?: string };
 
 export interface UnidadeDoSinal {
   id: string;
@@ -357,10 +358,17 @@ export async function gerarSinalPix(
   }
 
   // Fase 2 (fora da trava): a chave do Asaas da CLÍNICA e o link.
+  // quando a InfinitePay falhou antes, o motivo dela acompanha a falha do Asaas: a equipe não pode caçar uma chave do Asaas se o problema foi a InfinitePay
+  const falha = (motivo: MotivoDaFalha, detalhe: string): ResultadoDoSinal => ({
+    tipo: 'falhou',
+    motivo,
+    detalhe: (fallback ? `${detalhe} (antes, a InfinitePay falhou: ${fallback})` : detalhe).slice(0, 500),
+    ...(fallback ? { fallback } : {}),
+  });
   const conta = await deps.chave({ id: unit.id, slug: unit.slug }).catch(() => null);
   if (!conta) {
     await largar();
-    return { tipo: 'falhou', motivo: 'sem-chave', detalhe: 'a unidade não tem chave do Asaas no cofre' };
+    return falha('sem-chave', 'a unidade não tem chave do Asaas no cofre');
   }
   const valor = (centavos as number) / 100;
 
@@ -386,14 +394,14 @@ export async function gerarSinalPix(
       const detalhe = err instanceof Error ? err.message : String(err);
       logger.warn({ unit: unit.slug, leadId, detalhe }, 'sinal-pix: o Asaas não criou o Pix copia-e-cola');
       await largar();
-      return { tipo: 'falhou', motivo: 'asaas', detalhe: detalhe.slice(0, 300) };
+      return falha('asaas', detalhe.slice(0, 300));
     }
     const qrId = typeof pix?.id === 'string' || typeof pix?.id === 'number' ? String(pix.id) : '';
     const payload = typeof pix?.payload === 'string' ? pix.payload.trim() : '';
     if (!qrId || !copiaEColaValido(payload)) {
       logger.warn({ unit: unit.slug, leadId, qrId: qrId || null }, 'sinal-pix: resposta do Asaas sem id ou sem copia-e-cola válido');
       await largar();
-      return { tipo: 'falhou', motivo: 'asaas', detalhe: 'resposta do Asaas sem id ou sem copia-e-cola válido' };
+      return falha('asaas', 'resposta do Asaas sem id ou sem copia-e-cola válido');
     }
     let registradoPix = true;
     try {
@@ -424,13 +432,13 @@ export async function gerarSinalPix(
     const detalhe = err instanceof Error ? err.message : String(err);
     logger.warn({ unit: unit.slug, leadId, detalhe }, 'sinal-pix: o Asaas não criou o link');
     await largar();
-    return { tipo: 'falhou', motivo: 'asaas', detalhe: detalhe.slice(0, 300) };
+    return falha('asaas', detalhe.slice(0, 300));
   }
   const linkId = typeof criado?.id === 'string' || typeof criado?.id === 'number' ? String(criado.id) : '';
   if (!linkId || !urlDoAsaasValida(criado?.url)) {
     logger.warn({ unit: unit.slug, leadId, linkId: linkId || null }, 'sinal-pix: resposta do Asaas sem id ou sem url válida');
     await largar();
-    return { tipo: 'falhou', motivo: 'asaas', detalhe: 'resposta do Asaas sem id ou sem link válido' };
+    return falha('asaas', 'resposta do Asaas sem id ou sem link válido');
   }
 
   // Guarda. Se o banco falhar o link já existe no Asaas: o paciente ainda pode pagar (sem baixa automática) e o log deixa o rastro.

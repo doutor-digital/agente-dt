@@ -535,3 +535,15 @@ test('link pago: liquidação (settled) de um link que ainda não estava pago ta
   await processarAviso(m.deps, m.p, { ...PAGO, event: 'settled' });
   assert.equal(eventos.length, 1);
 });
+
+test('link pago: a resposta à InfinitePay NÃO espera o ouvinte (a baixa fala com o Kommo e pode demorar)', async () => {
+  const m = montar();
+  let comecou = false;
+  m.deps.aoPagar = () => {
+    comecou = true;
+    return new Promise<void>(() => undefined); // nunca termina
+  };
+  const r = await Promise.race([processarAviso(m.deps, m.p, PAGO), new Promise<string>((ok) => setTimeout(() => ok('travou'), 1000))]);
+  assert.deepEqual(r, { http: 200, resultado: 'pago' });
+  assert.equal(comecou, true);
+});

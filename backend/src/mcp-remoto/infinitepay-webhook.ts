@@ -57,7 +57,7 @@ export interface DepsDoAviso {
   alertar: (texto: string) => Promise<boolean>;
   /**
    * Chamado UMA vez, quando o link vira `pago` (pagamento confirmado no /payment_check, valor conferido). É o evento «link pago» (lib/link-pago.ts).
-   * Nunca lança nem atrasa a resposta além do que o ouvinte levar; o aviso já está gravado quando ele roda.
+   * Não é esperado: a resposta à InfinitePay não depende dele, e o aviso já está gravado quando ele roda. Erro dele só vai para o log.
    */
   aoPagar?: (e: LinkPago) => Promise<void>;
   log?: { info(o: object, m?: string): void; warn(o: object, m?: string): void };
@@ -236,7 +236,8 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
   }
   if (pago.mudou) deps.log?.info({ unidade: p.unidade, orderNsu: p.orderNsu, valor: reais(link.valorCentavos) }, 'infinitepay: pagamento confirmado');
   if (pago.mudou && deps.aoPagar) {
-    await deps
+    // NÃO espera o ouvinte: a baixa fala com o Kommo (várias idas) e a InfinitePay não pode ficar esperando a resposta 200 por isso. O aviso já está gravado; erro do ouvinte só vai para o log.
+    void deps
       .aoPagar({
         unidade: p.unidade,
         orderNsu: p.orderNsu,

@@ -319,6 +319,24 @@ test('link pago (evento): o que NÃO é sinal, está desligado, é seco ou vale 
   assert.equal(sinaisNoBanco[0]!.status, 'pendente');
 });
 
+test('link pago DEPOIS de a varredura dar o sinal como vencido: o dinheiro vale mais que o «venceu» — reabre e dá a baixa', async () => {
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ status: 'expirado', avisadoEm: new Date() }));
+  const k = kommoFalso();
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo);
+  assert.equal(sinaisNoBanco[0]!.status, 'pago');
+  assert.equal(k.gravou.length, 1);
+  assert.match(k.notas[0]!.texto, /pago no InfinitePay/);
+  // em seco/desligado a linha vencida não é reaberta
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ status: 'expirado', avisadoEm: new Date() }));
+  process.env.SINAL_PIX_SLUGS = '';
+  await baixarSinalDoLinkPago(evento(), null, k.deps.kommo);
+  assert.equal(sinaisNoBanco[0]!.status, 'expirado');
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+});
+
 test('baixa em modo SECO: só registra «gravaria» (com o nome certo do provedor) e não toca no cartão nem no banco', async () => {
   sinaisNoBanco.length = 0;
   sinaisNoBanco.push(ip({ leadId: '28000777' }));
