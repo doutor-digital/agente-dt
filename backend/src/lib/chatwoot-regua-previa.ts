@@ -23,7 +23,7 @@ import {
   type AjustesDaRegua,
   type Visto,
 } from './chatwoot-regua.js';
-import { lerConversas, quemFalaPorTelefone, type Armazem, type Chat, type CartaoNoKommo } from './chatwoot-regua-worker.js';
+import { lerConversas, MAX_MENSAGENS_POR_CICLO, quemFalaPorTelefone, type Armazem, type Chat, type CartaoNoKommo } from './chatwoot-regua-worker.js';
 
 const PASSO_MS = 10 * 60_000;
 export const HORAS_DA_PREVIA = 24;
@@ -47,6 +47,8 @@ export interface LinhaDaPrevia {
   faltando: string[];
   /** o paciente tem cartão ativo no Kommo da unidade: a régua NÃO mandaria (os robôs de lá falam) */
   noKommo: boolean;
+  /** não deu para conferir o Kommo: no ligado a régua NÃO manda até conferir */
+  semConferirKommo: boolean;
 }
 
 /** A parte pura: as linhas de UMA conversa. `memoria.feitos` não é alterado. */
@@ -58,7 +60,7 @@ export function previaDaConversa(c: ConversaRegua, memoria: Memoria, agora: Date
     for (const d of decidirRegua(c, { vistos: memoria.vistos, feitos }, new Date(t), unidade, ajustes).disparos) {
       if (desligados.has(d.regra)) continue; // robô desligado na tela «Robôs»: nem manda, nem registra (se religarem, sai)
       feitos.add(d.texto === null ? `${d.regra}${SUFIXO_FALTA}|${d.chave}` : `${d.regra}|${d.chave}`);
-      for (const ch of d.texto === null || d.interna ? [] : ((d as { cobre?: string[] }).cobre ?? [])) feitos.add(`${d.regra}|${ch}`);
+      for (const ch of d.texto === null || d.interna ? [] : ((d as { cobre?: string[] }).cobre ?? []) /* `cobre`: o PR dos dois horários no dia; sem ele a lista é vazia */) feitos.add(`${d.regra}|${ch}`);
       const campos = d.interna ? [] : camposDoModelo(d.modelo, unidade.textos);
       const vars = d.variaveis ?? [];
       const nome = campos.includes('contact.name') ? (vars[campos.indexOf('contact.name')] ?? null) : null;
@@ -72,6 +74,7 @@ export function previaDaConversa(c: ConversaRegua, memoria: Memoria, agora: Date
         interna: !!d.interna,
         faltando: d.faltando,
         noKommo: false,
+        semConferirKommo: false,
       });
     }
   }
@@ -128,12 +131,15 @@ export async function previaDaCaixa(
     const feitos = new Set<string>(feitosPorConversa.get(c.id) ?? []);
     for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitos.add(f);
     const dela = previaDaConversa(c, { vistos, feitos }, agora, horas, unidade, ajustes.regua, ajustes.desligados);
-    if (dela.some((l) => !l.interna && l.faltando.length === 0) && portas.kommo && c.telefone) {
+    // o Kommo só é conferido para quem FALARIA com o paciente (mensagem com texto), como no worker
+    const falariam = dela.filter((l) => !l.interna && l.faltando.length === 0);
+    if (falariam.length && portas.kommo && c.telefone) {
       try {
         const cartao = await portas.kommo(c.telefone);
-        if (cartao) for (const l of dela) if (!l.interna) l.noKommo = true;
+        if (cartao) for (const l of falariam) l.noKommo = true;
       } catch {
         semConferirKommo++;
+        for (const l of falariam) l.semConferirKommo = true;
       }
     }
     linhas.push(...dela);
@@ -146,17 +152,22 @@ const hhmm = (d: Date) => new Date(d.getTime() - 3 * 3600_000).toISOString().sli
 
 /** O texto para o João ler: uma linha por mensagem, SEM telefone. */
 export function formatarPrevia(r: Awaited<ReturnType<typeof previaDaCaixa>>, slug: string, agora: Date, horas: number): string {
-  const sairiam = r.linhas.filter((l) => !l.interna && !l.noKommo && l.faltando.length === 0);
+  const sairiam = r.linhas.filter((l) => !l.interna && !l.noKommo && !l.semConferirKommo && l.faltando.length === 0);
   const l: string[] = [];
   l.push(`Prévia da régua — ${slug} — próximas ${horas} h a partir de ${hhmm(agora)} (Belém)`);
   l.push(`${r.conversas} conversas lidas${r.truncada ? ' (LISTAGEM TRUNCADA: pode faltar conversa)' : ''}. Mandaria ${sairiam.length} mensagem(ns) ao paciente.`);
   l.push('');
   for (const x of r.linhas) {
-    const estado = x.interna ? 'INTERNA (nota para a equipe)' : x.noKommo ? 'NÃO manda: cartão ativo no Kommo' : x.faltando.length ? `NÃO manda, falta: ${x.faltando.join('; ')}` : 'manda';
+    const estado = x.interna ? 'INTERNA (nota para a equipe)' : x.noKommo ? 'NÃO manda: cartão ativo no Kommo' : x.semConferirKommo ? 'NÃO manda até conferir o Kommo (não consegui agora)' : x.faltando.length ? `NÃO manda, falta: ${x.faltando.join('; ')}` : 'manda';
     l.push(`${hhmm(x.saiEm)} | conversa ${x.conversa} | ${x.regra} | ${x.modelo} | nome: ${x.nome ?? '(sem nome)'} | horário: ${x.horario ?? '—'} | ${estado}`);
   }
   if (!r.linhas.length) l.push('(nada a mandar neste período)');
   l.push('');
+  // o worker manda no máximo MAX_MENSAGENS_POR_CICLO por ciclo (10 min): se mais do que isso vence de uma vez, o resto sai nos ciclos seguintes
+  const porPasso = new Map<number, number>();
+  for (const x of sairiam) porPasso.set(x.saiEm.getTime(), (porPasso.get(x.saiEm.getTime()) ?? 0) + 1);
+  const maior = Math.max(0, ...porPasso.values());
+  if (maior > MAX_MENSAGENS_POR_CICLO) l.push(`Atenção: ${maior} mensagens vencem no mesmo ciclo e o worker manda no máximo ${MAX_MENSAGENS_POR_CICLO} por ciclo (10 min): as demais saem nos ciclos seguintes, e algumas podem passar do prazo.`);
   l.push('Não está na prévia: se a janela de 24 h estará aberta (texto ou template), se o template está aprovado na Meta, e o que o paciente fizer até lá.');
   if (r.semConferirKommo) l.push(`Atenção: não consegui conferir o Kommo para ${r.semConferirKommo} conversa(s); no ligado a régua NÃO mandaria nelas até conferir.`);
   return l.join('\n');

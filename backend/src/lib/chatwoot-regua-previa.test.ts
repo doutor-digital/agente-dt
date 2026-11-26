@@ -168,9 +168,23 @@ test('a prévia confere o Kommo (só leitura) e marca quem NÃO receberia; Kommo
   );
   assert.equal(r.linhas.find((l) => l.conversa === 1)!.noKommo, true);
   assert.equal(r.linhas.find((l) => l.conversa === 4)!.noKommo, false);
+  assert.equal(r.linhas.find((l) => l.conversa === 4)!.semConferirKommo, true);
   assert.equal(r.semConferirKommo, 1);
   const texto = formatarPrevia(r, 'x', AGORA, 24);
   assert.match(texto, /NÃO manda: cartão ativo no Kommo/);
+  assert.match(texto, /NÃO manda até conferir o Kommo/);
+  assert.match(texto, /Mandaria 0 mensagem/, 'sem conferir o Kommo o ligado não manda: a contagem não as inclui');
   assert.match(texto, /não consegui conferir o Kommo para 1 conversa/);
   assert.doesNotMatch(texto, /5594/);
+});
+
+test('campo faltando e cartão no Kommo: a linha diz o que falta (o worker só confere o Kommo de quem falaria)', async () => {
+  const f = fabrica();
+  f.define([bruta(1, { ...AMANHA }, '+5594999990001')]);
+  await f.armazem.salvar(2, [{ conversationId: 1, tipo: 'criar' as const, campo: '_visto', valor: '1', desde: Z('2026-11-10T12:00:00Z'), inicial: false }]);
+  const faltando: DadosDaUnidade = { ...U, nome: '', textos: { parau_consulta_lembrete_vespera: 'Olá, {{contact.name}}. {{lead.cf.2450736}} {{lead.cf.2450798}}' } };
+  let consultasAoKommo = 0;
+  const r = await previaDaCaixa({ armazem: f.armazem, chat: f.chat, kommo: async () => { consultasAoKommo++; return { leadId: 1 }; } }, 2, faltando, AGORA, 24);
+  assert.deepEqual(r.linhas.map((l) => [l.faltando, l.noKommo]), [[['nome da unidade'], false]]);
+  assert.equal(consultasAoKommo, 0);
 });

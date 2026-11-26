@@ -13,6 +13,7 @@ import { formatarPrevia, HORAS_DA_PREVIA, previaDaCaixa } from '../lib/chatwoot-
 import { ajustesDaUnidade, bancoDosRobos } from '../lib/robos-estado.js';
 import { recarregarAutomacoes } from '../lib/automacoes-estado.js';
 import { contextoDaCaixa, contextoDoAmbiente } from '../mcp-remoto/chatwoot.js';
+import { iniciarConfigChatwoot, pararConfigChatwoot } from '../lib/chatwoot-unidades-banco.js';
 
 function argumento(nome: string): string | undefined {
   const a = process.argv.slice(2).find((x) => x === `--${nome}` || x.startsWith(`--${nome}=`));
@@ -26,10 +27,12 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const horas = Number(argumento('horas') ?? HORAS_DA_PREVIA);
-  if (!Number.isFinite(horas) || horas <= 0 || horas > 168) {
+  if (!Number.isInteger(horas) || horas < 1 || horas > 168) {
     console.error('--horas precisa estar entre 1 e 168');
     process.exit(2);
   }
+  // a configuração por unidade (caixas, textos, mapa de etapas, conta do Chatwoot) mora no banco: sem carregá-la só Parauapebas existe (como no server.ts)
+  await iniciarConfigChatwoot();
   const caixa = Object.entries(CAIXAS_REGUA).find(([, s]) => s === slug)?.[0];
   if (!caixa) {
     console.error(`A unidade ${slug} não tem caixa na régua (CAIXAS_REGUA).`);
@@ -66,4 +69,7 @@ main()
     console.error(err);
     process.exitCode = 1;
   })
-  .finally(() => prisma.$disconnect());
+  .finally(() => {
+    pararConfigChatwoot();
+    return prisma.$disconnect();
+  });
