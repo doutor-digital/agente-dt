@@ -274,7 +274,7 @@ export function kapsoReal(chave: string, buscar: typeof fetch = fetch): PortaDoK
         // Só as que falharam de vez, só mensagem de paciente (o eco do celular da equipe e outros eventos não são lead que deixou de entrar).
         let depois: string | null = null;
         for (let pagina = 1; pagina <= PAGINAS_MAX; pagina++) {
-          const j: any = await ler(`/webhook_deliveries?status=failed&event=meta.messages&period=24h&limit=100${depois ? `&after=${encodeURIComponent(depois)}` : ''}`);
+          const j: any = await ler(`/webhook_deliveries?status=failed&event=meta.messages&period=7d&limit=100${depois ? `&after=${encodeURIComponent(depois)}` : ''}`);
           for (const e of Array.isArray(j?.data) ? j.data : []) {
             const quando = Date.parse(String(e?.created_at ?? ''));
             if (!Number.isFinite(quando) || quando < desdeMs || e?.event !== 'meta.messages' || !falhou(e)) continue;
@@ -452,11 +452,12 @@ export async function cicloDaCaixa(d: DepsDoVigia, caixa: number, slug: string, 
     if (emHorarioDeAtendimento(unit, agora)) {
       const doNumero = [...(saude ?? []), ...problemasDeReceber(null, info)].filter((v, i, l) => l.indexOf(v) === i);
       if (doNumero.length) problemas.push({ texto: `Número do WhatsApp com problema no Kapso: ${doNumero.join('; ')}.` });
-      // falhas desde o ÚLTIMO FECHAMENTO da clínica (ou o último aviso, o que for mais novo): de manhã, o que falhou de madrugada aparece
-      const fechou = ultimoFechamento(unit, agora);
-      const desde = Math.max(fechou, (await d.ultimoAviso(caixa)) ?? 0);
+      // falhas desde o ÚLTIMO AVISO (tudo que falhou depois dele ainda não foi dito a ninguém — inclusive o que falhou entre o aviso e o fechamento) ou, sem aviso nenhum,
+      // desde o ÚLTIMO FECHAMENTO da clínica: de manhã, o que falhou de madrugada aparece. (Usar «o mais novo dos dois» perdia a falha das 18h quando o aviso foi às 17h e o fechamento às 18h30.)
+      const ultimo = await d.ultimoAviso(caixa);
+      const desde = ultimo ?? ultimoFechamento(unit, agora);
       const erros = (d.cicloKapso.entregas?.get(numero) ?? []).filter((t) => t >= desde).length;
-      if (erros > 0) problemas.push({ texto: `${erros} mensagem(ns) de paciente não foram entregues ao CRM pelo Kapso (desde ${desde === fechou ? 'o último fechamento da clínica' : 'o último aviso'}).` });
+      if (erros > 0) problemas.push({ texto: `${erros} mensagem(ns) de paciente não foram entregues ao CRM pelo Kapso (desde ${ultimo !== null ? 'o último aviso' : 'o último fechamento da clínica'}).` });
     }
     await d.cegueira(caixa, 'kapso', !leuKapso);
   }
@@ -632,7 +633,7 @@ export async function varrer(ctx: ContextoChatwoot, env: NodeJS.ProcessEnv = pro
     const caixas = Object.entries(CAIXAS_REGUA).filter(([c]) => unidadeDaCaixa(Number(c)));
     const algumaLigadaOuSeca = caixas.some(([, slug]) => estadoDoVigia(slug) !== 'desligado');
     if (!algumaLigadaOuSeca) return;
-    const cicloKapso = kapso ? { numeros: await kapso.numeros(), entregas: await kapso.entregasComErro(agora - 24 * HORA_MS) } : { numeros: new Map<string, NumeroDoKapso>(), entregas: null };
+    const cicloKapso = kapso ? { numeros: await kapso.numeros(), entregas: await kapso.entregasComErro(agora - 7 * 24 * HORA_MS) } : { numeros: new Map<string, NumeroDoKapso>(), entregas: null };
     for (const [caixaTxt, slug] of caixas) {
       try {
         const r = await cicloDaCaixa({ ...reais, cicloKapso }, Number(caixaTxt), slug, horas);
