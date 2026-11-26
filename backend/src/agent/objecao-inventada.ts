@@ -19,12 +19,12 @@ import { juntarFrases, quebrarEmFrases } from './horario-oferecido.js';
 // "é (mais) o valor que/ou…": o "é" é VERBO. Sem o acento a conjunção "e o valor varia conforme os sintomas" casava e a
 // resposta de preço da própria Sofia era tratada como sondagem (Salto, lead 5038681, 25/11).
 const SONDA_OBJECAO =
-  /(?<![a-zçãáéíóúâêô])é\s+(?:mais\s+)?o\s+valor(?:\s+d[aeo]s?\s+[a-zçãáéíóúâêô]+(?:\s+[a-zçãáéíóúâêô]+){0,2})?\s*(?:que\b|ou\b|,|\?)|o\s+valor\s+(?:que\s+)?(?:te\s+|lhe\s+)?(?:preocupa|pesa)|o\s+que\s+(?:mais\s+)?(?:pesa|te\s+(?:preocupa|segura|impede|trava))|o\s+que\s+(?:ainda\s+)?(?:est[áa]|t[áa])\s+te\s+segurando|valor\s+ou\s+(?:[ée]\s+)?(?:o\s+|a\s+)?(?:quest[ãa]o\s+d[oe]\s+)?hor[áa]rio|hor[áa]rio\s+ou\s+(?:[ée]\s+)?(?:o\s+)?valor/i;
+  /(?<![a-zçãáéíóúâêô])é\s+(?:mais\s+)?o\s+valor(?:\s+d[aeo]s?\s+[a-zçãáéíóúâêô]+(?:\s+[a-zçãáéíóúâêô]+){0,2})?(?:\s+(?:mesmo|realmente|de\s+verdade|aí|ai|mais))?\s*(?:que\b|ou\b|,|\?)|o\s+valor\s+(?:que\s+)?(?:te\s+|lhe\s+)?(?:preocupa|pesa)|o\s+que\s+(?:mais\s+)?(?:pesa|te\s+(?:preocupa|segura|impede|trava))|o\s+que\s+(?:ainda\s+)?(?:est[áa]|t[áa])\s+te\s+segurando|valor\s+ou\s+(?:[ée]\s+)?(?:o\s+|a\s+)?(?:quest[ãa]o\s+d[oe]\s+)?hor[áa]rio|hor[áa]rio\s+ou\s+(?:[ée]\s+)?(?:o\s+)?valor/i;
 
 /** O que, na fala dele, já é dúvida ou objeção — aí a sondagem tem razão de ser. Perguntar o preço ("qual o custo da
  * consulta?", "quanto cobra?") também é falar de valor: não é fala neutra (Salto, 24–25/11, texto do botão do anúncio). */
 const OBJECAO_DELE =
-  /pens|\bcar[oa]\b|valor|pre[çc]o|quanto|cust[oa]|cobr[ao]|investiment|dinheiro|grana|pagar|pagamento|longe|dist[âa]n|tempo|medo|receio|marido|esposa|mulher|filh|fam[íi]lia|depois|n[ãa]o\s+sei|d[úu]vida|organiz|condi[çc]|parcel|plano|conv[êe]nio|trabalh|hor[áa]rio|agenda|viaj|desist|complicad|dif[íi]cil|apertad|ver\s+(?:com|e\s+te)/i;
+  /pens|\bcar[oa]\b|valor|pre[çc]o|quanto|cust[oa]|\bcobr(?:a|am|ar|o)\b|investiment|dinheiro|grana|pagar|pagamento|longe|dist[âa]n|tempo|medo|receio|marido|esposa|mulher|filh|fam[íi]lia|depois|n[ãa]o\s+sei|d[úu]vida|organiz|condi[çc]|parcel|plano|conv[êe]nio|trabalh|hor[áa]rio|agenda|viaj|desist|complicad|dif[íi]cil|apertad|ver\s+(?:com|e\s+te)/i;
 /** "Não" é ambíguo (pode responder à pergunta de antes, pode ser recusa): fica com o prompt. */
 const NEGA = /(?<![\p{L}])n[ãa]o(?![\p{L}])/iu;
 

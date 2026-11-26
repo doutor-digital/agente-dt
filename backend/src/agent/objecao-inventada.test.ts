@@ -110,12 +110,22 @@ test('"e o valor varia" é conjunção: a resposta de preço do próprio modelo 
   }
 });
 
+test('"cobra" é preço; "cobrança" não conta como fala de valor (nit do sênior)', () => {
+  const sonda = 'Me conta: é o valor que te preocupa ou o horário?';
+  assert.equal(objecaoInventada([p('Quanto vocês cobram?')], sonda), null);
+  assert.equal(objecaoInventada([p('Quanto ele cobra?')], sonda), null);
+  assert.equal(objecaoInventada([p('Recebi uma cobrança estranha')], sonda), sonda);
+});
+
 test('a sondagem de verdade ("é o valor que…", "é mais o valor da consulta que pesa") continua pega', () => {
   const sondas = [
     'Me conta: é o valor que te preocupa ou o horário?',
     'Me conta então: é mais o valor da consulta que pesa, ou é a questão do horário que fica difícil pro seu trabalho?',
     'É o valor, o horário ou saber se resolve?',
     'O que mais pesa aí: o valor ou o horário disponível?',
+    'É o valor mesmo que te incomoda?',
+    'Me conta: é o valor de verdade que pesa, ou o horário?',
+    'É o valor do tratamento completo que pesa?',
   ];
   for (const s of sondas) assert.equal(objecaoInventada([p('Sim')], s), s, s);
 });
