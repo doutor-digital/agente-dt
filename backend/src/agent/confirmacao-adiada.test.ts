@@ -220,3 +220,116 @@ test('a chave nasce DESLIGADA: sem variável nem linha no banco, nada muda para 
   assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', 'doutor-hernia-outra'), 'desligado');
   assert.equal(confirmacaoAdiadaEstado('doutor-hernia-salto', 'doutor-hernia-salto'), 'ligado');
 });
+
+// ── Rodada do sênior depois do #481 (o detector precisava de ajuste ANTES de ligar) ─────────────────────────────────────────────────
+
+test('"não confirmo", "pode ser?" e o "te confirmo" que sobra NÃO contam como sim', () => {
+  for (const fala of [
+    'Vou ver e te confirmo',
+    'Vou ver com meu marido, não confirmo agora',
+    'Pode ser? Vou ver com meu marido e te aviso',
+    'Vou ver aqui e depois te confirmo o nome',
+    'Beleza, te confirmo mais tarde',
+    'Ótimo, te confirmo depois',
+    'Combinado, te confirmo na parte da tarde',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+});
+
+test('"Te confirmo depois se der" adia; o "se" de detalhe continua sendo detalhe', () => {
+  assert.ok(adiouConfirmacao('Te confirmo depois se der'));
+  assert.ok(adiouConfirmacao('Te confirmo mais tarde se eu puder'));
+  assert.equal(adiouConfirmacao('Sim, pode ser. Depois te aviso se precisar remarcar'), null);
+  assert.equal(adiouConfirmacao('Quinta 15h tá ótimo. Amanhã te aviso se meu filho vai junto'), null);
+});
+
+test('vírgula antes da hora: "Te confirmo amanhã, às 15h" é escolha de horário', () => {
+  for (const fala of ['Te confirmo amanhã, às 15h', 'Te confirmo amanhã, 15h', 'Te confirmo amanhã , às 8 da manhã']) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+  assert.ok(adiouConfirmacao('Te confirmo amanhã, depois te falo'));
+});
+
+test('um aceite com dia ou hora numa mensagem anterior vence o "vou ver" que vem depois; um "sim" solto não', () => {
+  for (const fala of [
+    'Sim, quinta 15h\nVou ver com meu chefe pra sair mais cedo',
+    'Sim, quinta 15h\nVou ver com meu chefe\nDepois te aviso',
+    'Quinta 15h tá ótimo\nVou ver aqui com meu chefe',
+    'Uhum, pode ser quinta\nDepois te aviso se precisar remarcar',
+    'Ok 👍 quinta 15h\nVou ver aqui no trabalho e já chego',
+  ]) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+  assert.ok(adiouConfirmacao('Sim\nMas te confirmo mais tarde'));
+  assert.ok(adiouConfirmacao('15:00\nMaria da Silva\nVou ver com meu marido e te aviso'));
+  assert.ok(adiouConfirmacao('Quinta 15h\nTe confirmo na parte da tarde'));
+});
+
+test('sondas novas do sênior: aceite sem "sim/confirmo/pode ser" + "vou ver…" ou "depois te retorno…" NÃO adia', () => {
+  for (const fala of [
+    'Beleza! Te aviso quando chegar aí',
+    'Ok, combinado, quinta às 15h. Qualquer coisa depois te chamo',
+    'Ótimo! Vou ver se consigo chegar mais cedo',
+    'Tá bom, quinta 15h. Vou olhar aqui como faço com as crianças',
+    'Show, quinta 15h. Vou checar a rota',
+    'Tudo certo! Preciso ver se tenho exames, mas eu vou',
+    'Pode deixar, quinta estarei aí. Vou ver com meu marido quem me leva',
+    'Perfeito, quinta 15h então. Depois te retorno com o nome completo',
+    'Isso, 15h. Te falo amanhã o nome da minha mãe',
+    'Ok 👍 quinta 15h. Vou ver aqui no trabalho e já chego',
+    'Quinta 15h tá ótimo\nVou ver aqui com meu chefe',
+    'Uhum, pode ser quinta\nDepois te aviso se precisar remarcar',
+    'Quero quinta 15h. Depois a gente se fala',
+    'Certo! Amanhã de manhã te confirmo o endereço que vou sair',
+    'Bora, quinta 15h. Mais tarde te mando meus documentos',
+    'Isso mesmo, quinta 15h. Vou ver o que levo de exame',
+  ]) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+  // e o que o sênior mandou travar continua travando
+  for (const fala of [
+    'Ok, vou ver aqui e te retorno',
+    'Mais tarde te confirmo',
+    'Amanhã te falo',
+    'Vou conferir minha agenda e te aviso',
+    'Preciso ver com meu chefe primeiro',
+    'Ok, vou ver isso depois',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+});
+
+test('seco: a marcação começa ANTES do registro; gravador lento ou que falha não atrasa nem derruba a consulta', async () => {
+  const ordem: string[] = [];
+  const tool = new DynamicStructuredTool({
+    name: 'agendar_consulta',
+    description: 't',
+    schema: z.object({ hora: z.string() }),
+    func: async () => {
+      ordem.push('marcou-inicio');
+      return 'Consulta marcada';
+    },
+  });
+  let soltar!: () => void;
+  const lento = new Promise<void>((r) => (soltar = r));
+  const [t] = travarAgendamentoAdiado(
+    [tool],
+    { adiou: 'vou confirmar mais tarde' },
+    { step: async () => { ordem.push('step-inicio'); await lento; ordem.push('step-fim'); } } as never,
+    () => 'seco',
+  );
+  const promessa = t.func({ hora: '15:00' } as never);
+  await new Promise((r) => setImmediate(r));
+  assert.deepEqual(ordem.slice(0, 2), ['marcou-inicio', 'step-inicio'], 'o original é chamado antes do step');
+  soltar();
+  assert.equal(await promessa, 'Consulta marcada');
+
+  const [falha] = travarAgendamentoAdiado(
+    [new DynamicStructuredTool({ name: 'agendar_consulta', description: 't', schema: z.object({ hora: z.string() }), func: async () => 'Consulta marcada' })],
+    { adiou: 'vou confirmar mais tarde' },
+    { step: async () => { throw new Error('banco fora'); } } as never,
+    () => 'seco',
+  );
+  assert.equal(await falha.func({ hora: '15:00' } as never), 'Consulta marcada');
+});
