@@ -31,6 +31,7 @@ import { eventoDePausa, eventoDeReativacao, pausar, portaDaPausaDoChatwoot, reat
 import { aplicarResolucao, eventoDeResolucao, portasDoResolver, type PortasDoResolver } from './chatwoot-resolver.js';
 import { aplicarReferralDoKapso, mensagemParaConsultar, type ReferralDoKapso } from './kapso-referral.js';
 import { etiquetarAnuncio, portasDaOrigem, preencherOrigem, type PortasDaOrigem } from './chatwoot-origem.js';
+import { noConviteDoCrm } from './chatwoot-convite-whatsapp.js';
 import { notaDoAnuncio, portasDaNota, type PortasDaNota } from './chatwoot-anuncio.js';
 import { transcribeAudio } from '../services/transcription.service.js';
 import { registrarEventoDaSofia, registrarRespostaDaSofia, ultimaFalaDoPaciente, type EventoDaSofia } from './sofia-avaliacoes.js';
@@ -968,6 +969,10 @@ export function eventoChatwootHandler(req: Request, res: Response): void {
       aoAchar: aoAcharReferral(r),
     }).catch(() => undefined);
   }
+  // ROBÔ «CONVITE AO WHATSAPP» (chave `convite-whatsapp`, chatwoot-convite-whatsapp.ts): lead que escreve numa caixa de Instagram/Facebook recebe UM convite
+  // com o link do WhatsApp da clínica (não é a Sofia; essas caixas nem estão no mapa de caixas) e, no WhatsApp, o texto pronto do convite marca a origem.
+  // Evento que não é nosso volta na hora; chave desligada não lê nem escreve nada. Nunca lança.
+  void noConviteDoCrm(req.body, conta);
   const m = mensagemDoPaciente(req.body);
   if (!m) return;
   const e = estadoDoReceptor(conta);

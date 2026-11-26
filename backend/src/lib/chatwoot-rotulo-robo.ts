@@ -99,6 +99,8 @@ const ROTULO_JS = String.raw`(function(){
     var ca = m.content_attributes && typeof m.content_attributes === 'object' ? m.content_attributes : {};
     if (quem === 'agentbot') return ca.demora_espera ? { t: 'auto' } : { t: 'sofia' };
     if (quem === 'contact') return null;
+    // o convite ao WhatsApp (robô, chatwoot-convite-whatsapp.ts): «🤖 Robô · mensagem automática» — pela MARCA, qualquer que seja o usuário que o enviou (o conector de uma conta nova pode ter id e nome desconhecidos)
+    if (ca.convite_whatsapp && (quem === 'user' || quem === '')) return { t: 'auto' };
     // o usuário CONECTOR: o id conhecido, ou o nome padrão das contas («🤖 Robô automático»; o nome do USUÁRIO, não o texto da mensagem)
     // (o nome padrão: «🤖 Robô automático», ou «Conector…» que o kit de nova clínica dá ao usuário; vale o de exibição e o do cadastro)
     var conector = CONECTORES.indexOf(Number(s.id)) >= 0 || [s.available_name, s.name].some(function(x){ return /^\s*(🤖|conector)/i.test(String(x || '')); });
