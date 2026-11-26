@@ -152,8 +152,16 @@ test('patchDaConsulta: do aberto vai para qualquer lugar; autorizada só vira ca
   assert.equal(patchDaConsulta(nota({ status: 'autorizado' }), { status: 'cancelado' }, AGORA)?.status, 'cancelado');
   assert.equal(patchDaConsulta(nota({ status: 'cancelado' }), { status: 'autorizado' }, AGORA), null);
   assert.equal(patchDaConsulta(aberta, null, AGORA), null, '404 logo depois do pedido ainda pode ser fila');
+  // 404 depois de 30 min: NUNCA vira `recusada` sozinha (a nota repetida seguiria liberada e a original poderia aparecer depois): só marca para revisão, uma vez
   const velha = nota({ status: 'incerto', criadoEm: new Date(AGORA - 31 * 60_000).toISOString() });
-  assert.equal(patchDaConsulta(velha, null, AGORA)?.status, 'recusada');
+  const marca = patchDaConsulta(velha, null, AGORA);
+  assert.equal(marca?.status, undefined);
+  assert.match(marca?.revisao ?? '', /não conhece esta referência/);
+  assert.equal(patchDaConsulta({ ...velha, ultimoEvento: 'sincronizado:nao_encontrada' }, null, AGORA), null);
+  // a nota gravada como autorizada SEM número nem links (POST que já respondeu autorizado) é completada pela consulta; completa, não muda mais
+  const semDados = nota({ status: 'autorizado', numeroNfse: null, urlDanfse: null });
+  assert.equal(patchDaConsulta(semDados, { status: 'autorizado', numero: '7', urlDanfse: 'https://focusnfe.s3.sa-east-1.amazonaws.com/x.pdf' }, AGORA)?.numeroNfse, '7');
+  assert.equal(patchDaConsulta(nota({ status: 'autorizado' }), { status: 'autorizado', numero: '7' }, AGORA), null);
   assert.equal(patchDaConsulta(aberta, { status: 'status_novo_da_focus' }, AGORA)?.status, undefined, 'status desconhecido não vira status do livro');
 });
 

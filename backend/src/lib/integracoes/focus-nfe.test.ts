@@ -168,6 +168,19 @@ test('o token nunca aparece em erro, nem se a Focus o repetir na mensagem ou no 
   assert.ok(!limparTexto('Authorization: Basic QUJDREVGR0hJSktMTU5PUA==').includes('QUJDREVG'));
 });
 
+test('a Focus repete CPF formatado, CNPJ e e-mail na mensagem de validação: nada disso sai no erro', async () => {
+  const { fetcher } = falsa([json(422, { codigo: 'erro_validacao', mensagem: 'CPF 529.982.247-25 de maria@exemplo.com inválido; CNPJ 11.222.333/0001-81' })]);
+  await assert.rejects(
+    () => emitirNota(CRED_H, 'r', {}, op(fetcher)),
+    (e: unknown) => {
+      const m = (e as Error).message;
+      assert.ok(!/529\.982|maria@|11\.222/.test(m), m);
+      assert.match(m, /\[documento\].*\[e-mail\]/);
+      return true;
+    },
+  );
+});
+
 test('timeout e rede: mensagem em português, sem URL com token', async () => {
   const t = falsa([Object.assign(new Error('t'), { name: 'TimeoutError' })]);
   await assert.rejects(() => emitirNota(CRED_P, 'r', {}, op(t.fetcher)), /não respondeu a tempo/);
@@ -261,6 +274,16 @@ test('ambiente: o mesmo token em duas unidades, unidade inativa e nome ambíguo 
   assert.match(motivos, /inativa/);
   assert.match(motivos, /ambígua/);
   assert.ok(!motivos.includes(TOKEN), 'o token nunca vai para o motivo');
+});
+
+test('ambiente: duas variáveis do mesmo tipo para a MESMA unidade não vencem em silêncio (ambiente conflitante tira a conta; as outras são ignoradas)', () => {
+  const base = { FOCUS_NFE_UNIDADES: 'doutor-hernia-acailandia', FOCUS_NFE_TOKEN_ACAILANDIA: TOKEN };
+  const a = lerContasDoAmbiente(UNIDADES, { ...base, FOCUS_NFE_AMBIENTE_ACAILANDIA: 'homologacao', FOCUS_NFE_AMBIENTE_DOUTOR_HERNIA_ACAILANDIA: 'producao' });
+  assert.equal(a.contas.size, 0, 'dois ambientes: a conta sai, nunca cai em produção');
+  assert.match(a.ignoradas.map((i) => i.motivo).join(' | '), /já tem esta configuração.*conta ficou de fora/);
+  const b = lerContasDoAmbiente(UNIDADES, { ...base, FOCUS_NFE_SERIE_DPS_ACAILANDIA: '5', FOCUS_NFE_SERIE_DPS_DOUTOR_HERNIA_ACAILANDIA: '900' });
+  assert.equal(b.contas.get('doutor-hernia-acailandia')!.serieDps, 5, 'a primeira vale; a segunda é ignorada com aviso');
+  assert.equal(b.ignoradas.length, 1);
 });
 
 test('ambiente: token com formato estranho é ignorado; variável de ambiente/CNPJ sem token é ignorada', () => {

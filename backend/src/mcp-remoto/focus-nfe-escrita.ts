@@ -25,9 +25,10 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
-import { ErroFocus, rotuloDoAmbiente, type Ambiente, type EmissaoAceita } from '../lib/integracoes/focus-nfe.js';
+import { ErroFocus, rotuloDoAmbiente, type Ambiente } from '../lib/integracoes/focus-nfe.js';
 import { cnpjValido, cpfValido } from '../lib/integracoes/mascaras.js';
 import { diaLocal, dinheiro, mascararDoc, mascararEmail, arredondar } from './asaas-limites.js';
+import { mascararErro } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import {
   LIMITES_FOCUS, LivroDeNotas, avisoDoAmbiente, consumoDoDiaFocus, mostrarNota, registrarLeituraFocus, resolverContaFocus, sincronizarNota,
@@ -627,8 +628,13 @@ export interface RespostaDeCancelamento {
 
 export async function confirmarNota(ctx: ContextoFocus, esc: EstadoEscritaFocus, quem: QuemFocus, a: { confirmacao: string }): Promise<RespostaDeEmissao | RespostaDeCancelamento> {
   const p = esc.pendentes.tirar(a.confirmacao, quem.id);
-  // a conta de novo: se a emissão foi desligada (ou a unidade saiu do conector) desde o resumo, nada é gravado
-  const c = contaDeNota(ctx, esc, p.unidade);
+  // a conta de novo: se a emissão foi desligada (ou a unidade saiu do conector) desde o resumo, nada é gravado; o código JÁ foi gasto e a mensagem diz
+  let c: ContaFocus;
+  try {
+    c = contaDeNota(ctx, esc, p.unidade);
+  } catch (e) {
+    throw new ErroDeEntrada(`${e instanceof Error ? e.message : 'a unidade não está disponível'} O código foi gasto: prepare de novo quando a unidade voltar.`);
+  }
   if (c.ambiente !== p.ambiente) {
     throw new ErroDeEntrada(`o ambiente da unidade mudou desde o resumo (era ${rotuloDoAmbiente(p.ambiente)}, agora é ${rotuloDoAmbiente(c.ambiente)}): não fiz nada. Prepare de novo. O código foi gasto.`);
   }
@@ -658,30 +664,37 @@ export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscrit
     // 60 s para trás: o ambiente nacional recusa data de emissão no futuro e o relógio dele pode estar um pouco atrás do nosso
     const emissao = `${new Date(esc.agora() - 60_000 - 3 * 3_600_000).toISOString().slice(0, 19)}-03:00`;
     const corpo = { ...nota.corpo, data_emissao: emissao, serie_dps: serieDps, numero_dps: numeroDps };
-    let aceita: EmissaoAceita | null = null;
     try {
-      aceita = await c.fonte.emitir(referencia, corpo);
+      await c.fonte.emitir(referencia, corpo);
     } catch (e) {
       const status = e instanceof ErroFocus ? e.status : null;
       const msg = e instanceof Error ? e.message : String(e);
       const recusa = status !== null && RECUSA_CERTA.has(status);
       if (recusa) {
-        await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: 'recusada', ultimoEvento: 'recusada_pela_focus', erro: msg.slice(0, 400) }).catch(() => undefined);
-        void esc.alertar(aviso('NOTA RECUSADA PELA FOCUS', c, quem, { valorCentavos: nota.valorCentavos, referencia, detalhe: msg.slice(0, 300) })).catch(() => false);
+        await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: 'recusada', ultimoEvento: 'recusada_pela_focus', erro: mascararErro(msg).slice(0, 400) }).catch(() => undefined);
+        void esc.alertar(aviso('NOTA RECUSADA PELA FOCUS', c, quem, { valorCentavos: nota.valorCentavos, referencia, detalhe: mascararErro(msg).slice(0, 300) })).catch(() => false);
         throw new ErroDeEntrada(`${msg}. Nada foi emitido (o código foi gasto: ajuste o pedido e prepare de novo).`);
       }
       // sem resposta clara (timeout, 5xx, formato): a nota PODE existir. A referência é nossa: a consulta diz.
       const achada = await melhorEsforco(() => c.fonte.consultar(referencia), 8000);
       if (!achada) {
-        await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: 'incerto', ultimoEvento: 'emissao_sem_resposta', erro: msg.slice(0, 400) }).catch(() => undefined);
+        await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: 'incerto', ultimoEvento: 'emissao_sem_resposta', erro: mascararErro(msg).slice(0, 400) }).catch(() => undefined);
         void esc.alertar(aviso('NOTA FISCAL COM RESULTADO INCERTO', c, quem, { valorCentavos: nota.valorCentavos, referencia, detalhe: 'A Focus não confirmou a emissão: a nota PODE ter sido emitida. Conferir no painel da Focus antes de repetir.' })).catch(() => false);
         throw new ErroDeEntrada(`${msg} — a nota PODE ter sido emitida (referência ${referencia}): confira com focus_nota antes de repetir. NÃO emita de novo.`);
       }
-      aceita = { status: achada.status };
+      // a consulta achou a referência: a Focus tem a nota (o status de verdade vem da sincronização logo abaixo)
     }
-    await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: aceita.status === 'autorizado' ? 'autorizado' : 'processando_autorizacao', ultimoEvento: 'emissao_aceita' });
+    // a Focus JÁ tem a nota: daqui para a frente falha de banco nunca pode virar "nada foi emitido" (a pessoa tentaria de novo e emitiria a segunda nota real)
+    let atual: NotaGuardada;
+    try {
+      // sempre `processando_autorizacao`: quem promove a autorizada é a consulta (ela traz o número e os links)
+      await ctx.notas.atualizar(c.slug, c.ambiente, referencia, { status: 'processando_autorizacao', ultimoEvento: 'emissao_aceita' });
+      atual = (await ctx.notas.porReferencia(c.slug, c.ambiente, referencia)) ?? (() => { throw new Error('nota sumiu do livro'); })();
+    } catch {
+      void esc.alertar(aviso('NOTA PEDIDA, GRAVAÇÃO LOCAL FALHOU', c, quem, { valorCentavos: nota.valorCentavos, referencia, detalhe: `A Focus ACEITOU a nota (DPS ${serieDps}/${numeroDps}), mas o banco não registrou o status. Conferir com focus_nota.` })).catch(() => false);
+      throw new ErroDeEntrada(`a nota FOI pedida à Focus (referência ${referencia}), mas não consegui gravar o status no banco: confira com focus_nota. NÃO emita de novo.`);
+    }
     // uma consulta logo depois: a autorização costuma levar segundos e, se já veio, a resposta já traz o número e os links
-    let atual = (await ctx.notas.porReferencia(c.slug, c.ambiente, referencia))!;
     const sync = await melhorEsforco(() => sincronizarNota(ctx, c, atual), 6000);
     if (sync) atual = sync.nota;
     void esc.alertar(aviso(atual.status === 'autorizado' ? 'NOTA FISCAL EMITIDA' : 'NOTA FISCAL: EMISSÃO PEDIDA', c, quem, { valorCentavos: nota.valorCentavos, referencia, detalhe: `DPS ${serieDps}/${numeroDps} · status: ${atual.status}${nota.origem ? ` · origem ${nota.origem}` : ''}` })).catch(() => false);
@@ -719,7 +732,7 @@ async function cancelarNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscritaFocu
       const status = e instanceof ErroFocus ? e.status : null;
       const msg = e instanceof Error ? e.message : String(e);
       if (status !== null && RECUSA_CERTA.has(status)) {
-        void esc.alertar(aviso('CANCELAMENTO RECUSADO PELA FOCUS', c, quem, { valorCentavos: p.valorCentavos, referencia: p.referencia, detalhe: msg.slice(0, 300) })).catch(() => false);
+        void esc.alertar(aviso('CANCELAMENTO RECUSADO PELA FOCUS', c, quem, { valorCentavos: p.valorCentavos, referencia: p.referencia, detalhe: mascararErro(msg).slice(0, 300) })).catch(() => false);
         throw new ErroDeEntrada(`${msg}. Nada foi cancelado (o código foi gasto: prepare de novo se quiser tentar outra vez).`);
       }
       // sem resposta: a consulta diz se o pedido chegou
@@ -736,7 +749,7 @@ async function cancelarNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscritaFocu
       return { unidade: c.slug, ambiente: rotuloDoAmbiente(c.ambiente), cancelada: true as const, nota: mostrarNota((await ctx.notas.porReferencia(c.slug, c.ambiente, p.referencia))!), registro: 'Registrado com quem pediu e quem aprovou o resumo.' };
     }
     // erro_cancelamento: a nota CONTINUA valendo; fica marcada para revisão
-    const motivo = (r.erros ?? []).slice(0, 3).map((x) => [x.codigo, x.mensagem].filter(Boolean).join(' ')).join(' | ').slice(0, 400) || 'sem detalhe';
+    const motivo = mascararErro((r.erros ?? []).slice(0, 3).map((x) => [x.codigo, x.mensagem].filter(Boolean).join(' ')).join(' | ')).slice(0, 400) || 'sem detalhe';
     await ctx.notas.atualizar(c.slug, c.ambiente, p.referencia, { revisao: `cancelamento NEGADO pela Focus/prefeitura: ${motivo}`, ultimoEvento: 'cancelamento_negado', erro: motivo });
     void esc.alertar(aviso('CANCELAMENTO NEGADO', c, quem, { valorCentavos: p.valorCentavos, referencia: p.referencia, detalhe: motivo })).catch(() => false);
     return {

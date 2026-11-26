@@ -56,7 +56,12 @@ export function limparTexto(texto: string, token?: string): string {
     t = t.split(token).join('[token]');
     t = t.split(Buffer.from(`${token}:`).toString('base64')).join('[token]');
   }
-  return t.replace(/Basic\s+[A-Za-z0-9+/=]{12,}/g, 'Basic [token]').replace(/\d{11,14}/g, '[documento]');
+  return t
+    .replace(/Basic\s+[A-Za-z0-9+/=]{12,}/g, 'Basic [token]')
+    // CPF e CNPJ com pontuação (123.456.789-09, 12.345.678/0001-90) e só dígitos, e e-mail: a Focus pode repeti-los numa mensagem de validação
+    .replace(/\d{3}\.\d{3}\.\d{3}-\d{2}|\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2}/g, '[documento]')
+    .replace(/\d{11,14}/g, '[documento]')
+    .replace(/[\w.+-]+@[\w-]+(?:\.[\w-]+)+/g, '[e-mail]');
 }
 
 /** Os 14 dígitos de um CNPJ válido de FORMATO (sem o cálculo dos dígitos: quem confere é a Focus); ou null. */
@@ -149,6 +154,8 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<Unidade>, e: NodeJS.
   }
   // o resto é resolvido pelo MESMO caminho do token e só vale para quem tem token
   const descartar = new Set<string>();
+  // duas variáveis do mesmo tipo para a MESMA unidade (ex. ..._ACAILANDIA e ..._DOUTOR_HERNIA_ACAILANDIA): a segunda não vence em silêncio
+  const jaAplicadas = new Set<string>();
   for (const [prefixo, aplicar] of [
     [P.ambiente, (c: ContaFocusConfig, v: string, variavel: string) => {
       if (v === 'homologacao' || v === 'producao') c.ambiente = v;
@@ -188,6 +195,14 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<Unidade>, e: NodeJS.
         ignoradas.push({ variavel, motivo: `a unidade ${u.slug} não tem token (FOCUS_NFE_TOKEN_…) ligado` });
         continue;
       }
+      const chave = `${prefixo}${conta.slug}`;
+      if (jaAplicadas.has(chave)) {
+        ignoradas.push({ variavel, motivo: `a unidade ${conta.slug} já tem esta configuração (outra variável): ${prefixo === P.ambiente ? 'por segurança a conta ficou de fora' : 'ignorada'}` });
+        // dois ambientes para a mesma unidade é o conflito perigoso (homologação x produção): a conta sai
+        if (prefixo === P.ambiente) descartar.add(conta.slug);
+        continue;
+      }
+      jaAplicadas.add(chave);
       aplicar(conta, valor, variavel);
     }
   }

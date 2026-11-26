@@ -16,6 +16,7 @@ import {
   type Ambiente, type CadastroPublico, type CancelamentoFocus, type ContaFocusConfig, type EmissaoAceita, type EmpresaFocus, type GatilhoFocus, type NotaFocus, type OpcoesDeChamada,
 } from '../lib/integracoes/focus-nfe.js';
 import { arredondar, diaLocal, dinheiro, positivo, FUSO_PADRAO } from './asaas-limites.js';
+import { mascararErro } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import { perfilDaUnidade, type PerfilFiscal } from './focus-nfe-perfis.js';
 import { acharSlug } from './unidades.js';
@@ -264,23 +265,26 @@ const dataIso = (s: string | undefined): Date | null => {
 /** A mensagem de erro da autorização (sem token nem documento: o cliente da Focus já limpa), curta para caber no livro. */
 export function resumoDosErros(n: NotaFocus): string | null {
   const e = n.erros?.slice(0, 3).map((x) => [x.codigo, x.mensagem, x.correcao ? `correção: ${x.correcao}` : ''].filter(Boolean).join(' ')).join(' | ');
-  return e ? e.slice(0, 500) : null;
+  return e ? mascararErro(e).slice(0, 500) : null;
 }
 
 /** O patch que a resposta da Focus faz no livro, ou null se ela não muda nada (a Focus é a verdade; o corpo do webhook nunca). */
 export function patchDaConsulta(atual: NotaGuardada, n: NotaFocus | null, agora: number): PatchDaNota | null {
   if (!n) {
     // A Focus não conhece a referência. Logo depois de um POST sem resposta isso ainda pode ser fila: só 30 minutos depois vale como "nunca chegou".
-    if ((atual.status === 'incerto' || atual.status === 'intencao') && agora - Date.parse(atual.criadoEm) > 30 * 60_000) {
-      return { status: 'recusada', ultimoEvento: 'sincronizado:nao_encontrada', erro: 'a Focus não conhece esta referência 30 minutos depois do pedido: a emissão nunca chegou a ela' };
+    // NUNCA vira `recusada` sozinha: a nota continua travando a nota repetida (emitir duas vezes é pior que pedir uma conferência). A marca de revisão avisa; quem confere no painel decide.
+    if ((atual.status === 'incerto' || atual.status === 'intencao') && agora - Date.parse(atual.criadoEm) > 30 * 60_000 && atual.ultimoEvento !== 'sincronizado:nao_encontrada') {
+      return { ultimoEvento: 'sincronizado:nao_encontrada', revisao: 'a Focus não conhece esta referência 30 minutos depois do pedido: provavelmente a emissão nunca chegou a ela. Confira no painel da Focus; se de fato não existe, emita de novo com outra "origem" (esta nota segue travando a repetida até lá)' };
     }
     return null;
   }
   const aberta = STATUS_ABERTOS.includes(atual.status);
   const novo = n.status;
-  // do aberto vai para qualquer lugar; do autorizado só para cancelado; o resto não volta atrás
-  if (!aberta && !(atual.status === 'autorizado' && novo === 'cancelado')) return null;
+  // do aberto vai para qualquer lugar; do autorizado só para cancelado (ou completa o que faltou: número e links); o resto não volta atrás
+  const completa = atual.status === 'autorizado' && novo === 'autorizado' && (!atual.numeroNfse || !atual.urlDanfse);
+  if (!aberta && !completa && !(atual.status === 'autorizado' && novo === 'cancelado')) return null;
   if (novo === atual.status && novo !== 'autorizado') return null;
+  if (novo === 'autorizado' && atual.status === 'autorizado' && !completa) return null;
   if (!STATUS_DA_NOTA.includes(novo as never)) return { ultimoEvento: `sincronizado:status_desconhecido`, erro: `a Focus devolveu um status que o conector não conhece (${novo.slice(0, 40)})` };
   return {
     status: novo,

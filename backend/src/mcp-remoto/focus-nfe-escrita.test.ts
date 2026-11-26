@@ -346,6 +346,36 @@ test('sem resposta mas a Focus JÁ tem a nota (a consulta por referência acha):
   assert.ok(!m.avisos.some((x) => /INCERTO/.test(x)));
 });
 
+test('a Focus ACEITOU e o banco falhou ao anotar: a mensagem diz que a nota FOI pedida (nunca "nada foi emitido") e o João é avisado', async () => {
+  const m = montar();
+  const prep = await prepararNota(m.ctx, m.esc, QUEM, pedido());
+  const atualizar = m.armazem.atualizar.bind(m.armazem);
+  let n = 0;
+  m.armazem.atualizar = async (...a) => {
+    if (++n === 1) throw new Error('banco caiu');
+    return atualizar(...a);
+  };
+  await assert.rejects(() => confirmarNota(m.ctx, m.esc, QUEM, { confirmacao: prep.confirmacao }), (e: unknown) => /FOI pedida.*NÃO emita de novo/.test((e as Error).message) && !/Nada foi emitido/.test((e as Error).message));
+  assert.equal(m.focus.emitidas.length, 1);
+  assert.match(m.avisos.at(-1)!, /GRAVAÇÃO LOCAL FALHOU/);
+});
+
+test('a Focus recusa com CPF formatado e e-mail na mensagem: nem o livro nem o aviso ao João os guardam', async () => {
+  const m = montar();
+  m.focus.falhas.emitir = new ErroFocus('a Focus NFe recusou o pedido: CPF 529.982.247-25 de maria@exemplo.com inválido', 422, 'erro_validacao');
+  await assert.rejects(() => prepararEConfirmar(m), /Nada foi emitido/);
+  const tudo = JSON.stringify([m.armazem.linhas, m.avisos]);
+  assert.ok(!/529\.982|52998224725|maria@/.test(tudo), tudo);
+});
+
+test('confirmar com a unidade fora do ar já gasta o código e a mensagem diz isso', async () => {
+  const m = montar();
+  const prep = await prepararNota(m.ctx, m.esc, QUEM, pedido());
+  m.ctx.contas.clear();
+  await assert.rejects(() => confirmarNota(m.ctx, m.esc, QUEM, { confirmacao: prep.confirmacao }), /O código foi gasto: prepare de novo/);
+  assert.equal(m.focus.emitidas.length, 0);
+});
+
 test('o banco fora do ar: nada é emitido (teto que não lê o banco não é teto)', async () => {
   const m = montar();
   const prep = await prepararNota(m.ctx, m.esc, QUEM, pedido());
