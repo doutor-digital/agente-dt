@@ -935,6 +935,8 @@ test('paciente já CONFIRMADO: o worker manda a véspera sem a pergunta (data, e
   assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. Passando para lembrar: a sua consulta é amanhã\.\nData e horário: 17\/11 às 14:30\nEndereço: /);
   assert.doesNotMatch(c.mensagens[0]!.texto, /\?/);
   assert.deepEqual(arm.disparos.map((d) => `${d.regra}|${d.modo}`), ['consulta-vespera|ligado']);
+});
+
 test('dois horários no dia: a mensagem cita os dois e o worker dá o lembrete do 2º como feito (modo «coberto»); se o envio é recusado, desfaz os dois registros', async () => {
   const sessao = { categoria_consulta: 'Sessão', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '09:00', outros_horarios_do_dia: '14:30' };
   const quando = new Date('2026-11-17T12:05:00Z'); // 24 h antes das 09:00 de 18/11 em Belém
