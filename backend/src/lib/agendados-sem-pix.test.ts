@@ -34,6 +34,18 @@ test('pagou: nome (primeiro + último) igual + valor da unidade + data; o Pix de
   assert.equal(b!.resultado, 'pagou', 'Pix de 5 dias antes do agendamento ainda é dele');
 });
 
+test('marcação CONFIRMADA (data de marcação desconhecida): o Pix vale desde 30 dias antes da consulta, não desde ontem; marcação AGENDADA de hoje não enxerga Pix de semanas atrás', () => {
+  const confirmada = ag('Maria Silva', { agendadoEm: null, dia: '2026-12-05' });
+  assert.equal(conf([confirmada], [px('p1', 'MARIA SILVA', 250, { dia: '2026-11-10' })])[0]!.resultado, 'pagou');
+  const agendada = ag('Maria Silva', { agendadoEm: '2026-11-25' });
+  assert.equal(conf([agendada], [px('p1', 'MARIA SILVA', 250, { dia: '2026-11-10' })])[0]!.motivo, 'data');
+});
+
+test('o mesmo paciente com DUAS marcações e um só Pix é UMA pessoa: pagou (não «Pix compartilhado»); homônimos de nome do meio diferente seguem ambíguos', () => {
+  const r = conf([ag('Maria Santos Silva'), ag('Maria Santos Silva', { hora: '10:00', dia: '2026-11-28' })], [px('p1', 'MARIA SILVA', 250)]);
+  assert.deepEqual(r.map((v) => v.resultado), ['pagou', 'pagou']);
+});
+
 test('pagou: CPF igual vale mesmo com o nome diferente (quando a fonte do paciente tem CPF); valor abaixo do sinal não vale', () => {
   const [pagou, pouco] = conf(
     [ag('Maria Silva', { cpf: '11122233344' }), ag('Ana Costa', { cpf: '55566677788' })],
@@ -134,9 +146,20 @@ test('texto: corta em 15 por bloco e diz quantos faltam', () => {
   assert.ok(t.length < 1500, 'cabe nos 1500 caracteres que a Evolution aceita');
 });
 
+test('texto: NUNCA passa do orçamento (a Evolution corta em 1500 sem avisar): lista grande encolhe e diz quantos faltam, e o rodapé fica', () => {
+  const outroNome = Array.from({ length: 20 }, (_, i) => ag(`Paciente${String.fromCharCode(97 + i)} Teste`, { hora: `${String(8 + (i % 9)).padStart(2, '0')}:00` }));
+  const comMotivo = conf(outroNome, [px('p1', 'ROBERTO PARENTE ALVES', 250)]); // 20 «a conferir», todas com o motivo comprido
+  const semPix = conf(outroNome.slice(0, 12), []); // 12 «não achei»
+  const juntos: Veredito[] = [...semPix, ...comMotivo.slice(0, 15).map((v, i) => ({ ...v, agendado: { ...v.agendado, nome: `Conferir${String.fromCharCode(97 + i)} Teste` } }))];
+  const t = textoDaLista(juntos, { bancoAte: '26/11 11:59' })!;
+  assert.ok(t.length <= 1400, `tem ${t.length} caracteres`);
+  assert.match(t, /… e mais \d+/);
+  assert.match(t, /Pix feito depois dessa hora ainda não aparece aqui\.$/, 'o rodapé não é cortado');
+});
+
 // ------------------------------------------------------------------------------------------------------------ o ciclo (seco, ligado, destino, banco)
 
-const unidade = (o: Partial<UnidadeDaLista> = {}): UnidadeDaLista => ({ id: 'u1', slug: 'doutor-hernia-teste', fuso: 'America/Sao_Paulo', hoje: HOJE, minutoDoDia: 12 * 60 + 20, diaDeTrabalho: true, valores: VALORES, ...o });
+const unidade = (o: Partial<UnidadeDaLista> = {}): UnidadeDaLista => ({ id: 'u1', slug: 'doutor-hernia-teste', fuso: 'America/Sao_Paulo', hoje: HOJE, minutoDoDia: 12 * 60 + 20, diaDeTrabalho: true, agendadosDesde: '2026-11-25', valores: VALORES, ...o });
 const bancoOk = (pix: PixRecebido[] = []): LeituraDoBanco => ({ pix, lidoAte: '26/11 11:59', confiavel: true });
 
 function harness(o: { agendados?: Agendado[] | null; conhecidos?: Array<string | null>; banco?: LeituraDoBanco | null; destino?: string | null; evolution?: boolean; envio?: 'ok' | 'recusado' | 'incerto'; marcas?: Map<string, string>; reivindicar?: 'novo' | 'repetido' | 'erro' } = {}) {
@@ -247,6 +270,18 @@ test('banco que não atualizou hoje: espera sem ler o extrato e sem marcar; depo
   assert.match(t, /A conferir/);
   assert.match(t, /o banco ainda não atualizou hoje/);
   assert.equal(t.includes('Não achei Pix'), false, 'com banco velho nada vira «não achei»');
+});
+
+test('a marca «pendente» (a Evolution recusou antes) se FECHA quando, na volta seguinte, não há mais o que avisar; marca «enviando» sem desfecho não repete e avisa no log', async () => {
+  const id = `${ID_DA_AUTOMACAO}:doutor-hernia-teste:${HOJE}:ligado`;
+  const h = harness({ banco: bancoOk([px('p1', 'MARIA SILVA', 250)]), marcas: new Map([[id, 'pendente']]) });
+  assert.equal(await cicloDaUnidade(unidade(), 'ligado', h.deps, 12 * 60 + 15), 'tudo_pago');
+  assert.deepEqual(h.chamadas.concluidos, ['enviado']);
+  assert.equal(h.marcas.get(id), 'enviado');
+  const preso = harness({ marcas: new Map([[id, 'enviando']]) });
+  assert.equal(await cicloDaUnidade(unidade(), 'ligado', preso.deps, 12 * 60 + 15), 'repetido');
+  assert.equal(preso.chamadas.enviados.length, 0);
+  assert.match(preso.chamadas.avisos[0]!, /«enviando» sem desfecho/);
 });
 
 test('falhas: agenda ou banco que não leu → não manda, não marca; a Evolution recusou → marca «pendente» e a volta seguinte tenta de novo; sem resposta → «incerto» e nunca repete', async () => {

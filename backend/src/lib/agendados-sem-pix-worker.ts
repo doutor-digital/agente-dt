@@ -9,14 +9,13 @@ import type { Prisma } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { enviarPelaEvolutionComResultado } from './alerta-whatsapp.js';
-import { dataLocalISO, ehFeriadoNacionalAgora } from './feriados.js';
+import { dataLocalISO, ehFeriadoNacional, ehFeriadoNacionalAgora } from './feriados.js';
 import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { destinoDoAvisoClinica } from './aviso-clinica-agendamento.js';
 import { unidadeSemAntecipado } from '../agent/pagamento-da-unidade.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas } from './integracoes/pluggy.js';
 import { entradasDoBanco, semAcento, valoresDaUnidade } from './pix-casamento.js';
 import {
-  AGENDADOS_DESDE_DIAS,
   ID_DA_AUTOMACAO,
   cicloDaUnidade,
   estadoDaLista,
@@ -130,7 +129,7 @@ const agendaGuardada = new Map<string, { ate: number; v: { agendados: Agendado[]
 /** A agenda lida para saber quem são os pacientes conhecidos: de três semanas atrás a 45 dias à frente (cabe numa busca só, o limite da franquia é 100 dias). */
 const CONHECIDOS_DESDE_DIAS = 21;
 
-/** Avaliação ou consulta (a que se paga antes) de hoje em diante, ainda AGENDADA ou CONFIRMADA, marcada desde ontem. Sessão, retorno e reavaliação não entram. */
+/** Avaliação ou consulta (a que se paga antes) de hoje em diante, ainda AGENDADA ou CONFIRMADA, mexida desde o dia útil anterior. Sessão, retorno e reavaliação não entram. */
 export async function agendadosRecentes(unit: UnidadeDoBanco, u: UnidadeDaLista, agora: number): Promise<{ agendados: Agendado[]; conhecidos: Array<string | null> } | null> {
   const chave = `${u.slug}:${u.hoje}`;
   const g = agendaGuardada.get(chave);
@@ -139,7 +138,7 @@ export async function agendadosRecentes(unit: UnidadeDoBanco, u: UnidadeDaLista,
   if (!r.ok || !r.data) return null;
   // lista incompleta (teto de páginas): melhor não afirmar nada do que afirmar «não achei» sobre metade da agenda
   if (r.data.truncada) return null;
-  const desde = somarDias(u.hoje, -AGENDADOS_DESDE_DIAS);
+  const desde = u.agendadosDesde;
   const conhecidos = r.data.schedules.filter((s) => s.idStatus !== SPINE_STATUS.DESMARCADO).map((s) => s.clientName);
   const agendados = r.data.schedules
     .filter((s) => s.idStatus === SPINE_STATUS.AGENDADO || s.idStatus === SPINE_STATUS.CONFIRMADO)
@@ -148,15 +147,16 @@ export async function agendadosRecentes(unit: UnidadeDoBanco, u: UnidadeDaLista,
       return c.startsWith('avaliacao') || c === 'consulta';
     })
     .filter((s) => s.dayLocal && s.timeLocal && s.dayLocal >= u.hoje)
-    .map((s): Agendado => ({
-      nome: s.clientName,
-      dia: s.dayLocal!,
-      hora: s.timeLocal!,
-      agendadoEm: s.modifiedUtc ? instanteNoFuso(new Date(s.modifiedUtc), u.fuso).slice(0, 10) : null,
-    }))
-    // sem data de marcação não dá para saber se é de ontem: fica de fora (a lista é de quem marcou agora, não de toda a agenda)
-    .filter((a) => a.agendadoEm !== null && a.agendadoEm >= desde);
+    .flatMap((s): Array<Agendado & { alteradoEm: string }> => {
+      if (!s.modifiedUtc) return []; // sem data nenhuma não dá para saber se é recente: fica de fora (a lista é de quem foi marcado agora, não de toda a agenda)
+      const alteradoEm = instanteNoFuso(new Date(s.modifiedUtc), u.fuso).slice(0, 10);
+      // a última alteração é a data da MARCAÇÃO só enquanto o registro está AGENDADO; em CONFIRMADO ela é a da confirmação (a régua e a recepção mexem no registro): a data da marcação é desconhecida
+      return [{ nome: s.clientName, dia: s.dayLocal!, hora: s.timeLocal!, agendadoEm: s.idStatus === SPINE_STATUS.AGENDADO ? alteradoEm : null, alteradoEm }];
+    })
+    .filter((a) => a.alteradoEm >= desde)
+    .map(({ alteradoEm: _alteradoEm, ...a }): Agendado => a);
   const v = { agendados, conhecidos };
+  for (const k of agendaGuardada.keys()) if (!k.endsWith(`:${u.hoje}`)) agendaGuardada.delete(k);
   agendaGuardada.set(chave, { ate: agora + AGENDA_GUARDADA_MS, v });
   return v;
 }
@@ -182,6 +182,15 @@ export async function lerBancoDaUnidade(ctx: ContextoPluggy, u: UnidadeDaLista, 
 // ----------------------------------------------------------------------------------------------------------------- a volta
 
 let rodando = false;
+
+/** O dia útil anterior da unidade (dia da agenda e não feriado nacional); sem nenhum nos últimos 14 dias, ontem. */
+export function diaUtilAnterior(hoje: string, diasDaAgenda: ReadonlyArray<number>): string {
+  for (let n = 1; n <= 14; n++) {
+    const d = somarDias(hoje, -n);
+    if (diasDaAgenda.includes(new Date(`${d}T00:00:00Z`).getUTCDay()) && !ehFeriadoNacional(d)) return d;
+  }
+  return somarDias(hoje, -1);
+}
 
 /** Uma volta sobre as unidades com banco. Nunca lança. */
 export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: number = Date.now()): Promise<void> {
@@ -216,6 +225,7 @@ export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: numb
           hoje,
           minutoDoDia: p.hora * 60 + p.min,
           diaDeTrabalho: diaDaAgenda && !ehFeriadoNacionalAgora(agora, fuso),
+          agendadosDesde: diaUtilAnterior(hoje, unit.spineAgendaDays),
           valores: valoresDaUnidade({ slug: unit.slug, sinalPixCentavos: unit.sinalPixCentavos, textoDeProdutos: unit.sourceProdutos, env: env.AGENDADOS_SEM_PIX_VALORES }),
         };
         const deps: DepsDoCiclo = {

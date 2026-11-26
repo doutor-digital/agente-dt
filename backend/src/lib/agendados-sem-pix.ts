@@ -25,7 +25,7 @@ import type { Estado } from './automacoes-estado.js';
 import { estadoDaAutomacao } from './automacoes-estado.js';
 import { diaDaSemana } from './feriados.js';
 import { logger } from './logger.js';
-import { type PixRecebido, chaveDoNome, nivelPixPessoa } from './pix-casamento.js';
+import { type PixRecebido, chaveDoNome, nivelPixPessoa, tokensDoNome } from './pix-casamento.js';
 import { primeiroNome } from './aviso-clinica-agendamento.js';
 
 export const ID_DA_AUTOMACAO = 'agendados-sem-pix';
@@ -34,10 +34,16 @@ export const estadoDaLista = (slug: string, raw: string | undefined = process.en
 
 /** Pix até tantos dias ANTES do agendamento ainda conta para ele (o paciente paga assim que recebe a chave, e a recepção marca depois). */
 export const PIX_ANTES_DO_AGENDAMENTO_DIAS = 7;
-/** Quem foi marcado desde ontem (00:00 da unidade) entra. */
-export const AGENDADOS_DESDE_DIAS = 1;
+/**
+ * Quando a data em que o paciente foi MARCADO não é conhecida (marcação CONFIRMADA: a última alteração é a confirmação, não a marcação), o Pix vale desde tantos dias antes da consulta.
+ */
+export const PIX_ANTES_DA_CONSULTA_DIAS = 30;
 
 const somarDias = (dia: string, n: number): string => new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+
+/** Primeiro dia de Pix que vale para este agendado. */
+export const pixDesde = (a: Pick<Agendado, 'dia' | 'agendadoEm'>): string =>
+  a.agendadoEm ? somarDias(a.agendadoEm, -PIX_ANTES_DO_AGENDAMENTO_DIAS) : somarDias(a.dia, -PIX_ANTES_DA_CONSULTA_DIAS);
 
 // ----------------------------------------------------------------------------------------------------------------- decisão (pura)
 
@@ -47,7 +53,10 @@ export interface Agendado {
   dia: string;
   /** HH:mm */
   hora: string;
-  /** dia em que foi marcado (a franquia não dá a data de criação: é a última alteração de quem ainda está AGENDADO), AAAA-MM-DD; null = não sei */
+  /**
+   * Dia em que foi marcado, AAAA-MM-DD (a franquia não dá a data de criação: é a última alteração de quem ainda está AGENDADO); null = não sei (marcação CONFIRMADA: a última
+   * alteração é a confirmação). Sem ela, o Pix vale desde 30 dias antes da consulta e a leitura do banco sobe junto.
+   */
   agendadoEm: string | null;
   /** CPF do paciente (11 dígitos) quando a fonte tem; a franquia não tem */
   cpf?: string | null;
@@ -89,11 +98,12 @@ function nivelDoPar(a: Agendado, p: PixRecebido): Nivel {
 export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: ReadonlyArray<PixRecebido>, o: OpcoesDaConferencia): Veredito[] {
   const menor = o.valores[0] ?? Number.POSITIVE_INFINITY;
   const naoEmpresa = pix.filter((p) => !p.empresa);
-  const dataOk = (a: Agendado, p: PixRecebido) => p.dia >= somarDias(a.agendadoEm ?? a.dia, -PIX_ANTES_DO_AGENDAMENTO_DIAS) && p.dia <= o.hoje;
+  const dataOk = (a: Agendado, p: PixRecebido) => p.dia >= pixDesde(a) && p.dia <= o.hoje;
   const valorOk = (p: PixRecebido) => o.valores.includes(p.centavos);
 
-  // quem casa forte com cada Pix (para achar o Pix que serve a mais de um agendado)
-  const forteDe = new Map<string, number[]>();
+  // quem casa forte com cada Pix (para achar o Pix que serve a mais de UMA PESSOA: duas marcações do mesmo paciente não contam como duas pessoas)
+  const pessoaDe = (a: Agendado): string => a.cpf ?? tokensDoNome(a.nome).join(' ');
+  const forteDe = new Map<string, Set<string>>();
   const fortes = agendados.map((a) => {
     const ids: string[] = [];
     if (!a.cpf && !chaveDoNome(a.nome)) return ids;
@@ -104,14 +114,14 @@ export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: Reado
     }
     return ids;
   });
-  fortes.forEach((ids, i) => ids.forEach((id) => forteDe.set(id, [...(forteDe.get(id) ?? []), i])));
+  fortes.forEach((ids, i) => ids.forEach((id) => forteDe.set(id, (forteDe.get(id) ?? new Set<string>()).add(pessoaDe(agendados[i]!)))));
   const reivindicados = new Set(forteDe.keys());
 
   return agendados.map((a, i): Veredito => {
     if (!a.cpf && !chaveDoNome(a.nome)) return { agendado: a, resultado: 'conferir', motivo: 'nome-incompleto' };
     const meus = fortes[i]!;
     if (meus.length) {
-      if (meus.some((id) => (forteDe.get(id)?.length ?? 0) === 1)) return { agendado: a, resultado: 'pagou' };
+      if (meus.some((id) => (forteDe.get(id)?.size ?? 0) === 1)) return { agendado: a, resultado: 'pagou' };
       return { agendado: a, resultado: 'conferir', motivo: 'pix-compartilhado' };
     }
     // sem casamento forte: o melhor indício fraco
@@ -127,7 +137,7 @@ export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: Reado
     if (!o.bancoConfiavel) return { agendado: a, resultado: 'conferir', motivo: 'banco-desatualizado' };
     if (!o.valores.length) return { agendado: a, resultado: 'conferir', motivo: 'sem-valores' };
     // Pix de valor de consulta, no período, que não é de NINGUÉM desta lista: pode ser parente pagando. Não dá para dizer «não achei».
-    const desde = somarDias(a.agendadoEm ?? a.dia, -1);
+    const desde = a.agendadoEm ? somarDias(a.agendadoEm, -1) : pixDesde(a);
     const deOutroConhecido = (p: PixRecebido) => agendados.some((b) => ['cpf', 'igual'].includes(nivelDoPar(b, p))) || (o.conhecidos ?? []).some((n) => nivelPixPessoa(p, n) === 'igual');
     const solto = naoEmpresa.some((p) => !reivindicados.has(p.id) && valorOk(p) && p.dia >= desde && p.dia <= o.hoje && !deOutroConhecido(p));
     return solto ? { agendado: a, resultado: 'conferir', motivo: 'pix-de-outro-nome' } : { agendado: a, resultado: 'sem_pix' };
@@ -148,6 +158,8 @@ const TEXTO_DO_MOTIVO: Record<Motivo, string> = {
 };
 
 const MAX_LINHAS = 15;
+/** A Evolution corta em 1500 caracteres: o texto é montado para caber, com margem, e diz quantos ficaram de fora (o corte seco comeria o fim da lista e o rodapé). */
+export const ORCAMENTO_DO_TEXTO = 1400;
 const SEM_NOME = 'paciente (sem nome)';
 
 function linha(v: Veredito, comMotivo: boolean): string {
@@ -158,10 +170,10 @@ function linha(v: Veredito, comMotivo: boolean): string {
   return `• *${quem}* — ${quando}${comMotivo && v.motivo ? ` (${TEXTO_DO_MOTIVO[v.motivo]})` : ''}`;
 }
 
-function bloco(titulo: string, vs: Veredito[], comMotivo: boolean): string[] {
+function bloco(titulo: string, vs: Veredito[], comMotivo: boolean, max: number): string[] {
   if (!vs.length) return [];
-  const mostrar = vs.slice(0, MAX_LINHAS).map((v) => linha(v, comMotivo));
-  if (vs.length > MAX_LINHAS) mostrar.push(`… e mais ${vs.length - MAX_LINHAS}`);
+  const mostrar = vs.slice(0, max).map((v) => linha(v, comMotivo));
+  if (vs.length > max) mostrar.push(`… e mais ${vs.length - max}`);
   return [titulo, ...mostrar, ''];
 }
 
@@ -170,19 +182,22 @@ export interface DadosDoTexto {
   bancoAte: string | null;
 }
 
-/** null = nada a avisar (todo mundo pagou). Sem CPF, sem sobrenome, sem valor, sem saldo. */
+/** null = nada a avisar (todo mundo pagou). Sem CPF, sem sobrenome, sem valor, sem saldo. Cabe em ORCAMENTO_DO_TEXTO caracteres. */
 export function textoDaLista(vs: ReadonlyArray<Veredito>, d: DadosDoTexto): string | null {
   const semPix = vs.filter((v) => v.resultado === 'sem_pix').sort(porHorario);
   const conferir = vs.filter((v) => v.resultado === 'conferir').sort(porHorario);
   if (!semPix.length && !conferir.length) return null;
-  const linhas = [
-    `🔎 *Agendados sem Pix*${d.bancoAte ? ` — banco lido até ${d.bancoAte}` : ''}`,
-    '',
-    ...bloco('*Não achei Pix:*', semPix, false),
-    ...bloco('*A conferir* (pode ter pago; não tenho certeza):', conferir, true),
-    'Pix feito depois dessa hora ainda não aparece aqui.',
-  ];
-  return linhas.join('\n');
+  const montar = (max: number) =>
+    [
+      `🔎 *Agendados sem Pix*${d.bancoAte ? ` — banco lido até ${d.bancoAte}` : ''}`,
+      '',
+      ...bloco('*Não achei Pix:*', semPix, false, max),
+      ...bloco('*A conferir* (pode ter pago; não tenho certeza):', conferir, true, max),
+      'Pix feito depois dessa hora ainda não aparece aqui.',
+    ].join('\n');
+  let texto = montar(MAX_LINHAS);
+  for (let max = MAX_LINHAS - 1; texto.length > ORCAMENTO_DO_TEXTO && max >= 1; max--) texto = montar(max);
+  return texto;
 }
 
 const porHorario = (a: Veredito, b: Veredito): number => `${a.agendado.dia} ${a.agendado.hora}`.localeCompare(`${b.agendado.dia} ${b.agendado.hora}`);
@@ -225,6 +240,8 @@ export interface UnidadeDaLista {
   minutoDoDia: number;
   /** dia de agenda da unidade e não é feriado nacional */
   diaDeTrabalho: boolean;
+  /** o dia útil anterior da unidade (AAAA-MM-DD): quem foi marcado desde então entra na lista de hoje (na segunda, vem desde a sexta, não só desde o domingo) */
+  agendadosDesde: string;
   valores: number[];
 }
 
@@ -279,6 +296,11 @@ export async function cicloDaUnidade(u: UnidadeDaLista, modo: Estado, deps: Deps
 
   const id = `${ID_DA_AUTOMACAO}:${u.slug}:${u.hoje}:${modo === 'seco' ? 'seco' : 'ligado'}`;
   const jaTem = await deps.marca.estado(id);
+  if (jaTem === 'enviando') {
+    // alguém ganhou o direito de mandar e não anotou o desfecho (o processo caiu no meio?): pode ter saído, então NUNCA repete; mas o dia não pode ficar calado sem ninguém saber
+    deps.avisarUmaVez(`${u.slug}:${u.hoje}:preso`, `${ID_DA_AUTOMACAO}: ${u.slug} tem a lista do dia marcada como «enviando» sem desfecho — não repito (pode ter saído); confira o grupo e o rastro do dia`);
+    return 'repetido';
+  }
   if (jaTem !== null && jaTem !== 'pendente') return 'repetido';
 
   // ligado sem destino ou sem Evolution: não manda e não gasta agenda nem banco (volta na próxima varredura, quando o João configurar)
@@ -296,13 +318,17 @@ export async function cicloDaUnidade(u: UnidadeDaLista, modo: Estado, deps: Deps
   const agenda = await deps.agendados(u);
   if (!agenda) return 'agenda_falhou';
   const { agendados, conhecidos } = agenda;
-  const marcar = (estado: 'enviado' | 'simulado', payload: Record<string, unknown>) => deps.marca.reivindicar(id, { unitId: u.id, titulo: 'Agendados sem Pix (lista da manhã)', payload, estado });
+  // fecha o dia SEM mandar nada; se uma tentativa anterior ficou `pendente` (a Evolution recusou) e agora não há o que avisar, a marca também fecha
+  const marcar = async (estado: 'enviado' | 'simulado', payload: Record<string, unknown>) => {
+    if (jaTem === 'pendente') await deps.marca.concluir(id, 'enviado');
+    else await deps.marca.reivindicar(id, { unitId: u.id, titulo: 'Agendados sem Pix (lista da manhã)', payload, estado });
+  };
   if (!agendados.length) {
     await marcar(modo === 'seco' ? 'simulado' : 'enviado', { modo, agendados: 0, nada: true });
     return 'sem_agendados';
   }
 
-  const desde = agendados.reduce((m, a) => (somarDias(a.agendadoEm ?? a.dia, -PIX_ANTES_DO_AGENDAMENTO_DIAS) < m ? somarDias(a.agendadoEm ?? a.dia, -PIX_ANTES_DO_AGENDAMENTO_DIAS) : m), u.hoje);
+  const desde = agendados.reduce((m, a) => (pixDesde(a) < m ? pixDesde(a) : m), u.hoje);
   const ultimaChance = desdeInicio >= ESPERA_DO_BANCO_HORAS * 60;
   const banco = await deps.banco(u, desde, ultimaChance);
   if (!banco) return 'banco_falhou';

@@ -99,6 +99,7 @@ test('quanto a Sofia rendeu: cada Pix vai para Sofia, equipe ou «não atribuíd
   assert.deepEqual(r.naoAtribuido.outrasEntradas, { lancamentos: 1, valor: 700 });
   assert.equal(r.entrouNaConta.total, 4580.9);
   assert.equal(r.conferencia.igualAoQueEntrou, true);
+  assert.equal(r.conferencia.somaDoExtrato, 4580.9, 'a soma do extrato é feita à parte, sem passar pela separação em Pix/maquininha/outras');
   assert.deepEqual(r.pacientesNaAgenda, { total: 7, sofia: 2, equipe: 4, origemIncerta: 1 });
   assert.match(r.nota, /só por nome|casamento é só por nome/);
   assert.match(r.nota, /Limites/);

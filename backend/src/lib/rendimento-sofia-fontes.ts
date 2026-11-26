@@ -9,7 +9,8 @@
 import { prisma } from './prisma.js';
 import { nomeDeGente } from './aviso-clinica-agendamento.js';
 import { chaveDoNome } from './pix-casamento.js';
-import { SPINE_STATUS, searchSchedules, somarDias, type SpineSchedule, type SpineUnit } from '../services/spine.service.js';
+import { SPINE_STATUS, localParaUtcIso, searchSchedules, somarDias, type SpineSchedule, type SpineUnit } from '../services/spine.service.js';
+import { fusoDaUnidade } from './fuso.js';
 import type { ConversaDaSofia, FontesDoRendimento, PacienteDaAgenda } from '../mcp-remoto/pluggy-rendimento.js';
 
 interface LinhaDeConversa {
@@ -47,10 +48,15 @@ export function fontesDoRendimentoReais(): FontesDoRendimento {
       return { pacientes, completa: r.completa };
     },
     async conversasDaSofia(empresa, de, ate) {
-      const unit = await prisma.unit.findUnique({ where: { slug: empresa }, select: { id: true } });
+      const unit = await prisma.unit.findUnique({ where: { slug: empresa }, select: { id: true, businessHoursTimezone: true, spineTimezone: true } });
       if (!unit) return null;
-      const desde = new Date(`${de}T00:00:00Z`);
-      const ateExclusivo = new Date(Date.parse(`${ate}T00:00:00Z`) + 86_400_000);
+      // o período é de DIAS DA UNIDADE (como a agenda e o banco): meia-noite no fuso dela, não em UTC
+      const fuso = fusoDaUnidade(unit);
+      const desdeIso = localParaUtcIso(`${de}T00:00:00`, fuso);
+      const ateIso = localParaUtcIso(`${somarDias(ate, 1)}T00:00:00`, fuso);
+      if (!desdeIso || !ateIso) return null;
+      const desde = new Date(desdeIso);
+      const ateExclusivo = new Date(ateIso);
       const linhas = await prisma.$queryRaw<LinhaDeConversa[]>`
         SELECT (SELECT f.valor FROM lead_fact_events f
                  WHERE f.unit_id = o.unit_id AND f.lead_id = o.kommo_lead_id::text AND f.chave = 'nome'

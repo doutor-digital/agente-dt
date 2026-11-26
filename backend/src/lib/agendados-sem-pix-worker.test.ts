@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import { logger } from './logger.js';
 import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import { ID_DA_AUTOMACAO, type UnidadeDaLista } from './agendados-sem-pix.js';
-import { agendadosRecentes, contextoPluggyDoAmbiente, evolutionDaLista, lerBancoDaUnidade, varrer } from './agendados-sem-pix-worker.js';
+import { agendadosRecentes, contextoPluggyDoAmbiente, diaUtilAnterior, evolutionDaLista, lerBancoDaUnidade, varrer } from './agendados-sem-pix-worker.js';
 import { agendaEmFatias } from './rendimento-sofia-fontes.js';
 import { criarContextoPluggy } from '../mcp-remoto/pluggy.js';
 import type { ContaPluggy, FontePluggy, ItemConfigurado, ItemPluggy, LancamentoPluggy } from './integracoes/pluggy.js';
@@ -49,7 +49,7 @@ const unit = () => ({ spineBaseUrl: base, spineToken: 't', spineTimezone: 'Ameri
 const sched = (id: number, nome: string, categoria: string, idStatus: number, dateAttendance: string, modified: string | undefined) => ({
   idSchedule: id, clientName: nome, categoryName: categoria, idStatus, statusName: 'x', dateAttendance, modified, modifiedBy: 'Recepcao Teste',
 });
-const U: UnidadeDaLista = { id: 'u1', slug: SLUG, fuso: 'America/Sao_Paulo', hoje: HOJE, minutoDoDia: 12 * 60 + 20, diaDeTrabalho: true, valores: [25000] };
+const U: UnidadeDaLista = { id: 'u1', slug: SLUG, fuso: 'America/Sao_Paulo', hoje: HOJE, minutoDoDia: 12 * 60 + 20, diaDeTrabalho: true, agendadosDesde: '2026-11-25', valores: [25000] };
 
 test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde ontem; sessão, retorno, reavaliação, desmarcado e marcação antiga ficam de fora; hora na unidade', async () => {
   pedidosDaAgenda.length = 0;
@@ -68,7 +68,8 @@ test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde on
   const r = await agendadosRecentes(unit() as never, { ...U, slug: 'a-agenda' }, Date.now());
   assert.deepEqual(r!.agendados, [
     { nome: 'Maria Silva', dia: '2026-11-27', hora: '08:30', agendadoEm: '2026-11-25' },
-    { nome: 'Joana Lima', dia: '2026-11-26', hora: '14:00', agendadoEm: '2026-11-26' },
+    // CONFIRMADA: a última alteração é a confirmação, não a marcação — a data da marcação é desconhecida (o Pix vale desde 30 dias antes da consulta)
+    { nome: 'Joana Lima', dia: '2026-11-26', hora: '14:00', agendadoEm: null },
   ]);
   // os conhecidos são todos os pacientes da agenda lida, de qualquer categoria, menos quem desmarcou
   assert.deepEqual(r!.conhecidos, ['Maria Silva', 'Joana Lima', 'Ana Antiga', 'Paulo Sessao', 'Rita Retorno', 'Rosa Reavalia', 'Sem Data', 'Ivo Atendido']);
@@ -78,6 +79,26 @@ test('agenda: só avaliação/consulta AGENDADA ou CONFIRMADA e marcada desde on
   // guardada: a volta seguinte (esperando o banco) não pergunta de novo à franquia
   await agendadosRecentes(unit() as never, { ...U, slug: 'a-agenda' }, Date.now());
   assert.equal(pedidosDaAgenda.length, 1);
+});
+
+test('agenda: o corte é o DIA ÚTIL anterior (na segunda, desde a sexta; depois de feriado, desde o último dia útil), e marcação confirmada ontem entra com data de marcação desconhecida', async () => {
+  const semana = [1, 2, 3, 4, 5];
+  assert.equal(diaUtilAnterior('2026-11-26', semana), '2026-11-25', 'quinta: quarta');
+  assert.equal(diaUtilAnterior('2026-11-30', semana), '2026-11-27', 'segunda: sexta (não domingo)');
+  assert.equal(diaUtilAnterior('2026-11-23', semana), '2026-11-19', 'segunda depois da Consciência Negra (sexta 20/11, feriado nacional): quinta');
+  assert.equal(diaUtilAnterior('2026-11-16', semana), '2026-11-13', 'segunda depois do feriado de domingo: sexta');
+  assert.equal(diaUtilAnterior('2026-09-08', semana), '2026-09-04', 'terça depois da Independência (segunda 07/09): sexta');
+  assert.equal(diaUtilAnterior('2026-11-30', [1, 2, 3, 4, 5, 6]), '2026-11-28', 'unidade que abre sábado: sábado');
+  assert.equal(diaUtilAnterior('2026-11-30', []), '2026-11-29', 'sem dia de agenda: ontem');
+  pedidosDaAgenda.length = 0;
+  totalDePaginas = 1;
+  linhas = [
+    sched(1, 'Maria Confirmada', 'AVALIAÇÃO', 38, '2026-12-01T11:30:00.000Z', '2026-11-27T18:00:00.000Z'), // confirmada na sexta
+    sched(2, 'Joana Marcada', 'AVALIAÇÃO', 37, '2026-12-01T12:30:00.000Z', '2026-11-27T18:00:00.000Z'), // marcada na sexta
+    sched(3, 'Ana Velha', 'AVALIAÇÃO', 37, '2026-12-01T13:30:00.000Z', '2026-11-26T18:00:00.000Z'), // marcada antes do corte
+  ];
+  const r = await agendadosRecentes(unit() as never, { ...U, slug: 'a-segunda', hoje: '2026-11-30', agendadosDesde: '2026-11-27' }, Date.now());
+  assert.deepEqual(r!.agendados.map((a) => [a.nome, a.agendadoEm]), [['Maria Confirmada', null], ['Joana Marcada', '2026-11-27']]);
 });
 
 test('agenda: lista cortada no teto de páginas NÃO vira lista (melhor calar que afirmar «não achei» sobre metade da agenda)', async () => {

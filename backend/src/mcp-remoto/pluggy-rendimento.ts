@@ -200,6 +200,8 @@ export async function pluggyRendimentoSofia(
 
   const centavosPix = entradas.pix.reduce((s, p) => s + p.centavos, 0);
   const totalEntrou = centavosPix + entradas.cartaoVendas.centavos + entradas.outras.centavos;
+  // a conferência usa uma conta INDEPENDENTE do casamento: soma direta de toda entrada efetivada em conta bancária, sem passar pela separação em Pix/maquininha/outras
+  const totalDoExtrato = leitura.lancamentos.filter((l) => l.tipo === 'entrada' && l.status !== 'PENDING' && l.contaTipo !== 'CREDIT').reduce((s, l) => s + Math.round(Math.abs(l.valor) * 100), 0);
   const naoAtribuidoCentavos = at.semDono.centavos + entradas.cartaoVendas.centavos + entradas.outras.centavos;
   const motivos = Object.fromEntries(Object.entries(at.semDono.motivos).filter(([, v]) => v.pix > 0).map(([k, v]) => [k, { pix: v.pix, valor: reais(v.centavos) }]));
   const porOrigem = (o: Origem) => pessoas.filter((p) => p.origem === o).length;
@@ -225,7 +227,11 @@ export async function pluggyRendimentoSofia(
       outrasEntradas: { lancamentos: entradas.outras.lancamentos, valor: reais(entradas.outras.centavos) },
       motivosDosPix: motivos,
     },
-    conferencia: { somaDosTresBlocos: reais(at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos), igualAoQueEntrou: at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos === totalEntrou },
+    conferencia: {
+      somaDosTresBlocos: reais(at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos),
+      somaDoExtrato: reais(totalDoExtrato),
+      igualAoQueEntrou: at.sofia.centavos + at.equipe.centavos + naoAtribuidoCentavos === totalDoExtrato && totalEntrou === totalDoExtrato,
+    },
     pacientesNaAgenda: { total: pessoas.length, sofia: porOrigem('sofia'), equipe: porOrigem('equipe'), origemIncerta: porOrigem('incerta') },
     ...(a.detalhar
       ? { detalhe: at.linhas.sort((x, y) => (x.dia < y.dia ? -1 : x.dia > y.dia ? 1 : 0)).map((l) => ({ grupo: l.grupo, paciente: primeiroNome(l.nome) ?? 'sem nome', valor: reais(l.centavos), dia: l.dia })) }
