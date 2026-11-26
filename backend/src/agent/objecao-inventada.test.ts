@@ -79,3 +79,53 @@ test('a regra "VOU PENSAR" do prompt só vale quando ELE disse que vai pensar', 
   assert.match(regra, /Nunca invente objeção/);
   assert.match(regra, /"Não" curto pode estar respondendo à pergunta anterior/);
 });
+
+// Salto, lead 5038681, 25/11/2026 10:38 UTC (e 4868491 e 5020739 nos dias 24–25): o paciente tocou no botão do anúncio — "Qual é o
+// custo da consulta particular?" — e a Sofia respondeu o preço sem a queixa. Duas brechas fizeram o grafo tratar isso como sondagem
+// de objeção inventada e forçar a agenda (a volta vazou "Essa chamada de horários foi precipitada…" ao paciente):
+//  (a) "custo/custa/cobra" não contavam como falar de valor, então a pergunta de preço era "fala neutra";
+//  (b) o `[ée]\s+o\s+valor` casava a CONJUNÇÃO "e o valor varia" — e, sem borda, o "e o valor" dentro de "Sobre o valor" e de
+//      "garante o valor menor".
+const CUSTO: Fala[] = [p('Qual é o custo da consulta particular?')];
+const SALTO_11_PROTOCOLOS =
+  'Trabalhamos com 11 protocolos de tratamento diferentes, e o valor varia conforme os sintomas e o tempo de tratamento — por isso, pra te orientar direitinho, me conta: onde é a sua dor e há quanto tempo ela começou?';
+
+test('a pergunta de preço (custo, custa, cobra, investimento) não é fala neutra', () => {
+  for (const fala of ['Qual é o custo da consulta particular?', 'Qto custa a consulta?', 'Quanto vocês cobram?', 'Qual o investimento?', 'Gostaria de saber sobre disponibilidade e custo da consulta.']) {
+    assert.equal(objecaoInventada([p(fala)], 'Me conta: é o valor que te preocupa ou o horário?'), null, fala);
+  }
+});
+
+test('"e o valor varia" é conjunção: a resposta de preço do próprio modelo não é sondagem', () => {
+  // com a fala neutra do botão do anúncio, para provar a brecha (b) sozinha
+  assert.equal(objecaoInventada([p('Olá! Gostaria de saber mais sobre o tratamento...')], SALTO_11_PROTOCOLOS), null);
+  assert.equal(objecaoInventada(CUSTO, SALTO_11_PROTOCOLOS), null);
+  for (const r of [
+    'Sobre o valor, ele varia conforme a forma de pagamento, mas antes me conta: onde é essa dor?',
+    'Como prefere pagar: Pix antecipado (garante o valor menor) ou na clínica no dia?',
+    'Só mais uma coisa: você prefere pagar antecipado no Pix (garante o valor de R$ 200) ou na clínica no dia?',
+    'Depois desse prazo, vale o valor de R$ 350 pago no dia, combinado?',
+  ]) {
+    assert.equal(objecaoInventada([p('Sim')], r), null, r);
+  }
+});
+
+test('"cobra" é preço; "cobrança" não conta como fala de valor (nit do sênior)', () => {
+  const sonda = 'Me conta: é o valor que te preocupa ou o horário?';
+  assert.equal(objecaoInventada([p('Quanto vocês cobram?')], sonda), null);
+  assert.equal(objecaoInventada([p('Quanto ele cobra?')], sonda), null);
+  assert.equal(objecaoInventada([p('Recebi uma cobrança estranha')], sonda), sonda);
+});
+
+test('a sondagem de verdade ("é o valor que…", "é mais o valor da consulta que pesa") continua pega', () => {
+  const sondas = [
+    'Me conta: é o valor que te preocupa ou o horário?',
+    'Me conta então: é mais o valor da consulta que pesa, ou é a questão do horário que fica difícil pro seu trabalho?',
+    'É o valor, o horário ou saber se resolve?',
+    'O que mais pesa aí: o valor ou o horário disponível?',
+    'É o valor mesmo que te incomoda?',
+    'Me conta: é o valor de verdade que pesa, ou o horário?',
+    'É o valor do tratamento completo que pesa?',
+  ];
+  for (const s of sondas) assert.equal(objecaoInventada([p('Sim')], s), s, s);
+});

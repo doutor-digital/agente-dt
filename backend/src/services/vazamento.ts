@@ -255,6 +255,17 @@ const RACIOCINIO_PT = [
   /\b(?:sem|n[aã]o\s+(?:vou|preciso|devo))\s+(?:acionar|chamar|usar|executar)\s+(?:nenhuma\s+|a\s+)ferramenta/iu,
   /\b(?:essa|esta)\s+ferramenta\s+n[aã]o\s+se\s+aplica/iu,
   /\b(?:j[aá]\s+mandei\s+(?:as\s+)?|sem\s+necessidade\s+de\s+a[cç][aã]o\s+de\s+|a[cç][aã]o\s+de\s+)tools?(?![\p{L}])/iu,
+  // A IA comenta a CHAMADA de ferramenta que ela mesma fez, como se o paciente a tivesse visto (Salto, lead 5038681, 25/11/2026,
+  // 10:38 UTC: "Essa chamada de horários foi precipitada — ainda não entendi a queixa. Vou responder corretamente primeiro.\n\nClaro,
+  // já te explico tudo! …"; 01/10 "essa chamada foi um engano meu, sem relação com sua mensagem"). "Chamada" sozinha é ligação ("a chamada
+  // de vídeo", "a chamada caiu", "a última chamada foi um erro da operadora"): só conta como "essa/esta/minha chamada de
+  // horários/agenda/ferramenta" + um juízo sobre o próprio erro (precipitada, engano, desnecessária…).
+  /(?<![\p{L}])(?:essa|esta|aquela|minha)\s+chamada\s+d[aeo]s?\s+(?:hor[áa]rios?|agenda|ferramenta|sistema|disponibilidade)\s+(?:foi|era|estava|ficou|n[aã]o\s+(?:era|devia|deveria))\s+(?:uma?\s+|muito\s+)?(?:precipitad|prematur|desnecess[áa]ri|equivocad|errad|indevid|engano|erro|equ[ií]voco)/iu,
+  // Sem o complemento ("de horários"), só o "engano/erro MEU": "essa chamada foi um engano meu, sem relação com sua mensagem" (01/10).
+  /(?<![\p{L}])(?:essa|esta|minha)\s+chamada\s+(?:foi|era)\s+um\s+(?:engano|erro|equ[ií]voco)\s+(?:meu|nosso)(?![\p{L}])/iu,
+  // "Vou responder corretamente primeiro": o modelo se corrige em voz alta. Com o "primeiro" no fim; "vou responder corretamente
+  // sua dúvida" é promessa ao paciente e passa.
+  /(?<![\p{L}])vou\s+responder\s+(?:corretamente|direito|certo)\s+primeiro(?![\p{L}])/iu,
   // A IA comenta a PRÓPRIA ferramenta como se o paciente tivesse visto: "Desculpa, isso não devia ter sido feito, vou corrigir."
   // (Tatuí 19/11/2026, depois de gravar "Ocupado" no cartão) e "Desculpa, não precisava ter feito isso — vamos ao que importa:"
   // (Salto 13/11). O paciente não sabe de ação nenhuma. Medido em 20/10–19/11 nas 32.177 respostas da IA: só estas duas casam.
