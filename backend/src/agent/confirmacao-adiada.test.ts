@@ -414,3 +414,80 @@ test('"amanhã cedo" sozinho não é horário; "um ótimo dia" no fim não desfa
   assert.ok(adiouConfirmacao('Antes da sexta vou decidir o dia pois tenho que ver umas coisa aqui ainda, mais vamos nos falando ok'));
   assert.ok(adiouConfirmacao('Tá bom porque com meu esposo depois te falo'));
 });
+
+// ── Ajuste final antes de ligar (sênior, depois do #490) ────────────────────────────────────────────────────────────────────────────
+
+test('"?" de OUTRA frase ou depois de vírgula não anula o "pode ser" (consulta perdida); o "pode ser?" do adiamento continua pego', () => {
+  for (const fala of [
+    'Pode ser quinta 15h. Vou ver com meu chefe se libera, tudo bem?',
+    'Pode ser quinta 15h, tem estacionamento?',
+    'Vou ver com meu chefe\nPode ser quinta 15h, tem estacionamento?',
+    'Pode ser quinta 15h! Vou ver se consigo sair mais cedo, ok?',
+  ]) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+  for (const fala of [
+    'Tá joia, vou falar com ele primeiro e depois te retorno, pode ser?',
+    'Me dê um tempinho, lhe dou retorno amanhã pode ser?',
+    'Pode ser quinta 15h?\nVou ver com meu marido e te aviso',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+});
+
+test('"quando chegar em casa" adia; "quando chegar aí" continua sendo aviso de chegada', () => {
+  assert.ok(adiouConfirmacao('Te confirmo quando chegar em casa'));
+  assert.ok(adiouConfirmacao('Quando chegar na minha casa eu confirmo'));
+  assert.equal(adiouConfirmacao('Beleza! Te aviso quando chegar aí'), null);
+});
+
+test('o dia/hora que é a DATA da promessa de responder não é o horário aceito', () => {
+  for (const fala of [
+    'Beleza, vou ver e te retorno quinta',
+    'Ótimo, vou ver com meu marido e te aviso amanhã às 15h',
+    'Show, deixa eu ver aqui, te falo sexta',
+    'Perfeito, vou ver e volto sexta',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+  for (const fala of [
+    'Perfeito, quinta 15h então. Depois te retorno com o nome completo',
+    'Ótimo, quinta 15h, te aviso quando chegar',
+    'Beleza, quinta 15h. Te retorno amanhã com o nome',
+  ]) {
+    assert.equal(adiouConfirmacao(fala), null, fala);
+  }
+});
+
+test('voltar atrás sem a palavra "confirm" vence o aceite anterior com horário', () => {
+  for (const fala of [
+    'Sim, quinta às 15h\nAh não, vou ver com meu marido e te retorno depois',
+    'Sim, quinta às 15h\nEspera, vou ver com meu chefe',
+    'Quinta 15h tá ótimo\nNa verdade vou ver com meu marido',
+  ]) {
+    assert.ok(adiouConfirmacao(fala), fala);
+  }
+  // sem retratação o aceite com horário segue valendo
+  assert.equal(adiouConfirmacao('Sim, quinta às 15h\nVou ver com meu chefe pra sair mais cedo'), null);
+  assert.equal(adiouConfirmacao('Sim, quinta às 15h\nNão, não precisa ligar, é só marcar'), null);
+});
+
+test('seco: o registro usa a CÓPIA do trecho, mesmo que o estado do turno mude durante a marcação', async () => {
+  const passos: Array<{ title: string; payload: { trecho: string } }> = [];
+  const turno: TurnoDaConfirmacao = { adiou: 'vou confirmar mais tarde' };
+  const tool = new DynamicStructuredTool({
+    name: 'agendar_consulta',
+    description: 't',
+    schema: z.object({ hora: z.string() }),
+    func: async () => {
+      turno.adiou = null; // o nó do agente reescreve o estado durante a marcação
+      return 'Consulta marcada';
+    },
+  });
+  const [t] = travarAgendamentoAdiado([tool], turno, { step: async (p: never) => void passos.push(p) } as never, () => 'seco');
+  await t.func({ hora: '15:00' } as never);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(passos.length, 1);
+  assert.match(passos[0].title, /vou confirmar mais tarde/);
+  assert.equal(passos[0].payload.trecho, 'vou confirmar mais tarde');
+});
