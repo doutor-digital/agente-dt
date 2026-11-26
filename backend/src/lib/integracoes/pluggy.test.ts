@@ -304,9 +304,50 @@ test('lançamentos: usa a /v2 (a /transactions sai do ar em 31/12/2026), manda d
   assert.equal(chamadas[1]!.query.get('after'), 'ABC==', 'só o valor de `after`, já decodificado, nunca o `next` inteiro');
   assert.equal(p.chamadas.some((x) => x.caminho === '/transactions'), false, 'a rota obsoleta não é usada');
   const t2 = r.lancamentos[1]!;
-  assert.deepEqual(t2, { id: 't2', data: '2026-11-02', descricao: 'desc t2', valor: 200, tipo: 'entrada', categoria: 'Transfers', status: 'POSTED', pagador: 'Maria Souza', recebedor: 'Doutor Digital', motivo: 'Consulta' });
-  assert.equal(JSON.stringify(r).includes('666.666'), false, 'o documento do pagador nunca é lido');
+  // o NÚMERO do documento do pagador nunca é lido; só o tipo (PF/PJ), para saber que o Pix veio de empresa
+  assert.deepEqual(t2, { id: 't2', data: '2026-11-02', descricao: 'desc t2', valor: 200, tipo: 'entrada', categoria: 'Transfers', status: 'POSTED', pagador: 'Maria Souza', pagadorTipoDocumento: 'PF', metodoDePagamento: 'PIX', recebedor: 'Doutor Digital', motivo: 'Consulta' });
+  assert.equal(JSON.stringify(r).includes('666'), false, 'o documento do pagador nunca é lido');
   assert.equal(r.lancamentos[0]!.tipo, 'saida');
+});
+
+test('lançamentos: só o TIPO do documento do pagador é guardado (CPF→PF, CNPJ→PJ); o número nunca, em nenhum formato', async () => {
+  const pg = (value: unknown, type: unknown = 'CPF') => ({ paymentData: { payer: { name: 'Fulana Teste', documentNumber: { type, value } }, receiver: {}, paymentMethod: 'PIX' } });
+  const p = pluggyFalso({
+    'POST /auth': () => auth(),
+    'GET /v2/transactions': () => ({
+      json: {
+        results: [
+          tx('cpf', '2026-11-02', 10, 'CREDIT', pg('111.222.333-44')),
+          tx('cnpj', '2026-11-02', 10, 'CREDIT', pg('12.345.678/0001-90', 'CNPJ')),
+          tx('mascarado', '2026-11-02', 10, 'CREDIT', pg('***.222.333-**')),
+          tx('tipo', '2026-11-02', 10, 'CREDIT', pg('11122233344', 'RG')),
+          tx('sem', '2026-11-02', 10, 'CREDIT'),
+        ],
+        next: null,
+      },
+    }),
+  });
+  const r = await cliente(p.fetcher).transacoes(CONTA, '2026-11-01', '2026-11-30');
+  const tipo = (id: string) => r.lancamentos.find((l) => l.id === id)!.pagadorTipoDocumento;
+  assert.equal(tipo('cpf'), 'PF');
+  assert.equal(tipo('cnpj'), 'PJ');
+  for (const id of ['tipo', 'sem']) assert.equal(tipo(id), undefined, id);
+  const tudo = JSON.stringify(r);
+  for (const numero of ['111', '222', '333', '12.345', '0001', '11122233344']) assert.equal(tudo.includes(numero), false, `o número do documento (${numero}) nunca entra no modelo`);
+});
+
+test('lançamentos: o método de pagamento (paymentMethod) é lido em maiúsculas; valor estranho ou ausente não vira método', async () => {
+  const pg = (paymentMethod: unknown) => ({ paymentData: { payer: { name: 'Fulana Teste' }, receiver: {}, paymentMethod } });
+  const p = pluggyFalso({
+    'POST /auth': () => auth(),
+    'GET /v2/transactions': () => ({ json: { results: [tx('pix', '2026-11-02', 10, 'CREDIT', pg('PIX')), tx('baixo', '2026-11-02', 10, 'CREDIT', pg('pix')), tx('estranho', '2026-11-02', 10, 'CREDIT', pg('pix; DROP')), tx('sem', '2026-11-02', 10, 'CREDIT')], next: null } }),
+  });
+  const r = await cliente(p.fetcher).transacoes(CONTA, '2026-11-01', '2026-11-30');
+  const m = (id: string) => r.lancamentos.find((l) => l.id === id)!.metodoDePagamento;
+  assert.equal(m('pix'), 'PIX');
+  assert.equal(m('baixo'), 'PIX');
+  assert.equal(m('estranho'), undefined);
+  assert.equal(m('sem'), undefined);
 });
 
 test('lançamentos: o `type` manda; sem ele vale o sinal; lançamento sem id/data/valor é descartado; cursor repetido e teto de páginas marcam truncado', async () => {
