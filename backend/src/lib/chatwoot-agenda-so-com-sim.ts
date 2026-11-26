@@ -145,8 +145,8 @@ const IMPEDIMENTO = new RegExp(
 const AFIRMA = /^\W*s\W*$|👍|👌|✅|(?<![a-z])(?:s+i+m+|show|fica sim|fica bom|fica otimo|serve(?: sim| pra mim| para mim)?|da sim|da certo|bacana|joia|massa|top|maravilha|legal|excelente|pode(?: ser| sim| marcar| agendar)?|quero(?: sim)?|fechado|fechou|combinado|ok|okay|beleza|blz|perfeito|otimo|otima|isso(?: mesmo)?|confirmo|confirmado|bora|vamos|marca(?:r)?|marque|agenda(?:r)?|agende|topo|claro|certo|tudo bem|ta bom|ta otimo|ta certo|com certeza|positivo|uhum|aham)(?![a-z])/;
 /** o «sim» a UMA oferta só vale se a fala COMEÇA afirmando e é curta («sim», «pode marcar», «ok, perfeito»), sem pergunta nem pedido de informação */
 const COMECA_AFIRMANDO = /^\W*s\W*$|^\W*(?:👍|👌|✅|s+i+m+|show|fica sim|fica bom|fica otimo|serve|da sim|da certo|bacana|joia|massa|top|maravilha|legal|excelente|pode|quero|fechado|fechou|combinado|ok|okay|beleza|blz|perfeito|otimo|otima|isso|confirmo|confirmado|bora|vamos|marca|marque|agende|topo|claro|certo|tudo bem|ta bom|ta otimo|ta certo|com certeza|positivo|uhum|aham)(?![a-z])/;
-/** «ok, obrigada»: agradece, não escolhe o horário (o «ok» fraco colado num agradecimento não é aceite) */
-const AGRADECE = /^\W*(?:ok|okay|certo|beleza|blz|entendi|tudo bem|ta bom|ta certo)\W*(?:muito )?(?:obrigad[oa]|brigad[oa]|valeu|vlw|grat[oa])\W*$/;
+/** «ok, obrigada», «legal, obrigada», «top, valeu»: agradece, não escolhe o horário (o elogio ou o «ok» fraco colado num agradecimento não é aceite; «sim, obrigada» é) */
+const AGRADECE = /^\W*(?:ok|okay|certo|beleza|blz|entendi|tudo bem|ta bom|ta certo|legal|top|massa|joia|bacana|show|perfeito|otimo|otima|maravilha|excelente|boa)\W*(?:muito )?(?:obrigad[oa]|brigad[oa]|valeu|vlw|grat[oa])\W*$/;
 const PEDE_INFORMACAO = /(?<![a-z])(?:saber|quanto|qual|quais|onde|como|quando|que horas|valor|preco|endereco|convenio|plano|duvida|pergunta|queria|gostaria|preciso)(?![a-z])/;
 /** «saio do trabalho às 14h», «só consigo depois das 14h»: o horário está na frase, mas não é a escolha */
 const RESTRICAO_DE_HORA = /(?<![a-z])(?:saio|sai|saindo|depois d|apos|antes d|ate (?:as|a|o)|so consigo|so posso|a partir)/;

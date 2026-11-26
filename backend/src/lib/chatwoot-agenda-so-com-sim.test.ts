@@ -191,10 +191,10 @@ test('«trabalho» e «médico» só barram com verbo de impedimento: «é minha
 });
 
 test('«ok, obrigada» agradece e «isso eu vejo depois» adia: nenhum é aceite; «ok» sozinho e «sim, obrigada» continuam sim', () => {
-  for (const fala of ['ok, obrigada', 'Ok obrigado!', 'beleza, valeu', 'certo, obrigada', 'isso eu vejo depois', 'vejo isso depois', 'decido amanhã', 'depois a gente vê', 'depois eu falo com vocês']) {
+  for (const fala of ['ok, obrigada', 'Ok obrigado!', 'beleza, valeu', 'certo, obrigada', 'legal, obrigada', 'top, valeu', 'Show, obrigado!', 'perfeito, obrigada', 'massa, vlw', 'isso eu vejo depois', 'vejo isso depois', 'decido amanhã', 'depois a gente vê', 'depois eu falo com vocês']) {
     assert.equal(ok([OFERTA_UNICA, u(fala)]), false, fala);
   }
-  for (const fala of ['ok', 'ok!', 'sim, obrigada', 'pode sim, obrigada', 'show, obrigada']) assert.equal(ok([OFERTA_UNICA, u(fala)]), true, fala);
+  for (const fala of ['ok', 'ok!', 'sim, obrigada', 'pode sim, obrigada', 'show', 'top']) assert.equal(ok([OFERTA_UNICA, u(fala)]), true, fala);
 });
 
 // ── review do /code-review high (rodada 3) ─────────────────────────────────────────────────────────
