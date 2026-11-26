@@ -99,6 +99,22 @@ export function descricaoSegura(bruto: string): string {
 
 // ----------------------------------------------------------------- OFX
 
+/** O segredo do servidor que faz do hash da conta um HMAC: no mínimo 32 caracteres, SÓ do ambiente (INFINITEPAY_CONTA_SEGREDO), sem derivar de nada. */
+export const SEGREDO_DA_CONTA_MINIMO = 32;
+
+export function segredoDaContaDoAmbiente(e: NodeJS.ProcessEnv = process.env): string {
+  const s = e.INFINITEPAY_CONTA_SEGREDO?.trim() ?? '';
+  return s.length >= SEGREDO_DA_CONTA_MINIMO ? s : '';
+}
+
+/** Sem o segredo a importação de relatório está desligada (e diz por quê): nada de hash sem chave nem de segredo emprestado do login. */
+export function exigirSegredoDaConta(segredo: string | undefined): string {
+  if (!segredo || segredo.length < SEGREDO_DA_CONTA_MINIMO) {
+    throw new ErroDeEntrada(`a importação de relatórios da InfinitePay está DESLIGADA: falta INFINITEPAY_CONTA_SEGREDO no servidor (${SEGREDO_DA_CONTA_MINIMO}+ caracteres; o script ligar-infinitepay-acailandia.sh o gera uma vez). Peça ao João. Nada foi gravado.`);
+  }
+  return segredo;
+}
+
 /** A conta do arquivo: só um hash (irreversível) e os 4 últimos caracteres. O número da conta nunca é guardado nem mostrado. */
 export interface ContaDoArquivo {
   hash: string;
@@ -154,7 +170,8 @@ export function dataDoOfx(v: string | undefined): string | undefined {
 }
 
 /** Lê um extrato OFX (v1 SGML ou v2 XML). Só as marcas conhecidas; nenhuma é interpretada como XML. A conta (ACCTID) só vira hash + final. */
-export function lerOfx(texto: string, segredoDaConta = ''): ResultadoDoOfx {
+export function lerOfx(texto: string, segredoDaConta: string): ResultadoDoOfx {
+  exigirSegredoDaConta(segredoDaConta);
   if (!/<OFX>/i.test(texto)) throw new ErroDeEntrada('isto não parece um arquivo OFX (não achei a marca <OFX>)');
   const linhas: LinhaDeMovimento[] = [];
   let ignoradas = 0;
@@ -177,12 +194,16 @@ export function lerOfx(texto: string, segredoDaConta = ''): ResultadoDoOfx {
   // a conta do arquivo: a identificação é lida só para CONFERIR se o arquivo é da mesma conta já importada da unidade; guarda-se o hash e o final
   // SÓ a conta DONA do extrato (BANKACCTFROM / CCACCTFROM, que vêm antes da lista de lançamentos): um TED traz a conta de destino em BANKACCTTO dentro do lançamento, e isso
   // não é "outra conta" do arquivo. O bloco vai até a lista de lançamentos, com ou sem a marca de fechamento (OFX v1 pode omiti-la).
-  const donos = [...texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>([\s\S]{0,400}?)(?=<BANKTRANLIST>|<LEDGERBAL>|<STMTTRN>|<\/STMTRS>|<\/CCSTMTRS>|$)/gi)];
+  const donos = [...texto.matchAll(/<(?:BANKACCTFROM|CCACCTFROM)>([\s\S]{0,4000}?)(?=<BANKTRANLIST>|<LEDGERBAL>|<STMTTRN>|<\/STMTRS>|<\/CCSTMTRS>|$)/gi)];
   const contas = new Map<string, string>();
   for (const d of donos) {
     const acct = /<ACCTID>\s*([^<\r\n]{1,64})/i.exec(d[1]!)?.[1]?.trim();
     if (acct) contas.set(`${/<BANKID>\s*([^<\r\n]{1,32})/i.exec(d[1]!)?.[1]?.trim() ?? ''}|${acct}`, acct);
   }
+  // um bloco de conta que não rendeu ACCTID (formato fora do padrão, ou maior que o limite de leitura) NÃO pode passar em silêncio: sem a conta, as checagens de conta ficariam de fora
+  // (o bloco que passa do limite de leitura nem casa a expressão: por isso conta-se as MARCAS de abertura e exige-se um bloco lido para cada uma)
+  const abertas = (texto.match(/<(?:BANKACCTFROM|CCACCTFROM)>/gi) ?? []).length;
+  if (abertas > 0 && (donos.length !== abertas || contas.size === 0)) throw new ErroDeEntrada('não consegui ler o ACCTID da conta do arquivo (bloco BANKACCTFROM/CCACCTFROM fora do padrão ou grande demais). Nada foi gravado: sem a conta não dá para conferir de qual unidade é.');
   if (contas.size > 1) throw new ErroDeEntrada('o arquivo tem lançamentos de MAIS DE UMA conta (BANKACCTFROM diferentes). Peça o extrato de uma conta por arquivo. Nada foi gravado.');
   const [dono, acct] = [...contas.entries()][0] ?? [];
   return {
@@ -294,7 +315,8 @@ function cabecalhoParaMostrar(cel: string[]): { cabecalho: string[]; semCabecalh
  * Lê o arquivo que chegou. `esperado` é o relatório que a pessoa disse que é: um OFX só pode ser extrato; um CSV só é lido por um leiaute do MESMO
  * relatório. Formato que não se reconhece NÃO vira erro mudo: volta `reconhecido: false` com o cabeçalho.
  */
-export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esperado: TipoDeRelatorio, segredoDaConta = ''): LeituraDoArquivo {
+export function lerRelatorio(conteudo: Buffer, tipoDoCofre: 'ofx' | 'csv', esperado: TipoDeRelatorio, segredoDaConta: string): LeituraDoArquivo {
+  exigirSegredoDaConta(segredoDaConta);
   const texto = decodificar(conteudo);
   if (tipoDoCofre === 'ofx') {
     if (esperado !== 'extrato') throw new ErroDeEntrada(`para ${esperado} use o CSV: o OFX é uma lista de lançamentos (data e valor) e não traz forma de pagamento, parcelas nem taxa. Para o OFX, escolha relatorio="extrato".`);
@@ -418,8 +440,9 @@ const reais = (c: number) => Math.round(c) / 100;
 
 export async function importarRelatorio(
   armazem: ArmazemDeRelatorios,
-  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string; aceitarOutraConta?: boolean; /** o segredo do servidor que torna o hash da conta um HMAC */ segredoDaConta?: string },
+  a: { unidade: string; relatorio: TipoDeRelatorio; tipoDoCofre: 'ofx' | 'csv'; conteudo: Buffer; importadoPor: string; aceitarOutraConta?: boolean; /** o segredo do servidor que torna o hash da conta um HMAC (obrigatório: sem ele a importação recusa) */ segredoDaConta?: string },
 ): Promise<ResultadoDaImportacao> {
+  exigirSegredoDaConta(a.segredoDaConta);
   const sha = sha256Do(a.conteudo);
   if (await armazem.jaImportado(a.unidade, sha)) {
     return { importado: false, motivo: 'ja_importado', aviso: 'este mesmo arquivo já foi importado nesta unidade; nada mudou' };
@@ -429,7 +452,7 @@ export async function importarRelatorio(
   if (outras.length > 0) {
     return { importado: false, motivo: 'arquivo_de_outra_unidade', unidades: outras, aviso: `este mesmo arquivo (mesmo conteúdo) já foi importado em ${outras.join(', ')}. Importar o mesmo relatório em duas unidades dobra o dinheiro de uma delas: não importei nada. Confira de que clínica é o arquivo e peça o relatório certo.` };
   }
-  const leitura = lerRelatorio(a.conteudo, a.tipoDoCofre, a.relatorio, a.segredoDaConta);
+  const leitura = lerRelatorio(a.conteudo, a.tipoDoCofre, a.relatorio, a.segredoDaConta!);
   if (!leitura.reconhecido) {
     return {
       importado: false,

@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
 import { CofreDeArquivos } from './cofre-arquivos.js';
 import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import {
-  LEIAUTES_CSV, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, dataDoOfx, decodificar, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
+  LEIAUTES_CSV, segredoDaContaDoAmbiente, centavosDoTexto, chavesDosMovimentos, coberturaDoPeriodo, dataDoOfx, decodificar, descricaoSegura, importarRelatorio, lerCsv, lerOfx, lerRelatorio, totaisDasVendas, totaisDoExtrato,
   type ImportacaoGuardada, type LeiauteCsv,
 } from './infinitepay-relatorio.js';
 import { relatoriosEmMemoria } from './infinitepay-relatorio-armazem.js';
@@ -16,6 +16,7 @@ import {
 } from './infinitepay-relatorio-ferramentas.js';
 
 const UNI = 'doutor-hernia-acailandia';
+const SEGREDO = 'segredo-de-teste-da-conta-0123456789';
 
 // ----------------------------------------------------------------- amostras (SINTÉTICAS: escritas pela especificação do OFX, não são da InfinitePay)
 const OFX_V1 = `OFXHEADER:100
@@ -92,7 +93,7 @@ test('descrição: CPF, telefone e e-mail saem mascarados; texto longo é cortad
 // ----------------------------------------------------------------- OFX
 
 test('OFX v1 (SGML): lê data, valor com sinal (ponto ou vírgula), FITID e período; não lê conta nem agência', () => {
-  const r = lerOfx(OFX_V1);
+  const r = lerOfx(OFX_V1, SEGREDO);
   assert.equal(r.ignoradas, 0);
   assert.deepEqual(r.linhas.map((l) => [l.data, l.valorCentavos, l.idExterno]), [['2026-11-03', 150050, 'A1'], ['2026-11-04', 20000, 'A2'], ['2026-11-10', -35025, 'A3']]);
   assert.equal(r.periodoInicio, '2026-11-01');
@@ -104,7 +105,7 @@ test('OFX v1 (SGML): lê data, valor com sinal (ponto ou vírgula), FITID e per�
 });
 
 test('OFX v2 (XML): mesma leitura, sem tratar o arquivo como XML', () => {
-  const r = lerOfx(OFX_V2);
+  const r = lerOfx(OFX_V2, SEGREDO);
   assert.equal(r.linhas.length, 2);
   assert.equal(r.periodoInicio, '2026-11-16');
   assert.equal(r.periodoFim, '2026-11-30');
@@ -113,15 +114,15 @@ test('OFX v2 (XML): mesma leitura, sem tratar o arquivo como XML', () => {
 
 test('OFX: lançamento sem data ou sem valor é CONTADO como ignorado, nunca adivinhado; arquivo que não é OFX é recusado', () => {
   const ruim = OFX_V1.replace('<DTPOSTED>20261104<TRNAMT>200.00', '<DTPOSTED>20269999<TRNAMT>200.00').replace('<TRNAMT>-350,25', '<TRNAMT>quase');
-  const r = lerOfx(ruim);
+  const r = lerOfx(ruim, SEGREDO);
   assert.equal(r.linhas.length, 1);
   assert.equal(r.ignoradas, 2);
-  assert.throws(() => lerOfx('data;valor\n2026-11-01;10'), /não parece um arquivo OFX/);
+  assert.throws(() => lerOfx('data;valor\n2026-11-01;10', SEGREDO), /não parece um arquivo OFX/);
 });
 
 test('FITID repetido em lançamentos DIFERENTES (contador que recomeça todo mês) não os apaga; o mesmo lançamento que reaparece continua sendo reconhecido', () => {
-  const nov = lerOfx(OFX_V1.replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'));
-  const dez = lerOfx(OFX_V1.replace(/20261103/, '20261203').replace(/20261104/, '20261204').replace(/20261110/, '20261210').replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'));
+  const nov = lerOfx(OFX_V1.replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'), SEGREDO);
+  const dez = lerOfx(OFX_V1.replace(/20261103/, '20261203').replace(/20261104/, '20261204').replace(/20261110/, '20261210').replace('<FITID>A1', '<FITID>1').replace('<FITID>A2', '<FITID>2').replace('<FITID>A3', '<FITID>3'), SEGREDO);
   const kNov = chavesDosMovimentos(nov.linhas);
   const kDez = chavesDosMovimentos(dez.linhas);
   assert.equal(kNov.filter((k) => kDez.includes(k)).length, 0, 'mesmo FITID, outro dia: chaves diferentes');
@@ -134,6 +135,7 @@ test('OFX sem FITID: a chave é o hash da linha com a ORDEM entre linhas iguais,
       .replace('<TRNAMT>200.00', '<TRNAMT>1500.50')
       .replace('<NAME>PIX RECEBIDO<MEMO>MARIA SOUZA CPF 52998224725', '<MEMO>Venda cartao credito 3x')
       .replace('<DTPOSTED>20261104', '<DTPOSTED>20261103'),
+    SEGREDO,
   );
   const chaves = chavesDosMovimentos(sem.linhas);
   assert.equal(new Set(chaves).size, chaves.length);
@@ -163,14 +165,14 @@ const buf = (s: string) => Buffer.from(s, 'utf8');
 
 test('importar OFX: grava as linhas, devolve período e totais; o mesmo arquivo de novo não muda nada', async () => {
   const arm = relatoriosEmMemoria();
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'lia@x.com' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'lia@x.com', segredoDaConta: SEGREDO });
   assert.ok(r.importado);
   if (!r.importado) return;
   assert.equal(r.importacao.linhasLidas, 3);
   assert.equal(r.importacao.linhasNovas, 3);
   assert.equal(r.importacao.periodoInicio, '2026-11-01');
   assert.deepEqual(r.totais, { entradas: 1700.5, saidas: -350.25, liquido: 1350.25 });
-  const de_novo = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'lia@x.com' });
+  const de_novo = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'lia@x.com', segredoDaConta: SEGREDO });
   assert.equal(de_novo.importado, false);
   assert.equal(arm.importacoesGravadas.length, 1);
   assert.equal((await arm.movimentos({ unidade: UNI, limite: 100 })).length, 3);
@@ -178,9 +180,9 @@ test('importar OFX: grava as linhas, devolve período e totais; o mesmo arquivo 
 
 test('arquivos que se sobrepõem: o lançamento que repete (mesmo FITID) não entra duas vezes e conta como repetido', async () => {
   const arm = relatoriosEmMemoria();
-  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
   const sobreposto = OFX_V1.replace('<DTEND>20261115235959[-3:BRT]', '<DTEND>20261120').replace('</BANKTRANLIST>', '<STMTTRN><TRNTYPE>CREDIT<DTPOSTED>20261118<TRNAMT>50.00<FITID>A9<MEMO>novo\n</STMTTRN></BANKTRANLIST>');
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(sobreposto), importadoPor: 'x' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(sobreposto), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.ok(r.importado);
   if (!r.importado) return;
   assert.equal(r.importacao.linhasLidas, 4);
@@ -191,8 +193,8 @@ test('arquivos que se sobrepõem: o lançamento que repete (mesmo FITID) não en
 
 test('o MESMO arquivo já importado em OUTRA unidade é recusado (relatório de uma clínica na conta de outra dobraria o dinheiro)', async () => {
   const arm = relatoriosEmMemoria();
-  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
-  const outra = await importarRelatorio(arm, { unidade: 'doutor-hernia-serra', relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
+  const outra = await importarRelatorio(arm, { unidade: 'doutor-hernia-serra', relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.equal(outra.importado, false);
   if (outra.importado || outra.motivo !== 'arquivo_de_outra_unidade') throw new Error('esperava arquivo_de_outra_unidade');
   assert.deepEqual(outra.unidades, [UNI]);
@@ -201,7 +203,7 @@ test('o MESMO arquivo já importado em OUTRA unidade é recusado (relatório de 
   assert.equal((await arm.importacoes('doutor-hernia-serra')).length, 0);
   assert.equal((await arm.importacoes(UNI)).length, 1);
   // na MESMA unidade continua sendo "já importado", não "outra unidade"
-  const mesma = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  const mesma = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.equal(!mesma.importado && mesma.motivo, 'ja_importado');
 });
 
@@ -210,18 +212,18 @@ test('o MESMO arquivo já importado em OUTRA unidade é recusado (relatório de 
 const COM_CONTA = (acct: string, extra = '') => OFX_V1.replace('<ACCTID>987654321', `<ACCTID>${acct}`).replace('<FITID>A1', `<FITID>A1${extra}`);
 
 test('ACCTID é lido só como hash + final: o número da conta não aparece em lugar nenhum do resultado', () => {
-  const r = lerOfx(OFX_V1);
+  const r = lerOfx(OFX_V1, SEGREDO);
   assert.equal(r.conta?.final, '4321');
   assert.match(r.conta!.hash, /^[0-9a-f]{32}$/);
   assert.equal(JSON.stringify(r).includes('987654321'), false);
-  assert.notEqual(lerOfx(COM_CONTA('111111111')).conta!.hash, r.conta!.hash);
-  assert.equal(lerOfx(OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '')).conta, undefined, 'sem ACCTID, sem conta');
-  assert.throws(() => lerOfx(OFX_V1.replace('</BANKTRANLIST>', '</BANKTRANLIST><BANKACCTFROM><ACCTID>555555555</BANKACCTFROM>')), /MAIS DE UMA conta/);
+  assert.notEqual(lerOfx(COM_CONTA('111111111'), SEGREDO).conta!.hash, r.conta!.hash);
+  assert.equal(lerOfx(OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, ''), SEGREDO).conta, undefined, 'sem ACCTID, sem conta');
+  assert.throws(() => lerOfx(OFX_V1.replace('</BANKTRANLIST>', '</BANKTRANLIST><BANKACCTFROM><ACCTID>555555555</BANKACCTFROM>'), SEGREDO), /MAIS DE UMA conta/);
 });
 
 test('extrato de OUTRA conta que a já importada da unidade: recusado sem gravar; com aceitarOutraConta passa, avisa e registra as duas contas', async () => {
   const arm = relatoriosEmMemoria();
-  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x' };
+  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x', segredoDaConta: SEGREDO };
   assert.ok((await importarRelatorio(arm, { ...base, conteudo: buf(OFX_V1) })).importado);
   const outra = buf(COM_CONTA('111112222', 'z').replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215'));
   const r = await importarRelatorio(arm, { ...base, conteudo: outra });
@@ -241,8 +243,6 @@ test('extrato de OUTRA conta que a já importada da unidade: recusado sem gravar
   // a mesma conta de sempre nunca é recusada
   assert.ok(arm.importacoesGravadas.every((i) => i.contaFinal));
 });
-
-const SEGREDO = 'segredo-de-teste-da-conta';
 
 test('a MESMA conta em OUTRA unidade é recusada mesmo com bytes diferentes (novo export do período) e sem exceção; na mesma unidade segue normal', async () => {
   const arm = relatoriosEmMemoria();
@@ -269,9 +269,9 @@ test('a MESMA conta em OUTRA unidade é recusada mesmo com bytes diferentes (nov
 });
 
 test('o hash da conta é um HMAC com o segredo do servidor: muda com o segredo, é estável com o mesmo e não é o sha256 puro', () => {
-  const a = lerOfx(OFX_V1, 'segredo-A').conta!;
-  assert.equal(lerOfx(OFX_V1, 'segredo-A').conta!.hash, a.hash);
-  assert.notEqual(lerOfx(OFX_V1, 'segredo-B').conta!.hash, a.hash);
+  const a = lerOfx(OFX_V1, 'segredo-A-0123456789-0123456789-xx').conta!;
+  assert.equal(lerOfx(OFX_V1, 'segredo-A-0123456789-0123456789-xx').conta!.hash, a.hash);
+  assert.notEqual(lerOfx(OFX_V1, 'segredo-B-0123456789-0123456789-xx').conta!.hash, a.hash);
   assert.notEqual(a.hash, createHash('sha256').update('0001|987654321').digest('hex').slice(0, 32), 'não é o sha256 do número');
   assert.match(a.hash, /^[0-9a-f]{32}$/);
 });
@@ -317,17 +317,58 @@ test('descricaoSegura: espaços colapsados ANTES de cortar, e número cortado na
   assert.ok(performance.now() - t0 < 50);
 });
 
+test('sem INFINITEPAY_CONTA_SEGREDO (ausente, vazio ou curto) a importação recusa com mensagem clara e nada é gravado; o segredo não vem do login', async () => {
+  for (const ruim of ['', undefined, 'curto', 'x'.repeat(31)]) {
+    const arm = relatoriosEmMemoria();
+    await assert.rejects(
+      () => importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', ...(ruim === undefined ? {} : { segredoDaConta: ruim }) }),
+      /DESLIGADA: falta INFINITEPAY_CONTA_SEGREDO/,
+      JSON.stringify(ruim),
+    );
+    assert.equal(arm.importacoesGravadas.length, 0);
+    assert.throws(() => lerOfx(OFX_V1, ruim ?? ''), /INFINITEPAY_CONTA_SEGREDO/);
+  }
+  assert.equal(segredoDaContaDoAmbiente({}), '');
+  assert.equal(segredoDaContaDoAmbiente({ INFINITEPAY_CONTA_SEGREDO: 'curto' }), '');
+  assert.equal(segredoDaContaDoAmbiente({ INFINITEPAY_CONTA_SEGREDO: 'k'.repeat(32) }), 'k'.repeat(32));
+  // SESSION_JWT_SECRET (ou qualquer outra variável) nunca vira o segredo da conta
+  assert.equal(segredoDaContaDoAmbiente({ SESSION_JWT_SECRET: 'j'.repeat(64) }), '');
+});
+
+test('fluxo: sem o segredo nem se pede o arquivo à clínica, e importar também recusa', async () => {
+  const c = await cenario();
+  try {
+    const ctx = ctxCom();
+    const sem = { ...c.deps, segredoDaConta: '' };
+    await assert.rejects(() => pedirRelatorio(ctx, sem, QUEM, { relatorio: 'extrato' }), /DESLIGADA: falta INFINITEPAY_CONTA_SEGREDO/);
+    const p = await pedirRelatorio(ctx, c.deps, QUEM, { relatorio: 'extrato' });
+    await c.enviar(p.linkDeEnvio.split('/').pop()!, 'a.ofx', buf(OFX_V1));
+    await assert.rejects(() => importarEnvio(ctx, sem, QUEM, { envio: p.envio }), /DESLIGADA/);
+    assert.equal(c.cofre.ver(QUEM.id, p.envio).estado, 'recebido', 'o arquivo continua guardado: com o segredo posto, importa');
+    assert.ok((await importarEnvio(ctx, c.deps, QUEM, { envio: p.envio })).importado);
+  } finally {
+    c.limpar();
+  }
+});
+
+test('bloco BANKACCTFROM grande (até 4.000 caracteres) é lido; maior que o limite ou sem ACCTID é RECUSADO, nunca pula as checagens de conta', () => {
+  const grande = (n: number) => OFX_V1.replace('<BANKID>0001<ACCTID>987654321', `<BANKID>0001<BRANCHID>${'9'.repeat(n)}<ACCTID>987654321`);
+  assert.equal(lerOfx(grande(1500), SEGREDO).conta?.final, '4321', 'com 1.500 caracteres antes do ACCTID ainda lê');
+  assert.throws(() => lerOfx(grande(5000), SEGREDO), /não consegui ler o ACCTID/);
+  assert.throws(() => lerOfx(OFX_V1.replace('<ACCTID>987654321', '<ACCTTYPE>X'), SEGREDO), /não consegui ler o ACCTID/);
+});
+
 test('arquivo sem ACCTID: importa, mas avisa que não deu para conferir a conta', async () => {
   const arm = relatoriosEmMemoria();
   const sem = OFX_V1.replace(/<BANKACCTFROM>.*<\/BANKACCTFROM>/, '');
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(sem), importadoPor: 'x' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(sem), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.ok(r.importado);
   if (r.importado) assert.match(String(r.aviso), /não declara a conta/);
 });
 
 test('período que se SOBREPÕE com lançamentos novos de outro identificador: avisa (risco de contar em dobro); sem sobreposição, não', async () => {
   const arm = relatoriosEmMemoria();
-  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x' };
+  const base = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'x', segredoDaConta: SEGREDO };
   await importarRelatorio(arm, { ...base, conteudo: buf(OFX_V1) });
   // os MESMOS 3 lançamentos com FITID diferentes, período que se sobrepõe: entram como novos e é exatamente o risco
   const refeito = OFX_V1.replace(/<FITID>A(\d)/g, '<FITID>B$1').replace('<DTEND>20261115235959[-3:BRT]', '<DTEND>20261118');
@@ -363,7 +404,7 @@ test('DTPOSTED: o deslocamento entre colchetes é respeitado e o dia é o de Bra
 });
 
 test('OFX com DTPOSTED em GMT: o lançamento da noite de Brasília fica no dia certo', () => {
-  const r = lerOfx(OFX_V1.replace('<DTPOSTED>20261104<TRNAMT>200.00', '<DTPOSTED>20261104010000[0:GMT]<TRNAMT>200.00'));
+  const r = lerOfx(OFX_V1.replace('<DTPOSTED>20261104<TRNAMT>200.00', '<DTPOSTED>20261104010000[0:GMT]<TRNAMT>200.00'), SEGREDO);
   assert.equal(r.linhas[1]!.data, '2026-11-03');
 });
 
@@ -395,21 +436,21 @@ test('descricaoSegura é LINEAR: 100 mil caracteres, de qualquer forma, em menos
 test('um OFX com 20 mil caracteres no NAME e no MEMO é lido em tempo curto, sem travar', () => {
   const grande = OFX_V1.replace('<NAME>PIX RECEBIDO<MEMO>MARIA SOUZA CPF 52998224725', `<NAME>${'a@'.repeat(10_000)}<MEMO>${'b.'.repeat(10_000)}`);
   const t0 = performance.now();
-  const r = lerOfx(grande);
+  const r = lerOfx(grande, SEGREDO);
   assert.ok(performance.now() - t0 < 200);
   assert.ok(r.linhas.every((l) => l.descricao.length <= 200));
 });
 
 test('OFX só vale para extrato: para vendas manda usar o CSV (nada é gravado)', async () => {
   const arm = relatoriosEmMemoria();
-  await assert.rejects(() => importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' }), /use o CSV/);
+  await assert.rejects(() => importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO }), /use o CSV/);
   assert.equal(arm.importacoesGravadas.length, 0);
 });
 
 test('CSV de leiaute DESCONHECIDO: nada é gravado, só o cabeçalho volta (nunca as linhas), e o mesmo arquivo pode ser importado depois', async () => {
   const arm = relatoriosEmMemoria();
   const csv = 'Data;Valor bruto;Taxa;Pagador\n01/11/2026;100,00;3,50;MARIA SOUZA 52998224725\n02/11/2026;50,00;1,00;JOSE';
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(csv), importadoPor: 'x' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(csv), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.equal(r.importado, false);
   if (r.importado || r.motivo !== 'leiaute_desconhecido') throw new Error('esperava leiaute_desconhecido');
   assert.deepEqual(r.cabecalho, ['Data', 'Valor bruto', 'Taxa', 'Pagador']);
@@ -423,7 +464,7 @@ test('CSV de leiaute DESCONHECIDO: nada é gravado, só o cabeçalho volta (nunc
 test('CSV SEM cabeçalho: a primeira linha é dado e NÃO volta ao chat (nem nome, nem documento, nem valor)', async () => {
   const arm = relatoriosEmMemoria();
   const csv = '2026-11-03;Maria Souza;123.456.789-01;150,00\n2026-11-04;José Lima;987.654.321-00;80,00';
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(csv), importadoPor: 'x' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(csv), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.equal(r.importado, false);
   if (r.importado || r.motivo !== 'leiaute_desconhecido') throw new Error('esperava leiaute_desconhecido');
   assert.equal(r.semCabecalho, true);
@@ -450,7 +491,7 @@ test('CSV com um leiaute cadastrado: vendas por forma, bruto, líquido e taxa (l
   try {
     const arm = relatoriosEmMemoria();
     const completo = 'quando;forma;bruto;liquido;parcelas\n2026-11-03;credito;1000,00;960,00;3\n2026-11-03;pix;200,00;200,00;1\n2026-11-04;credito;100,00;97,00;1';
-    const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(completo), importadoPor: 'x' });
+    const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'vendas', tipoDoCofre: 'csv', conteudo: buf(completo), importadoPor: 'x', segredoDaConta: SEGREDO });
     assert.ok(r.importado);
     const ctx = ctxCom();
     const v = await infinitepayVendas(ctx, arm, { inicio: '2026-11-01', fim: '2026-11-30' });
@@ -503,15 +544,15 @@ test('extrato: o padrão é SÓ extrato (recebível nunca soma junto) e a descri
 
 test('linhas repetidas sem sobreposição de período: a importação avisa (FITID pode ter sido reaproveitado)', async () => {
   const arm = relatoriosEmMemoria();
-  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x' });
+  await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1), importadoPor: 'x', segredoDaConta: SEGREDO });
   // mesmo conteúdo de linhas, mas num arquivo que declara OUTRO período (dezembro) e portanto não se sobrepõe
   const outro = OFX_V1.replace('<DTSTART>20261101000000[-3:BRT]<DTEND>20261115235959[-3:BRT]', '<DTSTART>20261201<DTEND>20261215');
-  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(outro), importadoPor: 'x' });
+  const r = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(outro), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.ok(r.importado);
   if (!r.importado) return;
   assert.equal(r.importacao.linhasRepetidas, 3);
   assert.match(String(r.aviso), /SEM que o período do arquivo encontre outro/);
-  const sobreposto = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1.replace('<MEMO>Transferencia enviada', '<MEMO>Transferencia enviada 2')), importadoPor: 'x' });
+  const sobreposto = await importarRelatorio(arm, { unidade: UNI, relatorio: 'extrato', tipoDoCofre: 'ofx', conteudo: buf(OFX_V1.replace('<MEMO>Transferencia enviada', '<MEMO>Transferencia enviada 2')), importadoPor: 'x', segredoDaConta: SEGREDO });
   assert.ok(sobreposto.importado);
   if (sobreposto.importado) assert.equal(sobreposto.aviso, undefined, 'sobreposição legítima não avisa');
 });
@@ -533,7 +574,7 @@ test('importar com a unidade fora do ar NÃO deixa o envio preso: o arquivo cont
 
 test('o registro de leiautes de CSV nasce VAZIO: nenhum leiaute da InfinitePay é inventado', () => {
   assert.equal(LEIAUTES_CSV.length, 0);
-  const l = lerRelatorio(buf('a;b\n1;2'), 'csv', 'vendas');
+  const l = lerRelatorio(buf('a;b\n1;2'), 'csv', 'vendas', SEGREDO);
   assert.equal(l.reconhecido, false);
 });
 
@@ -579,7 +620,7 @@ async function cenario() {
   const dir = mkdtempSync(path.join(tmpdir(), 'ip-relatorio-'));
   const cofre = new CofreDeArquivos({ dir: path.join(dir, 'cofre') });
   const armazem = relatoriosEmMemoria();
-  const deps = { segredoDaConta: 'segredo-de-teste-da-conta', cofre, baseUrl: () => 'https://conector.exemplo.com/', armazem };
+  const deps = { segredoDaConta: SEGREDO, cofre, baseUrl: () => 'https://conector.exemplo.com/', armazem };
   const enviar = async (token: string, nome: string, conteudo: Buffer) => {
     const r = cofre.reservar(token);
     return cofre.guardar(r, nome, conteudo);

@@ -17,6 +17,7 @@ import { infinitepayExtrato } from './infinitepay-relatorio-ferramentas.js';
 
 const BANCO = process.env.TESTE_POSTGRES_URL;
 const UNI = 'doutor-hernia-acailandia';
+const SEGREDO_PG = 'segredo-do-teste-no-postgres-0123456789';
 
 const OFX = (extra = '', fim = '20261115') => `OFXHEADER:100
 DATA:OFXSGML
@@ -45,7 +46,7 @@ test('Postgres de verdade: migrations aplicam; importa, não duplica arquivo nem
 
     const arm = armazemDeRelatoriosPrisma(db as never);
     const arm2 = armazemDeRelatoriosPrisma(db2 as never);
-    const a = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'j@x.com' };
+    const a = { unidade: UNI, relatorio: 'extrato' as const, tipoDoCofre: 'ofx' as const, importadoPor: 'j@x.com', segredoDaConta: SEGREDO_PG };
 
     const r1 = await importarRelatorio(arm, { ...a, conteudo: Buffer.from(OFX()) });
     assert.ok(r1.importado);
@@ -81,8 +82,25 @@ test('Postgres de verdade: migrations aplicam; importa, não duplica arquivo nem
     assert.match(gravada?.contaHash ?? '', /^[0-9a-f]{32}$/);
     assert.equal(JSON.stringify(gravada).includes('987654321'), false, 'o número da conta nunca é gravado');
 
+    // DUAS importações da mesma conta em unidades diferentes AO MESMO TEMPO (bytes diferentes): a trava por conta deixa passar só uma
+    const contas2 = Array.from({ length: 12 }, () => new PrismaClient({ datasourceUrl: BANCO }));
+    try {
+      const corrida = await Promise.allSettled(
+        contas2.map((cli, i) =>
+          importarRelatorio(armazemDeRelatoriosPrisma(cli as never), {
+            ...a, unidade: `unidade-corrida-${i}`, conteudo: Buffer.from(OFX('', `2026121${i % 10}`).replace('<ACCTID>987654321', '<ACCTID>424242424')),
+          }),
+        ),
+      );
+      const gravadas = await db.infinitepayImportacao.count({ where: { unitSlug: { startsWith: 'unidade-corrida-' } } });
+      assert.equal(gravadas, 1, `a mesma conta entrou em ${gravadas} unidades ao mesmo tempo`);
+      assert.equal(corrida.filter((x) => x.status === 'fulfilled' && x.value.importado).length, 1);
+    } finally {
+      await Promise.all(contas2.map((c2) => c2.$disconnect()));
+    }
+
     // a MESMA conta em OUTRA unidade, com bytes diferentes (novo export do período): recusada pelo hash da conta
-    const mesmaConta = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', segredoDaConta: 'segredo-do-teste', conteudo: Buffer.from(OFX('', '20261116')) });
+    const mesmaConta = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', segredoDaConta: 'outro-segredo-do-teste-no-postgres-01234', conteudo: Buffer.from(OFX('', '20261116')) });
     assert.notEqual(!mesmaConta.importado && mesmaConta.motivo, 'conta_de_outra_unidade', 'com OUTRO segredo o hash é outro: a conta é desconhecida (isso mostra que o segredo entra no hash)');
     const dono = await importarRelatorio(arm, { ...a, unidade: 'doutor-hernia-serra', conteudo: Buffer.from(OFX('', '20261117')) });
     assert.equal(!dono.importado && dono.motivo, 'conta_de_outra_unidade');

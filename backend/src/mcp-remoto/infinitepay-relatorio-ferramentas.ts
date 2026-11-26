@@ -16,7 +16,7 @@ import { CofreDeArquivos, ErroDeCofre } from './cofre-arquivos.js';
 import { executar } from './ferramenta.js';
 import { resolverContaInfinitepay, type ContextoInfinitepay } from './infinitepay.js';
 import {
-  RELATORIOS, coberturaDoPeriodo, importarRelatorio, totaisDasVendas, totaisDoExtrato,
+  RELATORIOS, coberturaDoPeriodo, exigirSegredoDaConta, importarRelatorio, totaisDasVendas, totaisDoExtrato,
   type ArmazemDeRelatorios, type TipoDeRelatorio, type VendaGuardada,
 } from './infinitepay-relatorio.js';
 
@@ -175,6 +175,8 @@ export async function infinitepayImportacoes(ctx: ContextoInfinitepay, armazem: 
 // ----------------------------------------------------------------- importação (quem escreve)
 
 export async function pedirRelatorio(ctx: ContextoInfinitepay, deps: DepsRelatorio, quem: { id: string; email?: string }, a: { unidade?: string; relatorio: TipoDeRelatorio }) {
+  // sem o segredo da conta a importação está desligada: nem se pede arquivo à clínica
+  exigirSegredoDaConta(deps.segredoDaConta);
   const conta = resolverContaInfinitepay(ctx, a.unidade);
   const como = COMO_EXPORTAR[a.relatorio];
   const formatos = FORMATOS[a.relatorio];
@@ -209,6 +211,7 @@ export async function pedirRelatorio(ctx: ContextoInfinitepay, deps: DepsRelator
 }
 
 export async function importarEnvio(ctx: ContextoInfinitepay, deps: DepsRelatorio, quem: { id: string; email?: string }, a: { envio: string; aceitarOutraConta?: boolean }) {
+  exigirSegredoDaConta(deps.segredoDaConta);
   let guardado;
   let d;
   try {

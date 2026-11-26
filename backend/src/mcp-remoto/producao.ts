@@ -61,6 +61,7 @@ import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } 
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
 import { armazemDeRelatoriosPrisma } from './infinitepay-relatorio-armazem.js';
+import { segredoDaContaDoAmbiente } from './infinitepay-relatorio.js';
 import { registrarImportacaoRelatoriosSePermitido, registrarLeituraRelatorios } from './infinitepay-relatorio-ferramentas.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
@@ -659,7 +660,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
   const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
   // o hash da conta do extrato é um HMAC com este segredo (INFINITEPAY_CONTA_SEGREDO, 32+ caracteres, SÓ do ambiente: sem ele a importação recusa)
-  const segredoDaContaInfinitepay = process.env.INFINITEPAY_CONTA_SEGREDO?.trim() ?? '';
+  const segredoDaContaInfinitepay = segredoDaContaDoAmbiente();
+  if (!segredoDaContaInfinitepay) logger.warn('mcp-remoto: INFINITEPAY_CONTA_SEGREDO ausente ou com menos de 32 caracteres — a importação de relatórios da InfinitePay fica desligada');
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());

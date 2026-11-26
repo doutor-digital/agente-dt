@@ -16,6 +16,7 @@ interface LinhaVenda { quando: Date; valorBrutoCentavos: number; valorLiquidoCen
 
 /** O pedaço do cliente do Prisma que o armazém usa (facilita o teste e a troca por transação). */
 export interface BancoDeRelatorios {
+  $executeRaw(consulta: TemplateStringsArray, ...valores: unknown[]): Promise<number>;
   $transaction<T>(fn: (tx: BancoDeRelatorios) => Promise<T>, opcoes?: { timeout?: number; maxWait?: number }): Promise<T>;
   infinitepayImportacao: {
     findUnique(a: { where: { unitSlug_sha256: { unitSlug: string; sha256: string } }; select: { id: true } }): Promise<{ id: string } | null>;
@@ -52,6 +53,13 @@ export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelat
       try {
         return await db.$transaction(
           async (tx) => {
+            // duas importações da MESMA conta em unidades diferentes ao mesmo tempo passariam as duas pela checagem de antes: a trava por conta as põe em fila,
+            // e a segunda relê quem já tem a conta (a primeira já gravou ao soltar a trava) e recusa
+            if (i.contaHash) {
+              await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`infinitepay-conta:${i.contaHash}`}::text, 0))`;
+              const donas = (await tx.infinitepayImportacao.findMany({ where: { contaHash: i.contaHash }, orderBy: { createdAt: 'asc' } })).filter((l) => l.unitSlug !== i.unidade);
+              if (donas.length > 0) throw new ErroDeEntrada(`esta conta acabou de ser importada em ${[...new Set(donas.map((l) => l.unitSlug))].join(', ')} (importação ao mesmo tempo): a mesma conta em duas unidades contaria o dinheiro duas vezes. Nada foi gravado.`);
+            }
             const imp = await tx.infinitepayImportacao.create({
               data: {
                 unitSlug: i.unidade, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, sha256: i.sha256, bytes: i.bytes,
