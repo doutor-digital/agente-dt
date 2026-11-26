@@ -42,6 +42,7 @@ import { cartaoNoKommoDaUnidade } from './chatwoot-cartao-kommo.js';
 import { confereCartaoNoKommo, kommoCortado, tratamentoNaFranquia } from './kommo-cortado.js';
 import { consultarFranquia } from './paciente-em-tratamento.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
+import { foraDoHorarioDaIa } from './chatwoot-horario-da-ia.js';
 import type { CartaoNoKommo } from './chatwoot-cartao-kommo.js';
 import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
@@ -201,6 +202,8 @@ export interface PortasDaIa {
   agendar(fn: () => void, ms: number): unknown;
   cancelar(t: unknown): void;
   hoje(): string;
+  /** o instante de agora (horário da clínica, feriado); opcional: o teste fixa, o real usa o relógio */
+  agora?(): Date;
   /** só com o robô ligado: tira a conversa de «Pendentes» (a Sofia não respondeu; a equipe precisa ver) */
   abrirParaEquipe?(conversa: number): Promise<void>;
   /**
@@ -326,6 +329,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     agendar: (fn, ms) => setTimeout(fn, ms),
     cancelar: (t) => clearTimeout(t as NodeJS.Timeout),
     hoje: () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10),
+    agora: () => new Date(),
   };
 }
 
@@ -374,6 +378,7 @@ async function vaiAtender(m: MensagemDoPaciente, lida: ConversaLida, p: PortasDa
     const unit = await p.unidade(m.slug);
     if (!unit) return false;
     if (emPausa(unit)) return false; // unidade pausada: não ganha o selo «Sofia atendendo»
+    if (foraDoHorarioDaIa(unit, p.agora?.())) return false; // fora do horário da IA (expediente, feriado): a equipe atende, sem selo
     if ((await p.cartaoNoKommo(unit, lida.telefone)) !== null) return false;
     // unidade que saiu da Kommo: paciente em tratamento na franquia também não ganha o selo (a rodada vai calar)
     if (kommoCortado(unit.slug) && p.tratamentoNaFranquia && (await p.tratamentoNaFranquia(unit, lida.telefone))) return false;
@@ -454,7 +459,8 @@ export type Desfecho =
   | 'horario-divergente'
   | 'cartao-no-kommo'
   | 'kommo-indisponivel'
-  | 'pausada-pela-unidade';
+  | 'pausada-pela-unidade'
+  | 'fora-do-horario';
 
 /**
  * A «assinatura» das mensagens PÚBLICAS da conversa: quantas são e qual é a última (pelo id do Chatwoot; sem id, pelo texto).
@@ -517,6 +523,8 @@ export const DESFECHOS_QUE_ENCERRAM: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'kommo-indisponivel',
   // a unidade está pausada (recepção ou painel Agente): a Sofia não atende, então a etiqueta «Sofia atendendo» não pode ficar
   'pausada-pela-unidade',
+  // fora do horário da IA (expediente da clínica, feriado): a equipe atende, a etiqueta «Sofia atendendo» não pode ficar
+  'fora-do-horario',
   // a última fala pública é nossa: a equipe respondeu (a pausa já teria tirado a etiqueta; se ela falhou, é aqui que sai) — se fosse a Sofia
   // mesma de outra cópia do servidor, a próxima mensagem do paciente repõe
   'equipe-respondeu',
@@ -541,6 +549,7 @@ export const DESFECHOS_DO_REGISTRO: ReadonlySet<Desfecho> = new Set<Desfecho>([
   'cartao-no-kommo',
   'kommo-indisponivel',
   'pausada-pela-unidade',
+  'fora-do-horario',
 ]);
 
 async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem: MemoriaDaIa, modo: ModoDaSofia, info: InfoDaRodada = {}): Promise<Desfecho> {
@@ -567,6 +576,15 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
     info.motivo = 'pausa da clínica';
     logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: unidade pausada — a Sofia não responde`);
     return 'pausada-pela-unidade';
+  }
+
+  // HORÁRIO DA IA (`business_hours_*`, `business_hours_expediente`, feriado nacional): o mesmo portão da Sofia do Kommo. Fora da janela a equipe atende
+  // e a Sofia fica calada; no modo «só fora do expediente» (Caxias, Petrópolis, Taubaté) é o contrário: calada DENTRO do expediente. Unidade sem
+  // `business_hours_enabled` (Parauapebas) nunca cai aqui — 24 h como sempre. Conferido na hora de rodar (60 s depois da fala), não na da mensagem.
+  if (foraDoHorarioDaIa(unit, p.agora?.())) {
+    info.motivo = 'fora do horário da IA';
+    logger.info({ conversa: m.conversa, unit: m.slug }, `${ID_IA}: fora do horário da IA nesta unidade — a Sofia não responde`);
+    return 'fora-do-horario';
   }
 
   // a conversa como está agora: já passada à equipe, em tratamento, grupo → calada; sem telefone não dá para conferir o Kommo nem a agenda
