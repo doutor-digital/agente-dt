@@ -915,11 +915,6 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
   for (const k of candidatos(c, memoria.vistos, ajustes)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
-    // retomada de lead para quem já tem consulta ou avaliou há pouco: o texto não combina com o caso (não registra: se a consulta cair, a regra ainda vale dentro do prazo)
-    if (retomadaSegurada(k.regra, c.attrs, agora)) {
-      if (!seguradas.includes(k.regra)) seguradas.push(k.regra);
-      continue;
-    }
     // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
     if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
     if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
@@ -929,6 +924,12 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
       continue;
     }
     if (!aberta) continue;
+    // retomada de lead para quem já tem consulta ou avaliou há pouco: o texto não combina com o caso (não registra: se a consulta cair, a regra ainda vale dentro do prazo).
+    // Só conta como «segurada» a que sairia AGORA (no prazo e na janela): a que já passou do prazo não vira linha de log a cada ciclo.
+    if (retomadaSegurada(k.regra, c.attrs, agora)) {
+      if (!seguradas.includes(k.regra)) seguradas.push(k.regra);
+      continue;
+    }
     if (k.interna) {
       disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: DESCRICAO_INTERNA[k.interna], variaveis: null, faltando: [], alvo: k.alvo, interna: k.interna });
       continue;
