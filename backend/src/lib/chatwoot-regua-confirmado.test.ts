@@ -102,3 +102,18 @@ test('os 4 textos «sem pedido» existem em TEXTOS_PARAU, usam só campos que a 
     assert.ok(camposDoModelo(m).every((c) => c === 'contact.name' || c === 'lead.cf.2450736' || c === 'lead.cf.2450928'), m);
   }
 });
+
+test('o modelo trocado na tela «Robôs» vale também para quem já confirmou (o ajuste é guardado pelo nome ORIGINAL do modelo)', () => {
+  const ajustes = { modelos: new Map([['consulta-vespera|parau_consulta_lembrete_vespera', 'parau_sessao_lembrete_vespera']]) };
+  const c = conv({ ...CONSULTA, situacao_consulta: 'Confirmado' });
+  const vistos = new Map<string, Visto>([['_visto', visto('1')]]);
+  const d = decidirRegua(c, { vistos, feitos: new Set() }, Z('2026-11-17T18:05:00Z'), U, ajustes).disparos.find((x) => x.regra === 'consulta-vespera')!;
+  assert.equal(d.modelo, 'parau_sessao_lembrete_vespera', 'o que a Gestora escolheu vence o «sem pedido»');
+  // sem ajuste, o «sem pedido» e a reserva (o original) vêm juntos
+  const s = decidirRegua(c, { vistos, feitos: new Set() }, Z('2026-11-17T18:05:00Z'), U).disparos.find((x) => x.regra === 'consulta-vespera')!;
+  assert.equal(s.modelo, 'parau_consulta_lembrete_vespera_confirmada');
+  assert.equal((s as { reserva?: { modelo: string } }).reserva?.modelo, 'parau_consulta_lembrete_vespera');
+  // quem não confirmou não tem reserva
+  const n = decidirRegua(conv({ ...CONSULTA, situacao_consulta: 'Agendado' }), { vistos, feitos: new Set() }, Z('2026-11-17T18:05:00Z'), U).disparos.find((x) => x.regra === 'consulta-vespera')!;
+  assert.equal('reserva' in n, false);
+});

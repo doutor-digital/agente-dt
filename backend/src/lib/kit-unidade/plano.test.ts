@@ -142,7 +142,7 @@ test('o seco mostra os 37 modelos prontos para a Meta, sem nada que a Meta recus
   const p = montarPlano(q((o) => { o.unidade.endereco = 'Av. Nova, 100 — Centro, Cidade Nova/PA'; o.unidade.mapa_url = 'https://maps.example/nova'; o.unidade.nome = 'Doutor Hérnia Cidade Nova'; o.unidade.cidade = 'Cidade Nova'; o.whatsapp.prefixo_modelos = 'novo_'; }), {}, { molde: MOLDE });
   const m = passo(p, 'modelos');
   assert.ok(!m.avisos.some((a) => /a Meta recusaria|dado da unidade faltando/.test(a)), m.avisos.join(' | '));
-  assert.ok(m.avisos.some((a) => /13 modelo\(s\) com categoria\/botões NÃO conferidos/.test(a)));
+  assert.ok(m.avisos.some((a) => /9 modelo\(s\) com categoria\/botões NÃO conferidos/.test(a)));
 });
 
 // ── a Sofia da unidade ───────────────────────────────────────────────────────────────────────────

@@ -39,6 +39,11 @@ export const METADADOS_DOS_MODELOS: Readonly<Record<string, MetadadosDoModelo>> 
   parau_consulta_prepagamento_pendente: { categoria: 'UTILITY', botoes: ['Já paguei', 'Preciso de ajuda', 'Prefiro pagar no dia'] },
   parau_consulta_lembrete_vespera: { categoria: 'UTILITY', botoes: ['Confirmar presença', 'Preciso remarcar'] },
   parau_consulta_confirmacao_dia: { categoria: 'UTILITY', botoes: ['Confirmar presença', 'Preciso remarcar'] },
+  // «sem pedido» (quem já confirmou): o mesmo lembrete sem «Confirmar presença»
+  parau_consulta_lembrete_vespera_confirmada: { categoria: 'UTILITY', botoes: ['Preciso remarcar'] },
+  parau_consulta_dia_confirmada: { categoria: 'UTILITY', botoes: ['Preciso remarcar'] },
+  parau_sessao_lembrete_vespera_confirmada: { categoria: 'UTILITY', botoes: ['Preciso remarcar'] },
+  parau_sessao_dia_confirmada: { categoria: 'UTILITY', botoes: ['Preciso remarcar'] },
   parau_consulta_preparo: { categoria: 'UTILITY', botoes: ['Está tudo certo', 'Tenho uma dúvida'] },
   parau_consulta_falta_mesmo_dia: { categoria: 'UTILITY', botoes: ['Quero remarcar', 'Me chama depois'] },
   parau_consulta_falta_48h: { categoria: 'UTILITY', botoes: ['Quero remarcar', 'Agora não posso'] },

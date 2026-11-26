@@ -933,3 +933,32 @@ test('paciente já CONFIRMADO: o worker manda a véspera sem a pergunta (data, e
   assert.doesNotMatch(c.mensagens[0]!.texto, /\?/);
   assert.deepEqual(arm.disparos.map((d) => `${d.regra}|${d.modo}`), ['consulta-vespera|ligado']);
 });
+
+test('paciente CONFIRMADO na caixa oficial com a janela FECHADA: se o «sem pedido» não está aprovado na Meta, vai o template ORIGINAL (com data, endereço e mapa); aprovado, vai o «sem pedido»; nenhum aprovado, só a nota', async () => {
+  const SEM = 'parau_consulta_lembrete_vespera_confirmada';
+  const confirmada = { attrs: { ...CONSULTA, situacao_consulta: 'Confirmado', etapa: 'Confirmado' }, ultima: CLINICA };
+  const fechada = new Date('2026-11-14T10:00:00Z');
+  // só o original aprovado
+  const a = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: fechada }, confirmada);
+  assert.equal(a.mensagens.length, 1);
+  assert.deepEqual(a.mensagens[0]!.template, { nome: VESP, idioma: 'pt_BR', variaveis: ['Maria', '17/11 às 14:30'] });
+  assert.match(a.mensagens[0]!.texto, /^Olá, Maria\. A sua consulta é amanhã\./);
+  assert.match(a.mensagens[0]!.texto, /Endereço: /);
+  assert.equal(a.resumo.disparos, 1);
+  assert.equal(a.resumo.semTemplate, 0);
+  assert.ok(a.disparos[0]!.texto.startsWith(`[template ${VESP}] `));
+  // os dois aprovados: vai o «sem pedido», sem a pergunta
+  const b = await doisCiclos('ligado', 3, { aprovados: [VESP, SEM], ultimaDoPaciente: fechada }, confirmada);
+  assert.deepEqual(b.mensagens[0]!.template, { nome: SEM, idioma: 'pt_BR', variaveis: ['Maria', '17/11 às 14:30'] });
+  assert.doesNotMatch(b.mensagens[0]!.texto, /\?/);
+  // nenhum aprovado: nota «sem template», nada ao paciente
+  const c = await doisCiclos('ligado', 3, { aprovados: [], ultimaDoPaciente: fechada }, confirmada);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.equal(c.resumo.semTemplate, 1);
+  assert.equal(c.resumo.disparos, 0);
+  // janela ABERTA: texto livre, o «sem pedido»
+  const d = await doisCiclos('ligado', 3, { aprovados: [], ultimaDoPaciente: new Date('2026-11-16T10:00:00Z') }, { ...confirmada, ultima: PACIENTE_HOJE });
+  assert.equal(d.mensagens[0]!.template, undefined);
+  assert.doesNotMatch(d.mensagens[0]!.texto, /\?/);
+});

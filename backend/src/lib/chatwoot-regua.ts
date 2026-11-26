@@ -252,6 +252,11 @@ export interface Disparo {
   alvo: Date;
   /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
   interna?: AcaoInterna;
+  /**
+   * Só no lembrete «sem pedido» (quem já confirmou): o MESMO lembrete na versão original, com a pergunta, já renderizado. O worker o manda no lugar quando o
+   * «sem pedido» não está aprovado na Meta (caixa oficial, janela de 24 h fechada): melhor o lembrete com a pergunta do que nenhum.
+   */
+  reserva?: { modelo: string; texto: string; variaveis: string[] };
 }
 
 export interface Decisao {
@@ -588,6 +593,8 @@ export interface Candidato {
   saiAntesDoDia?: string;
   /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
   momento?: Momento;
+  /** o modelo ORIGINAL (com a pergunta) quando este Candidato já é o «sem pedido»: serve de reserva se o «sem pedido» não estiver aprovado na Meta */
+  modeloComPedido?: string;
 }
 
 /**
@@ -615,7 +622,7 @@ const MODELO_SEM_PEDIDO: ReadonlyMap<string, string> = new Map([
 ]);
 /** Troca, nos lembretes que pedem confirmação, o modelo pelo «sem pedido»; o resto (e a regra, a chave e o horário) fica como estava. */
 const semPedidoSe = (sim: boolean, k: Candidato): Candidato => (sim ? semPedido(k) : k);
-const semPedido = (k: Candidato): Candidato => (MODELO_SEM_PEDIDO.has(k.modelo) ? { ...k, modelo: MODELO_SEM_PEDIDO.get(k.modelo)! } : k);
+const semPedido = (k: Candidato): Candidato => (MODELO_SEM_PEDIDO.has(k.modelo) ? { ...k, modelo: MODELO_SEM_PEDIDO.get(k.modelo)!, modeloComPedido: k.modelo } : k);
 /** motivo da espera → modelo da régua (só estes 4 têm lembrete; os outros motivos da lista não mandam nada) */
 export const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
@@ -892,8 +899,11 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     })
     // modelo trocado na tela «Robôs» (só vale para quem fala com o paciente; a aprovação na Meta o worker confere na hora de enviar)
     .map((k) => {
-      const novo = k.interna ? undefined : ajustes?.modelos?.get(`${k.regra}|${k.modelo}`);
-      return novo ? { ...k, modelo: novo } : k;
+      // o ajuste da tela «Robôs» é guardado pelo nome ORIGINAL do modelo (`regra|modelo do código`), mesmo quando o candidato já virou o «sem pedido»
+      const novo = k.interna ? undefined : ajustes?.modelos?.get(`${k.regra}|${k.modeloComPedido ?? k.modelo}`);
+      if (!novo) return k;
+      const { modeloComPedido: _semReserva, ...resto } = k;
+      return { ...resto, modelo: novo };
     });
 }
 
@@ -967,7 +977,9 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     }
     const r = renderizar(k.modelo, c, unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
-    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
+    const original = k.modeloComPedido && r.texto !== null ? renderizar(k.modeloComPedido, c, unidade, k.momento) : null;
+    const reserva = original?.texto != null && original.variaveis ? { reserva: { modelo: k.modeloComPedido!, texto: original.texto, variaveis: original.variaveis } } : {};
+    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo, ...reserva });
   }
   return { disparos, perdidas, ...(seguradas.length ? { seguradas } : {}) };
 }
