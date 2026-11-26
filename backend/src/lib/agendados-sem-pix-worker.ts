@@ -1,6 +1,6 @@
 /**
  * O worker da lista «Agendados sem Pix» (`agendados-sem-pix.ts`): de 5 em 5 minutos olha as unidades que têm banco na Pluggy e decide, por unidade, se já é hora da lista
- * do dia. Quase sempre não é (fora do horário, já feita, estado desligado): essas voltas não tocam agenda nem banco. O líder dos workers (`worker-lease.ts`) é quem o sobe.
+ * do dia. Quase sempre não é (fora do horário, já feita, estado desligado): essas voltas não tocam agenda nem extrato (só a lista de unidades). O líder dos workers (`worker-lease.ts`) é quem o sobe.
  *
  * As fontes reais: a agenda da franquia (`searchSchedules`, a mesma leitura do resto do agente), o banco pelo cliente compartilhado da Pluggy (o mesmo do conector, com o
  * cache de item e contas) e a Evolution que já manda os avisos à recepção. Nada aqui escreve na franquia, no Kommo nem no banco da Pluggy: a única escrita é a marca do dia.
@@ -114,6 +114,8 @@ export async function enviarAoGrupo(a: { url: string; header: string; valor: str
 
 const jaDisse = new Set<string>();
 const valoresLogados = new Set<string>();
+/** unidade → até quando não tentar ler a agenda de novo (depois de uma falha) */
+const agendaComFalha = new Map<string, number>();
 function avisarUmaVez(chave: string, msg: string): void {
   if (jaDisse.has(chave)) return;
   jaDisse.add(chave);
@@ -276,7 +278,13 @@ export async function varrer(env: NodeJS.ProcessEnv = process.env, agoraMs: numb
           logger.info({ unidade: u.slug, valoresReais: u.valores.map((v) => v / 100) }, `${ID_DA_AUTOMACAO}: valores de Pix que valem como sinal/consulta nesta unidade`);
         }
         const deps: DepsDoCiclo = {
-          agendados: (x) => agendadosRecentes(unit, x, agoraMs).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li a agenda`), null)),
+          agendados: async (x) => {
+            // falha de agenda (ou agenda grande demais): não repete a leitura pesada a cada 5 min — espera 10 min
+            if ((agendaComFalha.get(x.slug) ?? 0) > agoraMs) return null;
+            const r = await agendadosRecentes(unit, x, agoraMs).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li a agenda`), null));
+            if (!r) agendaComFalha.set(x.slug, agoraMs + 10 * 60_000);
+            return r;
+          },
           banco: (x, desde, lerMesmo) => lerBancoDaUnidade(ctx, x, desde, lerMesmo, agora).catch((err) => (logger.warn({ unidade: x.slug, err: String(err).slice(0, 200) }, `${ID_DA_AUTOMACAO}: não li o banco`), null)),
           destino: (slug) => destinoDoAvisoClinica(slug, env.AGENDADOS_SEM_PIX_DESTINOS),
           evolution: () => evolutionDaLista(env),

@@ -38,6 +38,11 @@ export const estadoDaLista = (slug: string, raw: string | undefined = process.en
 
 /** Pix até tantos dias ANTES da marcação ainda conta para ela (o paciente paga assim que recebe a chave, e a recepção marca depois). */
 export const PIX_ANTES_DO_AGENDAMENTO_DIAS = 7;
+/**
+ * O extrato é lido desde tantos dias antes da CONSULTA (não desde a «marcação»: a data de marcação é a última alteração do registro, e uma remarcação ou confirmação a empurra para
+ * frente). Pix de nome certo mais velho que a janela de pagamento (7 dias antes da marcação) não vale como «pagou», mas aparece como «a conferir (outra data)».
+ */
+export const LEITURA_ANTES_DA_CONSULTA_DIAS = 30;
 /** Quem foi marcado depois de (leitura do banco − esta margem) não pode ser dado como «não achei Pix»: o Pix dele ainda não podia estar lá. */
 export const MARGEM_DO_BANCO_MIN = 60;
 /** No máximo tantos envios ao grupo por dia e unidade (o primeiro + as repetições depois de recusa certa). */
@@ -47,8 +52,14 @@ export const ESPERA_ENTRE_ENVIOS_MIN = 15;
 
 const somarDias = (dia: string, n: number): string => new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
-/** Primeiro dia de Pix que vale para esta marcação. */
+/** Primeiro dia de Pix que vale como «pagou» para esta marcação. */
 export const pixDesde = (a: Pick<Agendado, 'agendadoEm'>): string => somarDias(a.agendadoEm, -PIX_ANTES_DO_AGENDAMENTO_DIAS);
+/** Primeiro dia de extrato a LER para esta marcação (a janela larga: ver LEITURA_ANTES_DA_CONSULTA_DIAS). */
+export const leituraDesde = (a: Pick<Agendado, 'agendadoEm' | 'dia'>): string => {
+  const larga = somarDias(a.dia, -LEITURA_ANTES_DA_CONSULTA_DIAS);
+  const estreita = pixDesde(a);
+  return larga < estreita ? larga : estreita;
+};
 
 /**
  * A categoria da consulta que se paga antes, em qualquer das grafias das franquias: «AVALIAÇÃO», «Avaliação inicial», «Consulta», «Consulta de avaliação», «Primeira consulta».
@@ -56,8 +67,8 @@ export const pixDesde = (a: Pick<Agendado, 'agendadoEm'>): string => somarDias(a
  */
 export function ehAvaliacao(categoria: string | null | undefined): boolean {
   const c = semAcento(categoria ?? '').trim();
-  if (!c || /reavalia|retorno|sess|fisio|tratamento/.test(c)) return false;
-  return /^(avalia|consulta|primeira consulta|1[ªao.]? consulta)/.test(c);
+  if (!c || /reavalia|retorno|sess|tratamento/.test(c)) return false;
+  return /^(avalia|consulta|primeira consulta|1[ªº]?o?\.? consulta)/.test(c);
 }
 
 // ----------------------------------------------------------------------------------------------------------------- decisão (pura)
@@ -162,7 +173,7 @@ export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: Reado
     for (const p of naoEmpresa) {
       const n = nivelDoPar(a, p);
       if (n === 'nenhum' || p.centavos < menor) continue;
-      const m: Motivo = n === 'parecido' ? 'nome-parecido' : !dataOk(a, p) ? 'data' : 'valor';
+      const m: Motivo = n === 'parecido' ? 'nome-parecido' : !valorOk(p) ? 'valor' : !dataOk(a, p) ? 'data' : 'valor';
       if (!fraco || (ranque[m] ?? 0) > (ranque[fraco] ?? 0)) fraco = m;
     }
     if (fraco) return { agendado: a, resultado: 'conferir', motivo: fraco };
@@ -394,22 +405,26 @@ export async function cicloDaUnidade(u: UnidadeDaLista, modo: Estado, deps: Deps
   }
 
   const agenda = await deps.agendados(u);
-  if (!agenda) return 'agenda_falhou';
+  if (!agenda) {
+    deps.avisarUmaVez(`${u.slug}:${u.hoje}:agenda`, `${ID_DA_AUTOMACAO}: ${u.slug} não consegui ler a agenda da franquia (falha ou agenda grande demais para o teto de leitura) — sem lista por enquanto; tento de novo em alguns minutos`);
+    return 'agenda_falhou';
+  }
   const { conhecidos } = agenda;
   // fecha o dia SEM mandar nada
   const fechar = async (payload: Record<string, unknown>) => void (await deps.marca.reivindicar(id, { unitId: u.id, titulo: TITULO_DA_MARCA, payload, estado: modo === 'seco' ? 'simulado' : 'enviado' }));
   // quem a conversa da Sofia marcou como «vai pagar na clínica» não deve nada antes da consulta: sai da lista
   const naClinica = await deps.pagamNaClinica(u, agenda.agendados.map((a) => a.idSchedule).filter((x): x is number => typeof x === 'number'));
   const agendados = agenda.agendados.filter((a) => !(typeof a.idSchedule === 'number' && naClinica.has(a.idSchedule)));
-  if (!agendados.length) {
-    await fechar({ modo, agendados: 0, pagamNaClinica: naClinica.size, nada: true });
-    return 'sem_agendados';
-  }
+  // sem ninguém a conferir NÃO fecha o dia: quem for marcado depois (a recepção marca a tarde toda) ainda entra na varredura seguinte; a agenda vem do cache, então é barato
+  if (!agendados.length) return 'sem_agendados';
 
-  const desde = agendados.reduce((m, a) => (pixDesde(a) < m ? pixDesde(a) : m), u.hoje);
+  const desde = agendados.reduce((m, a) => (leituraDesde(a) < m ? leituraDesde(a) : m), u.hoje);
   const ultimaChance = desdeInicio >= ESPERA_DO_BANCO_HORAS * 60;
   const banco = await deps.banco(u, desde, ultimaChance);
-  if (!banco) return 'banco_falhou';
+  if (!banco) {
+    deps.avisarUmaVez(`${u.slug}:${u.hoje}:banco`, `${ID_DA_AUTOMACAO}: ${u.slug} não consegui ler o banco (Pluggy fora, item não encontrado em PLUGGY_ITENS ou consentimento vencido) — sem lista por enquanto`);
+    return 'banco_falhou';
+  }
   if (!banco.confiavel && !ultimaChance) return 'aguardando_banco';
 
   const vs = conferirAgendados(agendados, banco.pix, { valores: u.valores, hoje: u.hoje, bancoConfiavel: banco.confiavel, bancoLidoEm: banco.lidoAteMs, podePagarNoDia: u.podePagarNoDia, conhecidos });

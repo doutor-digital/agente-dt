@@ -10,6 +10,8 @@ import {
   contagens,
   ehAvaliacao,
   estadoDaLista,
+  leituraDesde,
+  pixDesde,
   minutoDeInicio,
   textoDaLista,
   type Agendado,
@@ -59,6 +61,16 @@ test('o número do documento do pagador não entra no casamento: o Pix só tem n
 test('NÃO ACHEI PIX: nada no banco para o nome, banco confiável, marcado ANTES da leitura, sem Pix solto e unidade de taxa obrigatória', () => {
   const [v] = conf([ag('Maria Silva')], [px('p1', 'OUTRA PESSOA TOTAL', 80), px('p2', 'FULANO QUALQUER', 250, { dia: '2026-11-01' })]);
   assert.equal(v!.resultado, 'sem_pix');
+});
+
+test('REMARCADO/CONFIRMADO depois do pagamento: o extrato é lido desde 30 dias antes da CONSULTA, e o Pix velho de nome certo é «a conferir (outra data)», nunca «não achei»', () => {
+  const remarcado = ag('Maria Silva', { agendadoEm: '2026-11-25', dia: '2026-11-30' }); // pagou no dia 10; alteração do registro no dia 25
+  assert.equal(leituraDesde(remarcado), '2026-10-31', 'lê desde consulta − 30 dias (a janela de «pagou» seria 18/11)');
+  assert.equal(pixDesde(remarcado), '2026-11-18');
+  const [v] = conf([remarcado], [px('p1', 'MARIA SILVA', 250, { dia: '2026-11-10' })]);
+  assert.deepEqual([v!.resultado, v!.motivo], ['conferir', 'data']);
+  // Pix de nome certo e valor ERRADO e data fora (outro serviço): «valor», não «outra data»
+  assert.equal(conf([remarcado], [px('p1', 'MARIA SILVA', 500, { dia: '2026-11-10' })])[0]!.motivo, 'valor');
 });
 
 test('a conferir, nunca «não achei»: valor diferente, data fora, nome parecido', () => {
@@ -148,7 +160,7 @@ test('Pix de empresa (PJ) nunca é de paciente', () => {
 });
 
 test('categoria: aceita as grafias da avaliação e da consulta; reavaliação, retorno e sessão não', () => {
-  for (const c of ['AVALIAÇÃO', 'Avaliacao', 'Avaliação inicial', 'CONSULTA', 'Consulta de avaliação', 'Primeira consulta']) assert.equal(ehAvaliacao(c), true, c);
+  for (const c of ['AVALIAÇÃO', 'Avaliacao', 'Avaliação inicial', 'CONSULTA', 'Consulta de avaliação', 'Primeira consulta', '1º Consulta', '1ª consulta', 'Avaliação Fisioterapêutica']) assert.equal(ehAvaliacao(c), true, c);
   for (const c of ['REAVALIAÇÃO', 'RETORNO', 'Consulta de retorno', 'SESSÃO', 'Sessão de fisioterapia', 'TRATAMENTO', '', null, undefined]) assert.equal(ehAvaliacao(c as string), false, String(c));
 });
 
@@ -274,10 +286,10 @@ test('seco e ligado têm marcas DIFERENTES: o que o seco anotou não impede o li
   assert.equal(await cicloDaUnidade(unidade(), 'ligado', h.deps, INICIO), 'enviado');
 });
 
-test('sem agendado recente, ou todos pagaram: não manda nada e fecha o dia (sem ler o banco quando não há agendado)', async () => {
+test('sem agendado recente, ou todos pagaram: não manda nada (todos pagaram fecha o dia; sem agendado, não)', async () => {
   const sem = harness({ agendados: [] });
   assert.equal(await cicloDaUnidade(unidade(), 'ligado', sem.deps, INICIO), 'sem_agendados');
-  assert.equal(sem.chamadas.banco.length + sem.chamadas.enviados.length, 0);
+  assert.equal(sem.chamadas.banco.length + sem.chamadas.enviados.length + sem.chamadas.marcas.length, 0, 'sem agendado não lê o banco e NÃO fecha o dia: quem for marcado à tarde entra na varredura seguinte');
   const pagos = harness({ banco: bancoOk([px('p1', 'MARIA SILVA', 250)]) });
   assert.equal(await cicloDaUnidade(unidade(), 'ligado', pagos.deps, INICIO), 'tudo_pago');
   assert.equal(pagos.chamadas.enviados.length, 0);
@@ -319,6 +331,10 @@ test('falhas de leitura: agenda ou banco que não leu → não manda e não marc
   const semBanco = harness({ banco: null });
   assert.equal(await cicloDaUnidade(unidade(), 'ligado', semBanco.deps, INICIO), 'banco_falhou');
   assert.equal(semBanco.chamadas.enviados.length + semBanco.chamadas.marcas.length, 0);
+  assert.match(semBanco.chamadas.avisos[0]!, /não consegui ler o banco/, 'a falha não é muda');
+  const semAgenda = harness({ agendados: null });
+  await cicloDaUnidade(unidade(), 'ligado', semAgenda.deps, INICIO);
+  assert.match(semAgenda.chamadas.avisos[0]!, /não consegui ler a agenda da franquia/);
 });
 
 // ---------------------------------------------------------------- envio sem metralhadora
