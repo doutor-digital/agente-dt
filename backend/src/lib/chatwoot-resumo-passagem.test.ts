@@ -267,3 +267,34 @@ test('«hoje» da unidade no limite do dia: Boa Vista (UTC−4) às 23h30 ainda 
   assert.match(resumoDaPassagem({ attrs, falas, hoje: hojeDaUnidade({ businessHoursTimezone: 'America/Boa_Vista' }, agora) })!, /consulta Agendado: 26\/11 às 18:00/);
   assert.equal(resumoDaPassagem({ attrs, falas, hoje: hojeDaUnidade({ businessHoursTimezone: 'America/Sao_Paulo' }, agora) }), 'Resumo: última fala: «oi»', 'em São Paulo a consulta de ontem já passou');
 });
+
+// ── review do /code-review high (rodada 3) ─────────────────────────────────────────────────────────
+
+test('o tempo MAIS PRÓXIMO da dor vale e o de outra pessoa nunca: «minha mãe faleceu há 2 anos, tenho dor no joelho» não ganha «há 2 anos»; «meu pai faleceu há 3 anos, tenho dor no joelho há 2 meses» fica «há 2 meses»', () => {
+  const queixa = (f: string) => resumoDaPassagem({ falas: [u(f)] })!.split(' · ')[0];
+  assert.equal(queixa('minha mãe faleceu há 2 anos, tenho dor no joelho'), 'Resumo: dor no joelho');
+  assert.equal(queixa('meu pai faleceu há 3 anos, tenho dor no joelho há 2 meses'), 'Resumo: dor no joelho há 2 meses');
+  assert.equal(queixa('há 2 meses, tenho dor no joelho'), 'Resumo: dor no joelho há 2 meses');
+  assert.equal(queixa('faz 3 semanas que tenho dor no joelho'), 'Resumo: dor no joelho há 3 semanas');
+});
+
+test('e-mail e domínios: o e-mail inteiro some («meu e-mail é ana@gmail.com» não deixa «gmail.com» solto); .pro/.pt/.tv também; «obrigado.Me ajuda» não vira link', () => {
+  const r = resumoDaPassagem({ falas: [u('meu e-mail é ana@gmail.com')] })!;
+  assert.doesNotMatch(r, /gmail|@/);
+  assert.equal(r, 'Resumo: última fala: «meu e-mail é e-mail»');
+  for (const f of ['fale no meusite.pro', 'x.pt/abc', 'veja canal.tv e GOLPE.COM/x']) assert.doesNotMatch(resumoDaPassagem({ falas: [u(f)] })!, /meusite|x\.pt|canal\.tv|GOLPE/, f);
+  assert.match(resumoDaPassagem({ falas: [u('obrigado.Me ajuda')] })!, /«obrigado\.Me ajuda»/);
+});
+
+test('«quanto é o diagnóstico?» / «quanto custa a diária?» SÃO pergunta de preço (a lista de tempo tem fronteira de palavra)', () => {
+  for (const f of ['quanto é o diagnóstico?', 'quanto custa a diária?', 'quanto é a hora?']) assert.match(resumoDaPassagem({ falas: [u(f)] })!, /perguntou preço/, f);
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('quanto é o tempo?')] })!, /preço/);
+});
+
+test('o corte é do texto CRU e o escape vem depois: nenhuma barra solta antes do «…» nem fala encolhida pelas barras', () => {
+  const r = resumoDaPassagem({ falas: [u(`${'*a'.repeat(80)} fim`)] })!;
+  assert.doesNotMatch(r, /\\…|\\»/, 'sem barra solta na borda');
+  const miolo = r.split('«')[1]!.replace(/»$/, '');
+  assert.equal(Array.from(miolo.replace(/\\/g, '')).length <= 110, true);
+  assert.equal(Array.from(miolo.replace(/\\/g, '')).length >= 100, true, 'o corte conta os caracteres do paciente, não as barras');
+});
