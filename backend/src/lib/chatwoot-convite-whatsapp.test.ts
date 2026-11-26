@@ -13,6 +13,7 @@ import {
   eventoDoTextoPronto,
   marcarOrigemDoConvite,
   noConviteDoCrm,
+  ConversaLongaDemais,
   portasReaisDoConvite,
   slugDaCaixaSocial,
   type EventoSocial,
@@ -23,6 +24,7 @@ import { ID_CONVITE_WHATSAPP, _esquecerDecisoesParaTeste, textoPreEscrito } from
 import { _esquecerOBancoParaTeste, _semearParaTeste } from './automacoes-estado.js';
 import { rotuloRoboJs } from './chatwoot-rotulo-robo.js';
 import type { ConversaLida } from './chatwoot-porta.js';
+import { convidarParaWhatsapp, type DepsDoConvite } from './convite-whatsapp.js';
 
 const SLUG = 'doutor-hernia-parauapebas';
 const CONTA = 1;
@@ -39,7 +41,7 @@ beforeEach(() => {
 after(() => _esquecerOBancoParaTeste());
 
 const unidade = (extra: Partial<Unit> = {}): Unit =>
-  ({ id: 'u-parau', slug: SLUG, name: 'Doutor Hérnia Parauapebas', igWhatsappNumber: '(94) 98432-5883', fbWhatsappNumber: null, pausaDesde: null, pausaAte: null, ...extra }) as unknown as Unit;
+  ({ id: 'u-parau', slug: SLUG, name: 'Doutor Hérnia Parauapebas', igWhatsappNumber: '(21) 98888-7777', fbWhatsappNumber: null, pausaDesde: null, pausaAte: null, ...extra }) as unknown as Unit;
 
 const lida = (extra: Partial<ConversaLida> = {}): ConversaLida => ({ id: 50, nome: 'Fulana', telefone: null, attrs: {}, etiquetas: [], grupo: false, interno: false, ...extra });
 
@@ -186,7 +188,7 @@ test('SECO: deixa NOTA PRIVADA com o texto que mandaria, não envia e não gasta
   assert.equal(w.notas.length, 1);
   assert.match(w.notas[0]!, /só no papel.*mandaria este convite ao WhatsApp \(Instagram\)/s);
   assert.match(w.notas[0]!, /Aqui é da Doutor Hérnia Parauapebas\./);
-  assert.match(w.notas[0]!, /wa\.me\/5594984325883\?text=/);
+  assert.match(w.notas[0]!, /wa\.me\/5521988887777\?text=/);
 });
 
 test('SECO: a nota privada sai uma vez só por contato (a varredura de mensagens seguintes não empilha nota)', async () => {
@@ -207,7 +209,7 @@ test('LIGADO: manda o convite como mensagem pública com a marca do robô; a 2ª
   assert.equal(a.tipo, 'enviou');
   assert.equal(w.publicou.length, 1);
   assert.deepEqual(w.publicou[0]!.marca, { convite_whatsapp: true });
-  assert.match(w.publicou[0]!.texto, /^Oi! 😊 Aqui é da Doutor Hérnia Parauapebas\. Para te atender mais rápido e já ver os horários, continue pelo nosso WhatsApp: 👉 https:\/\/wa\.me\/5594984325883\?text=Ol%C3%A1!%20Vim%20pelo%20Instagram/);
+  assert.match(w.publicou[0]!.texto, /^Oi! 😊 Aqui é da Doutor Hérnia Parauapebas\. Para te atender mais rápido e já ver os horários, continue pelo nosso WhatsApp: 👉 https:\/\/wa\.me\/5521988887777\?text=Ol%C3%A1!%20Vim%20pelo%20Instagram/);
   assert.deepEqual(w.reivindicou, [chaveDoConviteCrm(CONTA, evento())]);
   const b = await convidarNoCrm(evento({ conversa: 51 }), CONTA, p, CONTA); // outra conversa do MESMO contato, dentro dos 7 dias
   assert.deepEqual(b, { tipo: 'ignorou', motivo: 'ja-convidado', detalhe: undefined });
@@ -216,9 +218,9 @@ test('LIGADO: manda o convite como mensagem pública com a marca do robô; a 2ª
 
 test('LIGADO: Facebook usa o número do Facebook e o texto do Facebook', async () => {
   ligar('ligado');
-  const { w, p } = portas({ unidade: async () => unidade({ fbWhatsappNumber: '(94) 91111-2222' }) });
+  const { w, p } = portas({ unidade: async () => unidade({ fbWhatsappNumber: '(21) 97777-6666' }) });
   await convidarNoCrm(evento({ canal: 'Facebook', caixa: CAIXA_FB }), CONTA, p, CONTA);
-  assert.match(w.publicou[0]!.texto, /wa\.me\/5594911112222\?text=.*Vim%20pelo%20Facebook/);
+  assert.match(w.publicou[0]!.texto, /wa\.me\/5521977776666\?text=.*Vim%20pelo%20Facebook/);
 });
 
 test('LIGADO: a mensagem é a de textoPreEscrito (o mesmo texto que marca a origem no WhatsApp)', async () => {
@@ -258,7 +260,7 @@ test('NUNCA: conversa pausada (ia-pausada), contato interno, ou a equipe já res
 });
 
 test('NUNCA: paciente (telefone do contato, quando há, acusa franquia); sem telefone nem consulta a franquia', async () => {
-  await umNao('paciente', { conversa: async () => lida({ telefone: '+5594999990000' }), pacienteNaFranquia: async () => 'sim' as const });
+  await umNao('paciente', { conversa: async () => lida({ telefone: '+5521999990000' }), pacienteNaFranquia: async () => 'sim' as const });
   ligar('ligado');
   _esquecerDecisoesParaTeste();
   let consultou = 0;
@@ -269,7 +271,7 @@ test('NUNCA: paciente (telefone do contato, quando há, acusa franquia); sem tel
 });
 
 test('FALHA FECHADA: o contato tem telefone e a franquia não respondeu = não convida', async () => {
-  await umNao('nao-consegui-conferir', { conversa: async () => lida({ telefone: '+5594999990000' }), pacienteNaFranquia: async () => 'nao-sei' });
+  await umNao('nao-consegui-conferir', { conversa: async () => lida({ telefone: '+5521999990000' }), pacienteNaFranquia: async () => 'nao-sei' });
 });
 
 test('SECO: a mesma conversa é decidida uma vez por hora (as leituras do Chatwoot não se repetem a cada mensagem)', async () => {
@@ -316,7 +318,7 @@ test('SECO: a nota privada avisa quando o contato não tem telefone (a conferên
   const { w, p } = portas();
   await convidarNoCrm(evento(), CONTA, p, CONTA);
   assert.match(w.notas[0]!, /não tem telefone.*paciente/s);
-  const b = portas({ conversa: async () => lida({ telefone: '+5594988887777' }) });
+  const b = portas({ conversa: async () => lida({ telefone: '+5521988880000' }) });
   await convidarNoCrm(evento({ contato: 913 }), CONTA, b.p, CONTA);
   assert.doesNotMatch(b.w.notas[0]!, /não tem telefone/);
 });
@@ -438,5 +440,92 @@ test('fiação: o receptor de eventos do Chatwoot chama o robô, e o rótulo do 
   assert.match(ia, /import \{ noConviteDoCrm \} from '\.\/chatwoot-convite-whatsapp\.js'/);
   assert.match(ia, /void noConviteDoCrm\(req\.body, conta\)/);
   const js = rotuloRoboJs({} as NodeJS.ProcessEnv);
-  assert.match(js, /ca\.convite_whatsapp\) return \{ t: 'auto' \}/);
+  assert.match(js, /ca\.convite_whatsapp && \(quem === 'user' \|\| quem === ''\)\) return \{ t: 'auto' \}/);
+});
+
+// ── UM caminho por unidade (o mesmo Instagram chega ao Kommo e ao CRM) ──────────────────────────────
+
+const ROTA_KOMMO = { kommoSalesbotId: 10, kommoReplyFieldId: 20, kommoBypassSalesbot: false } as Partial<Unit>;
+
+/** Portas de mentira do robô do KOMMO que só contam o que foi enviado. */
+function kommoDeMentira() {
+  const enviou: string[] = [];
+  const marcas = new Set<string>();
+  const deps: DepsDoConvite = {
+    jaConvidado: async (c) => marcas.has(c),
+    reivindicar: async (c) => (marcas.has(c) ? 'perdeu' : (marcas.add(c), 'ganhou')),
+    soltar: async () => undefined,
+    gravarEnviado: async () => true,
+    cartao: async () => ({ pausado: false, etapaPermite: true, temIdClient: false, telefone: null }),
+    equipeJaFalou: async () => false,
+    pacienteNaFranquia: async () => 'nao',
+    clinica: () => 'Doutor Hérnia Parauapebas',
+    enviar: async (_u, _p, texto) => (enviou.push(texto), 'entregue'),
+    simular: () => undefined,
+  };
+  return { enviou, deps };
+}
+
+test('UM caminho por unidade: com o robô ligado nos DOIS caminhos e o mesmo Instagram chegando ao Kommo e ao CRM, o lead recebe 1 convite (o do Kommo)', async () => {
+  ligar('ligado');
+  const u = unidade(ROTA_KOMMO);
+  const k = kommoDeMentira();
+  const c = portas({ unidade: async () => u });
+  const [kr, cr] = await Promise.all([
+    convidarParaWhatsapp({ unit: u, leadId: 777, origem: 'instagram_business', isChatMessage: true, chatId: 'c', talkId: '1', contactId: '5' }, k.deps),
+    convidarNoCrm(evento(), CONTA, c.p, CONTA),
+  ]);
+  assert.equal(kr.tipo, 'enviou');
+  assert.deepEqual(cr, { tipo: 'ignorou', motivo: 'outro-caminho', detalhe: 'esta unidade convida pelo Kommo' });
+  assert.equal(k.enviou.length + c.w.publicou.length, 1, 'exatamente um convite no total');
+  assert.deepEqual(c.w.reivindicou, [], 'o CRM nem gasta a marca dele');
+});
+
+test('UM caminho por unidade: o CRM convida onde o Kommo NÃO pode — unidade sem Salesbot, em modo bypass, ou fora da Kommo (CHATWOOT_KOMMO_CORTADO_SLUGS)', async () => {
+  ligar('ligado');
+  for (const u of [unidade(), unidade({ ...ROTA_KOMMO, kommoSalesbotId: null }), unidade({ ...ROTA_KOMMO, kommoBypassSalesbot: true })]) {
+    _esquecerDecisoesParaTeste();
+    _esquecerFreiosDoCrmParaTeste();
+    const c = portas({ unidade: async () => u });
+    assert.equal((await convidarNoCrm(evento(), CONTA, c.p, CONTA)).tipo, 'enviou');
+    assert.equal(c.w.publicou.length, 1);
+  }
+  const antes = process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+  process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = SLUG;
+  try {
+    const c = portas({ unidade: async () => unidade(ROTA_KOMMO) });
+    assert.equal((await convidarNoCrm(evento({ contato: 920 }), CONTA, c.p, CONTA)).tipo, 'enviou', 'saiu da Kommo: quem convida é o CRM');
+  } finally {
+    if (antes === undefined) delete process.env.CHATWOOT_KOMMO_CORTADO_SLUGS;
+    else process.env.CHATWOOT_KOMMO_CORTADO_SLUGS = antes;
+  }
+});
+
+test('UM caminho por unidade também em SECO: o CRM não deixa nota de «mandaria» onde o Kommo é quem convida', async () => {
+  ligar('seco');
+  const c = portas({ unidade: async () => unidade(ROTA_KOMMO) });
+  assert.equal(((await convidarNoCrm(evento(), CONTA, c.p, CONTA)) as { motivo: string }).motivo, 'outro-caminho');
+  assert.deepEqual(c.w.notas, []);
+});
+
+test('passagem do SECO para o LIGADO: a decisão do seco não segura o convite por 1 h', async () => {
+  const agora = 1_800_000_000_000;
+  ligar('seco');
+  const { w, p } = portas();
+  assert.equal((await convidarNoCrm(evento(), CONTA, p, CONTA, () => agora)).tipo, 'seco');
+  ligar('ligado');
+  assert.equal((await convidarNoCrm(evento(), CONTA, p, CONTA, () => agora + 60_000)).tipo, 'enviou');
+  assert.equal(w.publicou.length, 1);
+});
+
+test('conversa LONGA demais: o robô não repete as páginas a cada mensagem do lead (lembra o «não» por 1 h) e olha de novo depois', async () => {
+  ligar('ligado');
+  const agora = 1_800_000_000_000;
+  let leituras = 0;
+  const { w, p } = portas({ mensagens: async () => (leituras++, Promise.reject(new ConversaLongaDemais(50))) });
+  for (let i = 0; i < 5; i++) assert.equal((await convidarNoCrm(evento(), CONTA, p, CONTA, () => agora + i * 1000) as { motivo: string }).motivo ?? 'ja', i === 0 ? 'nao-consegui-conferir' : 'ja');
+  assert.equal(leituras, 1);
+  await convidarNoCrm(evento(), CONTA, p, CONTA, () => agora + 61 * 60_000);
+  assert.equal(leituras, 2);
+  assert.deepEqual(w.publicou, []);
 });

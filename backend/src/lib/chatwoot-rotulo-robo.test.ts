@@ -303,3 +303,15 @@ test('CSS: claro e escuro (.dark), 400 px; o rótulo é ::before (não existe n�
   assert.ok(css.includes('max-width:560px'), 'celular');
   assert.ok(css.includes("'[' + ATTR + ']{position:relative;margin-top:22px!important}'"), 'a margem só vale com o atributo');
 });
+
+test('o convite ao WhatsApp (marca content_attributes.convite_whatsapp) é «🤖 Robô · mensagem automática» mesmo quando o usuário que o enviou NÃO é um conector conhecido', () => {
+  const t = montar({
+    mensagens: [
+      { id: 60, message_type: 1, sender: { id: CONECTOR, name: '🤖 Robô automático', type: 'user' }, content_attributes: { convite_whatsapp: true }, content: 'convite' },
+      { id: 61, message_type: 1, sender: { id: 77, name: 'Usuário de integração', type: 'user' }, content_attributes: { convite_whatsapp: true }, content: 'convite por usuário desconhecido' },
+      { id: 62, message_type: 1, sender: EQUIPE, content: 'resposta da Bianca, sem a marca' },
+    ],
+  });
+  t.rodar();
+  assert.deepEqual([60, 61, 62].map(t.marca), ['auto', 'auto', 'gente']);
+});

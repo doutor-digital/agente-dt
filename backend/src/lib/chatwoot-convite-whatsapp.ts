@@ -30,6 +30,7 @@ import { claimMessageId, liberarClaim, reivindicarComCerteza } from './dedup-cac
 import { emPausa } from './pausa-unidade.js';
 import { conectoresDoRotulo } from './chatwoot-rotulo-robo.js';
 import { nomeDaClinicaDaUnidade, telefoneNaFranquia } from './convite-whatsapp.js';
+import { kommoCortado } from './kommo-cortado.js';
 import { normalizarFrase } from './origem-texto-pronto.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 import {
@@ -41,11 +42,19 @@ import {
   lembrarDecisao,
   numeroDaUnidade,
   textoDoConvite,
+  temRotaDeEnvioNoKommo,
   type CanalDoConvite,
 } from './convite-whatsapp-estado.js';
 
 /** A marca da mensagem do robô: o CRM a rotula e os leitores a reconhecem como fala nossa (nunca como equipe). */
 export const MARCA_DO_CONVITE = 'convite_whatsapp';
+/** A conversa tem mais mensagens do que o robô lê (6 páginas): não dá para afirmar que a equipe nunca respondeu — e o robô não repete as 6 leituras a cada mensagem do lead. */
+export class ConversaLongaDemais extends Error {
+  constructor(conversa: number) {
+    super(`conversa ${conversa} longa demais para conferir se a equipe já respondeu`);
+  }
+}
+
 const MENSAGENS_POR_PAGINA = 20;
 const PAGINAS_LIDAS = 6;
 /** Resposta sem remetente que sai até aqui depois da mensagem do lead que ela responde é a resposta automática da Meta — não conta como a equipe. */
@@ -151,6 +160,7 @@ export function equipeJaRespondeu(mensagens: ReadonlyArray<MensagemDaApi>, conec
 
 export type MotivoDoConviteCrm =
   | 'sem-unidade'
+  | 'outro-caminho'
   | 'menção-em-story'
   | 'unidade-pausada'
   | 'sem-numero'
@@ -214,8 +224,10 @@ export async function convidarNoCrm(
   const seco = estado === 'seco';
   const chave = chaveDoConviteCrm(conta, ev);
   const agoraMs = () => agora();
+  // a memória é POR MODO: o «mandaria» do seco não pode segurar o convite por 1 h depois de ligar a chave
+  const memoria = seco ? `${chave}#seco` : chave;
   const nao = (motivo: MotivoDoConviteCrm, detalhe?: string): DesfechoCrm => {
-    if (DEFINITIVOS.has(motivo)) lembrarDecisao(chave, agoraMs());
+    if (DEFINITIVOS.has(motivo)) lembrarDecisao(memoria, agoraMs());
     logger.info({ slug, conversa: ev.conversa, canal: ev.canal, motivo, detalhe }, `convite-whatsapp (CRM${seco ? ', seco' : ''}): não convida — ${motivo}${detalhe ? ` (${detalhe})` : ''}`);
     return { tipo: 'ignorou', motivo, detalhe };
   };
@@ -223,13 +235,17 @@ export async function convidarNoCrm(
     if (ev.mencaoEmStory) return nao('menção-em-story');
     const unit = await p.unidade(slug);
     if (!unit) return nao('sem-unidade', 'a unidade não está no banco');
+    // UM caminho por unidade: o mesmo Instagram chega ao Kommo e ao Chatwoot, e as duas pontas leem a mesma chave e o mesmo número. Onde o Kommo tem rota de envio
+    // (Salesbot + campo de resposta) e a unidade não saiu dele, quem convida é o Kommo (`convite-whatsapp.ts`); o CRM só convida onde o Kommo não pode (unidade
+    // sem Salesbot, ou fora da Kommo: CHATWOOT_KOMMO_CORTADO_SLUGS). A decisão não depende do estado da chave: seco e ligado escolhem o mesmo caminho.
+    if (temRotaDeEnvioNoKommo(unit) && !kommoCortado(slug)) return nao('outro-caminho', 'esta unidade convida pelo Kommo');
     if (emPausa(unit)) return nao('unidade-pausada');
     const wa = numeroDaUnidade(unit, ev.canal);
     if (!wa) return nao('sem-numero');
     if (!seco && (await p.jaConvidado(chave))) return nao('ja-convidado');
     if (!seco && freado(chave, agoraMs())) return nao('nao-consegui-conferir', 'o envio anterior foi recusado há menos de 30 min');
     // uma decisão por conversa por hora: o «não» definitivo e o «mandaria» do seco não repetem as leituras do Chatwoot a cada mensagem do lead
-    if (decididoRecentemente(chave, agoraMs())) return { tipo: 'ja-decidido' };
+    if (decididoRecentemente(memoria, agoraMs())) return { tipo: 'ja-decidido' };
 
     const lida = await p.conversa(ev.conversa);
     if (!lida) return nao('nao-consegui-conferir', 'conversa não lida');
@@ -246,7 +262,7 @@ export async function convidarNoCrm(
     if (seco) {
       if (await p.primeiraNotaDoSeco(chave)) await p.nota(ev.conversa, notaDoSeco(ev.canal, texto, !!lida.telefone));
       logger.info({ slug, conversa: ev.conversa, canal: ev.canal, texto }, 'convite-whatsapp (CRM, seco): mandaria o convite — nada foi enviado ao lead');
-      lembrarDecisao(chave, agoraMs());
+      lembrarDecisao(memoria, agoraMs());
       return { tipo: 'seco', texto };
     }
     if (conviteWhatsappEstado(slug) !== 'ligado') return nao('nao-consegui-conferir', 'a chave mudou durante a conferência');
@@ -271,6 +287,8 @@ export async function convidarNoCrm(
     logger.info({ slug, conversa: ev.conversa, canal: ev.canal }, 'convite-whatsapp (CRM): convite enviado');
     return { tipo: 'enviou', texto };
   } catch (err) {
+    // conversa longa demais é um «não» que não muda tão cedo: lembra por 1 h (senão seriam 6 GETs a cada mensagem do lead, para sempre)
+    if (err instanceof ConversaLongaDemais) lembrarDecisao(memoria, agoraMs());
     logger.warn({ err: String(err), slug, conversa: ev.conversa }, 'convite-whatsapp (CRM): falhou na conferência — não convida');
     return { tipo: 'ignorou', motivo: 'nao-consegui-conferir', detalhe: String(err).slice(0, 200) };
   }
@@ -358,7 +376,7 @@ export function portasReaisDoConvite(ctx: ContextoChatwoot): PortasDoConviteCrm 
         antes = Math.min(...lote.map((m) => numero(m.id) ?? Infinity));
         if (!Number.isFinite(antes)) break;
       }
-      throw new Error(`conversa ${id} longa demais para conferir se a equipe já respondeu`);
+      throw new ConversaLongaDemais(id);
     },
     async publica(id, texto, marca) {
       await chat.publica(id, texto, marca);
