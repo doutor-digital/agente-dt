@@ -61,6 +61,7 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<{ slug: string; nome
   const ignoradas: LeituraDoAmbiente['ignoradas'] = [];
   const P_CHAVE = 'INFINITEPAY_CHAVE_';
   const P_HANDLE = 'INFINITEPAY_HANDLE_';
+  const donasDaChave = new Map<string, string>();
   for (const variavel of Object.keys(e).sort()) {
     if (!variavel.startsWith(P_CHAVE)) continue;
     const chave = (e[variavel] ?? '').trim();
@@ -83,6 +84,13 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<{ slug: string; nome
       ignoradas.push({ variavel, motivo: `a unidade ${u.slug} já tem uma chave (outra variável)` });
       continue;
     }
+    // a mesma chave em duas unidades = a mesma conta da InfinitePay: teto, trava e limite por hora são POR UNIDADE, então dividir a chave multiplicaria os tetos
+    const dona = donasDaChave.get(chave);
+    if (dona) {
+      ignoradas.push({ variavel, motivo: `a mesma chave já está ligada à unidade ${dona}: uma chave, uma unidade` });
+      continue;
+    }
+    donasDaChave.set(chave, u.slug);
     contas.set(u.slug, { slug: u.slug, nome: u.nome, chave });
   }
   // a InfiniteTag (opcional) é resolvida pelo MESMO caminho da chave: o sufixo pode ser diferente (chave ..._ACAILANDIA, handle ..._DOUTOR_HERNIA_ACAILANDIA)

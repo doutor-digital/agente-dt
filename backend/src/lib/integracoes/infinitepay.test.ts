@@ -28,10 +28,10 @@ test('ambiente: INFINITEPAY_CHAVE_ACAILANDIA acha a unidade pelo final do slug',
 
 test('ambiente: o slug inteiro vale; o final ambíguo e o desconhecido são IGNORADOS, nunca adivinhados', () => {
   const r = lerContasDoAmbiente(UNIDADES, {
-    INFINITEPAY_CHAVE_HM_TECNOLOGIA: CHAVE,
-    INFINITEPAY_CHAVE_SERRA: CHAVE,
-    INFINITEPAY_CHAVE_TALHADA: CHAVE,
-    INFINITEPAY_CHAVE_NAO_EXISTE: CHAVE,
+    INFINITEPAY_CHAVE_HM_TECNOLOGIA: `${CHAVE}1`,
+    INFINITEPAY_CHAVE_SERRA: `${CHAVE}2`,
+    INFINITEPAY_CHAVE_TALHADA: `${CHAVE}3`,
+    INFINITEPAY_CHAVE_NAO_EXISTE: `${CHAVE}4`,
   });
   assert.ok(r.contas.has('hm-tecnologia'));
   // "-serra" só termina doutor-hernia-serra (a outra termina em "-talhada"), então não é ambíguo
@@ -93,6 +93,13 @@ test('ambiente: a chave de uma unidade INATIVA nunca vai para outra ativa que te
   // sufixo que só a inativa tem: não existe outra ativa para receber, continua ignorada
   const c = lerContasDoAmbiente([{ slug: 'doutor-hernia-timbo', nome: 'T', ativa: false }, { slug: 'doutor-hernia-serra', nome: 'S', ativa: true }], { INFINITEPAY_CHAVE_TIMBO: CHAVE });
   assert.equal(c.contas.size, 0);
+});
+
+test('ambiente: a MESMA chave em duas unidades liga só a primeira (uma chave, uma unidade: os tetos são por unidade)', () => {
+  const r = lerContasDoAmbiente(UNIDADES, { INFINITEPAY_CHAVE_ACAILANDIA: CHAVE, INFINITEPAY_CHAVE_HM_TECNOLOGIA: CHAVE });
+  assert.deepEqual([...r.contas.keys()], ['doutor-hernia-acailandia']);
+  assert.match(r.ignoradas[0]!.motivo, /uma chave, uma unidade/);
+  assert.equal(JSON.stringify(r.ignoradas).includes('inchk_FIXTURE'), false);
 });
 
 test('ambiente: a InfiniteTag é achada pelo mesmo caminho da chave (sufixos diferentes) e a órfã é reportada', () => {
