@@ -60,6 +60,8 @@ import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from 
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
+import { armazemDeRelatoriosPrisma } from './infinitepay-relatorio-armazem.js';
+import { registrarImportacaoRelatoriosSePermitido, registrarLeituraRelatorios } from './infinitepay-relatorio-ferramentas.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -654,6 +656,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   });
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
   if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
+  const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());
@@ -731,6 +735,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasInfinitepay(server, infinitepay, auditar);
       // criar link da InfinitePay: só quem está na lista de escrita E só se alguma unidade está em INFINITEPAY_ESCRITA_UNIDADES (vazio = a ferramenta nem existe)
       registrarEscritaInfinitepaySePermitido(server, infinitepay, escritaInfinitepay, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
+      registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar);
+      registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.

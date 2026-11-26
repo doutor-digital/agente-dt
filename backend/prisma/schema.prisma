@@ -3155,3 +3155,80 @@ model InfinitepayLink {
   @@index([chaveDuplicata])
   @@map("infinitepay_links")
 }
+
+// ============================================================================
+// INFINITEPAY — RELATÓRIOS IMPORTADOS (26/11/2026)
+// ============================================================================
+//
+// A API da InfinitePay não lê vendas, extrato nem recebíveis. A clínica exporta o relatório do app (OFX/CSV) e o conector o importa por estas tabelas.
+// Os valores são exatamente os do arquivo; o que o arquivo não cobre (período, aparelhos, contas) NÃO aparece: as ferramentas mostram a cobertura
+// (`infinitepay_importacoes`) junto de todo total. Nada daqui vai para a Sofia nem para o CRM. Não guarda número de conta nem CPF; a descrição do lançamento vem do arquivo com documento, telefone e e-mail mascarados e PODE conter o nome de quem pagou.
+
+/// Um arquivo importado. O mesmo arquivo (sha256) duas vezes na mesma unidade não entra de novo.
+model InfinitepayImportacao {
+  id            String    @id @default(cuid())
+  unitSlug      String    @map("unit_slug")
+  /// extrato | vendas | recebiveis
+  relatorio     String
+  /// ofx | csv
+  formato       String
+  /// o leiaute reconhecido (ex. ofx-bancario); vazio = o arquivo não foi reconhecido e nada foi gravado
+  leiaute       String?
+  sha256        String
+  bytes         Int
+  periodoInicio DateTime? @map("periodo_inicio") @db.Date
+  periodoFim    DateTime? @map("periodo_fim") @db.Date
+  linhasLidas   Int       @map("linhas_lidas")
+  linhasNovas   Int       @map("linhas_novas")
+  importadoPor  String    @map("importado_por")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  movimentos InfinitepayMovimento[]
+  vendas     InfinitepayVenda[]
+
+  @@unique([unitSlug, sha256])
+  @@index([unitSlug, createdAt])
+  @@map("infinitepay_importacoes")
+}
+
+/// Uma linha de extrato ou de recebível (valor com sinal: entrada +, saída −).
+model InfinitepayMovimento {
+  id            String                @id @default(cuid())
+  unitSlug      String                @map("unit_slug")
+  /// extrato | recebivel
+  tipo          String
+  data          DateTime              @db.Date
+  /// recebível: o dia previsto para cair
+  dataPrevista  DateTime?             @map("data_prevista") @db.Date
+  valorCentavos Int                   @map("valor_centavos")
+  descricao     String
+  /// o id do lançamento no arquivo (FITID); sem ele, um hash da linha + a ordem entre linhas iguais
+  chave         String
+  importacaoId  String                @map("importacao_id")
+  importacao    InfinitepayImportacao @relation(fields: [importacaoId], references: [id], onDelete: Cascade)
+
+  @@unique([unitSlug, tipo, chave])
+  @@index([unitSlug, data])
+  @@map("infinitepay_movimentos")
+}
+
+/// Uma venda do relatório de vendas (maquininha, Pix, link). Sem dado do comprador (o leiaute que for cadastrado não deve ler nome nem documento).
+model InfinitepayVenda {
+  id                   String                @id @default(cuid())
+  unitSlug             String                @map("unit_slug")
+  quando               DateTime
+  valorBrutoCentavos   Int                   @map("valor_bruto_centavos")
+  valorLiquidoCentavos Int?                  @map("valor_liquido_centavos")
+  /// credito | debito | pix | link | outro
+  forma                String
+  parcelas             Int?
+  bandeira             String?
+  status               String?
+  chave                String
+  importacaoId         String                @map("importacao_id")
+  importacao           InfinitepayImportacao @relation(fields: [importacaoId], references: [id], onDelete: Cascade)
+
+  @@unique([unitSlug, chave])
+  @@index([unitSlug, quando])
+  @@map("infinitepay_vendas")
+}

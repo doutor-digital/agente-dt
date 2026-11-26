@@ -49,7 +49,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.tramitacao ? ['tramitacao_* (advocacia: processos, publicações, clientes e prazos; só leitura, documentos só como metadados)'] : []),
       ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar em dois passos para quem tem permissão)'] : []),
       ...(tem.zenfisio ? ['zenfisio_* (clínica de fisioterapia: agenda com status, faltas e taxa de falta, profissionais, pacotes; só leitura)'] : []),
-      ...(tem.infinitepay ? ['infinitepay_* (status de um pagamento e os links de pagamento criados pelo conector; a API da InfinitePay NÃO lista vendas, Pix, saldo, extrato nem recebíveis)'] : []),
+      ...(tem.infinitepay ? ['infinitepay_* (status de um pagamento, os links criados pelo conector e, para quem tem permissão, criar link; vendas e extrato SÓ pelo relatório que a clínica exporta do app e o conector importa: a API da InfinitePay NÃO lê vendas, Pix, saldo, extrato nem recebíveis)'] : []),
       ...(tem.pluggy ? ['pluggy_* (leitura bancária via Open Finance: contas com saldo, extrato e resumo por dia/semana; só leitura, só para quem altera cartões; traz a data da última sincronização)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
