@@ -919,3 +919,42 @@ test('lead quente parado: sem CHATWOOT_GERENTE_WHATSAPP, o número da gerente ve
   assert.equal(avisoDaGerenteDoBanco('x', 3, 1, { env: {} }), undefined);
   assert.equal(avisoDaGerenteDoBanco('x', 3, undefined, { env }), undefined);
 });
+
+test('dois horários no dia: a mensagem cita os dois e o worker dá o lembrete do 2º como feito (modo «coberto»); se o envio é recusado, desfaz os dois registros', async () => {
+  const sessao = { categoria_consulta: 'Sessão', situacao_consulta: 'Agendado', data_consulta: '2026-11-18', hora_consulta: '09:00', outros_horarios_do_dia: '14:30' };
+  const quando = new Date('2026-11-17T12:05:00Z'); // 24 h antes das 09:00 de 18/11 em Belém
+  // envio normal
+  const a = armazemFalso();
+  const c1 = chatFalso(() => [bruta(1, { attrs: sessao })]);
+  await cicloDaCaixa(deps(a.armazem, c1.chat), 2, 'x', 'ligado', U, new Date(quando.getTime() - 600_000));
+  await cicloDaCaixa(deps(a.armazem, c1.chat), 2, 'x', 'ligado', U, quando);
+  await cicloDaCaixa(deps(a.armazem, c1.chat), 2, 'x', 'ligado', U, new Date(quando.getTime() + 600_000));
+  assert.equal(c1.mensagens.length, 1, 'uma mensagem só, nos três ciclos');
+  assert.match(c1.mensagens[0]!.texto, /Data e horário: 18\/11 às 09:00 e 14:30/);
+  assert.deepEqual(
+    a.disparos.map((d) => `${d.regra}|${d.chave}|${d.modo}`).sort(),
+    ['consulta-vespera|2026-11-18T09:00|ligado', 'consulta-vespera|2026-11-18T14:30|coberto'],
+  );
+  // a agenda passa para a 2ª sessão (a 1ª foi atendida): o lembrete dela já está feito, não sai outra mensagem
+  const depois = { ...sessao, hora_consulta: '14:30', outros_horarios_do_dia: '' };
+  const c2 = chatFalso(() => [bruta(1, { attrs: depois })]);
+  await cicloDaCaixa(deps(a.armazem, c2.chat), 2, 'x', 'ligado', U, new Date('2026-11-17T17:05:00Z'));
+  assert.equal(c2.mensagens.length, 0);
+
+  // o Chatwoot RECUSA o envio (4xx): nada fica registrado, nem o coberto — o próximo ciclo tenta de novo
+  const b = armazemFalso();
+  const recusa = Object.assign(new Error('422'), { status: 422 });
+  const c3 = chatFalso(() => [bruta(1, { attrs: sessao })], { falhaAoEscrever: () => recusa });
+  await cicloDaCaixa(deps(b.armazem, c3.chat), 2, 'x', 'ligado', U, new Date(quando.getTime() - 600_000));
+  await cicloDaCaixa(deps(b.armazem, c3.chat), 2, 'x', 'ligado', U, quando);
+  assert.deepEqual(b.disparos, []);
+
+  // a nota de «falta campo» (seco) não cobre nada: ela não avisou ninguém de horário nenhum
+  const c = armazemFalso();
+  const { TEXTOS_PARAU } = await import('./chatwoot-regua-textos.js');
+  const semUnidade: DadosDaUnidade = { ...U, nome: '', textos: { ...TEXTOS_PARAU, parau_sessao_lembrete_vespera: `${TEXTOS_PARAU.parau_sessao_lembrete_vespera}\n{{lead.cf.2450798}}` } };
+  const c4 = chatFalso(() => [bruta(1, { attrs: sessao })]);
+  await cicloDaCaixa(deps(c.armazem, c4.chat), 2, 'x', 'seco', semUnidade, new Date(quando.getTime() - 600_000));
+  await cicloDaCaixa(deps(c.armazem, c4.chat), 2, 'x', 'seco', semUnidade, quando);
+  assert.deepEqual(c.disparos.map((d) => `${d.regra}|${d.chave}|${d.modo}`), ['consulta-vespera!falta|2026-11-18T09:00|seco']);
+});

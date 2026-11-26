@@ -243,6 +243,8 @@ export interface Disparo {
   alvo: Date;
   /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
   interna?: AcaoInterna;
+  /** as chaves dos outros horários do dia que o texto já cita (ver `Candidato.cobre`): o worker as registra como feitas junto com esta */
+  cobre?: string[];
 }
 
 export interface Decisao {
@@ -320,6 +322,27 @@ export interface Momento {
   hora: { hh: number; mm: number } | null;
   /** data + hora, o que identifica a ocorrência (remarcou = outra) */
   chave: string;
+  /**
+   * Outros horários do MESMO dia, depois deste («HH:MM», em ordem): a agenda grava o que a pessoa tem a mais no dia em `outros_horarios_do_dia`. O texto do
+   * lembrete mostra todos («18/11 às 09:00 e 14:30»): duas sessões no mesmo dia viram UMA mensagem. Ausente = um horário só.
+   */
+  mais?: string[];
+}
+
+/** O atributo da conversa com os outros horários do mesmo dia («14:30» ou «14:30, 17:00»); a agenda (`chatwoot-agenda.ts`) é a única que o grava. */
+export const ATRIBUTO_OUTROS_HORARIOS = 'outros_horarios_do_dia';
+
+/** Os horários válidos do atributo, DEPOIS do horário principal (o dia só tem «mais tarde»), sem repetir, em ordem. Sem hora principal, ou nada válido: []. */
+export function outrosHorarios(valor: unknown, principal: Momento | null): string[] {
+  if (!principal?.hora) return [];
+  const base = principal.hora.hh * 60 + principal.hora.mm;
+  const achados = new Map<number, string>();
+  for (const pedaco of str(valor).split(/[,;/\s]+/)) {
+    const h = lerHora(pedaco);
+    const min = h ? h.hh * 60 + h.mm : -1;
+    if (h && min > base) achados.set(min, `${doisDigitos(h.hh)}:${doisDigitos(h.mm)}`);
+  }
+  return [...achados.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t);
 }
 
 function momento(dataV: unknown, horaV: unknown): Momento | null {
@@ -334,7 +357,9 @@ function instante(m: Momento, horaPadrao: number): Date {
 }
 
 const ddmm = (d: DataCivil) => `${doisDigitos(d.d)}/${doisDigitos(d.m)}`;
-const textoDoMomento = (m: Momento) => (m.hora ? `${ddmm(m.data)} às ${doisDigitos(m.hora.hh)}:${doisDigitos(m.hora.mm)}` : ddmm(m.data));
+const juntarHorarios = (horas: string[]): string => (horas.length <= 1 ? horas.join('') : `${horas.slice(0, -1).join(', ')} e ${horas[horas.length - 1]}`);
+const textoDoMomento = (m: Momento) =>
+  m.hora ? `${ddmm(m.data)} às ${juntarHorarios([`${doisDigitos(m.hora.hh)}:${doisDigitos(m.hora.mm)}`, ...(m.mais ?? [])])}` : ddmm(m.data);
 
 /** "R$ 350", "R$ 1.234,50". */
 export function brl(v: number): string {
@@ -577,6 +602,11 @@ export interface Candidato {
   saiAntesDoDia?: string;
   /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
   momento?: Momento;
+  /**
+   * As chaves (data+hora) dos OUTROS horários do dia que esta mensagem já cita: ao sair, a regra é dada como feita também para elas (o lembrete delas seria a
+   * mesma mensagem outra vez).
+   */
+  cobre?: string[];
 }
 
 /**
@@ -647,6 +677,7 @@ function lembretes(
 ): Candidato[] {
   const saida: Candidato[] = [];
   const teto = m.hora ? instante(m, 0) : emBelem(m.data, 8);
+  const cobre = m.mais?.length ? { cobre: m.mais.map((h) => `${m.data.iso}T${h}`) } : {};
   saida.push({
     regra: regras.vespera[0],
     modelo: regras.vespera[1],
@@ -655,10 +686,18 @@ function lembretes(
     teto,
     alvo: m.hora ? new Date(instante(m, 0).getTime() - (antes.vespera ?? DIA)) : emBelem(somarDias(m.data, -1), 9),
     momento: m,
+    ...cobre,
   });
-  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.dia ?? 3 * HORA)), momento: m });
-  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.preparo ?? HORA)), momento: m });
+  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.dia ?? 3 * HORA)), momento: m, ...cobre });
+  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.preparo ?? HORA)), momento: m, ...cobre });
   return saida;
+}
+
+/** O momento com os outros horários do mesmo dia (`outros_horarios_do_dia`); sem eles, o MESMO objeto de sempre. */
+function comMaisHorarios(m: Momento | null, valor: unknown): Momento | null {
+  if (!m) return m;
+  const mais = outrosHorarios(valor, m);
+  return mais.length ? { ...m, mais } : m;
 }
 
 /** Tudo que a régua PODERIA mandar a esta conversa, antes do horário e do «feitos» (exportada para o catálogo da tela «Robôs»). */
@@ -671,7 +710,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
   const etapaTratamento = str(a.etapa_tratamento);
   const tratamento = str(a.funil) === 'Tratamento' || etapaTratamento !== '';
   const semFollowUp = c.etiquetas.includes('sem-follow-up');
-  const consulta = momento(a.data_consulta, a.hora_consulta);
+  const consulta = comMaisHorarios(momento(a.data_consulta, a.hora_consulta), a.outros_horarios_do_dia);
   /** consulta da agenda que é SESSÃO de tratamento: tem os lembretes de sessão (mais abaixo), não os de consulta comercial */
   const ehSessao = str(a.categoria_consulta) === 'Sessão';
   const saida: Candidato[] = [];
@@ -899,7 +938,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     }
     const r = renderizar(k.modelo, c, unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
-    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
+    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo, ...(k.cobre ? { cobre: k.cobre } : {}) });
   }
   return { disparos, perdidas };
 }
