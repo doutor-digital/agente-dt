@@ -66,7 +66,7 @@ import { podeSerDuvidaDoLembrete, tratarDuvidaDoLembrete } from '../lib/duvida-n
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial, temMidiaSemArquivo } from '../lib/conversa-oficial.js';
-import { avisarComprovanteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno } from '../lib/anexos-do-turno.js';
+import { avisarComprovanteComIaPausada, avisarComprovanteDoLiteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno, type ComprovanteComIaPausada } from '../lib/anexos-do-turno.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
 import { tentarBotoes } from '../lib/resposta-com-botoes.js';
@@ -1536,7 +1536,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
   const anexos = (args.imageUrls?.length ? args.imageUrls : imageUrl ? [imageUrl] : []).slice(0, 3);
   let algumAnexoLido = false;
   // Unidade com taxa de reserva: comprovante que chegou neste turno (para avisar a equipe se a IA estiver pausada e ninguém o vir)
-  let comprovanteDoTurno: { id: string | null; resumo: string } | null = null;
+  const comprovantesDoTurno: ComprovanteComIaPausada[] = [];
   // Chave `exame-de-imagem-pausa-alerta` (Timbó, 11/11/2026): as leituras de exame de imagem deste turno.
   const comExame = exameDeImagemLigado(unit);
   const exames: string[] = [];
@@ -1565,7 +1565,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
             modelo: d.comprovante?.modelo ?? null,
           });
           naConversa = descricaoComReferencia(desc, g.id, g.criadoEm);
-          comprovanteDoTurno = { id: g.id, resumo: d.comprovante?.dados ? resumoDaLeitura(d.comprovante.dados) : 'a leitura em campos falhou' };
+          comprovantesDoTurno.push({ id: g.id, resumo: d.comprovante?.dados ? resumoDaLeitura(d.comprovante.dados) : 'a leitura em campos falhou' });
         } catch (err) {
           logger.error({ err: String(err), leadId, unit: unit.slug }, 'comprovante: não consegui guardar a leitura — este comprovante vai para a equipe');
         }
@@ -1699,7 +1699,11 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
 
     // Comprovante da taxa que chega com a IA pausada: a nota acima é de 1 por dia e só cita o texto; a equipe precisa de uma TAREFA, senão o
     // pagamento fica parado até alguém abrir a conversa (Boa Vista, 23/11/2026: o comprovante certo chegou 3 min depois da pausa e ninguém soube).
-    if (comprovanteDoTurno && unit.spineBookingRequiresPayment) await avisarComprovanteComIaPausada(unit, leadId, recorder, comprovanteDoTurno);
+    if (unit.spineBookingRequiresPayment) {
+      for (const c of comprovantesDoTurno) await avisarComprovanteComIaPausada(unit, leadId, recorder, c);
+      // WhatsApp Lite: a foto chega só como aviso de mídia — o webhook não a trouxe, está na rota oficial
+      if (comprovantesDoTurno.length === 0 && isChatMessage && temMidiaSemArquivo(humanMessage)) await avisarComprovanteDoLiteComIaPausada(unit, leadId, recorder);
+    }
 
     const totalLatency = Math.round(performance.now() - requestStart);
     await recorder.step({

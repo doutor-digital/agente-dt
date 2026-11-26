@@ -42,11 +42,12 @@ export async function lerAnexosDoTurno(
   recorder: Pick<TraceRecorder, 'step'>,
   deps: DepsDosAnexosDoTurno = {},
 ): Promise<AnexosDoTurno> {
-  const vazio: AnexosDoTurno = { texto: '', paraEntregar: [], msgs: msgsJaLidas };
-  if (!unit.spineBookingRequiresPayment || !Number.isFinite(leadId)) return vazio;
+  let msgs = msgsJaLidas;
+  const vazio = (): AnexosDoTurno => ({ texto: '', paraEntregar: [], msgs });
+  if (!unit.spineBookingRequiresPayment || !Number.isFinite(leadId)) return vazio();
   try {
     const criarKommo = deps.kommo ?? createKommoClient;
-    const msgs = msgsJaLidas ?? (await (deps.conversa ?? mensagensOficiaisDaUnidade)(unit, criarKommo(unit), leadId, 40));
+    msgs = msgsJaLidas ?? (await (deps.conversa ?? mensagensOficiaisDaUnidade)(unit, criarKommo(unit), leadId, 40));
     const lidos = await (deps.ler ?? lerAnexosDoPaciente)(unit, leadId, msgs);
     let texto = lidos.texto;
     if (lidos.naoLidos > 0) {
@@ -71,13 +72,19 @@ export async function lerAnexosDoTurno(
     return { texto, paraEntregar: lidos.paraEntregar, msgs };
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'anexos do paciente: não consegui ler pela conversa oficial (segue sem)');
-    return vazio;
+    return vazio();
   }
 }
 
 /** O turno deu certo: os comprovantes que ele carregava já estão na conversa e não precisam ser entregues de novo. */
 export async function entregarAnexosDoTurno(paraEntregar: ReadonlyArray<string>, leadId: number): Promise<void> {
   await marcarEntregues(prisma, paraEntregar).catch((err) => logger.warn({ err: String(err), leadId }, 'comprovante: não consegui marcar as leituras como entregues'));
+}
+
+/** O que a equipe lê na tarefa de um comprovante que chegou com a IA pausada. */
+export interface ComprovanteComIaPausada {
+  id: string | null;
+  resumo: string;
 }
 
 /**
@@ -88,7 +95,7 @@ export async function avisarComprovanteComIaPausada(
   unit: Unit,
   leadId: number,
   recorder: Pick<TraceRecorder, 'step'>,
-  comprovante: { id: string | null; resumo: string },
+  comprovante: ComprovanteComIaPausada,
   deps: Pick<DepsDosAnexosDoTurno, 'abrirTarefa' | 'kommo'> = {},
 ): Promise<void> {
   try {
@@ -104,5 +111,32 @@ export async function avisarComprovanteComIaPausada(
     });
   } catch (err) {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'comprovante com a IA pausada: não consegui abrir a tarefa da equipe (segue)');
+  }
+}
+
+/**
+ * Lite com a IA pausada: a foto do comprovante chega só como aviso de mídia e fica na rota oficial. Lê (uma vez, sem esperar) e abre a tarefa
+ * por comprovante. NÃO marca como entregue: se a IA voltar, o turno seguinte entrega a leitura à conversa. Foto que não carregou não gera
+ * tarefa aqui (a equipe está na conversa e vê o aviso de mídia); o que importa é o comprovante lido não ficar parado.
+ */
+export async function avisarComprovanteDoLiteComIaPausada(
+  unit: Unit,
+  leadId: number,
+  recorder: Pick<TraceRecorder, 'step'>,
+  deps: DepsDosAnexosDoTurno = {},
+): Promise<number> {
+  if (!unit.spineBookingRequiresPayment || !Number.isFinite(leadId)) return 0;
+  try {
+    const msgs = await (deps.conversa ?? mensagensOficiaisDaUnidade)(unit, (deps.kommo ?? createKommoClient)(unit), leadId, 40);
+    const lidos = await (deps.ler ?? lerAnexosDoPaciente)(unit, leadId, msgs);
+    if (lidos.comprovantes === 0) return 0;
+    // uma tarefa por comprovante lido (a chave leva o id da leitura); o texto da leitura vem da própria fala
+    const resumo = lidos.texto.replace(/\s+/g, ' ').trim().slice(0, 300) || 'ver a conversa';
+    const ids = lidos.paraEntregar.length ? lidos.paraEntregar : [null];
+    for (const id of ids) await avisarComprovanteComIaPausada(unit, leadId, recorder, { id, resumo }, deps);
+    return lidos.comprovantes;
+  } catch (err) {
+    logger.warn({ err: String(err), leadId, unit: unit.slug }, 'comprovante do Lite com a IA pausada: não consegui ler a rota oficial (segue)');
+    return 0;
   }
 }

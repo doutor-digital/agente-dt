@@ -47,6 +47,10 @@ const dormirPadrao = (ms: number) => new Promise<void>((ok) => setTimeout(ok, ms
 export const ehImagemDoTurnoPronta = (m: MensagemOficial, agora: number) =>
   m.autor === 'paciente' && m.direcao === 'entrada' && anexoLegivel(m) && agora - m.em.getTime() < JANELA_DO_TURNO_MS;
 
+/** Áudio, foto ou PDF do paciente, recente, que o Kommo ainda NÃO carregou (sem link): o aviso de mídia do Lite deste turno pode ser dele. */
+export const ehMidiaDoTurnoCarregando = (m: MensagemOficial, agora: number) =>
+  m.autor === 'paciente' && m.direcao === 'entrada' && !!m.anexo && !m.anexo.link && /voice|pic|image|file|doc|pdf/i.test(m.anexo.tipo) && agora - m.em.getTime() < JANELA_DO_TURNO_MS;
+
 export type ItemOficial = MensagemOficial & { transcricao?: string | null };
 
 /**
@@ -197,8 +201,15 @@ export async function blocoDaConversaOficial(args: {
   let selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now(), audioDoTurnoSemArquivo);
 
   // o aviso de mídia chegou e o áudio ainda não tem link na rota oficial: espera o Kommo carregar e relê
-  const imagemPronta = () => !!args.esperarImagem && desdeUltimaFalaDaSofia(msgs).some((m) => ehImagemDoTurnoPronta(m, Date.now()));
-  if (audioDoTurnoSemArquivo && !selecionados.some(ehAudioPronto) && !imagemPronta()) {
+  // Sem `esperarImagem`: pronto = o áudio do turno já tem link (como sempre). Com ele: áudio OU foto/PDF pronto, e NADA do turno ainda
+  // carregando — foto recente já carregada não pode encerrar a espera de um áudio que ainda não chegou (nem o contrário).
+  const pronto = () => {
+    const agora = Date.now();
+    if (!args.esperarImagem) return selecionados.some(ehAudioPronto);
+    const recentes = desdeUltimaFalaDaSofia(msgs);
+    return (selecionados.some(ehAudioPronto) || recentes.some((m) => ehImagemDoTurnoPronta(m, agora))) && !recentes.some((m) => ehMidiaDoTurnoCarregando(m, agora));
+  };
+  if (audioDoTurnoSemArquivo && !pronto()) {
     const esperas = args.esperas ?? ESPERAS_DO_AUDIO_MS;
     let esperado = 0;
     for (const ms of esperas) {
@@ -206,9 +217,9 @@ export async function blocoDaConversaOficial(args: {
       esperado += ms;
       msgs = await ler();
       selecionados = selecionarItens(desdeUltimaFalaDaSofia(msgs), humanMessage, Date.now(), true);
-      if (selecionados.some(ehAudioPronto) || imagemPronta()) break;
+      if (pronto()) break;
     }
-    const achou = selecionados.some(ehAudioPronto) || imagemPronta();
+    const achou = pronto();
     await recorder.step({
       kind: achou ? 'THINKING' : 'ERROR',
       title: achou

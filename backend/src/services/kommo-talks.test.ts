@@ -336,3 +336,19 @@ test('foto antiga (fora do turno) não encurta a espera do áudio que acabou de 
   await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
   assert.deepEqual(c.esperas, [4_000, 6_000, 8_000]);
 });
+
+test('foto recente JÁ carregada não encerra a espera de um áudio que ainda não chegou (e a espera termina quando os dois estão prontos)', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const fotoPronta = foto('f', s - 20);
+  const c = cenario({ leituras: [normalizar([fotoPronta, voz('v', s - 2, null)]), normalizar([fotoPronta, voz('v', s - 2, null)]), normalizar([fotoPronta, voz('v', s - 2)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, [4_000, 6_000], 'esperou o áudio, mesmo com a foto pronta, e parou quando o áudio carregou');
+  assert.deepEqual(c.transcritos, ['https://x/lite.ogg']);
+});
+
+test('duas fotos, uma ainda carregando: espera pela segunda', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const c = cenario({ leituras: [normalizar([foto('a', s - 20), foto('b', s - 2, null)]), normalizar([foto('a', s - 20), foto('b', s - 2)])] });
+  await blocoDaConversaOficial({ ...c.args, humanMessage: AVISO, nenhumAudioNoWebhook: true, esperarImagem: true });
+  assert.deepEqual(c.esperas, [4_000]);
+});
