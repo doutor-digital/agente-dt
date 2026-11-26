@@ -25,6 +25,7 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { conviteFalaNaUnidade, type NumerosDaUnidade, type RotaDeEnvioDaUnidade } from './convite-whatsapp-estado.js';
 
 export const ID_SOFIA_SO_WHATSAPP = 'sofia-so-whatsapp';
 
@@ -33,6 +34,17 @@ export const DECISAO_CANAL_NAO_PERMITIDO = '__channel_not_allowed__';
 
 export function sofiaSoWhatsappEstado(slug: string, raw: string | undefined = process.env.SOFIA_SO_WHATSAPP_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_SOFIA_SO_WHATSAPP, raw);
+}
+
+/**
+ * O estado EFETIVO da Sofia no Instagram/Facebook de uma unidade: o da chave própria; e, onde o robô «convite ao WhatsApp» está LIGADO e a
+ * unidade tem número para convidar, também `ligado` — a Sofia não fala por cima do convite (os dois falariam). Sem número (ou sem Salesbot) o robô
+ * não consegue falar, então a Sofia NÃO é calada por causa dele (o lead não pode ficar sem ninguém). O robô em «seco» não cala a Sofia.
+ */
+export function sofiaSoWhatsappEfetivo(unit: { slug: string } & NumerosDaUnidade & RotaDeEnvioDaUnidade, raw?: string | undefined): Estado {
+  const propria = sofiaSoWhatsappEstado(unit.slug, raw ?? process.env.SOFIA_SO_WHATSAPP_SLUGS);
+  if (propria === 'ligado') return propria;
+  return conviteFalaNaUnidade(unit) ? 'ligado' : propria;
 }
 
 /** A origem do Kommo é de rede social (Instagram, Facebook, Messenger)? Sem diferenciar maiúsculas; vazio/desconhecido = não. */
@@ -157,8 +169,8 @@ export interface DepsDoCanal {
  * Para quem fala POR INICIATIVA PRÓPRIA (escada de follow-up, reativação, cutucada): este paciente é de Instagram/Facebook e a chave está
  * LIGADA? Então nada nosso sai. Chave desligada ou em seco: `false` sem ler nada (o seco só vale no webhook). Nunca lança.
  */
-export async function pacienteDeRedeSocialCalado(unit: { id: string; slug: string }, leadId: number | string, deps: DepsDoCanal = {}): Promise<boolean> {
-  if ((deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) !== 'ligado') return false;
+export async function pacienteDeRedeSocialCalado(unit: { id: string; slug: string } & NumerosDaUnidade & RotaDeEnvioDaUnidade, leadId: number | string, deps: DepsDoCanal = {}): Promise<boolean> {
+  if ((deps.estado ?? sofiaSoWhatsappEfetivo(unit)) !== 'ligado') return false;
   const agora = (deps.agora ?? Date.now)();
   const chave = `${unit.id}:${leadId}`;
   const lembrado = memoria.get(chave);
@@ -196,12 +208,12 @@ export function origemDoTalkMaisRecente(talks: ReadonlyArray<TalkComOrigem>): st
  * sair de `origemDoPaciente`. Então, além dela, olha a conversa do próprio Kommo. Chave desligada ou em seco: `false` sem ler nada. Nunca lança.
  */
 export async function cartaoDeRedeSocialCalado(
-  unit: { id: string; slug: string },
+  unit: { id: string; slug: string } & NumerosDaUnidade & RotaDeEnvioDaUnidade,
   leadId: number,
   talks: () => Promise<ReadonlyArray<TalkComOrigem>>,
   deps: DepsDoCanal = {},
 ): Promise<boolean> {
-  if ((deps.estado ?? sofiaSoWhatsappEstado(unit.slug)) !== 'ligado') return false;
+  if ((deps.estado ?? sofiaSoWhatsappEfetivo(unit)) !== 'ligado') return false;
   if (await pacienteDeRedeSocialCalado(unit, leadId, deps)) return true;
   try {
     return origemDeRedeSocial(origemDoTalkMaisRecente(await talks()));

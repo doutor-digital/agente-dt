@@ -92,7 +92,8 @@ import { portaPerdidoReabre } from '../lib/perdido-reabre.js';
 import { portaRodaNoTurno } from '../lib/paciente-em-tratamento.js';
 import { portaClienteDoEscritorio } from '../lib/cliente-do-escritorio.js';
 import { portaPilotoDeNumeros } from '../lib/ia-so-numeros-de-teste.js';
-import { portaDoCanal } from '../lib/sofia-so-whatsapp.js';
+import { portaDoCanal, sofiaSoWhatsappEfetivo } from '../lib/sofia-so-whatsapp.js';
+import { convidarParaWhatsapp } from '../lib/convite-whatsapp.js';
 import { garantirTituloPadrao } from '../lib/titulo-padrao.js';
 import { telefoneDeFamiliarNoCartao } from '../lib/telefone-de-familiar.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
@@ -121,6 +122,8 @@ const messageAddSchema = z.object({
   entity_type: z.string().optional(),
   type: z.string().optional(),
   origin: z.string().optional(),
+  /** `text`, `voice`, `picture`… (o Kommo manda; o robô «convite ao WhatsApp» só descarta o que se diz comentário) */
+  message_type: z.string().optional(),
   attachment: attachmentSchema.optional(),
   attachments: z.array(attachmentSchema).optional(),
   author: z
@@ -343,6 +346,8 @@ interface ExtractedContext {
   accountId: number | null;
   /** De que canal veio a mensagem (`waba`, `com.amocrm.amocrmwa`, `instagram_business`, `facebook`…), como o Kommo informa; null = não veio. */
   origem: string | null;
+  /** `message_type` da mensagem no Kommo (`text`, `voice`, `picture`…); null = não veio. */
+  tipoDaMensagem: string | null;
   isChatMessage: boolean;
 }
 
@@ -361,6 +366,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
       authorId: msg.author?.id ?? null,
       accountId,
       origem: msg.origin?.trim() || null,
+      tipoDaMensagem: msg.message_type?.trim() || null,
       isChatMessage: true,
     };
   }
@@ -375,6 +381,7 @@ function extractContext(parsed: ParsedWebhook, leadId: number): ExtractedContext
     authorId: null,
     accountId,
     origem: null,
+    tipoDaMensagem: null,
     isChatMessage: false,
   };
 }
@@ -984,6 +991,21 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
   // Pode já ter saído acima (resposta à véspera que, no fim, não era — segue para a IA).
   if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
 
+  // ROBÔ «CONVITE AO WHATSAPP» (chave `convite-whatsapp`, lib/convite-whatsapp.ts): lead que escreve no Instagram/Facebook recebe UM convite para o
+  // WhatsApp da clínica (não é a Sofia). Por mensagem, fora do coalescer e sem ninguém esperar: nunca lança. Chave desligada: nada é lido.
+  if (ctx.isChatMessage) {
+    void convidarParaWhatsapp({
+      unit,
+      leadId,
+      origem: ctx.origem,
+      tipoDaMensagem: ctx.tipoDaMensagem,
+      isChatMessage: ctx.isChatMessage,
+      chatId: ctx.chatId,
+      talkId: ctx.talkId,
+      contactId: ctx.contactId,
+    }).catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'convite-whatsapp: falha inesperada (ignorada)'));
+  }
+
   const status = scheduleAgentRun({
     unitSlug: unit.slug,
     leadId,
@@ -1231,6 +1253,7 @@ export async function iniciarTurnoAdiado(pedido: PedidoDeTurno): Promise<void> {
     authorId: null,
     accountId: null,
     origem: null, // cartão que ganhou a unidade depois: sem origem, segue como WhatsApp (fora da chave sofia-so-whatsapp)
+    tipoDaMensagem: null,
     isChatMessage: true,
   };
   const status = scheduleAgentRun({
@@ -1466,6 +1489,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         slug: unit.slug,
         leadId,
         origem: args.origem,
+        // a chave própria OU o robô «convite ao WhatsApp» ligado nesta unidade (com número): onde ele fala, a Sofia não fala no Instagram/Facebook
+        estado: sofiaSoWhatsappEfetivo(unit),
         latenciaMs: () => Math.round(performance.now() - requestStart),
       },
       {
