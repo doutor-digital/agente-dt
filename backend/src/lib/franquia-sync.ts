@@ -80,16 +80,22 @@ export function nomeParaBusca(nome: string | null | undefined): string {
  * Regra: tratamento ABERTO ganha de fechado; entre dois do mesmo tipo, o mais recente.
  * Sem `statusName` conta como aberto, igual ao `tratamentoAberto` da máquina de etapas.
  */
+/**
+ * O tratamento está ABERTO na franquia (sem status, em andamento, não iniciado ou pendente)? A regra do sincronizador, num lugar só: quem escolhe
+ * o tratamento do cartão (`melhorTratamento`) e a lista de recuperação (que não liga para quem está em tratamento) leem a MESMA.
+ */
+export function tratamentoAbertoNaFranquia(statusName: string | null | undefined): boolean {
+  const n = normalizar(statusName);
+  return !n || n.includes('andamento') || n.includes('nao iniciado') || n.includes('pendente');
+}
+
 export function melhorTratamento(
   atual: SpineTreatment | null,
   novo: SpineTreatment | null,
 ): SpineTreatment | null {
   if (!atual) return novo;
   if (!novo) return atual;
-  const aberto = (t: SpineTreatment) => {
-    const n = normalizar(t.statusName);
-    return !n || n.includes('andamento') || n.includes('nao iniciado') || n.includes('pendente');
-  };
+  const aberto = (t: SpineTreatment) => tratamentoAbertoNaFranquia(t.statusName);
   if (aberto(atual) !== aberto(novo)) return aberto(atual) ? atual : novo;
   const quando = (t: SpineTreatment) => {
     const ms = Date.parse(t.created ?? '');
@@ -205,6 +211,11 @@ export function ehConsulta(s: Pick<SpineSchedule, 'categoryName'>): boolean {
   if (!c) return false;
   if (c.includes('sessao')) return false;
   return c.includes('avalia') || c.includes('retorno');
+}
+
+/** Sessão de tratamento: tem categoria e NÃO é consulta (avaliação ou retorno). A regra do sincronizador (jornada, faltas) e da lista de recuperação. */
+export function ehSessao(s: Pick<SpineSchedule, 'categoryName'>): boolean {
+  return !!normalizar(s.categoryName) && !ehConsulta(s);
 }
 
 /** Avaliação = o agendamento que a SDR fez; só ela ganha carimbo de "quando/quem agendou". */
