@@ -18,7 +18,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
-import { CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
+import { ATRIBUTO_OUTROS_HORARIOS, CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
 import { mesmoTelefone } from './chatwoot-lida.js';
 import { normalizar } from './franquia-sync.js';
@@ -38,6 +38,8 @@ export interface Desejado {
   hora_consulta: string | null;
   situacao_consulta: string;
   categoria_consulta: string | null;
+  /** os outros horários de pé da MESMA pessoa no mesmo dia, depois deste, cada um com a data («2026-11-20 14:30, 2026-11-20 17:00»); ausente/vazio = um horário só */
+  outros_horarios_do_dia?: string;
 }
 
 /** Situação da franquia → a lista do Chatwoot (Agendado, Confirmado, Atendido, Não compareceu, Remarcado, Desmarcado). */
@@ -68,6 +70,25 @@ export function agendamentoQueVale(lista: SpineSchedule[], hoje: string): SpineS
   if (dePe.length) return dePe[0]!;
   const passados = comDia.filter((s) => s.dayLocal! <= hoje).sort((a, b) => `${b.dayLocal} ${b.timeLocal ?? ''}`.localeCompare(`${a.dayLocal} ${a.timeLocal ?? ''}`));
   return passados[0] ?? null;
+}
+
+/**
+ * Os outros horários, no MESMO dia do agendamento que vale, que a mesma pessoa tem de pé (Agendado/Confirmado) e são DEPOIS dele, cada um com a data («2026-11-20 14:30, 2026-11-20 17:00»). Só quando o
+ * que vale é de hoje em diante e de pé: de um que já passou não se anuncia nada. Vazio = um horário só.
+ */
+export function outrosHorariosDoDia(vale: SpineSchedule, lista: SpineSchedule[], hoje: string): string {
+  const hora = (t: string | null): string | null => (t && /^\d{2}:\d{2}/.test(t) ? t.slice(0, 5) : null);
+  const minha = hora(vale.timeLocal);
+  if (!minha || !vale.dayLocal || vale.dayLocal < hoje || !['Agendado', 'Confirmado'].includes(situacaoDoChatwoot(vale))) return '';
+  const outras = new Set<string>();
+  const categoria = categoriaDoChatwoot(vale.categoryName);
+  for (const x of lista) {
+    const h = hora(x.timeLocal);
+    // só o que é do MESMO tipo: uma sessão da tarde não entra no lembrete da avaliação da manhã (e o lembrete dela não pode ser dado como feito)
+    if (x === vale || !h || x.dayLocal !== vale.dayLocal || h <= minha || categoriaDoChatwoot(x.categoryName) !== categoria || !['Agendado', 'Confirmado'].includes(situacaoDoChatwoot(x))) continue;
+    outras.add(h);
+  }
+  return [...outras].sort().map((h) => `${vale.dayLocal} ${h}`).join(', ');
 }
 
 export function desejadoDe(s: SpineSchedule): Desejado | null {
@@ -111,15 +132,18 @@ export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: str
   if (d.hora_consulta && String(atual.hora_consulta ?? '') !== d.hora_consulta) o.hora_consulta = d.hora_consulta;
   if (String(atual.situacao_consulta ?? '') !== d.situacao_consulta) o.situacao_consulta = d.situacao_consulta;
   if (d.categoria_consulta && String(atual.categoria_consulta ?? '') !== d.categoria_consulta) o.categoria_consulta = d.categoria_consulta;
+  // duas sessões no mesmo dia viram UMA mensagem com os dois horários: a agenda é a única que escreve este campo (a régua só lê)
+  const outros = d.outros_horarios_do_dia ?? '';
+  if (String(atual[ATRIBUTO_OUTROS_HORARIOS] ?? '') !== outros) o[ATRIBUTO_OUTROS_HORARIOS] = outros;
   const e = hoje ? etapaDaConsulta(atual, d, hoje) : {};
   if (e.etapa) o.etapa = e.etapa;
   return o;
 }
 
-const NOMES: Record<string, string> = { data_consulta: 'data', hora_consulta: 'hora', situacao_consulta: 'situação', categoria_consulta: 'categoria', etapa: 'etapa' };
+const NOMES: Record<string, string> = { data_consulta: 'data', hora_consulta: 'hora', situacao_consulta: 'situação', categoria_consulta: 'categoria', etapa: 'etapa', [ATRIBUTO_OUTROS_HORARIOS]: 'outros horários do dia' };
 export function descricao(m: Record<string, string>): string {
   return Object.entries(m)
-    .map(([k, v]) => `${NOMES[k] ?? k} = ${k === 'data_consulta' ? v.split('-').reverse().join('/') : v}`)
+    .map(([k, v]) => `${NOMES[k] ?? k} = ${k === 'data_consulta' ? v.split('-').reverse().join('/') : v === '' ? '(nenhum)' : v}`)
     .join(' · ');
 }
 
@@ -156,6 +180,7 @@ export function casar(
     const s = agendamentoQueVale(lista, hoje);
     const d = s ? desejadoDe(s) : null;
     if (!d) continue;
+    d.outros_horarios_do_dia = outrosHorariosDoDia(s!, lista, hoje);
     const muda = mudancas(alvo.attrs, d, hoje);
     const { segurada, porCategoria } = etapaDaConsulta(alvo.attrs, d, hoje);
     if (Object.keys(muda).length || segurada || porCategoria) {

@@ -257,6 +257,8 @@ export interface Disparo {
    * «sem pedido» não está aprovado na Meta (caixa oficial, janela de 24 h fechada): melhor o lembrete com a pergunta do que nenhum.
    */
   reserva?: { modelo: string; texto: string; variaveis: string[] };
+  /** as chaves dos outros horários do dia que o texto já cita (ver `Candidato.cobre`): o worker as registra como feitas junto com esta */
+  cobre?: string[];
 }
 
 export interface Decisao {
@@ -336,6 +338,33 @@ export interface Momento {
   hora: { hh: number; mm: number } | null;
   /** data + hora, o que identifica a ocorrência (remarcou = outra) */
   chave: string;
+  /**
+   * Outros horários do MESMO dia, depois deste («HH:MM», em ordem): a agenda grava o que a pessoa tem a mais no dia (com a data) em `outros_horarios_do_dia`. O texto do
+   * lembrete mostra todos («18/11 às 09:00 e 14:30»): duas sessões no mesmo dia viram UMA mensagem. Ausente = um horário só.
+   */
+  mais?: string[];
+}
+
+/**
+ * O atributo da conversa com os outros horários do mesmo dia, CADA UM COM A SUA DATA («2026-11-20 14:30, 2026-11-20 17:00»); a agenda (`chatwoot-agenda.ts`)
+ * é a única que o grava. A data vai junto porque outros escritores (a Sofia, a equipe) remarcam `data_consulta`/`hora_consulta` sem tocar neste campo: um horário
+ * de outro dia não pode aparecer («e 14:30» do dia 20 num lembrete do dia 25) nem ser dado como coberto.
+ */
+export const ATRIBUTO_OUTROS_HORARIOS = 'outros_horarios_do_dia';
+
+/** Os horários do atributo que são do MESMO DIA do principal e DEPOIS dele, sem repetir, em ordem («HH:MM»). Sem hora principal, sem data, outra data ou nada válido: []. */
+export function outrosHorarios(valor: unknown, principal: Momento | null): string[] {
+  if (!principal?.hora) return [];
+  const base = principal.hora.hh * 60 + principal.hora.mm;
+  const achados = new Map<number, string>();
+  for (const pedaco of str(valor).split(/[,;]+/)) {
+    const par = /^(\d{4}-\d{2}-\d{2})\s+(\S+)$/.exec(pedaco.trim());
+    if (!par || lerData(par[1])?.iso !== principal.data.iso) continue; // sem data, ou de outro dia: ignora
+    const h = lerHora(par[2]);
+    const min = h ? h.hh * 60 + h.mm : -1;
+    if (h && min > base) achados.set(min, `${doisDigitos(h.hh)}:${doisDigitos(h.mm)}`);
+  }
+  return [...achados.entries()].sort((a, b) => a[0] - b[0]).map(([, t]) => t);
 }
 
 function momento(dataV: unknown, horaV: unknown): Momento | null {
@@ -350,7 +379,9 @@ function instante(m: Momento, horaPadrao: number): Date {
 }
 
 const ddmm = (d: DataCivil) => `${doisDigitos(d.d)}/${doisDigitos(d.m)}`;
-const textoDoMomento = (m: Momento) => (m.hora ? `${ddmm(m.data)} às ${doisDigitos(m.hora.hh)}:${doisDigitos(m.hora.mm)}` : ddmm(m.data));
+const juntarHorarios = (horas: string[]): string => (horas.length <= 1 ? horas.join('') : `${horas.slice(0, -1).join(', ')} e ${horas[horas.length - 1]}`);
+const textoDoMomento = (m: Momento) =>
+  m.hora ? `${ddmm(m.data)} às ${juntarHorarios([`${doisDigitos(m.hora.hh)}:${doisDigitos(m.hora.mm)}`, ...(m.mais ?? [])])}` : ddmm(m.data);
 
 /** "R$ 350", "R$ 1.234,50". */
 export function brl(v: number): string {
@@ -595,6 +626,11 @@ export interface Candidato {
   momento?: Momento;
   /** o modelo ORIGINAL (com a pergunta) quando este Candidato já é o «sem pedido»: serve de reserva se o «sem pedido» não estiver aprovado na Meta */
   modeloComPedido?: string;
+  /**
+   * As chaves (data+hora) dos OUTROS horários do dia que esta mensagem já cita: ao sair, a regra é dada como feita também para elas (o lembrete delas seria a
+   * mesma mensagem outra vez).
+   */
+  cobre?: string[];
 }
 
 /**
@@ -681,6 +717,7 @@ function lembretes(
 ): Candidato[] {
   const saida: Candidato[] = [];
   const teto = m.hora ? instante(m, 0) : emBelem(m.data, 8);
+  const cobre = m.mais?.length ? { cobre: m.mais.map((h) => `${m.data.iso}T${h}`) } : {};
   saida.push({
     regra: regras.vespera[0],
     modelo: regras.vespera[1],
@@ -689,10 +726,18 @@ function lembretes(
     teto,
     alvo: m.hora ? new Date(instante(m, 0).getTime() - (antes.vespera ?? DIA)) : emBelem(somarDias(m.data, -1), 9),
     momento: m,
+    ...cobre,
   });
-  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.dia ?? 3 * HORA)), momento: m });
-  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.preparo ?? HORA)), momento: m });
+  if (m.hora && regras.dia) saida.push({ regra: regras.dia[0], modelo: regras.dia[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.dia ?? 3 * HORA)), momento: m, ...cobre });
+  if (m.hora && regras.preparo) saida.push({ regra: regras.preparo[0], modelo: regras.preparo[1], chave: m.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - (antes.preparo ?? HORA)), momento: m, ...cobre });
   return saida;
+}
+
+/** O momento com os outros horários do mesmo dia (`outros_horarios_do_dia`); sem eles, o MESMO objeto de sempre. */
+function comMaisHorarios(m: Momento | null, valor: unknown): Momento | null {
+  if (!m) return m;
+  const mais = outrosHorarios(valor, m);
+  return mais.length ? { ...m, mais } : m;
 }
 
 /** Tudo que a régua PODERIA mandar a esta conversa, antes do horário e do «feitos» (exportada para o catálogo da tela «Robôs»). */
@@ -705,7 +750,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
   const etapaTratamento = str(a.etapa_tratamento);
   const tratamento = str(a.funil) === 'Tratamento' || etapaTratamento !== '';
   const semFollowUp = c.etiquetas.includes('sem-follow-up');
-  const consulta = momento(a.data_consulta, a.hora_consulta);
+  const consulta = comMaisHorarios(momento(a.data_consulta, a.hora_consulta), a.outros_horarios_do_dia);
   /** consulta da agenda que é SESSÃO de tratamento: tem os lembretes de sessão (mais abaixo), não os de consulta comercial */
   const ehSessao = str(a.categoria_consulta) === 'Sessão';
   /** a consulta (ou sessão) da agenda já está «Confirmado» (ou o cartão está na etapa Confirmado sem situação marcada): não se pede a confirmação outra vez (`MODELO_SEM_PEDIDO`) */
@@ -897,6 +942,12 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
       vistosNoCiclo.add(id);
       return true;
     })
+    // o principal já está «Confirmado»: o outro horário (talvez só «Agendado») NÃO é dado como coberto, o lembrete dele sai por conta própria
+    .map((k) => {
+      if (!k.cobre || situ !== 'Confirmado') return k;
+      const { cobre: _naoCobre, ...resto } = k;
+      return resto;
+    })
     // modelo trocado na tela «Robôs» (só vale para quem fala com o paciente; a aprovação na Meta o worker confere na hora de enviar)
     .map((k) => {
       // o ajuste da tela «Robôs» é guardado pelo nome ORIGINAL do modelo (`regra|modelo do código`), mesmo quando o candidato já virou o «sem pedido»
@@ -979,7 +1030,7 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
     const original = k.modeloComPedido && r.texto !== null ? renderizar(k.modeloComPedido, c, unidade, k.momento) : null;
     const reserva = original?.texto != null && original.variaveis ? { reserva: { modelo: k.modeloComPedido!, texto: original.texto, variaveis: original.variaveis } } : {};
-    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo, ...reserva });
+    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo, ...reserva, ...(k.cobre ? { cobre: k.cobre } : {}) });
   }
   return { disparos, perdidas, ...(seguradas.length ? { seguradas } : {}) };
 }
