@@ -931,6 +931,20 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/sofia-so-whatsapp.ts',
   },
   {
+    id: 'confirmacao-adiada',
+    chave: 'CONFIRMACAO_ADIADA_SLUGS',
+    nome: 'A Sofia não marca quem adiou a confirmação',
+    oQueFaz:
+      'Quando a fala do paciente neste turno adia a confirmação do horário ("te confirmo mais tarde", "te confirmo na parte da tarde", "vou ver e te aviso", "depois te falo"), a ferramenta agendar_consulta recusa e o modelo responde sem marcar nem dizer "confirmado": tudo bem, é só avisar quando puder. Origem: Salto, lead 5032777, 25/11/2026 — "Te confirmo na parte da tarde." virou "✅ Agendamento confirmado".',
+    pegadinha:
+      'NASCE DESLIGADA e a primeira passada deve ser «Só no papel»: o histórico da execução mostra «agendar_consulta teria recusado — o paciente adiou a confirmação» e a consulta é marcada como sempre; confira os casos antes de ligar. Na dúvida MARCA: quem diz sim, confirmo, confirmado, fechado, pode ser, pode marcar, paguei ou mandou comprovante nunca é travado, e a última mensagem do turno decide («Vou ver com meu marido» seguido de «Confirmado!» marca). Lê UMA mensagem por vez (não atravessa a quebra de linha). Não adia: «vou confirmar» sem um quando, «confirmar» o Pix/pagamento/sinal/comprovante/endereço, «te confirmo amanhã às 15h» (é escolha de horário), «te aviso se…», «te falo o nome…». Áudio sem transcrição não é avaliado. Só vale para marcar consulta nova (`remarcar_consulta` não passa por aqui).',
+    risco: 'comportamento',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/confirmacao-adiada.ts',
+  },
+  {
     id: 'calar-cliente-do-escritorio',
     chave: 'CALAR_CLIENTE_ESCRITORIO_SLUGS',
     nome: 'IA calada para quem já é cliente do escritório',

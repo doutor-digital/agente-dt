@@ -59,6 +59,7 @@ import {
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
+import { adiouConfirmacao, confirmacaoAdiadaEstado, travarAgendamentoAdiado, type TurnoDaConfirmacao } from './confirmacao-adiada.js';
 
 const FALLBACK_LOOP_GUARDRAIL =
   'Deixa eu confirmar essa informação com a equipe pra não te passar nada errado 🙏 ' +
@@ -617,6 +618,10 @@ export async function buildAgentGraph(
     pixHolder: unit.pixHolder,
     ganchos: ganchosDaTaxa,
   });
+  // O paciente ADIOU a confirmação ("te confirmo na parte da tarde", Salto 25/11): com a chave `confirmacao-adiada` ligada a ferramenta não marca;
+  // em seco só registra que teria recusado. Nasce DESLIGADA. O agentNode preenche `confirmacao` a cada volta.
+  const confirmacao: TurnoDaConfirmacao = { adiou: null };
+  travarAgendamentoAdiado(tools, confirmacao, recorder, () => confirmacaoAdiadaEstado(unit.slug));
 
   const useAnthropic = unit.llmProvider === 'anthropic' && !!unit.anthropicApiKey;
   const useGoogle = unit.llmProvider === 'google' && !!unit.googleApiKey;
@@ -697,6 +702,7 @@ export async function buildAgentGraph(
     // Sem as respostas seguradas (o paciente mandou outra mensagem enquanto elas nasciam): contam as que ele leu.
     const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
+    confirmacao.adiou = confirmacaoAdiadaEstado(unit.slug) === 'desligado' ? null : adiouConfirmacao(falaDoPacienteNoTurno(falas));
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
