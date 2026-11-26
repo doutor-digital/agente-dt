@@ -48,7 +48,7 @@ import { aplicarGuardrail } from '../agent/guardrail.js';
 import { sinalDaUnidade } from '../agent/prompt-composer.js';
 import { unidadeSemAntecipado } from '../agent/pagamento-da-unidade.js';
 import { travaDaAgendaDaIa } from './crm-compartilhado.js';
-import { dataPorExtenso, feriadoNacional } from './feriados.js';
+import { dataLocalISO, dataPorExtenso, feriadoNacional } from './feriados.js';
 import { consultaMarcadaNoTurno, legendaDoCartao } from './cartao-de-chegada.js';
 import { extrairBotoes } from './botoes.js';
 import { SpineService } from '../services/spine.service.js';
@@ -56,6 +56,10 @@ import { AgendaReconcileService } from '../services/agenda-reconcile.service.js'
 import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
 import { hojeDaUnidade, resumoDaPassagem } from './chatwoot-resumo-passagem.js';
+import { aceitouEsteHorario, ID_SO_COM_SIM, recusaDeAceite } from './chatwoot-agenda-so-com-sim.js';
+import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { registrarSimulacao } from './so-no-papel.js';
+import { fusoDaUnidade } from './fuso.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -246,9 +250,11 @@ export interface PedidoDasFerramentas {
   estado: EstadoDaRodada;
   onCall: (a: SandboxAction) => void;
   deps?: DepsDasFerramentas;
-  /** o que a Sofia leu da conversa (as falas): alimenta o «Resumo» da nota de passagem; os atributos o resumo lê de AGORA, na hora de passar */
+  /** o que a Sofia leu da conversa (as falas): alimenta o «Resumo» da nota de passagem e a trava «só agenda com sim» (a última fala do paciente); os atributos o resumo lê de AGORA, na hora de passar */
   falas?: readonly Fala[];
-  /** o relógio (só o teste fixa): a data de hoje na unidade decide se a consulta do atributo ainda vale no resumo */
+  /** a chave `chatwoot-agenda-so-com-sim` desta unidade; ausente = pergunta ao catálogo (o teste fixa) */
+  soComSim?: Estado;
+  /** o relógio (só o teste fixa): a data de hoje na unidade — para «amanhã/hoje» da fala do paciente e para a consulta do «Resumo» */
   agora?: () => Date;
 }
 
@@ -481,9 +487,36 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
   const reais = (Object.values(agenda) as Array<DynamicStructuredTool | undefined>).filter((t): t is DynamicStructuredTool => !!t);
   // o lead da conversa vale em toda ferramenta, escreva o que escrever o modelo (e some do schema que ele vê)
   fixarLeadDaConversa(reais, lead, recorder, unit);
+  // «SÓ AGENDA COM SIM» (chatwoot-agenda-so-com-sim.ts): a ferramenta que grava dia e hora só roda se a última fala do paciente aceitou ESTE dia
+  // e ESTE horário. Chave por unidade, nasce desligada; em «só no papel» não bloqueia, só anota o que bloquearia. Desligada = byte a byte como antes.
+  const soComSim: Estado = p.soComSim ?? estadoDaAutomacao(unit.slug, ID_SO_COM_SIM, process.env.CHATWOOT_AGENDA_SO_COM_SIM_SLUGS);
+  const travaDoSim = (ferramenta: string, args: unknown): string | null => {
+    if (soComSim === 'desligado' || (ferramenta !== 'agendar_consulta' && ferramenta !== 'remarcar_consulta')) return null;
+    const a = args as { data?: string; hora?: string };
+    if (!a?.data || !a?.hora) {
+      // pedido torto: quem recusa é a validação (zod) da própria ferramenta; fica no log porque aqui a trava não consegue conferir
+      logger.warn({ conversa, ferramenta }, 'chatwoot-sofia: só agenda com sim — pedido sem data ou hora, a trava não conferiu');
+      return null;
+    }
+    const agora = p.agora?.() ?? new Date();
+    const r = aceitouEsteHorario(p.falas ?? [], { data: a.data, hora: a.hora }, dataLocalISO(agora, fusoDaUnidade(unit)));
+    if (r.ok) return null;
+    const texto = recusaDeAceite(ferramenta, r, { data: a.data, hora: a.hora });
+    logger.info({ conversa, ferramenta, modo: soComSim, motivo: r.motivo }, 'chatwoot-sofia: só agenda com sim — o paciente não aceitou este horário');
+    if (soComSim === 'seco') {
+      registrarSimulacao(unit, ID_SO_COM_SIM, { leadId: lead, acao: 'pularia', alvo: ferramenta, valor: `${a.data} ${a.hora}`, motivo: r.motivo });
+      return null;
+    }
+    return texto;
+  };
   for (const t of reais) {
     const interno = t.func.bind(t);
     t.func = async (args: unknown, ...resto: unknown[]) => {
+      const recusada = travaDoSim(t.name, args);
+      if (recusada) {
+        onCall({ tool: t.name, args: sem(args), result: recusada });
+        return recusada;
+      }
       const res = String(await interno(args as never, ...(resto as never[])));
       // no seco a leitura é só a grade, sem a sondagem que o ligado faz na franquia: quem avalia o seco precisa saber
       onCall({ tool: t.name, args: seco && t.name === 'consultar_horarios' ? { ...sem(args), observacao: 'seco: só a grade, sem a sondagem — o ligado pode oferecer menos horários' } : sem(args), result: res });
@@ -550,6 +583,9 @@ export interface ResultadoDaSofia {
 export interface DepsDaRodada {
   rodarTeste: typeof rodarTesteDaSofia;
   ferramentas?: DepsDasFerramentas;
+  /** só o teste: a chave «só agenda com sim» e o relógio */
+  soComSim?: Estado;
+  agora?: () => Date;
 }
 
 export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada): Promise<ResultadoDaSofia | null> {
@@ -567,7 +603,8 @@ export async function rodarSofiaDoChatwoot(p: PedidoDaSofia, deps: DepsDaRodada)
         recorder,
         estado,
         falas: p.falas,
-        agora: p.agora,
+        soComSim: deps.soComSim,
+        agora: deps.agora ?? p.agora,
         onCall: (a) => {
           feitas.push(a);
           onCall(a);

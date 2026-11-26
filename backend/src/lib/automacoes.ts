@@ -1237,6 +1237,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/chatwoot-ia.ts',
   },
   {
+    id: 'chatwoot-agenda-so-com-sim',
+    chave: 'CHATWOOT_AGENDA_SO_COM_SIM_SLUGS',
+    nome: 'Sofia do CRM só agenda com o «sim» do paciente',
+    oQueFaz:
+      'Trava, no código, as ferramentas de marcar e remarcar da Sofia do CRM: só gravam na franquia se a ÚLTIMA fala do paciente aceitou ESTE dia e ESTE horário (ele nomeou o horário — «quinta às 14h» —, ou disse «sim/pode/fechado» a uma mensagem da Sofia que oferecia UM horário só, o mesmo). «Vou ver», «depois te aviso», «talvez», «não», pergunta de disponibilidade, um «sim» a uma lista de horários ou outro dia/horário que não o da ferramenta: nada é gravado, a ferramenta devolve «RECUSADO» e a Sofia pergunta de novo, em uma frase.',
+    pegadinha:
+      'NASCE DESLIGADA. Em «só no papel» não bloqueia nada: anota na tela o que bloquearia (para medir quantas vezes o modelo marcaria sem o aceite antes de ligar). O erro cai sempre para o lado de perguntar mais uma vez: «sim, mas onde fica?» e qualquer «não» na mesma fala recusam e a Sofia confirma de novo. Só vale na Sofia do CRM (Chatwoot); a do Kommo não passa por aqui.',
+    risco: 'comportamento',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/chatwoot-agenda-so-com-sim.ts',
+  },
+  {
     id: 'chatwoot-agenda',
     chave: 'CHATWOOT_AGENDA_SLUGS',
     nome: 'Agenda da franquia no CRM',
