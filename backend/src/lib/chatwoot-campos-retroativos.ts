@@ -23,7 +23,7 @@
  *  - CAPI: etapa Agendado/Compareceu viraria evento de conversão para a Meta. O plano devolve `marcasCapi`: as linhas `capi-visto:<Evento>` como
  *    `inicial` (o worker nunca manda o que já estava assim).
  */
-import { candidatos, diaEmBelem, lerData, limiteDe, precisaUltimaPublica, type AjustesDaRegua, type Candidato, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
+import { candidatos, diaEmBelem, lerData, limiteDe, precisaUltimaPublica, retomadaSegurada, type AjustesDaRegua, type Candidato, type ConversaRegua, type MensagemResumo, type Vistos } from './chatwoot-regua.js';
 import { eventosAlcancados, type EventoCapi } from './chatwoot-capi.js';
 import { ETIQUETA_PAUSA } from './chatwoot-pausa.js';
 
@@ -256,8 +256,9 @@ function comoOWorker(c: ConversaRegua, ultimaPublica: MensagemResumo | null | un
  *  - `some`: regras que existiam, ainda no prazo, e deixam de existir (o paciente perderia véspera/dia/preparo, por exemplo).
  */
 export function mudancaNaRegua(antes: ConversaRegua, depois: ConversaRegua, vistosAntes: Vistos, vistosDepois: Vistos, agora: Date, ajustes?: AjustesDaRegua, ultimaPublica?: MensagemResumo | null): { acorda: string[]; some: string[] } {
-  const A = candidatos(comoOWorker(antes, ultimaPublica), vistosAntes, ajustes);
-  const D = candidatos(comoOWorker(depois, ultimaPublica), vistosDepois, ajustes);
+  // a retomada de lead que o worker SEGURA (consulta de pé, avaliou há pouco) não acorda nem some: a régua nunca a manda
+  const A = candidatos(comoOWorker(antes, ultimaPublica), vistosAntes, ajustes).filter((k) => !retomadaSegurada(k.regra, antes.attrs, agora));
+  const D = candidatos(comoOWorker(depois, ultimaPublica), vistosDepois, ajustes).filter((k) => !retomadaSegurada(k.regra, depois.attrs, agora));
   const chavesA = new Set(A.map(chaveDe));
   const chavesD = new Set(D.map(chaveDe));
   const noPrazo = (k: Candidato) => agora.getTime() <= limiteDe(k).getTime();
