@@ -244,7 +244,8 @@ function urlDaResposta(json: Record<string, unknown>): string | undefined {
     const d = dentro as Record<string, unknown>;
     candidatos.push(d.url, d.checkout_url, d.link, d.payment_url);
   }
-  return candidatos.find((v): v is string => typeof v === 'string' && /^https:\/\/[^\s]+$/.test(v));
+  // o link vai ser MANDADO ao paciente: só vale se o endereço for da própria InfinitePay (um domínio de documentação ou de redirecionamento não cobra nada)
+  return candidatos.find((v): v is string => typeof v === 'string' && /^https:\/\/([a-z0-9-]+\.)*infinitepay\.io(\/[^\s]*)?$/i.test(v));
 }
 
 /**

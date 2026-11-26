@@ -5,7 +5,7 @@ import type { AddressInfo } from 'node:net';
 import express from 'express';
 import { criarContextoInfinitepay, type ContaInfinitepay } from './infinitepay.js';
 import { armazemEmMemoria } from './infinitepay-falso.js';
-import { assinaturaDoAviso, montarRotaDoWebhookInfinitepay, processarAviso, urlDoAviso, type DepsDoAviso } from './infinitepay-webhook.js';
+import { assinaturaDoAviso, eventoDoCorpo, montarRotaDoWebhookInfinitepay, processarAviso, urlDoAviso, type DepsDoAviso } from './infinitepay-webhook.js';
 import { mascararUrlDoLog } from '../lib/mascara-url-log.js';
 
 const UNI = 'doutor-hernia-acailandia';
@@ -62,14 +62,36 @@ test('pago: confirma no /payment_check com os três códigos, confere o valor e 
   assert.equal(m.avisos.length, 0);
 });
 
-test('o corpo mentindo não paga nada: a InfinitePay não confirma → continua "criado" e o João é avisado', async () => {
+test('o corpo mentindo não paga nada: a InfinitePay ainda não confirma → continua "criado", responde 503 (ela tenta de novo) e avisa o João UMA vez', async () => {
   const m = montar({ consultar: async () => ({ sucesso: true, pago: false }) });
   const r = await processarAviso(m.deps, m.p, { ...PAGO, paid_amount: 15000 });
   assert.equal(r.resultado, 'não confirmado');
-  assert.equal(r.http, 200);
+  assert.equal(r.http, 503, 'a confirmação pode só estar atrasada: a InfinitePay precisa tentar de novo');
   assert.equal(m.armazem.linhas[0]!.status, 'criado');
   assert.equal(m.armazem.linhas[0]!.ultimoEvento, 'paid:nao_confirmado');
-  assert.match(m.avisos[0]!, /NÃO confirmou/);
+  assert.match(m.avisos[0]!, /ainda NÃO confirma/);
+  // a tentativa seguinte NÃO avisa de novo (sem enxurrada no Telegram)
+  const m2 = montar({ consultar: async () => ({ sucesso: true, pago: false }) });
+  m2.armazem.linhas[0]!.ultimoEvento = 'paid:nao_confirmado';
+  await processarAviso(m2.deps, m2.p, PAGO);
+  assert.equal(m2.avisos.length, 0);
+});
+
+test('a confirmação chega na segunda tentativa: o aviso repetido marca pago', async () => {
+  let pago = false;
+  const m = montar({ consultar: async () => (pago ? { sucesso: true, pago: true, valorCentavos: 15000 } : { sucesso: true, pago: false }) });
+  assert.equal((await processarAviso(m.deps, m.p, PAGO)).http, 503);
+  pago = true;
+  assert.deepEqual(await processarAviso(m.deps, m.p, PAGO), { http: 200, resultado: 'pago' });
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
+});
+
+test('a confirmação SEM o valor não vale: não marca pago e avisa (a conferência do valor não falha aberta)', async () => {
+  const m = montar({ consultar: async () => ({ sucesso: true, pago: true }) });
+  const r = await processarAviso(m.deps, m.p, PAGO);
+  assert.equal(r.resultado, 'valor diferente');
+  assert.equal(m.armazem.linhas[0]!.status, 'criado');
+  assert.match(m.avisos[0]!, /SEM o valor/);
 });
 
 test('valor confirmado diferente do link: não marca pago e avisa', async () => {
@@ -140,15 +162,36 @@ test('refunded: marca estornado e SEMPRE avisa o João; canceled só vale para l
   assert.equal(jaPago.armazem.linhas[0]!.status, 'pago', 'cancelamento não desfaz pagamento');
 });
 
-test('payment_failed, created e evento desconhecido: só ficam registrados', async () => {
+test('payment_failed e created só ficam registrados; evento que não se conhece também, mas AVISA o João', async () => {
   const m = montar();
-  for (const evento of ['payment_failed', 'created', 'novidade']) {
+  for (const evento of ['payment_failed', 'created']) {
     const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: evento });
     assert.equal(r.resultado, `registrado:${evento}`);
   }
+  assert.equal(m.avisos.length, 0);
+  const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'novidade' });
+  assert.equal(r.resultado, 'registrado:desconhecido:novidade');
+  assert.match(m.avisos[0]!, /evento que o conector não conhece \(novidade\)/);
   assert.equal(m.armazem.linhas[0]!.status, 'criado');
-  assert.equal(m.armazem.linhas[0]!.ultimoEvento, 'novidade');
   assert.equal(m.consultas.length, 0);
+});
+
+test('o nome do evento é lido pelo sentido: payment.paid, INVOICE.REFUNDED e order.canceled valem como paid, refunded e canceled', () => {
+  assert.equal(eventoDoCorpo({ event: 'payment.paid' }), 'paid');
+  assert.equal(eventoDoCorpo({ type: 'INVOICE.REFUNDED' }), 'refunded');
+  assert.equal(eventoDoCorpo({ event_type: 'order.canceled' }), 'canceled');
+  assert.equal(eventoDoCorpo({ event: 'payment.settled' }), 'settled');
+  assert.equal(eventoDoCorpo({ event: 'payment_failed' }), 'payment_failed');
+  assert.equal(eventoDoCorpo({ event: 'invoice.created' }), 'created');
+  assert.equal(eventoDoCorpo({}), undefined, 'sem evento no corpo é o corpo do paid da documentação');
+  assert.equal(eventoDoCorpo({ event: 'algo estranho!' }), 'desconhecido:algoestranho');
+});
+
+test('estorno com o evento em outra grafia também marca e avisa', async () => {
+  const m = montar({ status: 'pago' });
+  const r = await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'invoice.REFUNDED' });
+  assert.equal(r.resultado, 'estornado');
+  assert.match(m.avisos[0]!, /ESTORNO/);
 });
 
 test('o endereço do aviso leva a assinatura e o log de debug a esconde', () => {

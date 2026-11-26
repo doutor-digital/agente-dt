@@ -24,7 +24,8 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
       return linhas.filter((l) => l.unidade === f.unidade && (!f.status || l.status === f.status) && (!f.orderNsu || l.orderNsu === f.orderNsu)).slice(0, f.limite);
     },
     async porOrderNsu(unidade, orderNsu) {
-      return linhas.find((l) => l.unidade === unidade && l.orderNsu === orderNsu) ?? null;
+      const l = linhas.find((x) => x.unidade === unidade && x.orderNsu === orderNsu);
+      return l ? { ...l } : null;
     },
     async ler(unidade) {
       return livro(unidade);

@@ -204,6 +204,27 @@ test('a InfinitePay recusa (403): fica "falhou", não gasta teto e a resposta di
   assert.equal(ok.pedidos.length, 5);
 });
 
+test('429 (a InfinitePay mandou esperar): o link não existe, vira "falhou", não gasta teto e não dispara o alerta de "pode existir"', async () => {
+  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay pediu para ir mais devagar (429)', 429); } });
+  await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 100, descricao: 'Sessão' }), /Nada foi criado/);
+  assert.equal(m.armazem.linhas[0]!.status, 'falhou');
+  assert.equal(m.avisos.length, 0);
+});
+
+test('o link foi criado mas o banco não anotou a URL: o João recebe a URL no aviso e a resposta manda guardá-la', async () => {
+  const m = montar();
+  const original = m.armazem.resolver.bind(m.armazem);
+  m.armazem.resolver = async (u, o, r) => {
+    if (r.status === 'criado') throw new Error('banco caiu');
+    return original(u, o, r);
+  };
+  const r = await criarLink(m.ctx, m.esc, QUEM, { valor: 100, descricao: 'Sessão' });
+  assert.equal(r.criado, true);
+  assert.match(String(r.atencao), /NÃO consegui anotar a URL/);
+  assert.ok(m.avisos.some((a) => a.includes(r.url)), 'a URL vai no aviso');
+  assert.equal(m.armazem.linhas[0]!.status, 'intencao', 'continua contando no teto');
+});
+
 test('sem resposta clara (timeout): fica "intencao", CONTA no teto, avisa o João e a resposta manda conferir no app', async () => {
   const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay não respondeu a tempo'); } });
   await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 4000, descricao: 'Pacote' }), /pode ter sido criado/);
@@ -228,6 +249,7 @@ test('validação: valor, descrição, validade, parcelas e referência ruins s�
     [{ valor: 10, descricao: 'Consulta', validadeDias: 91 }, /validadeDias/],
     [{ valor: 10, descricao: 'Consulta', parcelasSemTaxa: 13 }, /parcelasSemTaxa/],
     [{ valor: 10, descricao: 'Consulta', referencia: 'com espaço' }, /referencia/],
+    [{ valor: 10, descricao: 'Consulta', referencia: 'cpf52998224725' }, /número longo/],
   ];
   for (const [a, re] of casos) await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, a), re);
   assert.equal(m.pedidos.length, 0);
@@ -316,4 +338,10 @@ test('POST /links: aceita a URL dentro de data; resposta sem URL é erro que avi
   );
   // uma URL http (não https) não vale
   await assert.rejects(() => criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'http://inseguro' }).f }), /sem a URL/);
+  // https, mas de outro domínio (documentação, redirecionamento ou um domínio parecido): o link iria ao paciente sem cobrar nada
+  for (const url of ['https://exemplo.com/pagar', 'https://infinitepay.io.falso.com/x', 'https://notinfinitepay.io/x', 'https://ajuda.infinitepay.io.evil.com/x']) {
+    await assert.rejects(() => criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url }).f }), /sem a URL/, url);
+  }
+  const ok = await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(200, { url: 'https://checkout.infinitepay.io/clinica/abc' }).f });
+  assert.equal(ok.url, 'https://checkout.infinitepay.io/clinica/abc');
 });

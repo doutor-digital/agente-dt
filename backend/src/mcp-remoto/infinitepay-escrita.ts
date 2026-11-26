@@ -318,6 +318,8 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
   const parcelas = a.parcelasSemTaxa ?? 0;
   if (!Number.isInteger(parcelas) || parcelas < 0 || parcelas > 12) throw new ErroDeEntrada('parcelasSemTaxa vai de 0 a 12');
   if (a.referencia !== undefined && !REFERENCIA.test(a.referencia.trim())) throw new ErroDeEntrada('referencia: use letras, números, "-" e "_" (até 60), sem espaço');
+  // a referência vai no endereço do aviso (log do proxy), no Telegram e no painel da InfinitePay: nada de CPF ou telefone
+  if (a.referencia !== undefined && temDigitosSeguidos(a.referencia, 10)) throw new ErroDeEntrada('referencia: não use CPF, telefone ou outro número longo (10 dígitos seguidos ou mais); ela aparece em avisos e no painel da InfinitePay');
   const agora = esc.agora();
   const orderNsu = a.referencia?.trim() || referenciaNova(agora);
   const chave = chaveDeDuplicata(conta.slug, centavos, descricao);
@@ -349,8 +351,8 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
     } catch (e) {
       const status = e instanceof ErroInfinitepay ? e.status : null;
       const msg = e instanceof Error ? e.message : String(e);
-      // 400/401/403/404/422: a InfinitePay recusou, o link não existe. Qualquer outra coisa (timeout, 5xx, resposta sem URL) deixa dúvida.
-      const recusa = status !== null && [400, 401, 403, 404, 422].includes(status);
+      // 400/401/403/404/422/429: a InfinitePay recusou (ou mandou esperar) e o link não existe. Qualquer outra coisa (timeout, 5xx, resposta sem URL) deixa dúvida.
+      const recusa = status !== null && [400, 401, 403, 404, 422, 429].includes(status);
       await esc.armazem.resolver(conta.slug, orderNsu, recusa ? { status: 'falhou', erro: msg.slice(0, 300) } : { status: 'intencao', erro: msg.slice(0, 300) }).catch(() => undefined);
       if (!recusa) {
         void esc.alertar(`⚠️ InfinitePay (${conta.nome}): criei o link ${orderNsu} de ${dinheiro(valor)} e a resposta não veio clara (${msg.slice(0, 120)}). Ele PODE existir. Confira no app antes de repetir.`).catch(() => false);
@@ -358,7 +360,9 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       }
       throw new ErroDeEntrada(`${msg} Nada foi criado.`);
     }
-    await esc.armazem.resolver(conta.slug, orderNsu, { status: 'criado', url, ...(invoiceSlug ? { invoiceSlug } : {}) }).catch(() => undefined);
+    // o link JÁ existe na InfinitePay: se o banco falhar ao anotar a URL, a URL não pode se perder (vai no aviso do João e na resposta)
+    const anotou = await esc.armazem.resolver(conta.slug, orderNsu, { status: 'criado', url, ...(invoiceSlug ? { invoiceSlug } : {}) }).then(() => true, () => false);
+    if (!anotou) void esc.alertar(`⚠️ InfinitePay (${conta.nome}): criei o link ${orderNsu} de ${dinheiro(valor)} mas o banco não anotou a URL: ${url}. Ele conta no teto como intenção.`).catch(() => false);
     if (valor > esc.tetoLink() / 2) {
       void esc.alertar(`🔗 InfinitePay (${conta.nome}): link de ${dinheiro(valor)} criado por ${criadoPor} (acima de 50% do teto de ${dinheiro(esc.tetoLink())}). Ref ${orderNsu}.`).catch(() => false);
     }
@@ -376,6 +380,7 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       parcelasSemTaxaParaAClinica: parcelas,
       avisoAutomatico: webhookUrl ? 'a InfinitePay avisa o conector quando pagar; veja o status em infinitepay_links' : 'sem aviso automático de pagamento (o conector não tem endereço público configurado); confira no app',
       aviso: 'A InfinitePay não deixa cancelar link pela API: este vale até a data acima (ou até o primeiro pagamento). Para estornar um pagamento, só pelo app ou pela Conta Web da InfinitePay.',
+      ...(anotou ? {} : { atencao: 'O link foi criado, mas NÃO consegui anotar a URL no banco (infinitepay_links vai mostrá-lo sem URL, como intencao). Guarde esta URL; o João foi avisado.' }),
       consumoDoDia: consumo,
     };
   });

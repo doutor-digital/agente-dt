@@ -641,7 +641,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
   // InfinitePay: criar link DIRETO (portão INFINITEPAY_ESCRITA_UNIDADES, vazio = desligado; tetos e aviso no Telegram) e o webhook que confirma o pagamento.
   // O segredo do endereço do webhook é derivado, não o do console: um endereço vazado serve a um link só e nunca vira sessão.
-  const segredoDoAviso = createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:infinitepay-webhook').digest('hex');
+  // INFINITEPAY_WEBHOOK_SEGREDO (opcional) fixa o segredo: o endereço de cada link vale por até 90 dias, e girar SESSION_JWT_SECRET sem ele faria os avisos dos links já criados darem 404
+  const segredoDoAviso = process.env.INFINITEPAY_WEBHOOK_SEGREDO?.trim() || createHmac('sha256', env.SESSION_JWT_SECRET).update('mcp-remoto:infinitepay-webhook').digest('hex');
   const escritaInfinitepay = criarEscritaInfinitepay({
     armazem: armazemDeEscritaPrisma(prisma as never),
     alertar: (texto) => enviarTelegram(texto),
