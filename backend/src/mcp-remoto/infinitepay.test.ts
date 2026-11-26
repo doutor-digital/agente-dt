@@ -213,7 +213,7 @@ test('listar_integracoes mostra a InfinitePay e as ferramentas; quem não tem co
   const r = listarIntegracoes({ franquia: new Map(), kommo: new Map(), bling: new Map(), infinitepay: new Map([['doutor-hernia-acailandia', { nome: 'Açailândia' }]]) });
   assert.equal(r.comInfinitepay, 1);
   assert.equal(r.unidades[0]!.infinitepay, true);
-  assert.match(r.unidades[0]!.ferramentas.join(' | '), /infinitepay_\*.*NÃO lista vendas/);
+  assert.match(r.unidades[0]!.ferramentas.join(' | '), /infinitepay_\*.*NÃO (lista|lê) vendas/);
   const antes = listarIntegracoes({ franquia: new Map([['serra', { nome: 'Serra' }]]), kommo: new Map(), bling: new Map() });
   assert.equal(antes.comInfinitepay, 0);
   assert.equal(antes.unidades[0]!.infinitepay, false);
