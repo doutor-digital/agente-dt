@@ -97,3 +97,26 @@ test('agenda: `casar` segue devolvendo só quem tem o que gravar (o nome do cada
   assert.equal(r.length, 0);
   assert.equal(nomesDe([ag({ clientName: 'Ana Souza' })], conversas, { 'ana souza': ['5594988887777'] }).get(20)?.nome, 'Ana Souza');
 });
+
+// ── correções da revisão ──────────────────────────────────────────────────────────────────────────
+
+test('agenda: a 2ª pessoa no mesmo WhatsApp (a filha agendou) LIMPA o nome que a mãe tinha gravado; nome só com outra grafia não regrava', () => {
+  const conversas: agenda.ConversaDaCaixa[] = [{ id: 14, telefone: '+559499745062', attrs: { nome_paciente: 'Maria da Silva' }, atividade: 10 }];
+  const fones = { 'maria da silva': ['5594999745062'], 'ana da silva': ['5594999745062'] };
+  const dois = nomesDe([ag({ clientName: 'Maria da Silva' }), ag({ clientName: 'Ana da Silva', idSchedule: 2 })], conversas, fones);
+  assert.deepEqual([...dois.entries()].map(([id, v]) => [id, v.nome]), [[14, '']], 'limpa');
+  // sem nome gravado e com dois nomes: nada a fazer (não há o que limpar)
+  assert.equal(nomesDe([ag({ clientName: 'Maria da Silva' }), ag({ clientName: 'Ana da Silva', idSchedule: 2 })], [{ ...conversas[0]!, attrs: {} }], fones).size, 0);
+  // a mesma pessoa com outra caixa/acento: não é mudança
+  assert.equal(nomesDe([ag({ clientName: 'MARIA DA SILVA' })], conversas, { 'maria da silva': ['5594999745062'] }).size, 0);
+});
+
+test('o modelo mandado à mão pela atendente (corpo de fora do CRM) usa o mesmo nome da régua: o do cadastro, e nunca o do perfil quando é o de quem atende', async () => {
+  const { preencherModelo } = await import('./modelo-preenchido.js');
+  const corpo = 'Olá, {{1}}. Sua consulta é {{2}}.';
+  const dele = preencherModelo({ modelo: 'modelo_de_fora', corpo }, conv({ nome: 'Aline', attrs: { nome_paciente: 'Joaquim Pereira' } }), U, Z('2026-11-16T12:00:00Z'));
+  assert.equal(dele.origem, 'externo');
+  assert.equal(dele.valores['1'], 'Joaquim');
+  const secretaria = preencherModelo({ modelo: 'modelo_de_fora', corpo }, conv({ nome: 'Aline Souza', atendente: 'Aline' }), U, Z('2026-11-16T12:00:00Z'));
+  assert.equal(secretaria.valores['1'], undefined, 'a atendente digita o nome: não vem o dela');
+});
