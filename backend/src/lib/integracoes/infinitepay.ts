@@ -44,7 +44,7 @@ export interface LeituraDoAmbiente {
 const sufixoDe = (variavel: string, prefixo: string) => variavel.slice(prefixo.length).toLowerCase().replace(/_/g, '-');
 
 /** Acha a unidade do sufixo: o slug inteiro, ou o final dele quando só uma unidade termina assim. Ambíguo ou desconhecido = undefined. */
-function unidadeDoSufixo(sufixo: string, unidades: ReadonlyArray<{ slug: string; nome: string }>): { slug: string; nome: string } | { motivo: string } {
+function unidadeDoSufixo<U extends { slug: string }>(sufixo: string, unidades: ReadonlyArray<U>): U | { motivo: string } {
   const exata = unidades.find((u) => u.slug === sufixo);
   if (exata) return exata;
   const pelofim = unidades.filter((u) => u.slug.endsWith(`-${sufixo}`));
@@ -52,7 +52,11 @@ function unidadeDoSufixo(sufixo: string, unidades: ReadonlyArray<{ slug: string;
   return { motivo: pelofim.length > 1 ? `ambígua: ${pelofim.map((u) => u.slug).join(', ')}` : 'nenhuma unidade com esse nome' };
 }
 
-export function lerContasDoAmbiente(unidades: ReadonlyArray<{ slug: string; nome: string }>, e: NodeJS.ProcessEnv = process.env): LeituraDoAmbiente {
+/**
+ * `unidades` deve trazer TODAS as unidades (ativas e inativas): o sufixo é resolvido entre todas e só depois a inativa é descartada. Assim a chave de uma unidade
+ * desativada (ex.: um cancelamento) nunca é entregue a outra unidade ativa cujo slug termine igual.
+ */
+export function lerContasDoAmbiente(unidades: ReadonlyArray<{ slug: string; nome: string; ativa?: boolean }>, e: NodeJS.ProcessEnv = process.env): LeituraDoAmbiente {
   const contas = new Map<string, ContaInfinitepayConfig>();
   const ignoradas: LeituraDoAmbiente['ignoradas'] = [];
   const P_CHAVE = 'INFINITEPAY_CHAVE_';
@@ -71,12 +75,33 @@ export function lerContasDoAmbiente(unidades: ReadonlyArray<{ slug: string; nome
       ignoradas.push({ variavel, motivo: u.motivo });
       continue;
     }
+    if (u.ativa === false) {
+      ignoradas.push({ variavel, motivo: `a unidade ${u.slug} está inativa` });
+      continue;
+    }
     if (contas.has(u.slug)) {
       ignoradas.push({ variavel, motivo: `a unidade ${u.slug} já tem uma chave (outra variável)` });
       continue;
     }
-    const handle = (e[`${P_HANDLE}${variavel.slice(P_CHAVE.length)}`] ?? '').trim().replace(/^\$/, '');
-    contas.set(u.slug, { slug: u.slug, nome: u.nome, chave, ...(handle ? { handle } : {}) });
+    contas.set(u.slug, { slug: u.slug, nome: u.nome, chave });
+  }
+  // a InfiniteTag (opcional) é resolvida pelo MESMO caminho da chave: o sufixo pode ser diferente (chave ..._ACAILANDIA, handle ..._DOUTOR_HERNIA_ACAILANDIA)
+  for (const variavel of Object.keys(e).sort()) {
+    if (!variavel.startsWith(P_HANDLE)) continue;
+    const handle = (e[variavel] ?? '').trim().replace(/^\$/, '');
+    if (!handle) continue;
+    const u = unidadeDoSufixo(sufixoDe(variavel, P_HANDLE), unidades);
+    if ('motivo' in u) {
+      ignoradas.push({ variavel, motivo: u.motivo });
+      continue;
+    }
+    const conta = contas.get(u.slug);
+    if (!conta) {
+      ignoradas.push({ variavel, motivo: `a unidade ${u.slug} não tem chave (INFINITEPAY_CHAVE_…) ligada` });
+      continue;
+    }
+    if (conta.handle) ignoradas.push({ variavel, motivo: `a unidade ${u.slug} já tem uma InfiniteTag (outra variável)` });
+    else conta.handle = handle;
   }
   return { contas, ignoradas };
 }
@@ -146,6 +171,11 @@ function falhaDoStatus(status: number, json: Record<string, unknown>): ErroInfin
   return new ErroInfinitepay(`a InfinitePay respondeu ${status}${msg}`, status);
 }
 
+/** Um 200 que não é o JSON da InfinitePay (página de um proxy, CDN fora do ar) não prova nada: nunca vira "chave ativa" nem "não pago". */
+function conferirFormato(status: number, json: Record<string, unknown>): void {
+  if (typeof json.success !== 'boolean') throw new ErroInfinitepay('a InfinitePay respondeu em formato inesperado (sem o campo success): pode ser um proxy ou uma mudança na API', status);
+}
+
 const inteiro = (v: unknown): number | undefined => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v) : undefined);
 
 /**
@@ -156,6 +186,7 @@ export async function consultarPagamento(chave: string, p: PedidoDeConsulta, o: 
   const corpo = { ...(p.handle ? { handle: p.handle } : {}), order_nsu: p.orderNsu, transaction_nsu: p.transactionNsu, slug: p.slug };
   const { status, json } = await chamar(chave, '/payment_check', corpo, o);
   if (status < 200 || status >= 300) throw falhaDoStatus(status, json);
+  conferirFormato(status, json);
   return {
     sucesso: json.success === true,
     pago: json.success === true && json.paid === true,
@@ -173,4 +204,5 @@ export async function consultarPagamento(chave: string, p: PedidoDeConsulta, o: 
 export async function testarChave(chave: string, o: OpcoesDeChamada = {}): Promise<void> {
   const r = await chamar(chave, '/payment_check', { order_nsu: 'dd-teste-leitura', transaction_nsu: '00000000-0000-0000-0000-000000000000', slug: 'inexistente' }, o);
   if (r.status < 200 || r.status >= 300) throw falhaDoStatus(r.status, r.json);
+  conferirFormato(r.status, r.json);
 }

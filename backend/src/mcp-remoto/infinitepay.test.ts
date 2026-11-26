@@ -100,9 +100,10 @@ test('links: totais por status em reais, falhou e intencao não entram no valor 
   ];
   const r = await infinitepayLinks(ctxCom(itens), {});
   assert.equal(r.resumo.links, 4);
-  assert.equal(r.resumo.valorEmLinksCriados, 150);
+  assert.equal(r.resumo.valorEmitido, 150);
   assert.equal(r.resumo.valorPago, 101.5);
-  assert.deepEqual(r.resumo.porStatus.pago, { quantidade: 1, valor: 100 });
+  assert.equal(r.resumo.valorEstornado, 0);
+  assert.deepEqual(r.resumo.porStatus.pago, { quantidade: 1, valor: 101.5 }, 'nos pagos o valor do status é o PAGO');
   assert.match(r.escopo, /SÓ os links criados por este conector/);
   assert.match(r.limitesDaApi, /não lista vendas/);
   assert.match(String(r.atencao), /intencao/);
@@ -119,7 +120,49 @@ test('links: período em dia de Brasília, status inválido recusa, maxItens cor
   assert.equal(f.ate.toISOString(), '2026-12-01T02:59:59.999Z');
   await assert.rejects(() => infinitepayLinks(ctx, { status: 'inventado' }), /status desconhecido/);
   await assert.rejects(() => infinitepayLinks(ctx, { inicio: '2026-11-30', fim: '2026-11-01' }), /início vem depois/);
-  await assert.rejects(() => infinitepayLinks(ctx, { inicio: '30/11/2026' }), /data inválida/);
+  await assert.rejects(() => infinitepayLinks(ctx, { inicio: '30/11/2026' }), /AAAA-MM-DD/);
+  await assert.rejects(() => infinitepayLinks(ctx, { fim: '2026-02-30' }), /não é uma data que existe/);
+});
+
+test('links: campoData=pago manda o filtro pela data do pagamento; o padrão é a data de criação, e a resposta diz qual', async () => {
+  const arm = armazem([link({ orderNsu: 'a' })]);
+  const ctx = criarContextoInfinitepay(new Map([[conta().slug, conta()]]), arm);
+  const padrao = await infinitepayLinks(ctx, { inicio: '2026-11-01', fim: '2026-11-30' });
+  assert.match(padrao.periodoPor, /CRIAÇÃO/);
+  const pago = await infinitepayLinks(ctx, { inicio: '2026-11-01', fim: '2026-11-30', campoData: 'pago' });
+  assert.match(pago.periodoPor, /PAGAMENTO/);
+  assert.deepEqual((arm.filtros as Array<{ campoData: string }>).map((f) => f.campoData), ['criado', 'pago']);
+});
+
+test('links: pago e estornado separados; valor emitido não é "recebido"', async () => {
+  const itens = [
+    link({ orderNsu: 'a', status: 'pago', valorCentavos: 10000, valorPagoCentavos: 10000 }),
+    link({ orderNsu: 'b', status: 'estornado', valorCentavos: 10000, valorPagoCentavos: 10000 }),
+  ];
+  const r = await infinitepayLinks(ctxCom(itens), {});
+  assert.equal(r.resumo.valorEmitido, 200);
+  assert.equal(r.resumo.valorPago, 100, 'o estornado não conta como pago');
+  assert.equal(r.resumo.valorEstornado, 100);
+});
+
+test('status: erro do banco ao procurar o link NÃO vira "não é do conector": a resposta avisa', async () => {
+  const arm = { ...armazem([link()]), async porOrderNsu() { throw new Error('banco caiu'); } };
+  const ctx = criarContextoInfinitepay(new Map([[conta().slug, conta()]]), arm);
+  const r = await infinitepayStatusPagamento(ctx, { orderNsu: 'dd-1', transactionNsu: 't', slug: 's' });
+  assert.equal(r.linkDoConector, null);
+  assert.match(String(r.avisoDoRegistro), /NÃO quer dizer que o link não foi criado/);
+});
+
+test('contas: testar vai em paralelo, e com `unidade` só testa essa', async () => {
+  let emCurso = 0;
+  let pico = 0;
+  const lenta = (slug: string): ContaInfinitepay => ({ ...conta(slug), fonte: { ...conta(slug).fonte, testar: async () => { emCurso += 1; pico = Math.max(pico, emCurso); await new Promise((r) => setTimeout(r, 20)); emCurso -= 1; } } });
+  const ctx = criarContextoInfinitepay(new Map([['doutor-hernia-acailandia', lenta('doutor-hernia-acailandia')], ['doutor-hernia-serra', lenta('doutor-hernia-serra')]]), armazem([]));
+  const r = await infinitepayContas(ctx, { testar: true });
+  assert.equal(r.total, 2);
+  assert.equal(pico, 2, 'as duas chamadas correram juntas');
+  const so = await infinitepayContas(ctx, { testar: true, unidade: 'serra' });
+  assert.deepEqual(so.contas.map((c) => c.unidade), ['doutor-hernia-serra']);
 });
 
 test('contas: lista a unidade com o final da chave; testar=true prova a chave e mostra a recusa sem a chave', async () => {

@@ -265,13 +265,20 @@ async function contasZenfisioDoBanco(): Promise<Map<string, ContaZenfisio>> {
  * Unidades com a chave da InfinitePay no AMBIENTE do servidor (INFINITEPAY_CHAVE_<UNIDADE>). A chave fica só em memória; variável que não acha unidade
  * (ou acha mais de uma) é pulada com aviso no log, sem o valor.
  */
+const infinitepayAvisadas = new Set<string>();
 async function contasInfinitepayDoAmbiente(): Promise<Map<string, ContaInfinitepay>> {
-  const unidades = await prisma.unit.findMany({ where: { isActive: true }, select: { slug: true, name: true } });
-  const lido = lerContasInfinitepay(unidades.map((u) => ({ slug: u.slug, nome: u.name })));
-  for (const i of lido.ignoradas) logger.warn({ variavel: i.variavel, motivo: i.motivo }, 'mcp-remoto: variável da InfinitePay ignorada');
+  // TODAS as unidades, ativas e inativas: a chave de uma unidade desativada não pode cair em outra que termine com o mesmo nome (ver lerContasDoAmbiente)
+  const unidades = await prisma.unit.findMany({ select: { slug: true, name: true, isActive: true } });
+  const lido = lerContasInfinitepay(unidades.map((u) => ({ slug: u.slug, nome: u.name, ativa: u.isActive })));
+  // o ambiente não muda com o processo no ar: cada variável ignorada é avisada UMA vez, não a cada renovação da lista
+  for (const i of lido.ignoradas) {
+    if (infinitepayAvisadas.has(i.variavel)) continue;
+    infinitepayAvisadas.add(i.variavel);
+    logger.warn({ variavel: i.variavel, motivo: i.motivo }, 'mcp-remoto: variável da InfinitePay ignorada');
+  }
   const contas = new Map<string, ContaInfinitepay>();
   for (const c of lido.contas.values()) contas.set(c.slug, contaInfinitepayDaConfig(c));
-  logger.info({ contas: contas.size }, 'mcp-remoto: contas da InfinitePay carregadas');
+  logger.debug({ contas: contas.size }, 'mcp-remoto: contas da InfinitePay carregadas');
   return contas;
 }
 

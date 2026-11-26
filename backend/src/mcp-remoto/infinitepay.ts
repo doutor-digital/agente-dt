@@ -12,7 +12,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
-import { ErroDeEntrada } from '../franquia-mcp/travas.js';
+import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
 import { consultarPagamento, finalDaChave, testarChave, type ContaInfinitepayConfig, type OpcoesDeChamada, type PagamentoConsultado, type PedidoDeConsulta } from '../lib/integracoes/infinitepay.js';
@@ -48,6 +48,8 @@ export interface FiltroDeLinks {
   /** início (inclusive) e fim (inclusive) em instantes UTC */
   de?: Date;
   ate?: Date;
+  /** qual data o período filtra: a de criação do link (padrão) ou a do pagamento (um link criado em outubro e pago em novembro entra no mês de novembro) */
+  campoData?: 'criado' | 'pago';
   status?: string;
   orderNsu?: string;
   limite: number;
@@ -97,6 +99,7 @@ export function criarContextoInfinitepay(contas: Map<string, ContaInfinitepay>, 
 
 export const FUSO = 'America/Sao_Paulo';
 const MAX_LINKS = 200;
+const MAX_LEITURA = 1000;
 
 /** O que a API da InfinitePay não deixa ler: repetido nas respostas para ninguém tomar o recorte pelo total. */
 export const LIMITES_DA_API =
@@ -137,20 +140,23 @@ const reaisDoLink = (l: LinkGuardado) => ({
 
 // ----------------------------------------------------------------- ferramentas
 
-export async function infinitepayContas(ctx: ContextoInfinitepay, a: { testar?: boolean }) {
-  const contas = [];
-  for (const c of ctx.contas.values()) {
-    let chave: { ok: boolean; erro?: string } | undefined;
-    if (a.testar) {
-      try {
-        await c.fonte.testar();
-        chave = { ok: true };
-      } catch (e) {
-        chave = { ok: false, erro: e instanceof Error ? e.message : String(e) };
+export async function infinitepayContas(ctx: ContextoInfinitepay, a: { unidade?: string; testar?: boolean }) {
+  // com `unidade`, só ela; sem, todas — e o teste de chave vai em PARALELO (uma chamada por unidade), para não somar os tempos limite
+  const lista = a.unidade?.trim() ? [resolverContaInfinitepay(ctx, a.unidade)] : [...ctx.contas.values()];
+  const contas = await Promise.all(
+    lista.map(async (c) => {
+      let chave: { ok: boolean; erro?: string } | undefined;
+      if (a.testar) {
+        try {
+          await c.fonte.testar();
+          chave = { ok: true };
+        } catch (e) {
+          chave = { ok: false, erro: e instanceof Error ? e.message : String(e) };
+        }
       }
-    }
-    contas.push({ unidade: c.slug, nome: c.nome, chaveFinal: c.chaveFinal, infiniteTagConfigurada: c.temHandle, ...(chave ? { chaveAtiva: chave } : {}) });
-  }
+      return { unidade: c.slug, nome: c.nome, chaveFinal: c.chaveFinal, infiniteTagConfigurada: c.temHandle, ...(chave ? { chaveAtiva: chave } : {}) };
+    }),
+  );
   return { total: contas.length, contas, limitesDaApi: LIMITES_DA_API };
 }
 
@@ -161,7 +167,9 @@ export async function infinitepayStatusPagamento(ctx: ContextoInfinitepay, a: { 
   const slug = a.slug.trim();
   if (!orderNsu || !transactionNsu || !slug) throw new ErroDeEntrada('preciso dos três: order_nsu, transaction_nsu e slug (o código da fatura). Só o order_nsu não basta.');
   const lido = await conta.fonte.consultar({ orderNsu, transactionNsu, slug });
-  const guardado = await ctx.links.porOrderNsu(conta.slug, orderNsu).catch(() => null);
+  // erro do banco NÃO é "link que não é do conector": a resposta diz que não conseguiu olhar
+  let leituraFalhou = false;
+  const guardado = await ctx.links.porOrderNsu(conta.slug, orderNsu).catch(() => ((leituraFalhou = true), null));
   return {
     unidade: conta.slug,
     orderNsu,
@@ -177,50 +185,63 @@ export async function infinitepayStatusPagamento(ctx: ContextoInfinitepay, a: { 
       ? { nota: 'valorPago difere de valor: em venda parcelada com taxas repassadas ao comprador é normal; não compare os dois.' }
       : {}),
     linkDoConector: guardado ? reaisDoLink(guardado) : null,
+    ...(leituraFalhou ? { avisoDoRegistro: 'não consegui consultar o registro dos links do conector (o banco não respondeu): linkDoConector=null NÃO quer dizer que o link não foi criado por ele.' } : {}),
   };
 }
 
-/** AAAA-MM-DD → instante UTC do começo (ou do fim) desse dia no fuso da clínica (UTC-3, sem horário de verão desde 2019). */
-function instanteDoDia(dia: string, fim: boolean): Date {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dia)) throw new ErroDeEntrada(`data inválida: ${dia} (use AAAA-MM-DD)`);
-  const d = new Date(`${dia}T${fim ? '23:59:59.999' : '00:00:00.000'}-03:00`);
-  if (Number.isNaN(d.getTime())) throw new ErroDeEntrada(`data inválida: ${dia}`);
-  return d;
+/** AAAA-MM-DD (de verdade: 30/02 é recusado) → instante UTC do começo (ou do fim) desse dia no fuso da clínica (UTC-3, sem horário de verão desde 2019). */
+function instanteDoDia(dia: string, fim: boolean, campo: string): Date {
+  validarData(dia, campo);
+  return new Date(`${dia}T${fim ? '23:59:59.999' : '00:00:00.000'}-03:00`);
 }
 
-export async function infinitepayLinks(ctx: ContextoInfinitepay, a: { unidade?: string; inicio?: string; fim?: string; status?: string; orderNsu?: string; maxItens?: number }) {
+export async function infinitepayLinks(
+  ctx: ContextoInfinitepay,
+  a: { unidade?: string; inicio?: string; fim?: string; campoData?: 'criado' | 'pago'; status?: string; orderNsu?: string; maxItens?: number },
+) {
   const conta = resolverContaInfinitepay(ctx, a.unidade);
   if (a.status && !(STATUS_DO_LINK as readonly string[]).includes(a.status)) throw new ErroDeEntrada(`status desconhecido: ${a.status}. Valem: ${STATUS_DO_LINK.join(', ')}`);
-  const de = a.inicio ? instanteDoDia(a.inicio, false) : undefined;
-  const ate = a.fim ? instanteDoDia(a.fim, true) : undefined;
+  const de = a.inicio ? instanteDoDia(a.inicio, false, 'inicio') : undefined;
+  const ate = a.fim ? instanteDoDia(a.fim, true, 'fim') : undefined;
   if (de && ate && de > ate) throw new ErroDeEntrada('o início vem depois do fim');
+  const campoData = a.campoData ?? 'criado';
   const max = Math.min(Math.max(a.maxItens ?? 50, 0), MAX_LINKS);
-  // lê UM a mais que o limite para saber se cortou; os totais valem para o que foi lido (até o teto de MAX_LINKS + 1)
-  const lidos = await ctx.links.listar({ unidade: conta.slug, ...(de ? { de } : {}), ...(ate ? { ate } : {}), ...(a.status ? { status: a.status } : {}), ...(a.orderNsu ? { orderNsu: a.orderNsu.trim() } : {}), limite: 1000 + 1 });
-  const cortouLeitura = lidos.length > 1000;
-  const todos = cortouLeitura ? lidos.slice(0, 1000) : lidos;
+  // lê UM a mais que o limite para saber se cortou; os totais valem para o que foi lido (até o teto de MAX_LEITURA + 1)
+  const lidos = await ctx.links.listar({
+    unidade: conta.slug, ...(de ? { de } : {}), ...(ate ? { ate } : {}), campoData, ...(a.status ? { status: a.status } : {}), ...(a.orderNsu ? { orderNsu: a.orderNsu.trim() } : {}), limite: MAX_LEITURA + 1,
+  });
+  const cortouLeitura = lidos.length > MAX_LEITURA;
+  const todos = cortouLeitura ? lidos.slice(0, MAX_LEITURA) : lidos;
   const porStatus: Record<string, { quantidade: number; valor: number }> = {};
-  let criados = 0;
-  let pagos = 0;
+  let emitido = 0;
+  let pago = 0;
+  let estornado = 0;
   for (const l of todos) {
+    // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
+    const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
     const g = (porStatus[l.status] ??= { quantidade: 0, valor: 0 });
     g.quantidade += 1;
-    g.valor = Math.round((g.valor + l.valorCentavos / 100) * 100) / 100;
-    if (l.status !== 'falhou' && l.status !== 'intencao') criados += l.valorCentavos;
-    if (l.status === 'pago') pagos += l.valorPagoCentavos ?? l.valorCentavos;
+    g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
+    if (l.status !== 'falhou' && l.status !== 'intencao') emitido += l.valorCentavos;
+    if (l.status === 'pago') pago += centavos;
+    if (l.status === 'estornado') estornado += centavos;
   }
   return {
     unidade: conta.slug,
     escopo: 'SÓ os links criados por este conector — não é o total de vendas da InfinitePay desta unidade',
+    periodoPor: campoData === 'pago' ? 'data do PAGAMENTO' : 'data de CRIAÇÃO do link (um link criado antes e pago dentro do período só entra com campoData="pago")',
     resumo: {
       links: todos.length,
-      valorEmLinksCriados: reais(criados),
-      valorPago: reais(pagos),
+      /** valor dos links criados, INCLUINDO cancelados e estornados, sem os que a InfinitePay recusou */
+      valorEmitido: reais(emitido),
+      /** o que foi pago e NÃO foi estornado */
+      valorPago: reais(pago),
+      valorEstornado: reais(estornado),
       porStatus,
     },
     itens: todos.slice(0, max).map(reaisDoLink),
     itensOmitidos: Math.max(todos.length - max, 0),
-    ...(cortouLeitura ? { truncado: true, aviso: 'mais de 1.000 links no período: divida o período. Os totais estão INCOMPLETOS.' } : {}),
+    ...(cortouLeitura ? { truncado: true, aviso: `mais de ${MAX_LEITURA} links no período: divida o período. Os totais estão INCOMPLETOS.` } : {}),
     ...(todos.some((l) => l.status === 'intencao')
       ? { atencao: 'há link em "intencao": o conector gravou o pedido e não chegou a registrar a resposta da InfinitePay (queda no meio). Confira no app da InfinitePay antes de refazer.' }
       : {}),
@@ -242,7 +263,10 @@ export function registrarFerramentasInfinitepay(server: McpServer, ctx: Contexto
         'Quais unidades do conector têm a InfinitePay (Checkout Integrado) ligada e os 4 últimos caracteres da chave. Com testar=true prova que a chave ' +
         'está ativa, sem criar nada. IMPORTANTE: a API da InfinitePay NÃO lista vendas, Pix, saldo, extrato nem recebíveis; só o status de um pagamento ' +
         'conhecido e os links que este conector criou.',
-      inputSchema: { testar: z.boolean().optional().describe('true: confere na InfinitePay se a chave está ativa (consulta um pagamento inventado; não cria nada)') },
+      inputSchema: {
+        unidade,
+        testar: z.boolean().optional().describe('true: confere na InfinitePay se a chave está ativa (consulta um pagamento inventado; não cria nada)'),
+      },
       annotations: ro,
     },
     (args) => executar('infinitepay_contas', args, auditar, () => infinitepayContas(ctx, args)),
@@ -278,6 +302,7 @@ export function registrarFerramentasInfinitepay(server: McpServer, ctx: Contexto
         unidade,
         inicio: z.string().optional().describe('primeiro dia, AAAA-MM-DD'),
         fim: z.string().optional().describe('último dia (incluso), AAAA-MM-DD'),
+        campoData: z.enum(['criado', 'pago']).optional().describe('qual data o período filtra: criado (padrão) ou pago (a data do pagamento)'),
         status: z.enum(STATUS_DO_LINK).optional(),
         orderNsu: z.string().optional().describe('um pedido só'),
         maxItens: z.number().int().min(0).max(MAX_LINKS).optional().describe('quantos links listar (padrão 50; 0 = só os números)'),

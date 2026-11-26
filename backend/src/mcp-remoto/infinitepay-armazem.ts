@@ -61,12 +61,13 @@ export function armazemDeLinksPrisma(db: BancoDeLinks): ArmazemDeLinks {
   return {
     async listar(f: FiltroDeLinks) {
       const criado = { ...(f.de ? { gte: f.de } : {}), ...(f.ate ? { lte: f.ate } : {}) };
+      const campo = f.campoData === 'pago' ? 'pagoEm' : 'createdAt';
       const linhas = await db.infinitepayLink.findMany({
         where: {
           unitSlug: f.unidade,
           ...(f.status ? { status: f.status } : {}),
           ...(f.orderNsu ? { orderNsu: f.orderNsu } : {}),
-          ...(Object.keys(criado).length ? { createdAt: criado } : {}),
+          ...(Object.keys(criado).length ? { [campo]: criado } : {}),
         },
         orderBy: { createdAt: 'desc' },
         take: f.limite,

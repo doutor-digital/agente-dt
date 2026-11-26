@@ -77,6 +77,36 @@ test('consultarPagamento: POST /payment_check com a chave no cabeçalho e nunca 
   assert.deepEqual(JSON.parse(String(vistas[0]!.init.body)), { order_nsu: 'o1', transaction_nsu: 't1', slug: 's1' });
 });
 
+test('ambiente: a chave de uma unidade INATIVA nunca vai para outra ativa que termine igual', () => {
+  const u = [
+    { slug: 'doutor-hernia-timbo', nome: 'Timbó', ativa: false },
+    { slug: 'clinica-nova-timbo', nome: 'Nova', ativa: true },
+  ];
+  // "timbo" é o final dos DOIS slugs: ambíguo, ignorado (nem a ativa recebe a chave da outra)
+  const a = lerContasDoAmbiente(u, { INFINITEPAY_CHAVE_TIMBO: CHAVE });
+  assert.equal(a.contas.size, 0);
+  assert.match(a.ignoradas[0]!.motivo, /ambígua/);
+  // pelo slug inteiro da inativa: reconhecida e descartada por estar inativa, sem cair na outra
+  const b = lerContasDoAmbiente(u, { INFINITEPAY_CHAVE_DOUTOR_HERNIA_TIMBO: CHAVE });
+  assert.equal(b.contas.size, 0);
+  assert.match(b.ignoradas[0]!.motivo, /inativa/);
+  // sufixo que só a inativa tem: não existe outra ativa para receber, continua ignorada
+  const c = lerContasDoAmbiente([{ slug: 'doutor-hernia-timbo', nome: 'T', ativa: false }, { slug: 'doutor-hernia-serra', nome: 'S', ativa: true }], { INFINITEPAY_CHAVE_TIMBO: CHAVE });
+  assert.equal(c.contas.size, 0);
+});
+
+test('ambiente: a InfiniteTag é achada pelo mesmo caminho da chave (sufixos diferentes) e a órfã é reportada', () => {
+  const r = lerContasDoAmbiente(UNIDADES, { INFINITEPAY_CHAVE_ACAILANDIA: CHAVE, INFINITEPAY_HANDLE_DOUTOR_HERNIA_ACAILANDIA: 'tag-a', INFINITEPAY_HANDLE_HM_TECNOLOGIA: 'sem-chave', INFINITEPAY_HANDLE_NAO_EXISTE: 'x' });
+  assert.equal(r.contas.get('doutor-hernia-acailandia')!.handle, 'tag-a');
+  assert.deepEqual(r.ignoradas.map((i) => i.variavel).sort(), ['INFINITEPAY_HANDLE_HM_TECNOLOGIA', 'INFINITEPAY_HANDLE_NAO_EXISTE']);
+});
+
+test('um 200 que não é o JSON da InfinitePay (proxy, CDN) não prova a chave nem vira "não pago"', async () => {
+  const html = (async () => new Response('<html>manutenção</html>', { status: 200 })) as unknown as typeof fetch;
+  await assert.rejects(() => testarChave(CHAVE, { fetcher: html }), /formato inesperado/);
+  await assert.rejects(() => consultarPagamento(CHAVE, { orderNsu: 'o', transactionNsu: 't', slug: 's' }, { fetcher: html }), /formato inesperado/);
+});
+
 test('consultarPagamento: manda a InfiniteTag só quando existe', async () => {
   const { f, vistas } = falso(200, { success: false });
   await consultarPagamento(CHAVE, { orderNsu: 'o', transactionNsu: 't', slug: 's', handle: 'minha-tag' }, { fetcher: f });
