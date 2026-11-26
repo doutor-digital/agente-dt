@@ -210,7 +210,7 @@ test('CLÍNICA DEMONSTRAÇÃO: o --aplicar monta tudo na conta própria dela; Me
   assert.ok(b.e.automacoes.includes('chatwoot-disparo'));
   // Meta/Kapso: NENHUMA chamada (seco)
   assert.equal(falso.chamadas.filter((c) => c.conta === 'kapso').length, 0);
-  assert.ok(resultados.find((r) => r.id === 'modelos')!.notas.some((n) => /SECO.*33 modelo/.test(n)));
+  assert.ok(resultados.find((r) => r.id === 'modelos')!.notas.some((n) => /SECO.*37 modelo/.test(n)));
 
   // NADA de segredo no que sai
   const tudo = [...linhas, relatorio].join('\n');
@@ -324,7 +324,7 @@ test('travaDaReferencia: referência que falha na leitura NÃO para a criação 
   assert.deepEqual(await travaDaReferencia({ referencia: cloud } as unknown as PortasExternas), { trava: false, aviso: null });
 });
 
-test('CLÍNICA DE VERDADE (modo real): a caixa é WhatsApp Cloud com a chave do Kapso, os 33 modelos vão ao Kapso UMA vez e a 2ª rodada não manda nada', async () => {
+test('CLÍNICA DE VERDADE (modo real): a caixa é WhatsApp Cloud com a chave do Kapso, os 37 modelos vão ao Kapso UMA vez e a 2ª rodada não manda nada', async () => {
   const q = ler('questionario.exemplo.yaml');
   const real = { ...q, unidade: { ...q.unidade, slug: 'clinica-real-teste', nome: 'Clínica Real Teste' }, chatwoot: { ...q.chatwoot, subdominio: 'realteste' }, whatsapp: { ...q.whatsapp, prefixo_modelos: 'real_' }, meta: { ...q.meta, token_env: 'META_ADS_TOKEN_REALTESTE', conta_env: 'META_ADS_CONTA_REALTESTE', dataset_id_env: 'META_DATASET_ID_REALTESTE' } } as typeof DEMO;
   const { falso, segredos, externas } = montar();
@@ -336,13 +336,13 @@ test('CLÍNICA DE VERDADE (modo real): a caixa é WhatsApp Cloud com a chave do 
   assert.equal(conta.inboxes[0]!.channel_type, 'Channel::Whatsapp');
   assert.deepEqual(conta.inboxes[0]!.channel, { type: 'whatsapp', phone_number: '+5594984420153', provider: 'whatsapp_cloud', provider_config: { api_key: 'kapso-chave-secreta', phone_number_id: '1212928641906230', business_account_id: '2146287749563217' } });
   const noKapso = falso.kapso.get('2146287749563217')!;
-  assert.equal(noKapso.size, 33);
+  assert.equal(noKapso.size, 37);
   assert.ok([...noKapso.keys()].every((n) => n.startsWith('real_')));
   const enviados = falso.chamadas.filter((c) => c.conta === 'kapso' && c.metodo === 'POST').length;
-  assert.equal(enviados, 33);
+  assert.equal(enviados, 37);
   assert.ok(![...r1.linhas, r1.relatorio].join('\n').includes('kapso-chave-secreta'));
   await rodar(real, b, externas);
-  assert.equal(falso.chamadas.filter((c) => c.conta === 'kapso' && c.metodo === 'POST').length, 33, '2ª rodada: nenhum modelo a mais');
+  assert.equal(falso.chamadas.filter((c) => c.conta === 'kapso' && c.metodo === 'POST').length, 37, '2ª rodada: nenhum modelo a mais');
 });
 
 test('modo real sem a chave do Kapso: a caixa NÃO é criada (nada de caixa pela metade)', async () => {

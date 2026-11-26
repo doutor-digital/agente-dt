@@ -53,6 +53,7 @@ import {
   SUFIXO_FALTA,
   type ConversaRegua,
   type DadosDaUnidade,
+  type Disparo,
   type Mudanca,
   type Visto,
 } from './chatwoot-regua.js';
@@ -576,6 +577,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         // caixa de WhatsApp Cloud: janela de 24 h aberta → texto; fechada → template aprovado (a Meta recusa texto livre)
         if (cloud && !faltou && !d.interna && !seguradaNoKommo && d.variaveis) {
           let via: ViaDoEnvio | undefined;
+          let usouReserva = false;
           try {
             if (janelaDe24hAberta(await ultimaDoPaciente(c), agora)) {
               via = { tipo: 'texto' };
@@ -588,6 +590,15 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
                   ? `na Meta pede ${naMeta} variável(is) e a régua tem ${d.variaveis.length}`
                   : undefined;
               via = { tipo: 'template', nome: nomeNaMeta, variaveis: d.variaveis, aprovado: naMeta !== undefined && !problema, problema };
+              // o lembrete «sem pedido» (quem já confirmou) ainda não está aprovado na Meta: vai o ORIGINAL (com a pergunta, mas com data, endereço e mapa) — melhor que nenhum
+              if (!via.aprovado && d.reserva) {
+                const nomeReserva = nomeDoModeloNaMeta(d.reserva.modelo, unidade.prefixoModelos);
+                const naMetaReserva = (await aprovados()).get(nomeReserva);
+                if (naMetaReserva !== undefined && (naMetaReserva === null || naMetaReserva === d.reserva.variaveis.length)) {
+                  via = { tipo: 'template', nome: nomeReserva, variaveis: d.reserva.variaveis, aprovado: true, motivo: `o «sem pedido» (${nomeNaMeta}) ainda não está aprovado: vai o lembrete original` };
+                  usouReserva = true;
+                }
+              }
             }
           } catch (err) {
             logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra }, `${ID_REGUA}: não consegui conferir a janela de 24 h/os templates — não mando agora`);
@@ -596,11 +607,13 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
             nota = notaDoSeco(d) + avisos;
             texto = nota;
           }
+          const dEnvio: Disparo = usouReserva && d.reserva ? { ...d, modelo: d.reserva.modelo, texto: d.reserva.texto, variaveis: d.reserva.variaveis } : d;
           if (via && modo === 'seco') {
-            nota = notaDoSeco(d, via) + avisos;
+            nota = notaDoSeco(dEnvio, via) + avisos;
             texto = nota;
           } else if (via?.tipo === 'template') {
             if (via.aprovado) {
+              if (usouReserva) texto = dEnvio.texto as string;
               template = { nome: via.nome, idioma: IDIOMA_TEMPLATE, variaveis: via.variaveis };
             } else {
               // sem template aprovado não há o que mandar: uma nota por chave (o envio segue possível nos próximos ciclos, quando aprovar)

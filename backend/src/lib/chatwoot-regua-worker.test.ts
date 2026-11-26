@@ -122,7 +122,7 @@ function chatFalso(
 }
 
 const deps = (armazem: Armazem, chat: Chat): DepsDoCiclo => ({ armazem, chat, pausa: async () => undefined });
-const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 const VESPERA = new Date('2026-11-16T17:30:00Z'); // consulta de 17/11 14:30 Belém, 24 h antes
 
 test('catálogo: a automação existe, tem seco e passa na verificação', () => {
@@ -670,7 +670,7 @@ test('UNIFICAÇÃO (controle): a MESMA conversa sem a etiqueta historico, nascid
 
 // ── histórico com consulta de pé: o worker passa a enxergar, e não dobra com o Kommo ──
 
-const HIST_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Confirmado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+const HIST_CONSULTA = { etapa: 'Agendado', situacao_consulta: 'Agendado', data_consulta: '2026-11-17', hora_consulta: '14:30' };
 
 test('conversa do histórico parada, mas com consulta de pé: lembrete sai (ligado); com consulta velha (mais de 35 dias) segue fora', async () => {
   const f = armazemFalso();
@@ -918,4 +918,47 @@ test('lead quente parado: sem CHATWOOT_GERENTE_WHATSAPP, o número da gerente ve
   // sem o canal dos alertas ou sem a conta: nem monta
   assert.equal(avisoDaGerenteDoBanco('x', 3, 1, { env: {} }), undefined);
   assert.equal(avisoDaGerenteDoBanco('x', 3, undefined, { env }), undefined);
+});
+
+test('paciente já CONFIRMADO: o worker manda a véspera sem a pergunta (data, endereço e mapa), uma vez só, e registra a regra de véspera como feita', async () => {
+  const confirmada = { etapa: 'Confirmado', situacao_consulta: 'Confirmado', categoria_consulta: 'Avaliação', data_consulta: '2026-11-17', hora_consulta: '14:30' };
+  const arm = armazemFalso();
+  const c = chatFalso(() => [bruta(1, { attrs: confirmada })]);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() - 600_000));
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, VESPERA);
+  await cicloDaCaixa(deps(arm.armazem, c.chat), 2, 'x', 'ligado', U, new Date(VESPERA.getTime() + 600_000));
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, false);
+  assert.match(c.mensagens[0]!.texto, /^Olá, Maria\. Passando para lembrar: a sua consulta é amanhã\.\nData e horário: 17\/11 às 14:30\nEndereço: /);
+  assert.doesNotMatch(c.mensagens[0]!.texto, /\?/);
+  assert.deepEqual(arm.disparos.map((d) => `${d.regra}|${d.modo}`), ['consulta-vespera|ligado']);
+});
+
+test('paciente CONFIRMADO na caixa oficial com a janela FECHADA: se o «sem pedido» não está aprovado na Meta, vai o template ORIGINAL (com data, endereço e mapa); aprovado, vai o «sem pedido»; nenhum aprovado, só a nota', async () => {
+  const SEM = 'parau_consulta_lembrete_vespera_confirmada';
+  const confirmada = { attrs: { ...CONSULTA, situacao_consulta: 'Confirmado', etapa: 'Confirmado' }, ultima: CLINICA };
+  const fechada = new Date('2026-11-14T10:00:00Z');
+  // só o original aprovado
+  const a = await doisCiclos('ligado', 3, { aprovados: [VESP], ultimaDoPaciente: fechada }, confirmada);
+  assert.equal(a.mensagens.length, 1);
+  assert.deepEqual(a.mensagens[0]!.template, { nome: VESP, idioma: 'pt_BR', variaveis: ['Maria', '17/11 às 14:30'] });
+  assert.match(a.mensagens[0]!.texto, /^Olá, Maria\. A sua consulta é amanhã\./);
+  assert.match(a.mensagens[0]!.texto, /Endereço: /);
+  assert.equal(a.resumo.disparos, 1);
+  assert.equal(a.resumo.semTemplate, 0);
+  assert.ok(a.disparos[0]!.texto.startsWith(`[template ${VESP}] `));
+  // os dois aprovados: vai o «sem pedido», sem a pergunta
+  const b = await doisCiclos('ligado', 3, { aprovados: [VESP, SEM], ultimaDoPaciente: fechada }, confirmada);
+  assert.deepEqual(b.mensagens[0]!.template, { nome: SEM, idioma: 'pt_BR', variaveis: ['Maria', '17/11 às 14:30'] });
+  assert.doesNotMatch(b.mensagens[0]!.texto, /\?/);
+  // nenhum aprovado: nota «sem template», nada ao paciente
+  const c = await doisCiclos('ligado', 3, { aprovados: [], ultimaDoPaciente: fechada }, confirmada);
+  assert.equal(c.mensagens.length, 1);
+  assert.equal(c.mensagens[0]!.privada, true);
+  assert.equal(c.resumo.semTemplate, 1);
+  assert.equal(c.resumo.disparos, 0);
+  // janela ABERTA: texto livre, o «sem pedido»
+  const d = await doisCiclos('ligado', 3, { aprovados: [], ultimaDoPaciente: new Date('2026-11-16T10:00:00Z') }, { ...confirmada, ultima: PACIENTE_HOJE });
+  assert.equal(d.mensagens[0]!.template, undefined);
+  assert.doesNotMatch(d.mensagens[0]!.texto, /\?/);
 });

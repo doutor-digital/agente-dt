@@ -252,6 +252,11 @@ export interface Disparo {
   alvo: Date;
   /** presente = regra interna (nota privada + ação, nunca mensagem ao paciente) */
   interna?: AcaoInterna;
+  /**
+   * Só no lembrete «sem pedido» (quem já confirmou): o MESMO lembrete na versão original, com a pergunta, já renderizado. O worker o manda no lugar quando o
+   * «sem pedido» não está aprovado na Meta (caixa oficial, janela de 24 h fechada): melhor o lembrete com a pergunta do que nenhum.
+   */
+  reserva?: { modelo: string; texto: string; variaveis: string[] };
 }
 
 export interface Decisao {
@@ -588,6 +593,8 @@ export interface Candidato {
   saiAntesDoDia?: string;
   /** a data+hora (consulta, sessão) que decidiu o envio: é a que o texto de sessão mostra */
   momento?: Momento;
+  /** o modelo ORIGINAL (com a pergunta) quando este Candidato já é o «sem pedido»: serve de reserva se o «sem pedido» não estiver aprovado na Meta */
+  modeloComPedido?: string;
 }
 
 /**
@@ -601,6 +608,21 @@ const ETAPAS_DA_CONSULTA = new Set(['Agendado', 'Confirmado', 'Fechou']);
 const ETAPAS_DE_QUALIFICACAO = new Set(['Sofia qualifica', 'Esperando humano']);
 /** situação em que a consulta ainda está de pé */
 const SITUACOES_DE_PE = new Set(['', 'Agendado', 'Confirmado', 'Remarcado']);
+/**
+ * Os lembretes cujo texto PEDE confirmação («Está tudo certo para o seu comparecimento?», «Está tudo certo?»). Quem já está «Confirmado» não os recebe COM a pergunta:
+ * a pergunta repetida, depois de ele já ter dito sim, confunde (paciente idoso não entende «confirmar de novo») e fez a unidade reclamar. Recebe o mesmo lembrete sem
+ * a pergunta (o modelo «…_confirmada»), que continua trazendo data, horário, endereço e mapa: a véspera é o único aviso com o endereço, e quem confirma no sábado
+ * também esquece. O preparo («leve o documento…») não pede nada e segue saindo.
+ */
+const MODELO_SEM_PEDIDO: ReadonlyMap<string, string> = new Map([
+  ['parau_consulta_lembrete_vespera', 'parau_consulta_lembrete_vespera_confirmada'],
+  ['parau_consulta_confirmacao_dia', 'parau_consulta_dia_confirmada'],
+  ['parau_sessao_lembrete_vespera', 'parau_sessao_lembrete_vespera_confirmada'],
+  ['parau_sessao_confirmacao_dia', 'parau_sessao_dia_confirmada'],
+]);
+/** Troca, nos lembretes que pedem confirmação, o modelo pelo «sem pedido»; o resto (e a regra, a chave e o horário) fica como estava. */
+const semPedidoSe = (sim: boolean, k: Candidato): Candidato => (sim ? semPedido(k) : k);
+const semPedido = (k: Candidato): Candidato => (MODELO_SEM_PEDIDO.has(k.modelo) ? { ...k, modelo: MODELO_SEM_PEDIDO.get(k.modelo)!, modeloComPedido: k.modelo } : k);
 /** motivo da espera → modelo da régua (só estes 4 têm lembrete; os outros motivos da lista não mandam nada) */
 export const MODELO_DA_ESPERA: Record<string, string> = {
   Exames: 'parau_espera_exames',
@@ -686,6 +708,8 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
   const consulta = momento(a.data_consulta, a.hora_consulta);
   /** consulta da agenda que é SESSÃO de tratamento: tem os lembretes de sessão (mais abaixo), não os de consulta comercial */
   const ehSessao = str(a.categoria_consulta) === 'Sessão';
+  /** a consulta (ou sessão) da agenda já está «Confirmado» (ou o cartão está na etapa Confirmado sem situação marcada): não se pede a confirmação outra vez (`MODELO_SEM_PEDIDO`) */
+  const jaConfirmou = situ === 'Confirmado' || (etapa === 'Confirmado' && situ === '');
   const saida: Candidato[] = [];
   /** o valor visto agora (não o que já estava na partida) */
   const novo = (campo: string, valor?: string): Visto | null => {
@@ -737,7 +761,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
           vespera: ['consulta-vespera', etapa === 'Fechou' ? 'parau_sessao_lembrete_vespera' : 'parau_consulta_lembrete_vespera'],
           dia: ['consulta-dia', 'parau_consulta_confirmacao_dia'],
           preparo: ['consulta-preparo', 'parau_consulta_preparo'],
-        }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }),
+        }, { vespera: tempo('consulta-vespera'), dia: tempo('consulta-dia'), preparo: tempo('consulta-preparo') }).map((k) => (jaConfirmou ? semPedido(k) : k)),
       );
     }
     // falta: na hora em que marcam «Não compareceu» e 48 h depois da consulta
@@ -807,7 +831,7 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     const dele = etapaTratamento === 'Em tratamento' ? momento(a.proxima_sessao, a.hora_sessao) : null;
     // «Em tratamento» com a próxima sessão preenchida e DIFERENTE da consulta da agenda: vale o campo que a equipe mantém (sessao-dia, abaixo)
     if (!dele || dele.chave === consulta.chave) {
-      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }, { vespera: tempo('consulta-vespera'), dia: tempo('sessao-dia') }));
+      saida.push(...lembretes(consulta, { vespera: ['consulta-vespera', 'parau_sessao_lembrete_vespera'], dia: ['sessao-dia', 'parau_sessao_confirmacao_dia'] }, { vespera: tempo('consulta-vespera'), dia: tempo('sessao-dia') }).map((k) => (jaConfirmou ? semPedido(k) : k)));
     }
   }
   // falta numa sessão da agenda: marcada «Não compareceu» no dia da sessão (o texto diz «hoje»); não usa os textos de falta de consulta.
@@ -845,9 +869,12 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     if (etapaTratamento === 'Em tratamento') {
       // sessão: 3 h antes (precisa da hora)
       const sessao = momento(a.proxima_sessao, a.hora_sessao);
+      // «Confirmado» é a situação da CONSULTA da agenda: só vale para esta sessão se a consulta é uma SESSÃO e é a MESMA (dia e hora). Outro dia é a confirmação de
+      // uma consulta antiga; outra hora no mesmo dia é outra sessão; uma avaliação ou retorno no mesmo dia não confirma a sessão
+      const sessaoJaConfirmada = jaConfirmou && ehSessao && !!sessao && !!consulta && consulta.chave === sessao.chave;
       if (sessao?.hora) {
         const teto = instante(sessao, 0);
-        saida.push({ regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - tempo('sessao-dia')), momento: sessao });
+        saida.push(semPedidoSe(sessaoJaConfirmada, { regra: 'sessao-dia', modelo: 'parau_sessao_confirmacao_dia', chave: sessao.chave, kind: 'antes', teto, alvo: new Date(teto.getTime() - tempo('sessao-dia')), momento: sessao }));
       }
       // metade das sessões: chegou a etiqueta `aderencia-meio`
       const meio = c.etiquetas.includes('aderencia-meio') ? novo('etiqueta:aderencia-meio') : null;
@@ -872,8 +899,11 @@ export function candidatos(c: ConversaRegua, vistos: Vistos, ajustes?: AjustesDa
     })
     // modelo trocado na tela «Robôs» (só vale para quem fala com o paciente; a aprovação na Meta o worker confere na hora de enviar)
     .map((k) => {
-      const novo = k.interna ? undefined : ajustes?.modelos?.get(`${k.regra}|${k.modelo}`);
-      return novo ? { ...k, modelo: novo } : k;
+      // o ajuste da tela «Robôs» é guardado pelo nome ORIGINAL do modelo (`regra|modelo do código`), mesmo quando o candidato já virou o «sem pedido»
+      const novo = k.interna ? undefined : ajustes?.modelos?.get(`${k.regra}|${k.modeloComPedido ?? k.modelo}`);
+      if (!novo) return k;
+      const { modeloComPedido: _semReserva, ...resto } = k;
+      return { ...resto, modelo: novo };
     });
 }
 
@@ -947,7 +977,9 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
     }
     const r = renderizar(k.modelo, c, unidade, k.momento);
     if (r.faltando.length && memoria.feitos.has(`${k.regra}${SUFIXO_FALTA}|${k.chave}`)) continue;
-    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo });
+    const original = k.modeloComPedido && r.texto !== null ? renderizar(k.modeloComPedido, c, unidade, k.momento) : null;
+    const reserva = original?.texto != null && original.variaveis ? { reserva: { modelo: k.modeloComPedido!, texto: original.texto, variaveis: original.variaveis } } : {};
+    disparos.push({ regra: k.regra, chave: k.chave, modelo: k.modelo, texto: r.texto, variaveis: r.variaveis, faltando: r.faltando, alvo: k.alvo, ...reserva });
   }
   return { disparos, perdidas, ...(seguradas.length ? { seguradas } : {}) };
 }

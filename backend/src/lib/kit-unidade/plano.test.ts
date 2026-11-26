@@ -77,7 +77,7 @@ test('seco sem consultar nada: o plano completo, na ordem, e cada passo diz se e
   assert.ok(passo(p, 'unidade').avisos.some((a) => /não consultado/.test(a)));
   const texto = textoDoPlano(p);
   assert.match(texto, /SECO: nada foi gravado/);
-  assert.match(texto, /33 a enviar/);
+  assert.match(texto, /37 a enviar/);
 });
 
 test('as automações em seco são só as do Chatwoot que TÊM modo seco, e nenhuma é «ligado»', () => {
@@ -138,7 +138,7 @@ test('unidade que já existe: campo VAZIO é preenchido (ALTERAR dizendo qual); 
   assert.notEqual(passo(montarPlano(qq, e3, { molde: MOLDE, sobrescrever: true }), 'unidade').acao, 'bloqueado');
 });
 
-test('o seco mostra os 33 modelos prontos para a Meta, sem nada que a Meta recuse, e marca os de categoria não conferida', () => {
+test('o seco mostra os 37 modelos prontos para a Meta, sem nada que a Meta recuse, e marca os de categoria não conferida', () => {
   const p = montarPlano(q((o) => { o.unidade.endereco = 'Av. Nova, 100 — Centro, Cidade Nova/PA'; o.unidade.mapa_url = 'https://maps.example/nova'; o.unidade.nome = 'Doutor Hérnia Cidade Nova'; o.unidade.cidade = 'Cidade Nova'; o.whatsapp.prefixo_modelos = 'novo_'; }), {}, { molde: MOLDE });
   const m = passo(p, 'modelos');
   assert.ok(!m.avisos.some((a) => /a Meta recusaria|dado da unidade faltando/.test(a)), m.avisos.join(' | '));
@@ -202,7 +202,7 @@ test('o relatório final lista o que falta, e o plano nunca imprime o valor de u
     assert.ok(!tudo.includes('SEGREDO-NAO-PODE-VAZAR'));
     assert.match(tudo, /META_ADS_TOKEN_PARAUAPEBAS: presente/);
     assert.ok(p.relatorio.some((r) => /^NÚMERO/.test(r)));
-    assert.ok(p.relatorio.some((r) => /^MODELOS: 33/.test(r)));
+    assert.ok(p.relatorio.some((r) => /^MODELOS: 37/.test(r)));
     assert.ok(p.relatorio.some((r) => /^AUTOMAÇÕES: ficam em SECO/.test(r)));
     assert.ok(p.relatorio.some((r) => /^UNIDADE: nasce inativa/.test(r)));
   } finally {
