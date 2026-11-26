@@ -316,7 +316,7 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
     atendimentoAtivo,
     async passarParaEquipe(conversa, lida, motivo, falas) {
-      await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo, resumo: resumoDaPassagem({ attrs: lida.attrs, falas }) });
+      await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo, resumo: resumoDaPassagem({ attrs: lida.attrs, falas, hoje: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) }) });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
       if (robo) await robo.abrirParaEquipe(conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));
     },

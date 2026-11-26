@@ -14,6 +14,14 @@ const MAX_ULTIMA_FALA = 110;
 const MAX_QUEIXA = 60;
 
 const txt = (v: unknown): string => (typeof v === 'string' ? v.trim() : typeof v === 'number' ? String(v) : '');
+const semAcento = (t: string): string => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+/** corta por caractere (não por unidade UTF-16): emoji na borda não vira meio-caractere, que o Chatwoot recusaria */
+const cortar = (t: string, max: number): string => {
+  const cs = Array.from(t);
+  return cs.length > max ? `${cs.slice(0, max - 1).join('').trimEnd()}…` : t;
+};
+/** o que o paciente escreveu vai numa nota que o Chatwoot renderiza (markdown e menção): sem colchete, parêntese, arroba, crase nem link */
+const neutro = (t: string): string => t.replace(/[a-z][a-z0-9+.-]*:\/\/\S+|www\.\S+/gi, 'link').replace(/[\[\]()@`<>]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** só o que o paciente escreveu de verdade (sem as marcas «[áudio]» e «[anexo]» que a leitura da conversa põe no lugar do que não é texto) */
 function falasDoPaciente(falas: readonly Fala[]): string[] {
@@ -24,40 +32,47 @@ function falasDoPaciente(falas: readonly Fala[]): string[] {
     .filter((l) => l && l !== '[áudio]' && l !== '[anexo]');
 }
 
-const DOR = /\bdor(?:es)?\s+(?:(?:n[aoe]s?|d[aoe]s?|em|no|na|nas|nos)\s+)?\p{L}+(?:\s+\p{L}+)?/iu;
-const TEMPO = /\b(?:h[aá]|faz|fazem|tem)\s+(?:uns\s+|cerca\s+de\s+|quase\s+)?\d+\s+(?:dias?|semanas?|mes(?:es)?|m[eê]s|anos?)\b/iu;
+// «dor na lombar», «dor de cabeça», «dores nos joelhos»: a preposição é obrigatória («a dor melhorou bastante» não é queixa)
+const DOR = /(?<!\p{L})dor(?:es)?\s+(?:n[aoe]s?|d[aoe]s?|em)\s+\p{L}+(?:\s+\p{L}+)?/iu;
+const NEGA_ANTES = /(?<![a-z])(?:nao|sem|nenhuma?|nunca)(?![a-z])/;
+// o tempo só vale na MESMA linha da dor («dor na lombar há 2 meses»); «meu pai tem 70 anos» não é sintoma
+const TEMPO = /(?<!\p{L})(?:h[aá]|faz|fazem)\s+(?:uns\s+|cerca\s+de\s+|quase\s+)?\d+\s+(?:dias?|semanas?|mes(?:es)?|m[eê]s|anos?)(?!\p{L})/iu;
 // «dor na lombar de ontem» → o que sobra no fim da captura e não é parte do lugar (palavras de ligação) sai
 const LIGACAO = new Set(['que', 'e', 'mas', 'há', 'ha', 'faz', 'desde', 'quando', 'com', 'porque', 'pq', 'de', 'do', 'da', 'em', 'no', 'na', 'ou', 'a', 'o', 'tem']);
 function limparDor(captura: string): string | null {
   const palavras = captura.replace(/\s+/g, ' ').trim().split(' ');
-  while (palavras.length > 1 && LIGACAO.has(palavras[palavras.length - 1]!.toLowerCase())) palavras.pop();
-  return palavras.length >= 2 ? palavras.join(' ') : null;
+  while (palavras.length > 2 && LIGACAO.has(palavras[palavras.length - 1]!.toLowerCase())) palavras.pop();
+  return palavras.length >= 3 ? palavras.join(' ') : null;
 }
-const DIA = /(?<!\p{L})(?:(?:segunda|ter[cç]a|quarta|quinta|sexta)(?:-feira)?|s[aá]bado|domingo|amanh[ãa]|hoje)(?!\p{L})/giu;
+const DIA = /(?<!\p{L})(?:(?:segunda|ter[cç]a|quarta|quinta|sexta)(?:-feira)?|s[aá]bado|domingo)(?!\p{L})/giu;
 const PERIODO = /(?<!\p{L})(?:de\s+manh[ãa]|[àa]\s+tarde|[àa]\s+noite|cedo)(?!\p{L})/giu;
-const PRECO = /pre[cç]o|valor|quanto\s+(?:custa|[eé]|fica|sai|cobra)|custa\b|r\$/iu;
-const PERGUNTA_DE_PRECO = /quanto|qual\s+(?:[eé]\s+)?o\s+(?:valor|pre[cç]o)|\?/iu;
-const CONVENIO = /conv[eê]nio|plano\s+de\s+sa[uú]de|unimed|hapvida|amil|bradesco\s+sa[uú]de|sulam[eé]rica|carteirinha/iu;
-const EXAME = /resson[aâ]ncia|tomografia|raio[\s-]?x|exame|laudo|eletroneuromiografia/iu;
+/** a linha fala de MARCAR (horário, consulta, vaga…): só nela «quinta» ou «à noite» é preferência de agenda, não sintoma («a dor piora à noite») */
+const FALA_DE_AGENDA = /hor[aá]rio|consulta|marcar|agendar|agenda|vaga|posso ir|pode ser|dispon[ií]vel|encaix|\d\s*h(?![a-z])|\b[aà]s\s+\d/i;
+const NAO_E_DIA = /segunda\s+(?:opini|vez|via|parte)/i;
+const PRECO = /(?<![a-z])(?:preco|valor|valores|custa|custo|quanto\s+(?:custa|e|fica|sai|cobra)|r\$)/;
+const PERGUNTA_DE_PRECO = /quanto|qual\s+(?:e\s+)?(?:o\s+)?(?:valor|preco)|(?:valor|preco|custa)\s*\?/;
+const CONVENIO = /(?<![a-z])(?:convenio|plano\s+de\s+saude|unimed|hapvida|amil|bradesco\s+saude|sulamerica|carteirinha)(?![a-z])/;
+const EXAME = /(?<![a-z])(?:ressonancia|tomografia|raio[\s-]?x|exames?|laudo|eletroneuromiografia)(?![a-z])/;
 
 const ultimo = <T>(xs: T[]): T | undefined => xs[xs.length - 1];
 
 function queixa(linhas: string[]): string | null {
-  let dor: string | null = null;
-  let tempo: string | null = null;
   for (const l of linhas) {
     const d = DOR.exec(l);
-    if (d) dor = limparDor(d[0]) ?? dor;
+    if (!d) continue;
+    if (NEGA_ANTES.test(semAcento(l.slice(Math.max(0, (d.index ?? 0) - 25), d.index)))) continue; // «não tenho dor na lombar»
+    const dor = limparDor(d[0]);
+    if (!dor) continue;
     const t = TEMPO.exec(l);
-    if (t) tempo = t[0].replace(/^(?:faz|fazem|tem)\b/i, 'há').replace(/\s+/g, ' ').trim();
+    const tempo = t ? t[0].replace(/^(?:faz|fazem)\b/i, 'há').replace(/\s+/g, ' ').trim() : null;
+    return cortar(neutro(`${dor}${tempo ? ` ${tempo}` : ''}`), MAX_QUEIXA);
   }
-  if (!dor && !tempo) return null;
-  const q = dor ? `${dor}${tempo ? ` ${tempo}` : ''}` : `tempo citado: ${tempo}`;
-  return q.length > MAX_QUEIXA ? `${q.slice(0, MAX_QUEIXA - 1).trimEnd()}…` : q;
+  return null;
 }
 
 function quando(linhas: string[]): string | null {
-  const todo = linhas.join('\n');
+  const agenda = linhas.filter((l) => FALA_DE_AGENDA.test(l) && !DOR.test(l) && !NAO_E_DIA.test(l));
+  const todo = agenda.join('\n');
   const dia = ultimo([...todo.matchAll(DIA)])?.[0];
   const periodo = ultimo([...todo.matchAll(PERIODO)])?.[0];
   if (!dia && !periodo) return null;
@@ -69,26 +84,40 @@ function dataCurta(d: string): string {
   return m ? `${m[3]}/${m[2]}` : d;
 }
 
-/** A linha «Resumo: …» (sem quebra de linha), ou null se não há nada confiável a dizer. */
-export function resumoDaPassagem(a: { attrs?: Record<string, unknown>; falas?: readonly Fala[] }): string | null {
-  const attrs = a.attrs ?? {};
-  const linhas = falasDoPaciente(a.falas ?? []);
-  const partes: string[] = [];
+/**
+ * A linha «Resumo: …» (sem quebra de linha), ou null se não há nada confiável a dizer. `hoje` (AAAA-MM-DD na unidade): a consulta só entra se estiver
+ * Agendada/Confirmada para hoje ou depois (o atributo da conversa fica velho depois da consulta); sem `hoje` ela não entra.
+ */
+export function resumoDaPassagem(a: { attrs?: Record<string, unknown>; falas?: readonly Fala[]; hoje?: string | null }): string | null {
+  try {
+    const attrs = a.attrs ?? {};
+    const linhas = falasDoPaciente(a.falas ?? []);
+    const norm = linhas.map(semAcento);
+    const partes: string[] = [];
 
-  const q = queixa(linhas);
-  if (q) partes.push(q);
-  const dia = txt(attrs.data_consulta);
-  if (dia) partes.push(`consulta ${txt(attrs.situacao_consulta).toLowerCase() || 'marcada'} ${dataCurta(dia)}${txt(attrs.hora_consulta) ? ` às ${txt(attrs.hora_consulta)}` : ''}`);
-  const quer = quando(linhas);
-  if (quer) partes.push(quer);
-  const falouPreco = linhas.filter((l) => PRECO.test(l));
-  if (falouPreco.length) partes.push(falouPreco.some((l) => PERGUNTA_DE_PRECO.test(l)) ? 'perguntou preço' : 'falou de preço');
-  if (linhas.some((l) => CONVENIO.test(l))) partes.push('falou de convênio/plano');
-  if (linhas.some((l) => EXAME.test(l))) partes.push('falou de exame');
-  const qualif = txt(attrs.qualificacao);
-  if (qualif) partes.push(`qualificação ${qualif}`);
-  const fala = ultimo(linhas);
-  if (fala) partes.push(`última fala: «${fala.length > MAX_ULTIMA_FALA ? `${fala.slice(0, MAX_ULTIMA_FALA - 1).trimEnd()}…` : fala}»`);
+    const q = queixa(linhas);
+    if (q) partes.push(q);
+    const dia = txt(attrs.data_consulta);
+    const situacao = txt(attrs.situacao_consulta);
+    if (dia && a.hoje && /^\d{4}-\d{2}-\d{2}$/.test(dia) && dia >= a.hoje && /^(agendado|confirmado)$/i.test(situacao)) {
+      partes.push(`consulta ${situacao}: ${dataCurta(dia)}${txt(attrs.hora_consulta) ? ` às ${txt(attrs.hora_consulta)}` : ''}`);
+    }
+    const quer = quando(linhas);
+    if (quer) partes.push(quer);
+    const idxPreco = norm.map((l, i) => (PRECO.test(l) ? i : -1)).filter((i) => i >= 0);
+    if (idxPreco.length) partes.push(idxPreco.some((i) => PERGUNTA_DE_PRECO.test(norm[i]!)) ? 'perguntou preço' : 'falou de preço');
+    if (norm.some((l) => CONVENIO.test(l))) partes.push('falou de convênio/plano');
+    if (norm.some((l) => EXAME.test(l))) partes.push('falou de exame');
+    const qualif = neutro(txt(attrs.qualificacao));
+    if (qualif) partes.push(`qualificação ${qualif}`);
+    // a última fala INTEIRA do paciente (as linhas dela juntas), não só a última linha
+    const ultimaFala = ultimo((a.falas ?? []).filter((f) => f.role === 'user' && f.content.trim() && f.content.trim() !== '[áudio]' && f.content.trim() !== '[anexo]'));
+    const fala = ultimaFala ? neutro(ultimaFala.content.split('\n').join(' / ')) : '';
+    if (fala) partes.push(`última fala: «${cortar(fala, MAX_ULTIMA_FALA)}»`);
 
-  return partes.length ? `Resumo: ${partes.join(' · ')}` : null;
+    return partes.length ? `Resumo: ${partes.join(' · ')}` : null;
+  } catch {
+    // o resumo é só um enfeite da nota: nada aqui pode impedir de passar a conversa para a equipe
+    return null;
+  }
 }

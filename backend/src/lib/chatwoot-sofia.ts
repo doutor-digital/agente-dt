@@ -56,6 +56,8 @@ import { AgendaReconcileService } from '../services/agenda-reconcile.service.js'
 import { texto, type ConversaLida, type PortaDoChatwoot } from './chatwoot-porta.js';
 import { leadDaConversaChatwoot } from './chatwoot-lead.js';
 import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
+import { dataLocalISO } from './feriados.js';
+import { fusoDaUnidade } from './fuso.js';
 import type { SandboxAction, rodarTesteDaSofia } from '../controllers/playground.controller.js';
 
 export type { ConversaLida, PortaDoChatwoot };
@@ -230,6 +232,8 @@ export interface PedidoDasFerramentas {
   /** o que a Sofia sabe da conversa (atributos e falas): alimenta o «Resumo» da nota de passagem para a equipe */
   attrs?: Record<string, unknown>;
   falas?: readonly Fala[];
+  /** o relógio (só o teste fixa): a data de hoje na unidade decide se a consulta do atributo ainda vale no resumo */
+  agora?: () => Date;
 }
 
 const sem = (args: unknown): Record<string, unknown> => {
@@ -255,7 +259,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       return true;
     }
     try {
-      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: resumoDaPassagem({ attrs: p.attrs, falas: p.falas }) });
+      estado.etapa = await passarParaEquipeNoChatwoot(chat, { conversa, etapa: estado.etapa, motivo, resumo: resumoDaPassagem({ attrs: p.attrs, falas: p.falas, hoje: dataLocalISO((p.agora?.() ?? new Date()), fusoDaUnidade(unit)) }) });
       passou();
       return true;
     } catch (err) {

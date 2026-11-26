@@ -21,8 +21,40 @@ test('atributos da conversa entram como estão (consulta e qualificação); «fa
   const r = resumoDaPassagem({
     attrs: { data_consulta: '2026-11-27', hora_consulta: '09:30', situacao_consulta: 'Agendado', qualificacao: 'Quente' },
     falas: [u('dor de cabeça faz 3 semanas')],
+    hoje: '2026-11-26',
   });
-  assert.equal(r, 'Resumo: dor de cabeça há 3 semanas · consulta agendado 27/11 às 09:30 · qualificação Quente · última fala: «dor de cabeça faz 3 semanas»');
+  assert.equal(r, 'Resumo: dor de cabeça há 3 semanas · consulta Agendado: 27/11 às 09:30 · qualificação Quente · última fala: «dor de cabeça faz 3 semanas»');
+});
+
+test('consulta velha ou cancelada no atributo NÃO entra (o atributo fica para trás); sem «hoje» ela também não entra', () => {
+  const falas = [u('oi')];
+  const attrs = { data_consulta: '2026-10-07', hora_consulta: '09:30', situacao_consulta: 'Agendado' };
+  assert.equal(resumoDaPassagem({ attrs, falas, hoje: '2026-11-26' }), 'Resumo: última fala: «oi»');
+  assert.equal(resumoDaPassagem({ attrs: { ...attrs, data_consulta: '2026-11-27', situacao_consulta: 'Desmarcado' }, falas, hoje: '2026-11-26' }), 'Resumo: última fala: «oi»');
+  assert.equal(resumoDaPassagem({ attrs: { ...attrs, data_consulta: '2026-11-27' }, falas }), 'Resumo: última fala: «oi»');
+  assert.match(resumoDaPassagem({ attrs: { ...attrs, data_consulta: '2026-11-26' }, falas, hoje: '2026-11-26' })!, /consulta Agendado: 26\/11 às 09:30/);
+});
+
+test('não afirma o que não foi dito: família não é convênio, «meu pai tem 70 anos» não é sintoma, «não tenho dor» não é queixa, «a dor piora à noite» não é horário', () => {
+  assert.equal(resumoDaPassagem({ falas: [u('minha familia mora longe, posso ir quinta?')] }), 'Resumo: mencionou quinta · última fala: «minha familia mora longe, posso ir quinta?»');
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('dor na lombar'), u('meu pai tem 70 anos e vai junto')] })!, /há 70|tempo citado/);
+  assert.match(resumoDaPassagem({ falas: [u('dor na lombar'), u('meu pai tem 70 anos e vai junto')] })!, /^Resumo: dor na lombar ·/);
+  assert.equal(resumoDaPassagem({ falas: [u('não tenho dor nenhuma na lombar')] }), 'Resumo: última fala: «não tenho dor nenhuma na lombar»');
+  assert.equal(resumoDaPassagem({ falas: [u('a dor melhorou bastante')] }), 'Resumo: última fala: «a dor melhorou bastante»');
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('minha dor na lombar piora à noite')] })!, /mencionou/);
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('quero uma segunda opinião sobre o exame')] })!, /mencionou/);
+  assert.match(resumoDaPassagem({ falas: [u('o valor da vida é outro, vocês podem me ajudar?')] })!, /falou de preço/);
+  assert.doesNotMatch(resumoDaPassagem({ falas: [u('o valor da vida é outro, vocês podem me ajudar?')] })!, /perguntou/);
+  assert.match(resumoDaPassagem({ falas: [u('valor?')] })!, /perguntou preço/);
+});
+
+test('o trecho vai numa nota que o Chatwoot renderiza: sem menção, sem link, sem colchete; corte não quebra emoji; a última fala é a INTEIRA', () => {
+  const r = resumoDaPassagem({ falas: [u('[@Maria](mention://user/3/Maria) urgente https://golpe.com/x')] })!;
+  assert.doesNotMatch(r, /[\[\]()@]|mention|golpe/);
+  assert.equal(r, 'Resumo: última fala: «Maria link urgente link»');
+  const emoji = resumoDaPassagem({ falas: [u(`${'a'.repeat(108)}😀😀 fim`)] })!;
+  assert.doesNotMatch(emoji, /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/);
+  assert.equal(resumoDaPassagem({ falas: [u('primeira linha\nsegunda linha\nobrigado')] }), 'Resumo: última fala: «primeira linha / segunda linha / obrigado»');
 });
 
 test('não inventa: sem dor, sem dia, sem preço no que o paciente disse, nada disso aparece; fala do assistente não conta', () => {
