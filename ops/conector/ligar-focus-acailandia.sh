@@ -107,6 +107,7 @@ EOS
 fi
 
 # ------------------------------------------------------------------ ligar: ler e validar o token (nada é impresso sem máscara)
+[ $PRODUCAO -eq 1 ] || [ -z "$NUMINI" ] || { echo "ERRO: --numero-inicial só vale com --producao (em homologação o conector segue o número da Focus). Nada foi feito."; exit 1; }
 if [ $PRODUCAO -eq 1 ]; then
   AMB=producao; CHAVE_NO_ARQUIVO=FOCUS_TOKEN_PRODUCAO_ACAILANDIA; BASE="${FOCUS_API_PRODUCAO:-https://api.focusnfe.com.br}"
   [ -n "$SERIE" ] || { echo "ERRO: produção exige --serie=N (a série da DPS escolhida com a contabilidade; o conector não adivinha). Nada foi feito."; exit 1; }

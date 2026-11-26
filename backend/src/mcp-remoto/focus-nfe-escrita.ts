@@ -31,7 +31,7 @@ import { diaLocal, dinheiro, mascararDoc, mascararEmail, arredondar } from './as
 import { mascararErro } from '../lib/integracoes/mascaras.js';
 import { executar } from './ferramenta.js';
 import {
-  LIMITES_FOCUS, LivroDeNotas, avisoDoAmbiente, consumoDoDiaFocus, mostrarNota, registrarLeituraFocus, resolverContaFocus, sincronizarNota,
+  LIMITES_FOCUS, LivroDeNotas, SEM_NUMERO_DA_DPS, avisoDoAmbiente, consumoDoDiaFocus, mostrarNota, numeroMinimoDaFocus, registrarLeituraFocus, resolverContaFocus, sincronizarNota,
   type ContaFocus, type ContextoFocus, type LimitesDeEmissao, type NotaGuardada,
 } from './focus-nfe.js';
 import { temDadoPessoal } from './infinitepay-escrita.js';
@@ -161,7 +161,7 @@ const digitos = (s: string) => s.replace(/\D/g, '');
 const pct = (n: number) => `${String(n).replace('.', ',')}%`;
 const SIM_NAO = (b: boolean) => (b ? 'sim' : 'não');
 const DE_QUEM_PEDIU = 'informado por quem pediu';
-const DO_PERFIL = 'perfil fiscal da unidade (informado pelo João em 26/11/2026, do cadastro da clínica; sem confirmação escrita da contabilidade)';
+const doPerfil = (p: { origem: string } | undefined) => `perfil fiscal da unidade (${p?.origem ?? 'origem não registrada'})`;
 
 const NOMES_DA_OPCAO_SIMPLES: Record<number, string> = { 1: 'não optante', 2: 'optante MEI', 3: 'optante ME/EPP' };
 const NOMES_DA_RETENCAO: Record<number, string> = { 1: 'ISS NÃO retido', 2: 'ISS retido pelo tomador' };
@@ -217,6 +217,7 @@ export interface ResultadoDaValidacao {
 export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: string): ResultadoDaValidacao {
   const faltam: string[] = [];
   const perfil = conta.perfil;
+  const DO_PERFIL = doPerfil(perfil);
   const avisos: string[] = [];
   const f = a.fiscal ?? {};
   const t = a.tomador ?? {};
@@ -532,6 +533,11 @@ async function prepararEmissao(ctx: ContextoFocus, esc: EstadoEscritaFocus, c: C
     if (cadastro.optanteSimples === false && opcao !== 1) throw new ErroDeEntrada(`o cadastro público diz que o prestador NÃO é optante do Simples Nacional, mas o pedido diz opção ${opcao}. Confirme com a contabilidade. Nada foi preparado.`);
     if (cadastro.codigoIbge && cadastro.codigoIbge !== c.municipio) avisos.push(`o município do cadastro público do CNPJ (IBGE ${cadastro.codigoIbge}) é diferente do configurado (${c.municipio}): confira antes de aprovar`);
   }
+  // produção: o número da DPS precisa ser conhecido (lido da Focus ou escolhido) JÁ no resumo, para ninguém aprovar o que vai ser recusado com o código gasto
+  if (c.ambiente === 'producao' && !c.numeroInicialExplicito) {
+    const empresa = await melhorEsforco(() => c.fonte.empresa(c.cnpj!), 6000);
+    if (numeroMinimoDaFocus(c, empresa) === undefined) throw new ErroDeEntrada(`${SEM_NUMERO_DA_DPS} Nada foi preparado.`);
+  }
   // os limites e a nota repetida JÁ no resumo (sem reservar): ninguém aprova um resumo que vai falhar no confirmar com o código gasto. O confirmar reserva de verdade.
   const chave = chaveDeNotaRepetida(c.slug, c.ambiente, v.nota.tomadorDocumento, v.nota.valorCentavos, v.nota.dataCompetencia, v.nota.origem);
   const [livro, repetida] = await Promise.all([ctx.notas.ler(c.slug, c.ambiente, agora), ctx.notas.ativaPorChave(c.slug, c.ambiente, chave)]);
@@ -651,6 +657,8 @@ export async function confirmarNota(ctx: ContextoFocus, esc: EstadoEscritaFocus,
  * `referencia`: só letras e números, única na unidade e no ambiente.
  */
 export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscritaFocus, c: ContaFocus, quem: QuemFocus, nota: NotaValidada, referencia: string): Promise<RespostaDeEmissao> {
+  // o portão do perfil vale para QUALQUER chamador (o manual e o automático futuro), não só para a validação do pedido
+  if (c.conflitoDePerfil) throw new ErroDeEntrada(`${c.conflitoDePerfil} Nada foi emitido.`);
   const agora = esc.agora();
   const hoje = diaLocal(agora);
   if (nota.dataCompetencia > hoje) throw new ErroDeEntrada(`a competência aprovada (${nota.dataCompetencia}) é futura (hoje é ${hoje}): não emiti. Prepare de novo. Nada foi emitido.`);
@@ -661,12 +669,10 @@ export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscrit
   return umaPorVez(esc, c.slug, async () => {
     // o número da DPS nunca fica abaixo do que a Focus já guarda para a série (a empresa dela tem `proximo_numero_nfsen_*`); DPS repetida é recusada pelo ambiente nacional
     const empresa = await melhorEsforco(() => c.fonte.empresa(c.cnpj!), 6000);
-    const serieDaFocus = c.ambiente === 'producao' ? empresa?.serieNfsenProducao : empresa?.serieNfsenHomologacao;
-    const proximoDaFocus = c.ambiente === 'producao' ? empresa?.proximoNumeroNfsenProducao : empresa?.proximoNumeroNfsenHomologacao;
-    const numeroMinimo = proximoDaFocus !== undefined && (serieDaFocus === undefined || serieDaFocus === serie) ? proximoDaFocus : undefined;
+    const numeroMinimo = numeroMinimoDaFocus(c, empresa);
     // produção sem saber o próximo número da Focus e sem número de partida escolhido: nada de adivinhar
     if (c.ambiente === 'producao' && numeroMinimo === undefined && !c.numeroInicialExplicito) {
-      throw new ErroDeEntrada('produção: não consegui ler na Focus o próximo número da DPS desta série e FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> não está configurado: um número repetido é recusado pelo ambiente nacional. O João escolhe o número de partida com a contabilidade. Nada foi emitido.');
+      throw new ErroDeEntrada(`${SEM_NUMERO_DA_DPS} Nada foi emitido. O código foi gasto: prepare de novo.`);
     }
     // a reserva que vale: dentro da trava da unidade, relê o banco, confere tudo e grava a INTENÇÃO antes de qualquer chamada à Focus
     const { serieDps, numeroDps } = await ctx.notas.reservar({

@@ -203,6 +203,21 @@ export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}
   };
 }
 
+/**
+ * O número mínimo da DPS que a Focus já guarda para ESTA série: só vale se a empresa mostra a série E ela é a configurada (o contador de outra série não diz nada sobre esta), e é um
+ * inteiro a partir de 1. `undefined` = não se sabe; em PRODUÇÃO, sem isso e sem FOCUS_NFE_NUMERO_INICIAL a emissão é recusada.
+ */
+export function numeroMinimoDaFocus(conta: Pick<ContaFocus, 'ambiente' | 'serieDps'>, empresa: EmpresaFocus | null | undefined): number | undefined {
+  if (!empresa) return undefined;
+  const serie = conta.ambiente === 'producao' ? empresa.serieNfsenProducao : empresa.serieNfsenHomologacao;
+  const proximo = conta.ambiente === 'producao' ? empresa.proximoNumeroNfsenProducao : empresa.proximoNumeroNfsenHomologacao;
+  const nossa = conta.serieDps ?? (conta.ambiente === 'homologacao' ? 1 : undefined);
+  if (serie === undefined || nossa === undefined || serie !== nossa) return undefined;
+  return proximo !== undefined && Number.isInteger(proximo) && proximo >= 1 ? proximo : undefined;
+}
+
+export const SEM_NUMERO_DA_DPS = 'produção: não consegui ler na Focus o próximo número da DPS desta série (a série da empresa lá precisa aparecer e ser a configurada) e FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> não está configurado: um número repetido é recusado pelo ambiente nacional. O João escolhe o número de partida com a contabilidade.';
+
 export interface ContextoFocus {
   contas: Map<string, ContaFocus>;
   notas: ArmazemDeNotas;
@@ -419,8 +434,8 @@ export async function dadosFiscais(ctx: ContextoFocus, lim: LimitesDeEmissao, a:
   if (cadastro && cadastro.ok && cadastro.valor && c.municipio && cadastro.valor.codigoIbge && cadastro.valor.codigoIbge !== c.municipio) {
     cuidados.push(`o município configurado (${c.municipio}) é diferente do do cadastro público do CNPJ (${cadastro.valor.codigoIbge}): confira FOCUS_NFE_MUNICIPIO_<UNIDADE>`);
   }
-  if (c.perfil?.aliquotaOrigem) cuidados.push(`alíquota do ISS padrão (${c.perfil.aliquotaIss}%): ${c.perfil.aliquotaOrigem}`);
-  if (c.ambiente === 'producao' && !c.numeroInicialExplicito && proximoDaFocus === undefined) cuidados.push('produção: não consegui ler o próximo número da DPS na Focus e FOCUS_NFE_NUMERO_INICIAL_<UNIDADE> não está configurado: a emissão será recusada (número repetido é recusado pelo ambiente nacional)');
+  if (c.perfil?.aliquotaOrigem) cuidados.push(`alíquota do ISS padrão (${c.perfil.aliquotaIss === 'parametrizada' ? 'parametrizada' : `${c.perfil.aliquotaIss}%`}): ${c.perfil.aliquotaOrigem}`);
+  if (c.ambiente === 'producao' && !c.numeroInicialExplicito && numeroMinimoDaFocus(c, dele) === undefined) cuidados.push(`a emissão será RECUSADA: ${SEM_NUMERO_DA_DPS}`);
   if (!ctx.webhookConfigurado) cuidados.push('FOCUS_NFE_WEBHOOK_SEGREDO ausente (32+ caracteres): o aviso automático de nota autorizada está desligado; o status só atualiza quando alguém consulta com focus_nota');
   const meuGatilho = gatilhos.ok ? gatilhos.valor.some((g) => g.event === 'nfsen' && g.url.includes(`/focus-nfe/webhook/${encodeURIComponent(c.slug)}/`)) : null;
   return {

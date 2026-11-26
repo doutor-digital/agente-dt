@@ -4,11 +4,13 @@
 #   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh              # envia 1 nota de teste (dados fictícios), acompanha até 90 s e diz o resultado
 #   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh --sem-aliquota   # igual, mas SEM o campo da alíquota do ISS (para ver se o ADN prefere a omissão com Simples)
 #   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh --cancelar       # se a nota for AUTORIZADA, cancela em seguida (teste do cancelamento)
+#   --serie=N   série da DPS do teste (padrão 9999, para não mexer na numeração da série 1 que o conector usa; se a Focus/ADN recusar a série, use --serie=1)
 #
 # O bloqueio: toda nota enviada em homologação termina em erro_autorizacao E1235 («The element 'infDPS' … has invalid child element 'serv' … expected: 'indDest'»), porque o ambiente
 # nacional pede `indDest` direto em infDPS e o gerador da Focus (NT-009 pacote 1) o coloca dentro de IBSCBS. Este script prova, no MESMO dia em que a Focus corrigir, que a nota passou a autorizar.
 #
 # Saída (código de retorno):  0 = AUTORIZADA (E1235 SUMIU: pode provar PDF/XML/cancelamento e liberar o PR #500)
+#                             6 = AUTORIZADA, mas o cancelamento (--cancelar) NÃO foi aceito
 #                             3 = E1235 AINDA PRESENTE (nada mudou)    4 = outro erro (o texto exato é impresso)    5 = sem resposta final em 90 s    1 = problema local (token etc.)
 # Lê o token de HOMOLOGAÇÃO em ~/Kommo-Integracao/_replicacao/focus_nfe_tokens.txt (FOCUS_TOKEN_HOMOLOGACAO_ACAILANDIA) e NUNCA o imprime. O endereço é fixo: homologacao.focusnfe.com.br.
 # Dados 100% FICTÍCIOS do tomador (CPF de exemplo válido). Cada rodada gera uma referência e um número de DPS novos. A nota de homologação não tem validade fiscal.
@@ -19,7 +21,10 @@ import base64, json, re, sys, time, urllib.request, urllib.error, datetime, rand
 arq, args = sys.argv[1], sys.argv[2:]
 SEM_ALIQ = "--sem-aliquota" in args
 CANCELAR = "--cancelar" in args
+SERIE = 9999
 for a in args:
+    if a.startswith("--serie=") and a[8:].isdigit() and 1 <= int(a[8:]) <= 49999:
+        SERIE = int(a[8:]); continue
     if a not in ("--sem-aliquota", "--cancelar"):
         print("argumento desconhecido:", a); sys.exit(1)
 tok = ""
@@ -49,7 +54,7 @@ agora = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3)))
 ref = "ddteste" + format(int(time.time()), "x") + str(random.randint(10, 99))
 corpo = {
     "data_emissao": (agora - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%S-03:00"),
-    "serie_dps": 1, "numero_dps": int(time.time()) % 900000000 + random.randint(1, 99),
+    "serie_dps": SERIE, "numero_dps": random.randint(1, 899999),
     "data_competencia": agora.strftime("%Y-%m-%d"), "emitente_dps": 1, "codigo_municipio_emissora": 2100055,
     "cnpj_prestador": "63130582000140", "inscricao_municipal_prestador": "1000000007142",
     "codigo_opcao_simples_nacional": 3, "regime_tributario_simples_nacional": 1, "regime_especial_tributacao": 0,
@@ -60,7 +65,7 @@ corpo = {
     "ibs_cbs_situacao_tributaria": "000", "ibs_cbs_classificacao_tributaria": "000001", "indicador_total_tributacao": 0,
 }
 if not SEM_ALIQ: corpo["percentual_aliquota_relativa_municipio"] = 0
-print("Homologação · referência", ref, "· alíquota:", "omitida" if SEM_ALIQ else "0")
+print("Homologação · referência", ref, "· série", SERIE, "· alíquota:", "omitida" if SEM_ALIQ else "0")
 st, txt = chamar("POST", "/v2/nfsen?ref=" + ref, corpo)
 print("POST /v2/nfsen ->", st, limpa(txt)[:300].replace("\n", " "))
 if st not in (200, 201, 202): print("A Focus recusou já no envio (pré-validação síncrona)."); sys.exit(4)
@@ -78,6 +83,9 @@ if final.get("status") == "autorizado":
     if CANCELAR:
         st, txt = chamar("DELETE", "/v2/nfsen/" + ref, {"justificativa": "Teste de homologação: cancelamento da nota de prova"})
         print("CANCELAR ->", st, limpa(txt)[:300].replace("\n", " "))
+        try: cancelou = st == 200 and json.loads(txt).get("status") == "cancelado"
+        except Exception: cancelou = False
+        if not cancelou: print("A nota foi autorizada, mas o CANCELAMENTO NÃO foi aceito (veja a resposta acima)."); sys.exit(6)
     sys.exit(0)
 erros = final.get("erros") or []
 texto = limpa(json.dumps(erros, ensure_ascii=False))

@@ -28,12 +28,15 @@ export interface PerfilFiscal {
   opcaoSimplesNacional: 1 | 2 | 3;
   /** alíquota do ISS em % (ou "parametrizada"): só existe quando a unidade a decidiu e registrou aqui; a pessoa pode trocar a cada nota */
   aliquotaIss?: number | 'parametrizada';
+  /** de onde vieram os dados do perfil (quem informou, quando, e se a contabilidade confirmou): o resumo da nota repete isto */
+  origem: string;
   /** de onde veio a alíquota, em texto, para o resumo da nota dizer a verdade */
   aliquotaOrigem?: string;
 }
 
 export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
   'doutor-hernia-acailandia': {
+    origem: 'informado pelo João em 26/11/2026, do cadastro da clínica; sem confirmação escrita da contabilidade',
     cnpj: '63130582000140',
     razaoSocial: 'MAGALHAES CLINICA DE FISIOTERAPIA - UNIDADE DE ACAILANDIA LTDA',
     municipioIbge: '2100055',

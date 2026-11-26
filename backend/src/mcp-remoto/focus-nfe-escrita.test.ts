@@ -4,7 +4,7 @@ import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { ErroFocus, type Ambiente } from '../lib/integracoes/focus-nfe.js';
 import { armazemDeNotasEmMemoria, focusEmMemoria } from './focus-nfe-falso.js';
 import {
-  PendentesFocus, chaveDeNotaRepetida, confirmarNota, contaDeNota, criarEscritaFocus, limparArgumentos, prepararNota, registrarFocusSePermitido, validarEmissao,
+  PendentesFocus, chaveDeNotaRepetida, emitirNotaConfirmada, confirmarNota, contaDeNota, criarEscritaFocus, limparArgumentos, prepararNota, registrarFocusSePermitido, validarEmissao,
   type PedidoDePreparo, type RespostaDeEmissao,
 } from './focus-nfe-escrita.js';
 import { PERFIS_FISCAIS } from './focus-nfe-perfis.js';
@@ -190,10 +190,22 @@ test('numeração da DPS: nunca fica abaixo do próximo número que a Focus já 
 
 test('produção: sem ler o próximo número da Focus e sem FOCUS_NFE_NUMERO_INICIAL a emissão é RECUSADA (DPS repetida é recusada pelo ambiente nacional); com um dos dois, emite', async () => {
   const sem = montar({ ambiente: 'producao', serie: 900, explicito: false });
-  const prep = await prepararNota(sem.ctx, sem.esc, QUEM, pedido());
-  await assert.rejects(() => confirmarNota(sem.ctx, sem.esc, QUEM, { confirmacao: prep.confirmacao }), /próximo número da DPS.*Nada foi emitido/);
-  assert.equal(sem.focus.emitidas.length, 0);
-  assert.equal(sem.armazem.linhas.length, 0, 'nem a intenção foi gravada');
+  await assert.rejects(() => prepararNota(sem.ctx, sem.esc, QUEM, pedido()), /próximo número da DPS.*Nada foi preparado/, 'já no resumo, sem gastar código');
+  // a Focus some entre o resumo e a confirmação: recusa, diz que o código foi gasto e nada é gravado
+  const meio = montar({ ambiente: 'producao', serie: 900, explicito: false });
+  meio.focus.empresa = { serieNfsenProducao: 900, proximoNumeroNfsenProducao: 12 };
+  const prep = await prepararNota(meio.ctx, meio.esc, QUEM, pedido());
+  meio.focus.empresa = null;
+  await assert.rejects(() => confirmarNota(meio.ctx, meio.esc, QUEM, { confirmacao: prep.confirmacao }), /próximo número da DPS.*Nada foi emitido.*código foi gasto/);
+  assert.equal(meio.focus.emitidas.length, 0);
+  assert.equal(meio.armazem.linhas.length, 0, 'nem a intenção foi gravada');
+  // o contador de uma série que a Focus não mostra (ou de outra série) não vale para esta
+  const semSerie = montar({ ambiente: 'producao', serie: 900, explicito: false });
+  semSerie.focus.empresa = { proximoNumeroNfsenProducao: 12 };
+  await assert.rejects(() => prepararNota(semSerie.ctx, semSerie.esc, QUEM, pedido()), /próximo número da DPS/);
+  const outraSerie = montar({ ambiente: 'producao', serie: 900, explicito: false });
+  outraSerie.focus.empresa = { serieNfsenProducao: 1, proximoNumeroNfsenProducao: 12 };
+  await assert.rejects(() => prepararNota(outraSerie.ctx, outraSerie.esc, QUEM, pedido()), /próximo número da DPS/);
   const lendo = montar({ ambiente: 'producao', serie: 900, explicito: false });
   lendo.focus.empresa = { serieNfsenProducao: 900, proximoNumeroNfsenProducao: 12 };
   await prepararEConfirmar(lendo);
@@ -218,6 +230,13 @@ test('o perfil é de UM CNPJ e município: se o ambiente troca qualquer um, NADA
     assert.equal(m.focus.emitidas.length, 0);
   }
   assert.ok(contaFocusDaConfig({ ...base }).perfil, 'sem troca nenhuma o perfil vale');
+});
+
+test('o portão do perfil vale também para quem chama emitirNotaConfirmada direto (a emissão automática futura)', async () => {
+  const m = montar();
+  const v = validarEmissao(m.conta, pedido(), '2026-11-26').nota;
+  await assert.rejects(() => emitirNotaConfirmada(m.ctx, m.esc, { ...m.conta, conflitoDePerfil: 'perfil em conflito' }, QUEM, v, 'ddnfabc'), /perfil em conflito.*Nada foi emitido/);
+  assert.equal(m.focus.emitidas.length, 0);
 });
 
 test('o perfil de Açailândia tem os dados que o João e a contabilidade informaram (e nenhuma alíquota)', () => {
