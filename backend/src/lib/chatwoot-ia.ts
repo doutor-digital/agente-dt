@@ -48,6 +48,7 @@ import { portaDoChatwoot, type ConversaLida, type PortaDoChatwoot } from './chat
 import { combinadoPelaEquipe, consultaDosAtributos, consultasReaisDoPaciente, diaEHoraNoFuso, divergenciaDoCombinado, idsDaIntegracao, type ConsultaReal } from './chatwoot-horario-combinado.js';
 import { SpineService } from '../services/spine.service.js';
 import { fusoDaUnidade } from './fuso.js';
+import { dataLocalISO } from './feriados.js';
 import { resumoDaPassagem } from './chatwoot-resumo-passagem.js';
 import { motivoDeNaoResponder, passarParaEquipeNoChatwoot, rodarSofiaDoChatwoot, type Fala, type ModoDaSofia, type ResultadoDaSofia } from './chatwoot-sofia.js';
 
@@ -188,7 +189,7 @@ export interface PortasDaIa {
   /** as consultas de pé deste paciente na franquia; null = não deu para conferir */
   agendaReal(unit: Unit, lida: ConversaLida): Promise<ConsultaReal[] | null>;
   /** passa a conversa para a equipe (etiqueta + etapa + nota); LANÇA se o Chatwoot falhar */
-  passarParaEquipe(conversa: number, lida: ConversaLida, motivo: string, falas?: Fala[]): Promise<void>;
+  passarParaEquipe(conversa: number, lida: ConversaLida, motivo: string, falas?: Fala[], unit?: Unit): Promise<void>;
   transcrever(unit: Unit, url: string): Promise<string>;
   /** a conversa como está agora (atributos, etiquetas, telefone) */
   conversa(conversa: number): Promise<ConversaLida | null>;
@@ -315,8 +316,10 @@ export function portasReais(ctx: ContextoChatwoot, opcoes: { tokenRobo?: string 
     encerrarAtendimento: async (conversa) => void (await encerrarAtendimento(conversa, atendimento)),
     conferirAtendimento: async (conversa) => void (await (atendimentoAtivo ? conferirAtendimento : encerrarAtendimento)(conversa, atendimento)),
     atendimentoAtivo,
-    async passarParaEquipe(conversa, lida, motivo, falas) {
-      await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo, resumo: resumoDaPassagem({ attrs: lida.attrs, falas, hoje: new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10) }) });
+    async passarParaEquipe(conversa, lida, motivo, falas, unit) {
+      // «hoje» na unidade (o resumo só mostra consulta de hoje em diante); sem unidade, o fuso do Brasil que o resto do arquivo usa
+      const hoje = unit ? dataLocalISO(new Date(), fusoDaUnidade(unit)) : new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+      await passarParaEquipeNoChatwoot(chat, { conversa, etapa: String(lida.attrs.etapa ?? '').trim(), motivo, resumo: (atributosDeAgora) => resumoDaPassagem({ attrs: atributosDeAgora, falas, hoje }) });
       // robô → equipe: tira de «Pendentes» (a etiqueta e a nota já avisaram; falhar aqui não desfaz a passagem)
       if (robo) await robo.abrirParaEquipe(conversa).catch((err: unknown) => logger.warn({ err: String(err), conversa }, `${ID_IA}: não consegui abrir a conversa para a equipe (robô)`));
     },
@@ -665,7 +668,7 @@ async function rodarSofiaDessaConversa(m: MensagemDoPaciente, p: PortasDaIa, mem
         }
       } else {
         try {
-          await p.passarParaEquipe(m.conversa, lida, motivo, falas);
+          await p.passarParaEquipe(m.conversa, lida, motivo, falas, unit);
         } catch (err) {
           logger.error({ err: String(err), conversa: m.conversa }, `${ID_IA}: horário combinado diverge da agenda, mas não consegui passar para a equipe`);
           return 'falhou';

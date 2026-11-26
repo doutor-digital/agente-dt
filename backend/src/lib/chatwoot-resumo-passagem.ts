@@ -49,12 +49,23 @@ const PERIODO = /(?<!\p{L})(?:de\s+manh[ãa]|[àa]\s+tarde|[àa]\s+noite|cedo)(?
 /** a linha fala de MARCAR (horário, consulta, vaga…): só nela «quinta» ou «à noite» é preferência de agenda, não sintoma («a dor piora à noite») */
 const FALA_DE_AGENDA = /hor[aá]rio|consulta|marcar|agendar|agenda|vaga|posso ir|pode ser|dispon[ií]vel|encaix|\d\s*h(?![a-z])|\b[aà]s\s+\d/i;
 const NAO_E_DIA = /segunda\s+(?:opini|vez|via|parte)/i;
-const PRECO = /(?<![a-z])(?:preco|valor|valores|custa|custo|quanto\s+(?:custa|e|fica|sai|cobra)|r\$)/;
-const PERGUNTA_DE_PRECO = /quanto|qual\s+(?:e\s+)?(?:o\s+)?(?:valor|preco)|(?:valor|preco|custa)\s*\?/;
+const PRECO = /(?<![a-z])(?:preco|valor|valores|custa|custo|quanto\s+(?:custa|e|fica|sai|cobra))(?![a-z])|r\$/;
+// «quanto eu vou esperar?» / «quanto tempo demora?» não são pergunta de preço: o «quanto» só vale colado a custa/é/fica/sai/cobra
+const PERGUNTA_DE_PRECO = /quanto\s+(?:custa|e|fica|sai|cobra|vai\s+custar)(?![a-z])|qual\s+(?:e\s+)?(?:o\s+)?(?:valor|preco)(?![a-z])|(?:valor|preco|custa)\s*\?/;
 const CONVENIO = /(?<![a-z])(?:convenio|plano\s+de\s+saude|unimed|hapvida|amil|bradesco\s+saude|sulamerica|carteirinha)(?![a-z])/;
 const EXAME = /(?<![a-z])(?:ressonancia|tomografia|raio[\s-]?x|exames?|laudo|eletroneuromiografia)(?![a-z])/;
 
 const ultimo = <T>(xs: T[]): T | undefined => xs[xs.length - 1];
+
+/** a última fala do paciente que tem TEXTO (as linhas dela sem «[áudio]»/«[anexo]»), juntas por « / »; dois áudios seguidos não viram «áudio / áudio» */
+function ultimaFalaComTexto(falas: readonly Fala[]): string {
+  for (let i = falas.length - 1; i >= 0; i--) {
+    if (falas[i]!.role !== 'user') continue;
+    const linhas = falasDoPaciente([falas[i]!]);
+    if (linhas.length) return neutro(linhas.join(' / '));
+  }
+  return '';
+}
 
 function queixa(linhas: string[]): string | null {
   for (const l of linhas) {
@@ -111,8 +122,7 @@ export function resumoDaPassagem(a: { attrs?: Record<string, unknown>; falas?: r
     const qualif = neutro(txt(attrs.qualificacao));
     if (qualif) partes.push(`qualificação ${qualif}`);
     // a última fala INTEIRA do paciente (as linhas dela juntas), não só a última linha
-    const ultimaFala = ultimo((a.falas ?? []).filter((f) => f.role === 'user' && f.content.trim() && f.content.trim() !== '[áudio]' && f.content.trim() !== '[anexo]'));
-    const fala = ultimaFala ? neutro(ultimaFala.content.split('\n').join(' / ')) : '';
+    const fala = ultimaFalaComTexto(a.falas ?? []);
     if (fala) partes.push(`última fala: «${cortar(fala, MAX_ULTIMA_FALA)}»`);
 
     return partes.length ? `Resumo: ${partes.join(' · ')}` : null;
