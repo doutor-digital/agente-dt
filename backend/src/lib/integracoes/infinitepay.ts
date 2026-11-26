@@ -214,3 +214,78 @@ export async function testarChave(chave: string, o: OpcoesDeChamada = {}): Promi
   if (r.status < 200 || r.status >= 300) throw falhaDoStatus(r.status, r.json);
   conferirFormato(r.status, r.json);
 }
+
+// ----------------------------------------------------------------- criação de link (ESCRITA em conta real)
+
+export interface PedidoDeLink {
+  orderNsu: string;
+  itens: Array<{ quantidade: number; precoCentavos: number; descricao: string }>;
+  /** o webhook do link: a InfinitePay avisa aqui; a URL carrega a assinatura nossa, porque o webhook dela não tem assinatura */
+  webhookUrl?: string;
+  eventos?: string[];
+  /** ISO 8601 com fuso, no futuro e dentro de um ano (limite da InfinitePay) */
+  validoAte?: string;
+  /** padrão true: o link aceita UM pagamento e depois bloqueia */
+  pagamentoUnico?: boolean;
+  /** padrão true; false = só cartão (o cartão não dá para desligar) */
+  pix?: boolean;
+  /** até quantas parcelas o vendedor absorve as taxas (0 a 12; padrão 0: o comprador paga as taxas do parcelamento) */
+  parcelasSemTaxa?: number;
+  handle?: string;
+}
+
+export const EVENTOS_DO_WEBHOOK = ['paid', 'settled', 'refunded', 'canceled', 'payment_failed'] as const;
+
+export function dominiosDoLink(e: NodeJS.ProcessEnv = process.env): string[] {
+  const extras = (e.INFINITEPAY_LINK_DOMINIOS ?? '').split(',').map((d) => d.trim().toLowerCase().replace(/^\./, '')).filter((d) => /^[a-z0-9]([a-z0-9.-]*[a-z0-9])?\.[a-z]{2,}$/.test(d));
+  return ['infinitepay.io', ...extras];
+}
+
+function hostDoLinkPermitido(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== 'https:' || u.username || u.password) return false;
+  const host = u.hostname.toLowerCase();
+  return dominiosDoLink().some((d) => host === d || host.endsWith(`.${d}`));
+}
+
+/** A primeira URL https que a resposta traz (no topo ou dentro de `data`): o formato exato da resposta de /links não vem na documentação. */
+function urlDaResposta(json: Record<string, unknown>): string | undefined {
+  const candidatos: unknown[] = [json.url, json.checkout_url, json.link, json.payment_url, json.checkoutUrl];
+  const dentro = json.data;
+  if (dentro && typeof dentro === 'object' && !Array.isArray(dentro)) {
+    const d = dentro as Record<string, unknown>;
+    candidatos.push(d.url, d.checkout_url, d.link, d.payment_url);
+  }
+  // o link vai ser MANDADO ao paciente: só vale se o endereço for da própria InfinitePay (um domínio de documentação ou de redirecionamento não cobra nada).
+  // O domínio real do checkout não está na documentação: `INFINITEPAY_LINK_DOMINIOS` (separados por vírgula) acrescenta outros, sem mudar código.
+  return candidatos.find((v): v is string => typeof v === 'string' && hostDoLinkPermitido(v));
+}
+
+/**
+ * POST /links. Só `criarLinkNaInfinitepay` chama esta rota, e só o código de escrita do conector (com portão, tetos e aviso) chama esta função.
+ * Resposta sem URL = erro com o aviso de que o link PODE existir (a API não deixa buscar link por order_nsu).
+ */
+export async function criarLinkNaInfinitepay(chave: string, p: PedidoDeLink, o: OpcoesDeChamada = {}): Promise<{ url: string; slug?: string }> {
+  const corpo = {
+    ...(p.handle ? { handle: p.handle } : {}),
+    order_nsu: p.orderNsu,
+    items: p.itens.map((i) => ({ quantity: i.quantidade, price: i.precoCentavos, description: i.descricao })),
+    ...(p.webhookUrl ? { webhook: { url: p.webhookUrl, events: p.eventos ?? [...EVENTOS_DO_WEBHOOK] } } : {}),
+    options: {
+      ...(p.validoAte ? { valid_until: p.validoAte } : {}),
+      single_payment: p.pagamentoUnico ?? true,
+      payment_methods_enabled: p.pix === false ? ['credit_card'] : ['credit_card', 'pix'],
+      assured_installments: p.parcelasSemTaxa ?? 0,
+    },
+  };
+  const { status, json } = await chamar(chave, '/links', corpo, o);
+  if (status < 200 || status >= 300) throw falhaDoStatus(status, json);
+  const url = urlDaResposta(json);
+  if (!url) throw new ErroInfinitepay('a InfinitePay respondeu sem a URL do link. O link PODE ter sido criado: confira no app da InfinitePay antes de repetir.', status);
+  return { url, ...(typeof json.slug === 'string' ? { slug: json.slug } : {}) };
+}

@@ -20,7 +20,7 @@ function link(o: Partial<LinkGuardado> = {}): LinkGuardado {
   return {
     orderNsu: 'dd-1', unidade: 'doutor-hernia-acailandia', status: 'criado', url: 'https://checkout.infinitepay.io/x/dd-1', valorCentavos: 15000, descricao: 'Consulta',
     validoAte: null, criadoPor: 'u1', criadoEm: '2026-11-26T12:00:00.000Z', invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null,
-    valorPagoCentavos: null, reciboUrl: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null, ...o,
+    valorPagoCentavos: null, reciboUrl: null, revisao: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null, ...o,
   };
 }
 
@@ -222,7 +222,7 @@ test('listar_integracoes mostra a InfinitePay e as ferramentas; quem não tem co
 test('armazém do Prisma: lê por unidade e período, na ordem do banco, e devolve datas em ISO', async () => {
   const linha: LinhaDoLink = {
     unitSlug: 'u', orderNsu: 'o1', status: 'pago', url: 'https://x', valorCentavos: 100, descricao: 'd', validoAte: null, criadoPor: 'u1', createdAt: new Date('2026-11-26T12:00:00Z'),
-    invoiceSlug: 'sl', transactionNsu: 'tn', formaPagamento: 'pix', parcelas: 1, valorPagoCentavos: 100, reciboUrl: null, pagoEm: new Date('2026-11-26T12:05:00Z'), liquidadoEm: null, ultimoEvento: 'paid', erro: null,
+    invoiceSlug: 'sl', transactionNsu: 'tn', formaPagamento: 'pix', parcelas: 1, valorPagoCentavos: 100, reciboUrl: null, revisao: null, pagoEm: new Date('2026-11-26T12:05:00Z'), liquidadoEm: null, ultimoEvento: 'paid', erro: null,
   };
   const pedidos: unknown[] = [];
   const db = {

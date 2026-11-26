@@ -55,7 +55,9 @@ import { criarContextoZenfisio, registrarFerramentasZenfisio, type ContaZenfisio
 import { entityIdDaConta, lerConfigZenfisio, zenfisioGet } from '../lib/integracoes/zenfisio.js';
 import { lerContasDoAmbiente as lerContasInfinitepay } from '../lib/integracoes/infinitepay.js';
 import { contaInfinitepayDaConfig, criarContextoInfinitepay, registrarFerramentasInfinitepay, type ContaInfinitepay } from './infinitepay.js';
-import { armazemDeLinksPrisma } from './infinitepay-armazem.js';
+import { armazemDeEscritaPrisma } from './infinitepay-armazem.js';
+import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from './infinitepay-escrita.js';
+import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
@@ -637,7 +639,21 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   manterAtualizado(contasTiquetaqueDoBanco, (contas) => (tiquetaque.contas = contas), 'as contas do Tiquetaque');
   const zenfisio = criarContextoZenfisio(new Map());
   manterAtualizado(contasZenfisioDoBanco, (contas) => (zenfisio.contas = contas), 'as contas do ZenFisio');
-  const infinitepay = criarContextoInfinitepay(new Map(), armazemDeLinksPrisma(prisma));
+  // InfinitePay: criar link DIRETO (portão INFINITEPAY_ESCRITA_UNIDADES, vazio = desligado; tetos e aviso no Telegram) e o webhook que confirma o pagamento.
+  // O segredo do endereço do webhook vem SÓ de INFINITEPAY_WEBHOOK_SEGREDO (32+ caracteres), sem derivar do segredo do console: o endereço de cada link vale por até 90 dias e girar
+  // SESSION_JWT_SECRET faria os avisos dos links vivos darem 404. Sem o segredo: nenhum link é criado e a rota nem é montada (ver ligar-infinitepay-acailandia.sh, que o gera uma vez).
+  const segredoDoAviso = segredoDoAvisoDoAmbiente();
+  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook não é montado');
+  const escritaInfinitepay = criarEscritaInfinitepay({
+    armazem: armazemDeEscritaPrisma(prisma as never),
+    alertar: (texto) => enviarTelegram(texto),
+    urlDoWebhook: (unidade, orderNsu) => {
+      if (!segredoDoAviso) throw new ErroDeEntrada('INFINITEPAY_WEBHOOK_SEGREDO não está configurado (32+ caracteres): sem ele o aviso de pagamento não pode ser assinado e o conector não cria o link. Nada foi criado.');
+      return urlDoAviso(new URL(urlPublica).origin, segredoDoAviso, unidade, orderNsu);
+    },
+  });
+  const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
+  if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());
@@ -713,6 +729,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasTiquetaque(server, tiquetaque, auditar);
       registrarFerramentasZenfisio(server, zenfisio, auditar);
       registrarFerramentasInfinitepay(server, infinitepay, auditar);
+      // criar link da InfinitePay: só quem está na lista de escrita E só se alguma unidade está em INFINITEPAY_ESCRITA_UNIDADES (vazio = a ferramenta nem existe)
+      registrarEscritaInfinitepaySePermitido(server, infinitepay, escritaInfinitepay, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.

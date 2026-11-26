@@ -15,7 +15,7 @@ import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada, validarData } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
 import { acharSlug } from './unidades.js';
-import { consultarPagamento, finalDaChave, testarChave, type ContaInfinitepayConfig, type OpcoesDeChamada, type PagamentoConsultado, type PedidoDeConsulta } from '../lib/integracoes/infinitepay.js';
+import { consultarPagamento, criarLinkNaInfinitepay, finalDaChave, testarChave, type ContaInfinitepayConfig, type OpcoesDeChamada, type PagamentoConsultado, type PedidoDeConsulta, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 
 export const STATUS_DO_LINK = ['intencao', 'criado', 'falhou', 'pago', 'estornado', 'cancelado'] as const;
 export type StatusDoLink = (typeof STATUS_DO_LINK)[number];
@@ -37,6 +37,8 @@ export interface LinkGuardado {
   parcelas: number | null;
   valorPagoCentavos: number | null;
   reciboUrl: string | null;
+  /** estorno/cancelamento avisado pela InfinitePay e NÃO confirmado pela API: o João confere no app */
+  revisao: string | null;
   pagoEm: string | null;
   liquidadoEm: string | null;
   ultimoEvento: string | null;
@@ -70,6 +72,8 @@ export interface ContaInfinitepay {
     consultar(p: Omit<PedidoDeConsulta, 'handle'>): Promise<PagamentoConsultado>;
     /** prova a chave sem criar nada; lança se estiver revogada */
     testar(): Promise<void>;
+    /** a ESCRITA (POST /links): só o código de criação de link, com portão e tetos, chama. Ausente = a conta não cria link. */
+    criarLink?(p: Omit<PedidoDeLink, 'handle'>): Promise<{ url: string; slug?: string }>;
   };
 }
 
@@ -89,6 +93,7 @@ export function contaInfinitepayDaConfig(c: ContaInfinitepayConfig, op: OpcoesDe
     fonte: {
       consultar: (p) => consultarPagamento(c.chave, { ...p, ...(c.handle ? { handle: c.handle } : {}) }, op),
       testar: () => testarChave(c.chave, op),
+      criarLink: (p) => criarLinkNaInfinitepay(c.chave, { ...p, ...(c.handle ? { handle: c.handle } : {}) }, op),
     },
   };
 }
@@ -135,6 +140,8 @@ const reaisDoLink = (l: LinkGuardado) => ({
   parcelas: l.parcelas,
   reciboUrl: l.reciboUrl,
   ultimoEvento: l.ultimoEvento,
+  ...(l.revisao ? { revisao: l.revisao, confirmadoPelaApi: false } : {}),
+  ...(l.status === 'cancelado' || l.status === 'estornado' ? { avisoDoStatus: 'status vindo de AVISO da InfinitePay, não confirmado pela API (o /payment_check só confirma pagamento)' } : {}),
   ...(l.erro ? { erro: l.erro } : {}),
 });
 
@@ -216,15 +223,22 @@ export async function infinitepayLinks(
   let emitido = 0;
   let pago = 0;
   let estornado = 0;
+  let emRevisao = 0;
+  let estornadoNaoConfirmado = 0;
   for (const l of todos) {
     // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
     const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
+    const estornoEmRevisao = l.status === 'pago' && Boolean(l.revisao?.includes('estorno avisado'));
     const g = (porStatus[l.status] ??= { quantidade: 0, valor: 0 });
     g.quantidade += 1;
-    g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
+    // o valor do status `pago` é o MESMO de resumo.valorPago: o pago com estorno em revisão conta na quantidade, mas o dinheiro dele está em valorEstornadoNaoConfirmado
+    if (!estornoEmRevisao) g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
     if (l.status !== 'falhou' && l.status !== 'intencao') emitido += l.valorCentavos;
-    if (l.status === 'pago') pago += centavos;
+    // pago com ESTORNO avisado e não confirmado: o dinheiro não conta como pago (pode ter voltado) e entra no estornado, separado em `valorEstornadoNaoConfirmado`
+    if (l.status === 'pago' && !estornoEmRevisao) pago += centavos;
     if (l.status === 'estornado') estornado += centavos;
+    if (estornoEmRevisao) estornadoNaoConfirmado += centavos;
+    if (l.revisao) emRevisao += 1;
   }
   return {
     unidade: conta.slug,
@@ -234,14 +248,22 @@ export async function infinitepayLinks(
       links: todos.length,
       /** valor dos links criados, INCLUINDO cancelados e estornados, sem os que a InfinitePay recusou */
       valorEmitido: reais(emitido),
-      /** o que foi pago e NÃO foi estornado */
+      /** o que foi pago, sem os links com estorno avisado e ainda não confirmado (esses ficam em valorEstornadoNaoConfirmado) */
       valorPago: reais(pago),
-      valorEstornado: reais(estornado),
+      /** estornos que contam: os confirmados (status estornado) MAIS os avisados e ainda não confirmados pela API */
+      valorEstornado: reais(estornado + estornadoNaoConfirmado),
+      /** a parte de valorEstornado que é só aviso da InfinitePay, NÃO confirmado pela API: confira no app */
+      valorEstornadoNaoConfirmado: reais(estornadoNaoConfirmado),
+      /** links com estorno/cancelamento avisado e NÃO confirmado pela API (o status NÃO foi mudado) */
+      emRevisao: emRevisao,
       porStatus,
     },
     itens: todos.slice(0, max).map(reaisDoLink),
     itensOmitidos: Math.max(todos.length - max, 0),
     ...(cortouLeitura ? { truncado: true, aviso: `mais de ${MAX_LEITURA} links no período: divida o período. Os totais estão INCOMPLETOS.` } : {}),
+    ...(emRevisao > 0
+      ? { revisaoPendente: `${emRevisao} link(s) com estorno ou cancelamento AVISADO pela InfinitePay e NÃO confirmado pela API (o /payment_check só vê pagamento). O status não foi mudado: confira no app e veja o campo revisao de cada um.` }
+      : {}),
     ...(todos.some((l) => l.status === 'intencao')
       ? { atencao: 'há link em "intencao": o conector gravou o pedido e não chegou a registrar a resposta da InfinitePay (queda no meio). Confira no app da InfinitePay antes de refazer.' }
       : {}),
