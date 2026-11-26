@@ -216,7 +216,16 @@ export interface DadosDaUnidade {
   textos?: Readonly<Record<string, string>>;
   /** prefixo dos modelos desta unidade na Meta ("parau_"); sem isto o nome na Meta é o nome base */
   prefixoModelos?: string;
+  /**
+   * Unidade que NÃO recebe pagamento antecipado (`unidadeSemAntecipado`: Timbó, só paga no dia). Nela a régua nunca cobra Pix: `prepagamento` e
+   * `prepagamento-pendente` não saem, mesmo que alguém tenha marcado «Pagamento antecipado» na conversa (ou que a marca tenha vindo de uma importação).
+   * Ausente = como sempre (Parauapebas e as demais).
+   */
+  semAntecipado?: boolean;
 }
+
+/** As regras que COBRAM um Pix (a chave, o valor «com pagamento antecipado»): nunca saem em unidade sem antecipado. */
+export const REGRAS_DE_COBRANCA: ReadonlySet<string> = new Set(['prepagamento', 'prepagamento-pendente']);
 
 /**
  * Regras INTERNAS: no Kommo são robôs que não falam com o paciente (criam tarefa, põem etiqueta, mudam etapa). Aqui viram nota
@@ -884,6 +893,8 @@ export function decidirRegua(c: ConversaRegua, memoria: Memoria, agora: Date, un
   for (const k of candidatos(c, memoria.vistos, ajustes)) {
     if (agora.getTime() < k.alvo.getTime()) continue;
     if (memoria.feitos.has(`${k.regra}|${k.chave}`)) continue;
+    // unidade sem antecipado: ninguém cobra Pix (a marca «Pagamento antecipado» na conversa não vale ali)
+    if (unidade.semAntecipado && REGRAS_DE_COBRANCA.has(k.regra)) continue;
     // a hora em que SAI (agora), não a prevista: depois do último instante ou no dia da consulta, esta mensagem perdeu o sentido
     if (k.saiAte && agora.getTime() > k.saiAte.getTime()) continue;
     if (k.saiAntesDoDia && diaEmBelem(agora) >= k.saiAntesDoDia) continue;
