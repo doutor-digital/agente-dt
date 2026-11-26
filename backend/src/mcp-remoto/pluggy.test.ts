@@ -191,8 +191,9 @@ test('extrato: totais de entrou e saiu em reais, data do dado e itens do mais no
   const r = await pluggyExtrato(ctx(padrao()), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30' });
   assert.equal(r.contasLidas, 3);
   assert.equal(r.lidos, 8);
-  // banco: entrou 1000 + 80 + 500 = 1580; saiu 250,50 + 19,90 + 1200 = 1470,40
-  assert.deepEqual(r.totais.contasBancarias, { entrou: 1580, saiu: 1470.4, saldoDoPeriodo: 109.6, lancamentos: 6 });
+  // banco: entrou 1000 + 500 = 1500 (os 80 da TED PENDENTE ficam de fora); saiu 250,50 + 19,90 + 1200 = 1470,40
+  assert.deepEqual(r.totais.contasBancarias, { entrou: 1500, saiu: 1470.4, saldoDoPeriodo: 29.6, lancamentos: 5 });
+  assert.match(r.notaDosTotais, /pendentes.*NÃO entram nos totais/);
   assert.deepEqual(r.totais.cartoesDeCredito, { entrou: 1200, saiu: 300, saldoDoPeriodo: 900, lancamentos: 2 });
   assert.match(r.notaDosTotais, /nunca some os dois blocos/);
   assert.equal(r.totaisValemPara, 'todos os lançamentos do período');
@@ -225,7 +226,7 @@ test('extrato: valorMinimo é em módulo, texto acha descrição e nome de pagad
   assert.equal(sai.totais.contasBancarias.entrou, 0, 'tipo=saida: os totais seguem o filtro');
   const zero = await pluggyExtrato(ctx(f), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30', maxItens: 0 });
   assert.equal(zero.itens.length, 0);
-  assert.equal(zero.totais.contasBancarias.lancamentos, 6);
+  assert.equal(zero.totais.contasBancarias.lancamentos, 5);
   await assert.rejects(() => pluggyExtrato(ctx(f), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30', texto: 'a' }), /2 caracteres/);
   await assert.rejects(() => pluggyExtrato(ctx(f), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30', valorMinimo: -1 }), /valorMinimo/);
 });
@@ -273,6 +274,19 @@ test('extrato: conta que falha deixa o resultado INCOMPLETO e diz qual; leitura 
   assert.equal(parcial.incompleto, true, 'item que não listou as contas também deixa incompleto');
 });
 
+test('extrato: com uma conta pedida, a queda de OUTRO item da empresa não derruba a leitura dela', async () => {
+  const f = fonteFalsa({ contas: { [ITEM_A]: [conta(CONTA_CC)], [ITEM_B]: new Error('a Pluggy respondeu 500') }, lancamentos: { [CONTA_CC]: [lanc('x', '2026-11-02', 10)] } });
+  const r = await pluggyExtrato(ctx(f), { empresa: 'doutor-digital', conta: CONTA_CC, inicio: '2026-11-01', fim: '2026-11-30' });
+  assert.equal(r.itens.length, 1);
+  assert.equal('incompleto' in r, false, 'a falha do outro item não é desta conta');
+  // sem conta pedida, a mesma falha deixa o resultado incompleto
+  const todas = await pluggyExtrato(ctx(f), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30' });
+  assert.equal(todas.incompleto, true);
+  // e se é o item DA conta que não listou, o erro é a falha, não "conta de outra empresa"
+  const g = fonteFalsa({ contas: { [ITEM_A]: new Error('a Pluggy respondeu 503') } });
+  await assert.rejects(() => pluggyExtrato(ctx(g, [itensDe[0]!]), { conta: CONTA_CC, inicio: '2026-11-01', fim: '2026-11-30' }), /respondeu 503/);
+});
+
 test('extrato: a data vem como o banco lançou (sem fuso mexer no dia)', async () => {
   const f = fonteFalsa({ contas: { [ITEM_A]: [conta(CONTA_CC)] }, lancamentos: { [CONTA_CC]: [lanc('d', '2026-11-30', -1)] } });
   const r = await pluggyExtrato(ctx(f, [itensDe[0]!]), { inicio: '2026-11-30', fim: '2026-11-30' });
@@ -285,10 +299,11 @@ test('extrato: a data vem como o banco lançou (sem fuso mexer no dia)', async (
 test('resumo por dia: só dias com movimento, em ordem, cartão fora dos períodos', async () => {
   const r = await pluggyResumo(ctx(padrao()), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30' });
   assert.equal(r.agrupadoPor, 'dia');
-  assert.deepEqual(r.periodos.map((p) => ('dia' in p ? p.dia : '')), ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-10', '2026-11-11']);
+  assert.deepEqual(r.periodos.map((p) => ('dia' in p ? p.dia : '')), ['2026-11-02', '2026-11-03', '2026-11-04', '2026-11-11']);
   assert.deepEqual(r.periodos[0], { dia: '2026-11-02', entrou: 1000, saiu: 250.5, saldo: 749.5, lancamentos: 2 });
   assert.equal(r.periodos.some((p) => 'dia' in p && p.dia === '2026-11-05'), false, 'a compra de cartão do dia 05 não entra nos dias');
   assert.equal(r.totais.cartoesDeCredito?.saiu, 300);
+  assert.equal(r.pendentes, 1, 'o pendente é contado, mas não entra em nenhum dia');
   assert.equal(r.dadosDe[0]!.ultimaSincronizacao, '2026-11-26T09:00:00.000Z');
 });
 
@@ -300,7 +315,7 @@ test('resumo por semana: segunda a domingo, rótulo da segunda', async () => {
   const r = await pluggyResumo(ctx(padrao()), { empresa: 'doutor-digital', inicio: '2026-11-01', fim: '2026-11-30', agrupar: 'semana' });
   assert.deepEqual(r.periodos.map((p) => ('semanaDe' in p ? p.semanaDe : '')), ['2026-11-02', '2026-11-09']);
   assert.deepEqual(r.periodos[0], { semanaDe: '2026-11-02', ate: '2026-11-08', entrou: 1500, saiu: 270.4, saldo: 1229.6, lancamentos: 4 });
-  assert.deepEqual(r.periodos[1], { semanaDe: '2026-11-09', ate: '2026-11-15', entrou: 80, saiu: 1200, saldo: -1120, lancamentos: 2 });
+  assert.deepEqual(r.periodos[1], { semanaDe: '2026-11-09', ate: '2026-11-15', entrou: 0, saiu: 1200, saldo: -1200, lancamentos: 1 });
   assert.match(r.observacao, /segunda a domingo/);
 });
 

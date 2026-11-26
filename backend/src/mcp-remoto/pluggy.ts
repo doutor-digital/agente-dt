@@ -191,11 +191,12 @@ async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: st
   const empresa = resolverEmpresa(ctx, a.empresa);
   const itens = ctx.itens.filter((i) => i.empresa === empresa);
   const agora = ctx.agora();
-  const falhas: string[] = [];
+  // cada falha guarda de QUAL item veio: com uma conta pedida, a queda de outro item não é problema dela
+  const falhas: Array<{ item: string; texto: string }> = [];
   const doItem = await Promise.all(
     itens.map(async (i) => {
       const [it, contas] = await Promise.allSettled([fonte.item(i.itemId), fonte.contas(i.itemId)]);
-      if (contas.status === 'rejected') falhas.push(`${apelidoOuFinal(i)}: ${msg(contas.reason)}`);
+      if (contas.status === 'rejected') falhas.push({ item: i.itemId, texto: `${apelidoOuFinal(i)}: ${msg(contas.reason)}` });
       return { i, it: it.status === 'fulfilled' ? it.value : null, contas: contas.status === 'fulfilled' ? contas.value : [] };
     }),
   );
@@ -205,7 +206,7 @@ async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: st
     // só vale conta de um item DESTA empresa: o id sozinho não dá acesso a conta de outra empresa
     alvo = todas.filter((x) => x.c.id === a.conta!.trim());
     // se as contas de algum item não vieram, a conta pedida pode estar nele: o erro é a falha, não "conta de outra empresa"
-    if (!alvo.length && falhas.length) throw new ErroPluggy(falhas.join('; '));
+    if (!alvo.length && falhas.length) throw new ErroPluggy(falhas.map((f) => f.texto).join('; '));
     if (!alvo.length) throw new ErroDeEntrada(`essa conta não é de nenhum item da empresa ${empresa}. Veja os ids em pluggy_contas.`);
   }
   const lidas = await Promise.all(
@@ -213,17 +214,18 @@ async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: st
       const rotulo = rotuloDaConta(x.it?.banco ?? null, x.c);
       try {
         const r = await fonte.transacoes(x.c.id, a.inicio, a.fim);
-        if (r.truncado) falhas.push(`${rotulo}: lançamentos demais, a leitura parou antes do fim do período`);
+        if (r.truncado) falhas.push({ item: x.i.itemId, texto: `${rotulo}: lançamentos demais, a leitura parou antes do fim do período` });
         return r.lancamentos.map((l): LancamentoDaConta => ({ ...l, contaId: x.c.id, conta: rotulo, contaTipo: x.c.tipo }));
       } catch (e) {
-        falhas.push(`${rotulo}: ${msg(e)}`);
+        falhas.push({ item: x.i.itemId, texto: `${rotulo}: ${msg(e)}` });
         return [];
       }
     }),
   );
-  // com uma conta pedida, a falha dela é o erro (não há "resto" para mostrar)
-  if (a.conta?.trim() && falhas.length) throw new ErroPluggy(falhas.join('; '));
   const envolvidos = new Set(alvo.map((x) => x.i.itemId));
+  // com uma conta pedida só contam as falhas do item DELA, e aí a falha é o erro (não há "resto" para mostrar)
+  const relevantes = a.conta?.trim() ? falhas.filter((f) => envolvidos.has(f.item)) : falhas;
+  if (a.conta?.trim() && relevantes.length) throw new ErroPluggy(relevantes.map((f) => f.texto).join('; '));
   return {
     empresa,
     inicio: a.inicio,
@@ -231,8 +233,8 @@ async function lerPeriodo(ctx: ContextoPluggy, a: { empresa?: string; conta?: st
     frescor: doItem.filter((d) => !a.conta?.trim() || envolvidos.has(d.i.itemId)).map((d) => frescorDoItem(d.i, d.it, agora)),
     lancamentos: lidas.flat(),
     contasLidas: alvo.length,
-    incompleto: falhas.length > 0,
-    falhas,
+    incompleto: relevantes.length > 0,
+    falhas: relevantes.map((f) => f.texto),
   };
 }
 
@@ -247,7 +249,7 @@ function totais(ls: ReadonlyArray<LancamentoDaConta>) {
     let saiu = 0;
     let n = 0;
     for (const l of ls) {
-      if (!filtro(l)) continue;
+      if (!filtro(l) || l.status === 'PENDING') continue;
       n += 1;
       if (l.tipo === 'entrada') entrou += centavos(l.valor);
       else saiu += centavos(l.valor);
@@ -260,7 +262,7 @@ function totais(ls: ReadonlyArray<LancamentoDaConta>) {
 }
 
 const NOTA_DOS_TOTAIS =
-  'entrou/saiu somam o valor de cada lançamento. Transferência entre as próprias contas aparece como saída numa e entrada na outra. Cartão de crédito vem separado: compra no cartão e o pagamento da fatura na conta são o mesmo dinheiro, nunca some os dois blocos.';
+  'entrou/saiu somam o valor de cada lançamento JÁ EFETIVADO: os pendentes (status PENDING, que o banco ainda pode trocar ou cancelar) aparecem na lista e em `pendentes`, mas NÃO entram nos totais. Transferência entre as próprias contas aparece como saída numa e entrada na outra. Cartão de crédito vem separado: compra no cartão e o pagamento da fatura na conta são o mesmo dinheiro, nunca some os dois blocos.';
 
 // ----------------------------------------------------------------- pluggy_extrato
 
@@ -325,7 +327,7 @@ export async function pluggyResumo(ctx: ContextoPluggy, a: { empresa?: string; c
   const baldes = new Map<string, { entrou: number; saiu: number; n: number }>();
   // cartão fica fora dos baldes (veja NOTA_DOS_TOTAIS); os totais dele vêm no bloco próprio
   for (const l of leitura.lancamentos) {
-    if (ehCartao({ tipo: l.contaTipo })) continue;
+    if (ehCartao({ tipo: l.contaTipo }) || l.status === 'PENDING') continue;
     const chave = agrupar === 'semana' ? segundaDaSemana(l.data) : l.data;
     const b = baldes.get(chave) ?? { entrou: 0, saiu: 0, n: 0 };
     if (l.tipo === 'entrada') b.entrou += centavos(l.valor);
@@ -349,6 +351,7 @@ export async function pluggyResumo(ctx: ContextoPluggy, a: { empresa?: string; c
     dadosDe: leitura.frescor,
     aviso: AVISO_DE_FRESCOR,
     contasLidas: leitura.contasLidas,
+    pendentes: leitura.lancamentos.filter((l) => l.status === 'PENDING').length,
     totais: totais(leitura.lancamentos),
     notaDosTotais: NOTA_DOS_TOTAIS,
     periodos,

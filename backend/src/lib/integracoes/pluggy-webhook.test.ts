@@ -199,3 +199,27 @@ test('webhook: a resposta sai ANTES do tratamento (o que demora roda em `depois`
   await r.depois!();
   assert.equal(avisou, true);
 });
+
+test('webhook: aviso que o Telegram NÃO aceitou não conta como avisado (o próximo evento tenta de novo)', async () => {
+  const tentativas: number[] = [];
+  const m = montar({ avisar: async () => (tentativas.push(1), tentativas.length > 1) });
+  const a = evento({ event: 'item/error', eventId: 'f1' });
+  await enviar(m, a, assinar(a));
+  const b = evento({ event: 'item/error', eventId: 'f2' });
+  await enviar(m, b, assinar(b));
+  const c = evento({ event: 'item/error', eventId: 'f3' });
+  await enviar(m, c, assinar(c));
+  assert.equal(tentativas.length, 2, '1ª falhou, 2ª entregou, 3ª ficou dentro das 6 h');
+});
+
+test('webhook: recusas em rajada geram UM log por minuto (a rota é pública), com a contagem', async () => {
+  const m = montar();
+  const corpo = evento();
+  for (let i = 0; i < 50; i++) await enviar(m, corpo, undefined);
+  const avisos = m.registro.logs.filter((l) => l.includes('webhook recusado'));
+  assert.equal(avisos.length, 1);
+  m.passar(61_000);
+  await enviar(m, corpo, undefined);
+  assert.equal(m.registro.logs.filter((l) => l.includes('webhook recusado')).length, 2);
+  assert.match(m.registro.logs.filter((l) => l.includes('webhook recusado'))[1]!, /"recusadas":50/, '49 que ficaram calados + a que gerou o log');
+});

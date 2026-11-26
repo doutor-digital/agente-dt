@@ -74,6 +74,8 @@ const MAX_EVENTOS = 2000;
 export function criarTratadorDoWebhook(d: DependenciasDoWebhook) {
   const eventosVistos = new Map<string, number>();
   const ultimoAviso = new Map<string, number>();
+  let recusadas = 0;
+  let ultimoLogDeRecusa = 0;
 
   return function tratar(corpo: Buffer, cabecalho: string | undefined): RespostaDoWebhook {
     const env = d.ambiente();
@@ -81,7 +83,13 @@ export function criarTratadorDoWebhook(d: DependenciasDoWebhook) {
     // sem segredo configurado a rota nem existe (o servidor sem a variável se comporta como sempre)
     if (!segredos.length) return { status: 404 };
     if (!assinaturaValida(corpo, cabecalho, segredos, d.agora())) {
-      d.log.warn({ temCabecalho: Boolean(cabecalho) }, 'pluggy: webhook recusado (assinatura ausente, inválida ou fora do prazo)');
+      // rota pública: quem a descobre pode mandar milhares de pedidos; o aviso sai no máximo 1 vez por minuto, com a contagem do que ficou calado
+      recusadas += 1;
+      if (d.agora() - ultimoLogDeRecusa >= 60_000) {
+        d.log.warn({ recusadas, temCabecalho: Boolean(cabecalho) }, 'pluggy: webhook recusado (assinatura ausente, inválida ou fora do prazo)');
+        ultimoLogDeRecusa = d.agora();
+        recusadas = 0;
+      }
       return { status: 401 };
     }
     let evento: Record<string, unknown>;
@@ -123,12 +131,14 @@ export function criarTratadorDoWebhook(d: DependenciasDoWebhook) {
         const agora = d.agora();
         const anterior = ultimoAviso.get(itemId);
         if (anterior !== undefined && agora - anterior < INTERVALO_DO_AVISO_MS) return;
+        // marca ANTES de mandar (dois eventos juntos não geram dois avisos) e DESMARCA se o Telegram não aceitou: aviso que não chegou não conta
         ultimoAviso.set(itemId, agora);
         // só o CÓDIGO do erro (USER_AUTHORIZATION_EXPIRED…), nunca texto livre vindo do corpo
         const codigo = typeof (evento.error as { code?: unknown } | undefined)?.code === 'string' ? String((evento.error as { code: string }).code) : '';
         const cod = /^[A-Z][A-Z_]{2,48}$/.test(codigo) ? ` (${codigo})` : '';
         const quem = conhecido.apelido ? `${conhecido.apelido} (${itemMascarado(itemId)})` : itemMascarado(itemId);
-        await d.avisar(`Pluggy: a conexão ${quem} deu erro${cod}. O extrato bancário do conector pode estar desatualizado. Reconecte no Meu Pluggy (meu.pluggy.ai) e confirme com pluggy_contas.`);
+        const entregue = await d.avisar(`Pluggy: a conexão ${quem} deu erro${cod}. O extrato bancário do conector pode estar desatualizado. Reconecte no Meu Pluggy (meu.pluggy.ai) e confirme com pluggy_contas.`);
+        if (!entregue) ultimoAviso.delete(itemId);
       },
     };
   };

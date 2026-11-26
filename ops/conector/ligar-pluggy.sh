@@ -21,6 +21,8 @@
 # Pré-requisito: o código do PR da Pluggy já estar no ar (merge + deploy); sem ele as variáveis não fazem nada.
 # O script é DECLARATIVO: o estado final é o que ele grava. Rodar de novo troca o conjunto inteiro (variáveis antigas do mesmo nome saem do .env).
 # Webhook (cadastrar no Dashboard da Pluggy, depois de ligar): https://agente-vps.doutordigitalconsultoria.com/api/webhooks/pluggy
+# Troca do segredo do webhook sem perder evento: ponha o segredo ANTIGO em PLUGGY_WEBHOOK_SECRET_PREVIOUS (docker service update --env-add) antes de gerar o novo; este script não mexe nele.
+# A cópia deste script também está no repositório (ops/conector/ligar-pluggy.sh) para revisão; a que o João roda fica em ~/Kommo-Integracao/_replicacao/.
 set -euo pipefail
 EXEC=0; DESLIGAR=0
 EMPRESA_GERAL=""
@@ -47,7 +49,9 @@ DIR=~/Kommo-Integracao/_replicacao
 ARQ="${PLUGGY_CREDENCIAIS_ARQUIVO:-$DIR/pluggy_credenciais.txt}"      # as variáveis PLUGGY_*_ARQUIVO só servem para testar o script com valores de mentira
 ARQ_WH="${PLUGGY_WEBHOOK_ARQUIVO:-$DIR/pluggy_webhook_secret.txt}"
 API="${PLUGGY_API_URL:-https://api.pluggy.ai}"
-VARS_DA_PLUGGY=(PLUGGY_CLIENT_ID PLUGGY_CLIENT_SECRET PLUGGY_ITENS PLUGGY_WEBHOOK_SECRET PLUGGY_WEBHOOK_SECRET_PREVIOUS)
+# o que --executar DECLARA (grava ou tira); PLUGGY_WEBHOOK_SECRET_PREVIOUS (segredo antigo, na troca do segredo) é manual e só o --desligar remove
+VARS_LIGAR=(PLUGGY_CLIENT_ID PLUGGY_CLIENT_SECRET PLUGGY_ITENS PLUGGY_WEBHOOK_SECRET)
+VARS_DA_PLUGGY=("${VARS_LIGAR[@]}" PLUGGY_WEBHOOK_SECRET_PREVIOUS)
 TMPD=~/.cache/pluggy-env; mkdir -p "$TMPD"; chmod 700 "$TMPD"
 LINHAS="$TMPD/linhas.env"; : > "$LINHAS"; chmod 600 "$LINHAS"
 CAB="$TMPD/cab.txt"; RESP="$TMPD/resp.json"
@@ -134,7 +138,7 @@ ITENS_ENV="$(IFS=,; printf '%s' "${ENTRADAS[*]}")"
 WH=""
 if [ -f "$ARQ_WH" ]; then
   WH="$(tr -d '[:space:]' < "$ARQ_WH")"
-  [[ "$WH" =~ ^whsec_[0-9a-f]{64}$ ]] || { echo "ERRO: o arquivo do webhook não tem um segredo no formato whsec_ + 64 hexadecimais. Nada foi feito."; exit 1; }
+  [[ "$WH" =~ ^whsec_[A-Za-z0-9+/=_-]{16,200}$ ]] || { echo "ERRO: o arquivo do webhook não tem um segredo no formato whsec_… (só letras, números e + / = _ -). Nada foi feito."; exit 1; }
 fi
 
 # ------------------------------------------------------------------ provar na Pluggy ANTES de mandar qualquer coisa à VPS
@@ -187,7 +191,7 @@ if [ $EXEC -ne 1 ]; then echo "(simulação: nada gravado. Para gravar: --execut
 
 # ------------------------------------------------------------------ gravar na VPS
 scp -q -i $KEY -o BatchMode=yes "$LINHAS" $VPS:/root/.pluggy-linhas-novas.env
-ssh -i $KEY -o BatchMode=yes $VPS "bash -s -- ${VARS_DA_PLUGGY[*]}" <<'REMOTO'
+ssh -i $KEY -o BatchMode=yes $VPS "bash -s -- ${VARS_LIGAR[*]}" <<'REMOTO'
 set -euo pipefail
 NOVAS=/root/.pluggy-linhas-novas.env
 chmod 600 "$NOVAS"

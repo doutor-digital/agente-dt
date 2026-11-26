@@ -237,10 +237,19 @@ function falhaDoStatus(status: number, json: Record<string, unknown> | null, con
   if (noAuth && status === 401) return new ErroPluggy(`a Pluggy recusou o clientId/clientSecret (401)${cod}: confira as credenciais da aplicação (o secret vence em 180 dias)`, 401, conhecidos);
   if (noAuth && status === 403) return new ErroPluggy(`a Pluggy recusou a chamada (403)${cod}: se for CLIENT_IP_NOT_ALLOWED, o IP do servidor não está na lista da aplicação`, 403, conhecidos);
   if (status === 401) return new ErroPluggy('a Pluggy não aceitou a chave de acesso (401), mesmo renovada', 401, conhecidos);
-  if (status === 403) return new ErroPluggy(`a Pluggy recusou a leitura (403)${cod}: para o Meu Pluggy, a listagem de itens não existe; use o id do item`, 403, conhecidos);
+  if (status === 403) return new ErroPluggy(`a Pluggy recusou a leitura (403)${cod}: confira se o consentimento do Meu Pluggy ainda vale (dura 1 ano) e se a aplicação não restringe IPs. A listagem de itens (GET /items) não existe no Meu Pluggy: os ids ficam em PLUGGY_ITENS`, 403, conhecidos);
   if (status === 404) return new ErroPluggy('a Pluggy não achou o recurso (404): item ou conta que não existe nesta aplicação', 404, conhecidos);
   if (status === 429) return new ErroPluggy('a Pluggy pediu para ir mais devagar (429); tente de novo em instantes', 429, conhecidos);
   return new ErroPluggy(`a Pluggy respondeu ${status}${cod}`, status, conhecidos);
+}
+
+/** O valor (já decodificado) do `after` do `next` da Pluggy, seja `?accountId=…&after=…` ou uma URL/caminho completo. */
+export function depoisDoCursor(next: string): string | null {
+  try {
+    return new URL(next, PLUGGY_API).searchParams.get('after');
+  } catch {
+    return null;
+  }
 }
 
 export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente = {}): FontePluggy {
@@ -303,6 +312,7 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
         throw new ErroPluggy(nome === 'TimeoutError' || nome === 'AbortError' ? 'a Pluggy não respondeu a tempo' : 'não consegui falar com a Pluggy (rede)', null, conhecidos());
       }
       if ((r.status === 429 || r.status >= 500) && tentativa < retentativas) {
+        await r.body?.cancel().catch(() => undefined);
         // 429: a Pluggy diz em RateLimit-Reset quantos segundos faltam; espera isso, no máximo 10 s (o Retry-After é sempre 60)
         const reset = Number(r.headers.get('RateLimit-Reset'));
         await esperar(r.status === 429 ? Math.min(Number.isFinite(reset) && reset > 0 ? reset * 1000 : 1000, 10_000) : 500 * 2 ** tentativa);
@@ -325,7 +335,8 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
       const k = await obterChave(renovou);
       const r = await pedir('GET', caminho, { ...(query ? { query } : {}), chave: k });
       if (r.status === 401 && !renovou) {
-        chave = null;
+        // só descarta a chave que FALHOU: outra leitura em paralelo pode já ter renovado, e apagar a nova custaria um /auth a mais
+        if (chave?.valor === k) chave = null;
         continue;
       }
       if (r.status < 200 || r.status >= 300) throw falhaDoStatus(r.status, r.json, conhecidos(), false);
@@ -425,7 +436,7 @@ export function criarClientePluggy(cred: CredenciaisPluggy, op: OpcoesDoCliente 
           if (l) lancamentos.push(l);
         }
         // `next` vem como query string pronta ("?accountId=…&after=…"); só o valor de `after` (já decodificado) volta no pedido
-        const proximo = typeof j.next === 'string' && j.next ? new URLSearchParams(j.next.replace(/^\?/, '')).get('after') : null;
+        const proximo = typeof j.next === 'string' && j.next ? depoisDoCursor(j.next) : null;
         if (!proximo) return { lancamentos, truncado: false };
         if (cursores.has(proximo)) return { lancamentos, truncado: true };
         cursores.add(proximo);

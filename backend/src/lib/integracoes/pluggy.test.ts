@@ -4,6 +4,7 @@ import {
   ErroPluggy,
   clienteCompartilhado,
   criarClientePluggy,
+  depoisDoCursor,
   itemMascarado,
   lerCredenciais,
   lerItensDoAmbiente,
@@ -355,4 +356,28 @@ test('testar força uma chave nova e só chama /auth (não lê dado)', async () 
 test('resposta que não é JSON (proxy) não vira dado', async () => {
   const p = pluggyFalso({ 'POST /auth': () => auth(), ['GET /items/' + ITEM]: () => ({ texto: '<html>bad gateway</html>' }) });
   await assert.rejects(() => cliente(p.fetcher).item(ITEM), /formato inesperado/);
+});
+
+test('cursor: `next` vira o valor decodificado de `after`, em query pura, caminho ou URL completa; sem after = null', () => {
+  assert.equal(depoisDoCursor('?accountId=x&after=ABC%3D%3D'), 'ABC==');
+  assert.equal(depoisDoCursor('/v2/transactions?after=ZZ%2B&accountId=x'), 'ZZ+');
+  assert.equal(depoisDoCursor('https://api.pluggy.ai/v2/transactions?after=QQ&accountId=x'), 'QQ');
+  assert.equal(depoisDoCursor('?accountId=x'), null);
+});
+
+test('401 em leituras paralelas: a chave que outra leitura já renovou NÃO é apagada (um /auth por rodada, não um por leitura)', async () => {
+  const p = pluggyFalso({
+    'POST /auth': (_c, n) => auth(n),
+    ['GET /items/' + ITEM]: (c) => (c.chave === `${API_KEY}1` ? { status: 401, json: {} } : { json: { id: ITEM, status: 'UPDATED' } }),
+    ['GET /items/' + ITEM2]: (c) => (c.chave === `${API_KEY}1` ? { status: 401, json: {} } : { json: { id: ITEM2, status: 'UPDATED' } }),
+  });
+  const c = cliente(p.fetcher, { cacheMs: 0 });
+  await Promise.all([c.item(ITEM), c.item(ITEM2)]);
+  assert.equal(p.chamadas.filter((x) => x.caminho === '/auth').length, 2, 'a 1ª chave e UMA renovação, não uma por leitura');
+});
+
+test('403 de leitura não culpa a listagem de itens: aponta consentimento e IP, e só lembra da listagem', async () => {
+  const p = pluggyFalso({ 'POST /auth': () => auth(), 'GET /v2/transactions': () => ({ status: 403, json: {} }) });
+  const e = await cliente(p.fetcher).transacoes(CONTA, '2026-11-01', '2026-11-30').catch((x: Error) => x);
+  assert.match((e as Error).message, /consentimento do Meu Pluggy/);
 });
