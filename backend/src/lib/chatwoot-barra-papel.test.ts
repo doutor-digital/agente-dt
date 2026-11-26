@@ -23,7 +23,7 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 
 // O menu.js que a MAIN de e14d8e85 entrega (montarMenuJs com o __AGENTE__ já trocado), por argumento: tamanho e SHA-256 medidos no código de main.
 // Sem a chave ligada o menu.js tem de sair BYTE A BYTE igual: é o que diz que ninguém, em nenhuma clínica, viu a barra mudar. Se alguém mexer DE PROPÓSITO
-// no menu.js, estes números mudam junto (o teste diz qual).
+// no menu.js, estes números mudam junto (o teste diz qual): para renovar, imprima length e sha256 de montarMenuJs('https://agente.exemplo.test', [], { 'x.exemplo.test': 5 }) e de [3, 7] em main.
 const DE_MAIN: Array<[readonly number[], number, string]> = [
   [[], 118882, 'ae7b3bbbe7fec97b8e6790cdc5b20475f49e5266dad0d0b49a9a9633d968855b'],
   [[3, 7], 118888, '861ee587575def73924f4fafdcf6365156986594f28a32f025dedf468aad48bd'],
@@ -32,6 +32,10 @@ const DOMINIOS = { 'x.exemplo.test': 5 };
 
 test('SEM a chave o menu.js sai BYTE A BYTE igual ao de main (tamanho e SHA-256); «0», vazio, «true» e «2» também não ligam', () => {
   const salvo = process.env.CHATWOOT_BARRA_POR_PAPEL;
+  // as chaves de OUTROS blocos do menu.js mudam o arquivo: o teste mede com todas no padrão
+  const outras = ['CHATWOOT_SELO_SOFIA', 'CHATWOOT_ATALHOS', 'CHATWOOT_RESOLVER_OBRIGATORIO'];
+  const guardadas = outras.map((k) => [k, process.env[k]] as const);
+  for (const k of outras) delete process.env[k];
   try {
     for (const v of [undefined, '', '0', 'true', '2', ' ']) {
       if (v === undefined) delete process.env.CHATWOOT_BARRA_POR_PAPEL;
@@ -46,6 +50,7 @@ test('SEM a chave o menu.js sai BYTE A BYTE igual ao de main (tamanho e SHA-256)
   } finally {
     if (salvo === undefined) delete process.env.CHATWOOT_BARRA_POR_PAPEL;
     else process.env.CHATWOOT_BARRA_POR_PAPEL = salvo;
+    for (const [k, v] of guardadas) if (v !== undefined) process.env[k] = v;
   }
   assert.equal(barraPorPapelLigada({}), false);
   assert.equal(barraPorPapelLigada({ CHATWOOT_BARRA_POR_PAPEL: '1' }), true);
@@ -101,9 +106,13 @@ test('contador: etiquetas e status certos, filtro em AND, lê meta.all_count; 60
   assert.ok(js.includes("{ attribute_key: 'labels', filter_operator: 'equal_to', values: ETIQUETAS, query_operator: null }"), 'qualquer uma das duas etiquetas (equal_to em etiqueta é «alguma delas»)');
   assert.ok(js.includes('j.meta.all_count'));
   assert.ok(js.includes('setInterval(function(){ contar(false); }, 60000)'), 'a rotina é de 60 s');
-  assert.ok(js.includes('porTroca ? 15000 : 55000'), 'trocar de tela chama no máximo a cada 15 s; a rotina respeita 55 s');
+  assert.ok(js.includes('porTroca ? 15000 : 30000'), 'trocar de tela chama no máximo a cada 15 s; a rotina (tick de 60 s) nunca é barrada por uma chamada recente de troca de tela');
+  assert.ok(js.includes("customViews/getConversationCustomViews") && js.includes('return consultaDaPasta() || { payload: ['), 'conta com o filtro da PRÓPRIA pasta (o número bate com a lista); a consulta da proposta é a reserva');
+  assert.ok(js.includes('ctl.abort()') && js.includes('}, 15000)'), 'chamada pendurada desiste em 15 s');
+  assert.ok(js.includes('cont.conta !== conta') && js.includes('cont.n = null; cont.ultima = 0'), 'trocou de conta: o número da anterior não aparece');
+  assert.ok(js.includes('Date.now() - perfil.falhou < 60000'), 'perfil que falha não é pedido de novo a cada passada (400 ms)');
   assert.ok(js.includes("document.visibilityState !== 'visible'"), 'aba escondida não chama');
-  assert.ok(js.includes('cont.preso') && js.includes('.catch(function(){ cont.n = null; })'), 'uma chamada por vez; falhou, o número some em vez de ficar velho');
+  assert.ok(js.includes('cont.preso') && js.includes('.catch(function(){ if (cont.conta === conta) cont.n = null; })'), 'uma chamada por vez; falhou, o número some em vez de ficar velho');
   // vermelho de verdade, e é pseudo-elemento (nenhum nó novo dentro do link que o Vue mantém)
   assert.ok(js.includes('#DC2626') && js.includes("'a[' + CONTA + ']::after{content:attr(' + CONTA + ')"));
   assert.ok(js.includes("'99+'"));

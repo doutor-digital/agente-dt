@@ -8,8 +8,10 @@
  *      Somem: Relatórios, Campanhas, Configurações, Central de Ajuda, Empresas, Captain, equipes vazias, e as telas de gestão do menu
  *      (Funil, Oportunidades, Robôs, Disparos). Esconder é só `display:none` (atributo `data-dd-oculto`): o endereço da tela segue valendo.
  *  - Contador VERMELHO na pasta «🙋 A Sofia passou para mim»: conversas ABERTAS com a etiqueta `esperando-humano` ou `ia-pausada`.
- *    Conta pela API do próprio Chatwoot com a sessão de quem está logado (`POST conversations/filter`, lê `meta.all_count`): UMA chamada a cada
- *    60 s por aba aberta (e uma ao trocar de tela, no máximo a cada 15 s); aba escondida não chama; sem resposta, o número some (nunca inventa).
+ *    Conta pela API do próprio Chatwoot com a sessão de quem está logado (`POST conversations/filter`, lê `meta.all_count`) usando o filtro SALVO NA
+ *    PRÓPRIA PASTA (lido do estado do Chatwoot, zero requisição) — assim o número é o que a lista dela mostra; sem esse estado vale a consulta da
+ *    proposta (abertas com as duas etiquetas). UMA chamada a cada 60 s por aba aberta (e uma ao trocar de tela, no máximo a cada 15 s); aba escondida
+ *    não chama; 15 s sem resposta desiste; sem resposta, o número some (nunca inventa); trocou de conta, zera.
  *    O número é um `::after` do link da pasta (atributo `data-dd-conta`): o script não cria nó dentro do que o Vue mantém.
  *
  * Chave: `CHATWOOT_BARRA_POR_PAPEL=1` liga. Desligada (padrão) o bloco NÃO ENTRA no `menu.js`: o arquivo sai BYTE A BYTE igual ao de antes (o teste compara o SHA-256 com o de main).
@@ -36,12 +38,12 @@ const BARRA_JS = String.raw`(function(){
   var TELAS_FORA = ['data-oport-menu', 'data-funil-menu', 'data-robos-menu', 'data-disparos-menu'];
   var HOJE_FILA = ['data-hoje-menu', 'data-oport-menu', 'data-mkt-menu', 'data-gestor-menu'];
   var ABAS = [
-    { id: 'me', nome: 'Minhas', re: /^minhas/ },
-    { id: 'sem', nome: 'Sem dono', re: /^nao atribu/ },
-    { id: 'todas', nome: 'Todas', re: /^todos?( |$)/ }
+    { id: 'me', nome: 'Minhas', re: /^(minhas|mine)/ },
+    { id: 'sem', nome: 'Sem dono', re: /^(nao atribu|unassigned)/ },
+    { id: 'todas', nome: 'Todas', re: /^(todos?|all)( |$)/ }
   ];
-  var espera = null, perfil = { conta: null, papel: null, pedindo: false };
-  var cont = { n: null, ultima: 0, preso: false, caminho: '' };
+  var espera = null, perfil = { conta: null, papel: null, pedindo: false, falhou: 0 };
+  var cont = { n: null, ultima: 0, preso: false, caminho: '', conta: null };
 
   function sessao(){
     var m = document.cookie.match(/(?:^|; )cw_d_session_info=([^;]*)/); if (!m) return null;
@@ -63,9 +65,10 @@ const BARRA_JS = String.raw`(function(){
   function papelAtual(){
     var conta = contaDaUrl(); if (!conta) return null;
     var r = papelDoEstado(); if (r) return r;
-    if (perfil.conta !== conta) { perfil.conta = conta; perfil.papel = null; perfil.pedindo = false; }
+    if (perfil.conta !== conta) { perfil.conta = conta; perfil.papel = null; perfil.pedindo = false; perfil.falhou = 0; }
     if (perfil.papel) return perfil.papel;
-    var s = sessao(); if (!s || perfil.pedindo) return null;
+    // o perfil falhou: espera 60 s antes de tentar de novo (nada de martelar o Chatwoot a cada passada)
+    var s = sessao(); if (!s || perfil.pedindo || Date.now() - perfil.falhou < 60000) return null;
     perfil.pedindo = true;
     fetch('/api/v1/profile', { headers: { 'access-token': s.token, client: s.client, uid: s.uid } })
       .then(function(x){ return x.ok ? x.json() : null; })
@@ -74,14 +77,14 @@ const BARRA_JS = String.raw`(function(){
         if (a && a.role && perfil.conta === conta) perfil.papel = a.role;
       })
       .catch(function(){})
-      .then(function(){ perfil.pedindo = false; agendar(); });
+      .then(function(){ perfil.pedindo = false; if (perfil.papel) agendar(); else perfil.falhou = Date.now(); });
     return null;
   }
 
   // ── o CSS (um só, no <head>): esconder, contador vermelho, pastas em coluna (para a ordem valer) ────────────────────────────────
   function css(){
     return '[' + OCULTO + ']{display:none!important}'
-      + '[' + PASTA_COL + ']{display:flex!important;flex-direction:column}'
+      + '[' + PASTA_COL + ']{display:flex;flex-direction:column}'
       + 'a[' + CONTA + ']::after{content:attr(' + CONTA + ');flex-shrink:0;margin-left:auto;min-width:20px;height:20px;padding:0 6px;border-radius:10px;'
       + 'background:#DC2626;color:#fff;font:700 12px/20px Inter,-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;text-align:center;box-sizing:border-box}'
       + '[data-dd-ferramentas]{list-style:none;padding:10px 8px 2px;font:600 11px/16px Inter,-apple-system,system-ui,"Segoe UI",Roboto,Arial,sans-serif;'
@@ -209,8 +212,23 @@ const BARRA_JS = String.raw`(function(){
     Array.prototype.forEach.call(todos, function(x){ if (x !== a || !(cont.n > 0)) x.removeAttribute(CONTA); });
     if (a && cont.n > 0) { var t = cont.n > 99 ? '99+' : String(cont.n); if (a.getAttribute(CONTA) !== t) a.setAttribute(CONTA, t); }
   }
+  // a consulta da PRÓPRIA pasta, lida do estado do Chatwoot (zero requisição): o número é exatamente o que a lista dela mostra, e acompanha a pasta se
+  // a Suzanne mudar o filtro. Sem o estado (ou sem filtro nela), vale a consulta da proposta: abertas com esperando-humano ou ia-pausada.
+  function consultaDaPasta(){
+    try {
+      var m = (linkDaPasta().getAttribute('href') || '').match(/\/custom_view\/(\d+)/); if (!m) return null;
+      var app = document.getElementById('app'); var vue = app && app.__vue_app__;
+      var store = vue && vue.config && vue.config.globalProperties && vue.config.globalProperties.$store;
+      var vs = store && store.getters && store.getters['customViews/getConversationCustomViews'];
+      if (!Array.isArray(vs)) return null;
+      for (var i = 0; i < vs.length; i++) {
+        if (String(vs[i].id) === m[1]) { var q = vs[i].query; return q && Array.isArray(q.payload) && q.payload.length ? { payload: q.payload } : null; }
+      }
+    } catch (e) {}
+    return null;
+  }
   function consulta(){
-    return { payload: [
+    return consultaDaPasta() || { payload: [
       { attribute_key: 'status', filter_operator: 'equal_to', values: ['open'], query_operator: 'AND' },
       { attribute_key: 'labels', filter_operator: 'equal_to', values: ETIQUETAS, query_operator: null }
     ] };
@@ -219,18 +237,21 @@ const BARRA_JS = String.raw`(function(){
   function contar(porTroca){
     var conta = contaDaUrl(), s = sessao();
     if (!conta || !s || cont.preso || !linkDaPasta() || document.visibilityState !== 'visible') return;
-    var minimo = porTroca ? 15000 : 55000;
+    var minimo = porTroca ? 15000 : 30000;
     if (Date.now() - cont.ultima < minimo) return;
     cont.preso = true; cont.ultima = Date.now();
+    // sem resposta em 15 s: desiste (uma chamada pendurada não pode travar o contador da aba para sempre)
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null, limite = ctl ? setTimeout(function(){ ctl.abort(); }, 15000) : null;
     fetch('/api/v1/accounts/' + conta + '/conversations/filter', {
       method: 'POST',
       headers: { 'access-token': s.token, client: s.client, uid: s.uid, 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify(consulta())
+      body: JSON.stringify(consulta()),
+      signal: ctl ? ctl.signal : undefined
     })
       .then(function(r){ if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
-      .then(function(j){ var n = j && j.meta ? Number(j.meta.all_count) : NaN; cont.n = isFinite(n) && n >= 0 ? n : null; })
-      .catch(function(){ cont.n = null; })
-      .then(function(){ cont.preso = false; marcarContador(); });
+      .then(function(j){ if (cont.conta !== conta) return; var n = j && j.meta ? Number(j.meta.all_count) : NaN; cont.n = isFinite(n) && n >= 0 ? n : null; })
+      .catch(function(){ if (cont.conta === conta) cont.n = null; })
+      .then(function(){ if (limite) clearTimeout(limite); cont.preso = false; marcarContador(); });
   }
 
   function passar(){
@@ -241,6 +262,9 @@ const BARRA_JS = String.raw`(function(){
     garantirEstilo();
     hojeNoTopo();
     if (papel === 'agent') barraDaAtendente(ul); else desfazer(ul);
+    // trocou de clínica (outra conta) na mesma aba: o número da anterior não vale, some até a conta nova responder
+    var conta = contaDaUrl();
+    if (cont.conta !== conta) { cont.conta = conta; cont.n = null; cont.ultima = 0; cont.caminho = ''; }
     if (cont.caminho !== location.pathname) { cont.caminho = location.pathname; contar(true); }
     marcarContador();
   }
