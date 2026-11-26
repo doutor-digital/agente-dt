@@ -169,7 +169,7 @@ test('Kapso: entregas — pede SÓ `status=failed` de `meta.messages` com `limit
   });
   const erros = await V.kapsoReal('chave-secreta-do-kapso-123', k.f).entregasComErro(agora - 3 * HORA);
   assert.deepEqual([...erros!].map(([k, v]) => [k, v.length]), [['111', 2], ['222', 1]]);
-  assert.match(k.pedidos[0]!.url, /\/webhook_deliveries\?status=failed&event=meta\.messages&period=24h&limit=100$/);
+  assert.match(k.pedidos[0]!.url, /\/webhook_deliveries\?status=failed&event=meta\.messages&period=7d&limit=100$/);
   assert.ok(k.pedidos.every((p) => p.chave === 'chave-secreta-do-kapso-123' && !p.url.includes('chave-secreta')), 'a chave só no cabeçalho');
 });
 
@@ -554,6 +554,20 @@ test('depois de avisar, a falha antiga NÃO volta a ser contada: o Kapso conta a
   const depois = await rodar(Date.UTC(2026, 10, 23, 11, 30)); // avisado segunda 08:30, 3 h+ atrás
   assert.equal(depois.r, 'ok');
   assert.equal(depois.m.c.enviados.length, 0);
+});
+
+test('falha ENTRE o último aviso (17h) e o fechamento (18h30) NÃO se perde: na manhã seguinte conta desde o último aviso, não desde o fechamento', async () => {
+  const falhaAntesDeFechar = Date.UTC(2026, 10, 23, 21, 0); // segunda 18:00 BRT
+  const m = mundo({ serie: serie(6, undefined, PARAUAPEBAS), entregas: new Map([['111', [falhaAntesDeFechar]]]), unidade: PARAUAPEBAS as never, ultimoAviso: Date.UTC(2026, 10, 23, 20, 0) }); // aviso segunda 17:00
+  (m.deps as any).agora = () => Date.UTC(2026, 10, 24, 11, 5); // terça 08:05
+  assert.equal(await V.cicloDaCaixa(m.deps as never, 3, 'x'), 'avisou');
+  assert.match(m.c.enviados[0]!, /1 mensagem\(ns\) de paciente não foram entregues ao CRM pelo Kapso \(desde o último aviso\)/);
+});
+
+test('o catálogo descreve a média como ela é: 6 semanas do mesmo dia da semana (não «2 semanas»)', () => {
+  const a = automacaoPorId('chatwoot-vigia')!;
+  assert.match(a.oQueFaz, /6 semanas.*MESMO dia da semana/);
+  assert.doesNotMatch(a.oQueFaz, /2 semanas/);
 });
 
 test('agenda DESLIGADA (spineEnabled=false): o vigia não avalia, devolve «sem-agenda» e AVISA que não avalia (uma vez por dia) — nunca fica mudo', async () => {
