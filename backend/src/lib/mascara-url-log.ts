@@ -6,6 +6,7 @@ export function mascararUrlDoLog(url: string): string {
   return url
     .replace(/^(\/arquivos\/(?:enviar|baixar)\/)[^/?]+/, '$1[token]')
     .replace(/^(\/infinitepay\/webhook\/[^/?]+\/[^/?]+\/)[^/?]+/, '$1[assinatura]')
+    .replace(/^(\/focus-nfe\/webhook\/[^/?]+\/)[^/?]+/, '$1[assinatura]')
     .replace(/(\/nova-clinica\/)[^/?#\s]+/, '$1[codigo]')
     .replace(/([?&]k=)[^&]+/, '$1[chave]')
     .replace(/([?&]access_token=)[^&]+/, '$1[chave]');

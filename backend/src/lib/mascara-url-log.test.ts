@@ -10,4 +10,6 @@ test('o código do formulário nova clínica nunca vai para o log (página e API
   assert.equal(mascararUrlDoLog('/api/x?access_token=zzz'), '/api/x?access_token=[chave]');
   assert.equal(mascararUrlDoLog('/api/health'), '/api/health');
   assert.ok(!mascararUrlDoLog(`/nova-clinica/${codigo}`).includes(codigo));
+  // o segredo do webhook da Focus NFe no endereço (/focus-nfe/webhook/<unidade>/<assinatura>) também não vai para o log
+  assert.equal(mascararUrlDoLog('/focus-nfe/webhook/doutor-hernia-acailandia/2b7dbef7a8a898864eb5eba6c6941da7'), '/focus-nfe/webhook/doutor-hernia-acailandia/[assinatura]');
 });

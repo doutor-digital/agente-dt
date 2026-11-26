@@ -41,10 +41,10 @@ export interface LeituraDoAmbiente {
   ignoradas: Array<{ variavel: string; motivo: string }>;
 }
 
-const sufixoDe = (variavel: string, prefixo: string) => variavel.slice(prefixo.length).toLowerCase().replace(/_/g, '-');
+export const sufixoDe = (variavel: string, prefixo: string) => variavel.slice(prefixo.length).toLowerCase().replace(/_/g, '-');
 
 /** Acha a unidade do sufixo: o slug inteiro, ou o final dele quando só uma unidade termina assim. Ambíguo ou desconhecido = undefined. */
-function unidadeDoSufixo<U extends { slug: string }>(sufixo: string, unidades: ReadonlyArray<U>): U | { motivo: string } {
+export function unidadeDoSufixo<U extends { slug: string }>(sufixo: string, unidades: ReadonlyArray<U>): U | { motivo: string } {
   const exata = unidades.find((u) => u.slug === sufixo);
   if (exata) return exata;
   const pelofim = unidades.filter((u) => u.slug.endsWith(`-${sufixo}`));
