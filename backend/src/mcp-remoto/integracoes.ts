@@ -18,6 +18,8 @@ export interface FontesDeIntegracao {
   sistemas?: Map<string, { nome: string }>;
   zenfisio?: Map<string, { nome: string }>;
   infinitepay?: Map<string, { nome: string }>;
+  /** Leitura bancária (Pluggy). Dado sensível: quem monta a sessão só passa isto para quem pode ver; para os demais fica vazio e a resposta é a de sempre. */
+  pluggy?: Map<string, { nome: string }>;
   /** Ferramentas da empresa, não de uma unidade (ex. o Chatwoot do atendimento novo), só para quem tem acesso. */
   gerais?: string[];
 }
@@ -30,10 +32,11 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
   const sistemas = f.sistemas ?? new Map<string, { nome: string }>();
   const zenfisio = f.zenfisio ?? new Map<string, { nome: string }>();
   const infinitepay = f.infinitepay ?? new Map<string, { nome: string }>();
-  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys(), ...convenia.keys(), ...tiquetaque.keys(), ...tramitacao.keys(), ...sistemas.keys(), ...zenfisio.keys(), ...infinitepay.keys()])].sort();
+  const pluggy = f.pluggy ?? new Map<string, { nome: string }>();
+  const slugs = [...new Set([...f.franquia.keys(), ...f.kommo.keys(), ...f.bling.keys(), ...asaas.keys(), ...convenia.keys(), ...tiquetaque.keys(), ...tramitacao.keys(), ...sistemas.keys(), ...zenfisio.keys(), ...infinitepay.keys(), ...pluggy.keys()])].sort();
   const unidades = slugs.map((slug) => {
-    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? convenia.get(slug)?.nome ?? tiquetaque.get(slug)?.nome ?? tramitacao.get(slug)?.nome ?? sistemas.get(slug)?.nome ?? zenfisio.get(slug)?.nome ?? infinitepay.get(slug)?.nome ?? slug;
-    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug), asaas: asaas.has(slug), convenia: convenia.has(slug), tiquetaque: tiquetaque.has(slug), tramitacao: tramitacao.has(slug), sistemas: sistemas.has(slug), zenfisio: zenfisio.has(slug), infinitepay: infinitepay.has(slug) };
+    const nome = f.franquia.get(slug)?.nome ?? f.kommo.get(slug)?.nome ?? f.bling.get(slug)?.nome ?? asaas.get(slug)?.nome ?? convenia.get(slug)?.nome ?? tiquetaque.get(slug)?.nome ?? tramitacao.get(slug)?.nome ?? sistemas.get(slug)?.nome ?? zenfisio.get(slug)?.nome ?? infinitepay.get(slug)?.nome ?? pluggy.get(slug)?.nome ?? slug;
+    const tem = { franquia: f.franquia.has(slug), kommo: f.kommo.has(slug), bling: f.bling.has(slug), asaas: asaas.has(slug), convenia: convenia.has(slug), tiquetaque: tiquetaque.has(slug), tramitacao: tramitacao.has(slug), sistemas: sistemas.has(slug), zenfisio: zenfisio.has(slug), infinitepay: infinitepay.has(slug), ...(pluggy.size ? { pluggy: pluggy.has(slug) } : {}) };
     const ferramentas = [
       ...(tem.franquia ? ['franquia (pacientes, agenda, tratamentos, BI)'] : []),
       ...(tem.kommo ? ['kommo_*'] : []),
@@ -47,6 +50,7 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
       ...(tem.sistemas ? ['sistemas_* (sistema novo de RH/Caixa/Financeiro: esquema, consulta, usuários, log, simulação; alterar em dois passos para quem tem permissão)'] : []),
       ...(tem.zenfisio ? ['zenfisio_* (clínica de fisioterapia: agenda com status, faltas e taxa de falta, profissionais, pacotes; só leitura)'] : []),
       ...(tem.infinitepay ? ['infinitepay_* (status de um pagamento e os links de pagamento criados pelo conector; a API da InfinitePay NÃO lista vendas, Pix, saldo, extrato nem recebíveis)'] : []),
+      ...(tem.pluggy ? ['pluggy_* (leitura bancária via Open Finance: contas com saldo, extrato e resumo por dia/semana; só leitura, só para quem altera cartões; traz a data da última sincronização)'] : []),
     ];
     return { slug, nome, ...tem, ferramentas };
   });
@@ -62,6 +66,8 @@ export function listarIntegracoes(f: FontesDeIntegracao) {
     comSistemas: unidades.filter((u) => u.sistemas).length,
     comZenfisio: unidades.filter((u) => u.zenfisio).length,
     comInfinitepay: unidades.filter((u) => u.infinitepay).length,
+    // só aparece para quem vê a leitura bancária: para os demais a resposta é a de antes
+    ...(pluggy.size ? { comPluggy: unidades.filter((u) => 'pluggy' in u && u.pluggy).length } : {}),
     ferramentasGerais: f.gerais ?? [],
     unidades,
     observacao: 'Anúncios (Meta Ads e Google Ads) ainda não estão neste conector.',

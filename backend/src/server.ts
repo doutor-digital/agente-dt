@@ -12,6 +12,7 @@ import { apagarCofreDeArquivos, ligarConectorRemoto } from './mcp-remoto/produca
 import { paginaPausaHandler } from './controllers/pausa.controller.js';
 import { paginaAprendizadosHandler } from './controllers/aprendizados.controller.js';
 import { ligarNovaClinica, somenteCadastroNoHostDeCadastro } from './controllers/nova-clinica.controller.js';
+import { ligarWebhookPluggy } from './controllers/pluggy-webhook.controller.js';
 import { mascararUrlDoLog } from './lib/mascara-url-log.js';
 import { paginaAgenteHandler } from './controllers/agente-chatwoot.controller.js';
 import { paginaAgenteKommoHandler } from './controllers/agente-kommo.controller.js';
@@ -159,6 +160,9 @@ async function main(): Promise<void> {
 
   // Formulário público «nova clínica» (código de uso único). ANTES dos parsers gerais: a rota lê o corpo com teto de 64 KB e conta o limite de taxa antes de ler.
   ligarNovaClinica(app);
+
+  // Webhook da Pluggy (leitura bancária do conector): assinatura sobre o corpo CRU, então também antes dos parsers gerais. Sem PLUGGY_WEBHOOK_SECRET responde 404.
+  ligarWebhookPluggy(app);
 
   // Webhook do Kommo antes do parser geral: cartões em lote passam de 1000 parâmetros e o geral devolvia 413
   // antes do handler (ver parser-webhook-kommo.ts).
