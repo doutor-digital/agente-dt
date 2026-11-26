@@ -86,6 +86,11 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     assert.equal(e4.atual?.status, 'pago');
     assert.equal(e4.atual?.revisao, 'estorno avisado, NÃO confirmado pela API');
     assert.equal(e4.atual?.ultimoEvento, 'refunded');
+    // as marcas ACUMULAM no banco (compara e troca): cancelamento depois do estorno não apaga o estorno, e a mesma marca de novo não duplica
+    const e5 = await b.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: 'cancelamento avisado em x, NÃO confirmado pela API' });
+    assert.match(e5.atual?.revisao ?? '', /^estorno avisado.* \| cancelamento avisado/);
+    const e6 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: 'cancelamento avisado em y, NÃO confirmado pela API' });
+    assert.equal(e6.atual?.revisao, e5.atual?.revisao, 'a mesma marca não duplica');
 
     // a leitura do conector lê a tabela de verdade
     const lista = await infinitepayLinks(a.ctx, {});

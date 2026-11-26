@@ -228,12 +228,13 @@ export async function infinitepayLinks(
   for (const l of todos) {
     // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
     const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
+    const estornoEmRevisao = l.status === 'pago' && Boolean(l.revisao?.includes('estorno avisado'));
     const g = (porStatus[l.status] ??= { quantidade: 0, valor: 0 });
     g.quantidade += 1;
-    g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
+    // o valor do status `pago` é o MESMO de resumo.valorPago: o pago com estorno em revisão conta na quantidade, mas o dinheiro dele está em valorEstornadoNaoConfirmado
+    if (!estornoEmRevisao) g.valor = Math.round((g.valor + centavos / 100) * 100) / 100;
     if (l.status !== 'falhou' && l.status !== 'intencao') emitido += l.valorCentavos;
     // pago com ESTORNO avisado e não confirmado: o dinheiro não conta como pago (pode ter voltado) e entra no estornado, separado em `valorEstornadoNaoConfirmado`
-    const estornoEmRevisao = l.status === 'pago' && Boolean(l.revisao?.startsWith('estorno'));
     if (l.status === 'pago' && !estornoEmRevisao) pago += centavos;
     if (l.status === 'estornado') estornado += centavos;
     if (estornoEmRevisao) estornadoNaoConfirmado += centavos;

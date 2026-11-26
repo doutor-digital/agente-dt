@@ -219,6 +219,19 @@ const TELEFONE = /(?<!\d)\(?\d{2}\)?[\s.-]?9?\d{4}[\s.-]?\d{4}(?!\d)/;
 const SEM_DATA_NEM_VALOR = '|';
 // datas (26/11/2026, 26-11-2026) e valores em dinheiro: BR (1.500,00 e 150,00), dólar (1,500.00) e simples (150.00). O ponto de um CPF ("123.456.789.01") NÃO é valor:
 // o valor simples não pode ter dígito nem ponto/vírgula colados antes ou depois.
+/**
+ * As marcas de REVISÃO se ACUMULAM, nunca se sobrescrevem: estorno avisado e depois cancelamento avisado ficam os dois (o estorno em revisão continua descontado do pago).
+ * Cada tipo de marca entra uma vez só (um aviso repetido não duplica). O texto de cada marca começa pelo seu tipo.
+ */
+export const TIPOS_DE_MARCA = ['estorno avisado', 'cancelamento avisado', 'pagamento confirmado depois'] as const;
+export function acumularRevisao(atual: string | null | undefined, nova: string): string {
+  const tipo = TIPOS_DE_MARCA.find((t) => nova.startsWith(t));
+  if (!atual) return nova;
+  if (tipo && atual.includes(tipo)) return atual;
+  return `${atual} | ${nova}`;
+}
+export const temMarca = (revisao: string | null | undefined, tipo: (typeof TIPOS_DE_MARCA)[number]): boolean => Boolean(revisao?.includes(tipo));
+
 const DATAS = /(?<!\d)\d{1,2}[/-]\d{1,2}[/-]\d{4}(?!\d)|(?<!\d)\d{1,2}\/\d{1,2}\/\d{2}(?!\d)/g;
 const VALORES = /(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3}(?:,\d{3})+\.\d{2}|\d+[.,]\d{2})(?![\d]|[.,]\d)/g;
 
@@ -228,7 +241,10 @@ const VALORES = /(?<![\d.,])(?:\d{1,3}(?:\.\d{3})+,\d{2}|\d{1,3}(?:,\d{3})+\.\d{
  * "CPF 123456789-01", "123 456 789 01", "123.456.789.01" e "CNPJ 12345678/0001-90") e o telefone com DDD.
  */
 export function temDadoPessoal(texto: string): boolean {
-  const t = texto.replace(DATAS, SEM_DATA_NEM_VALOR).replace(VALORES, SEM_DATA_NEM_VALOR);
+  // valor em dinheiro tem no máximo 7 dígitos (o teto é R$ 5.000,00: 6): mais que isso NÃO é valor, é um CPF/CNPJ com cara de valor ("529.982.247,25", "529982247.25")
+  const semDatasEValores = texto.replace(DATAS, SEM_DATA_NEM_VALOR).replace(VALORES, (m) => (m.replace(/\D/g, '').length <= 7 ? SEM_DATA_NEM_VALOR : m));
+  // a vírgula também separa grupos de um documento ("529.982.247,25"): para a checagem de dígitos seguidos ela vale como ponto
+  const t = semDatasEValores.replace(/,/g, '.');
   return temDigitosSeguidos(t, 11) || TELEFONE.test(t);
 }
 

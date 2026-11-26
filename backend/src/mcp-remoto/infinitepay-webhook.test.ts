@@ -283,15 +283,57 @@ test('pagamento confirmado pela API depois de um cancelamento NÃO confirmado: o
   assert.equal(m.armazem.linhas[0]!.valorPagoCentavos, 15150);
   assert.equal(m.avisos.length, 1);
   assert.match(m.avisos[0]!, /CONFIRMOU o pagamento.*depois de um cancelamento avisado e NÃO confirmado.*Marquei o link como pago/);
+  assert.match(m.armazem.linhas[0]!.revisao ?? '', /depois de cancelamento/);
 });
 
-test('cancelamento sem efeito (o link já estava cancelado): o alerta diz que nada mudou, não que marcou', async () => {
+test('o mesmo cancelamento reentregue avisa UMA vez só (link nunca pago e link pago)', async () => {
   const m = montar({ status: 'criado' });
-  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
-  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  for (let i = 0; i < 3; i++) await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  assert.equal(m.avisos.length, 1);
   assert.match(m.avisos[0]!, /Marquei como cancelado/);
-  assert.match(m.avisos[1]!, /Nada mudou/);
-  assert.doesNotMatch(m.avisos[1]!, /Marquei como cancelado/);
+  assert.equal(m.armazem.linhas[0]!.status, 'cancelado');
+  const pago = montar({ status: 'pago' });
+  for (let i = 0; i < 3; i++) await processarAviso(pago.deps, pago.p, { order_nsu: REF, event: 'canceled' });
+  assert.equal(pago.avisos.length, 1);
+  assert.equal(pago.armazem.linhas[0]!.status, 'pago');
+  const estorno = montar({ status: 'pago' });
+  for (let i = 0; i < 3; i++) await processarAviso(estorno.deps, estorno.p, { order_nsu: REF, event: 'refunded' });
+  assert.equal(estorno.avisos.length, 1, 'o estorno reentregue também');
+});
+
+test('as marcas de revisão ACUMULAM: estorno e depois cancelamento no mesmo pago ficam os dois, e o estorno segue descontado do valorPago', async () => {
+  const m = montar({ status: 'pago' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'refunded' });
+  await processarAviso(m.deps, m.p, { order_nsu: REF, event: 'canceled' });
+  const rev = m.armazem.linhas[0]!.revisao ?? '';
+  assert.match(rev, /estorno avisado/);
+  assert.match(rev, /cancelamento avisado/);
+  assert.equal(m.armazem.linhas[0]!.status, 'pago');
+  const r = await infinitepayLinks(m.deps.ctx, {});
+  assert.equal(r.resumo.valorPago, 0, 'o cancelamento NÃO devolve o estorno ao pago');
+  assert.equal(r.resumo.valorEstornado, 150);
+  assert.equal(r.resumo.valorEstornadoNaoConfirmado, 150);
+  assert.equal(r.resumo.porStatus.pago?.valor, r.resumo.valorPago, 'porStatus.pago bate com valorPago');
+  // a ordem inversa (cancelamento, depois estorno) dá o mesmo
+  const n = montar({ status: 'pago' });
+  await processarAviso(n.deps, n.p, { order_nsu: REF, event: 'canceled' });
+  await processarAviso(n.deps, n.p, { order_nsu: REF, event: 'refunded' });
+  assert.match(n.armazem.linhas[0]!.revisao ?? '', /cancelamento avisado.*estorno avisado/);
+  assert.equal((await infinitepayLinks(n.deps.ctx, {})).resumo.valorPago, 0);
+});
+
+test('pagamento confirmado depois de um cancelamento avisado: vira pago, avisa E fica com marca de revisão', async () => {
+  const m = montar({ status: 'cancelado' });
+  await processarAviso(m.deps, m.p, PAGO);
+  const l = m.armazem.linhas[0]!;
+  assert.equal(l.status, 'pago');
+  assert.match(l.revisao ?? '', /pagamento confirmado depois de cancelamento avisado/);
+  const r = await infinitepayLinks(m.deps.ctx, {});
+  assert.equal(r.resumo.emRevisao, 1);
+  assert.equal(r.resumo.valorPago, 151.5, 'a marca de pagamento-depois-de-cancelamento não desconta o dinheiro');
+  // reentregue: nada de novo
+  await processarAviso(m.deps, m.p, PAGO);
+  assert.equal(m.avisos.length, 1);
 });
 
 test('valorPago não soma o link com estorno em revisão; valorEstornado reflete a revisão (separada em valorEstornadoNaoConfirmado)', async () => {

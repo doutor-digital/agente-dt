@@ -1,7 +1,7 @@
 /** A tabela `infinitepay_links` (links de pagamento criados pelo conector) como o conector a lê. */
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import type { ArmazemDeLinks, FiltroDeLinks, LinkGuardado } from './infinitepay.js';
-import { FALHA_DO_BANCO_INFINITEPAY, LIMITES_INFINITEPAY, LivroDeLinks, type ArmazemDeEscrita, type EventoDoLink, type ItemDoLivro, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
+import { FALHA_DO_BANCO_INFINITEPAY, LIMITES_INFINITEPAY, LivroDeLinks, acumularRevisao, type ArmazemDeEscrita, type EventoDoLink, type ItemDoLivro, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
 
 /** O pedaço do cliente do Prisma que a leitura usa (facilita o teste sem banco). */
 export interface LinhaDoLink {
@@ -164,7 +164,7 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
     },
     async aplicarEvento(unidade, orderNsu, e: EventoDoLink) {
       const agora = new Date();
-      const registro = { ultimoEvento: e.evento, ultimoEventoEm: agora, ...(e.revisao ? { revisao: e.revisao } : {}) };
+      const registro = { ultimoEvento: e.evento, ultimoEventoEm: agora };
       let mudou = false;
       const alvo = { unitSlug: unidade, orderNsu };
       if (e.paraStatus) {
@@ -189,6 +189,17 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
         mudou = r.count > 0;
       }
       if (!mudou) await db.infinitepayLink.updateMany({ where: alvo, data: registro });
+      // a marca de revisão ACUMULA (compara e troca, até 5 tentativas): nunca apaga a que já estava
+      if (e.revisao) {
+        for (let tentativa = 0; tentativa < 5; tentativa++) {
+          const atual = await db.infinitepayLink.findUnique({ where: { unitSlug_orderNsu: alvo as { unitSlug: string; orderNsu: string } } });
+          if (!atual) break;
+          const novo = acumularRevisao(atual.revisao, e.revisao);
+          if (novo === atual.revisao) break;
+          const r = await db.infinitepayLink.updateMany({ where: { ...alvo, revisao: atual.revisao }, data: { revisao: novo } });
+          if (r.count > 0) break;
+        }
+      }
       const l = await db.infinitepayLink.findUnique({ where: { unitSlug_orderNsu: alvo as { unitSlug: string; orderNsu: string } } });
       return { mudou, atual: l ? comoLinkGuardado(l) : null };
     },

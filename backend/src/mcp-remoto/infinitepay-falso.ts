@@ -1,7 +1,7 @@
 /** O armazém dos links em memória, com o mesmo contrato do de produção (trava → ler → conferir → gravar a intenção). Só para testes. */
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import type { LinkGuardado } from './infinitepay.js';
-import { LivroDeLinks, type ArmazemDeEscrita, type EventoDoLink, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
+import { LivroDeLinks, acumularRevisao, type ArmazemDeEscrita, type EventoDoLink, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
 
 interface Linha extends LinkGuardado {
   chave: string | null;
@@ -76,7 +76,7 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
         mudou = true;
       }
       l.ultimoEvento = e.evento;
-      if (e.revisao) l.revisao = e.revisao;
+      if (e.revisao) l.revisao = acumularRevisao(l.revisao, e.revisao);
       return { mudou, atual: { ...l } };
     },
   };

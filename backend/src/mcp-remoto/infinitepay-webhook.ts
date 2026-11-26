@@ -15,7 +15,7 @@ import type { Express, Request, Response } from 'express';
 import { dinheiro } from './asaas-limites.js';
 import type { ContextoInfinitepay } from './infinitepay.js';
 import { reais } from './infinitepay.js';
-import type { ArmazemDeEscrita } from './infinitepay-escrita.js';
+import { temMarca, type ArmazemDeEscrita } from './infinitepay-escrita.js';
 import { ipDoCliente, JanelaDeContagem } from './limites.js';
 
 export const ROTA_WEBHOOK_INFINITEPAY = '/infinitepay/webhook/:unidade/:orderNsu/:assinatura';
@@ -109,18 +109,28 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
 
   // Estorno e cancelamento chegam só pelo aviso: a API NÃO os confirma (o /payment_check só diz se pagou). Por isso NUNCA desfazem um link já confirmado como pago:
   // o link fica `pago` e ganha uma marca de REVISÃO (visível em infinitepay_links) e um alerta ao João, que confere no app.
-  const marca = (o: string) => `${o} avisado pela InfinitePay em ${new Date((deps.agora ?? Date.now)()).toISOString()}, NÃO confirmado pela API (o /payment_check só confirma pagamento): confira no app`;
+  const marca = (o: string) => `${o} pela InfinitePay em ${new Date((deps.agora ?? Date.now)()).toISOString()}, NÃO confirmado pela API (o /payment_check só confirma pagamento): confira no app`;
   if (evento === 'refunded') {
+    // o mesmo aviso reentregue não avisa de novo: a marca já está lá (o armazém acumula as marcas, nunca sobrescreve)
+    if (temMarca(link.revisao, 'estorno avisado')) {
+      await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento });
+      return { http: 200, resultado: 'estorno já marcado' };
+    }
     // estorno não muda o status (nem de `pago`, nem de link ainda não pago): só marca para revisão
-    await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, revisao: marca('estorno') });
+    await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento, revisao: marca('estorno avisado') });
     void deps.alertar(`↩️ InfinitePay avisou um ESTORNO (${quem}). NÃO confirmado pela API: não mudei o status (${link.status}); o link ficou marcado para revisão. Confira no app da InfinitePay.`).catch(() => false);
     return { http: 200, resultado: 'estorno marcado para revisão' };
   }
   if (evento === 'canceled') {
     // cancelamento de um link que ainda não foi pago vale como cancelado (sem pagamento a proteger); sobre um `pago` só marca para revisão
     const antesDoPagamento = link.status === 'intencao' || link.status === 'criado' || link.status === 'cancelado';
+    // o mesmo cancelamento reentregue não avisa de novo (link já cancelado, ou já marcado para revisão)
+    if (link.status === 'cancelado' || (!antesDoPagamento && temMarca(link.revisao, 'cancelamento avisado'))) {
+      await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento });
+      return { http: 200, resultado: 'cancelamento já registrado' };
+    }
     // link que nunca foi pago e foi cancelado: não há dinheiro a conferir, então NÃO ganha marca de revisão (o status `cancelado` já diz que veio de aviso). Sobre um `pago`, marca.
-    const r = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, antesDoPagamento ? { evento, paraStatus: 'cancelado', deStatus: ['intencao', 'criado'] } : { evento, revisao: marca('cancelamento') });
+    const r = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, antesDoPagamento ? { evento, paraStatus: 'cancelado', deStatus: ['intencao', 'criado'] } : { evento, revisao: marca('cancelamento avisado') });
     const texto = antesDoPagamento
       ? r.mudou
         ? 'Marquei como cancelado (ainda não estava pago).'
@@ -179,7 +189,12 @@ export async function processarAviso(deps: DepsDoAviso, p: { unidade: string; or
   };
   // o pagamento primeiro (settled sem paid anterior também confirma e marca); a liquidação só se acrescenta ao que já está pago
   // `cancelado` entra: um cancelamento avisado NÃO foi confirmado pela API e o pagamento foi (valor conferido), então o pagamento vence
-  const pago = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, { evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado', 'cancelado'], pagamento });
+  // o pagamento que vence um cancelamento avisado deixa uma MARCA de revisão (o cancelamento pode ter sido real e o dinheiro devolvido: o João confere no app)
+  const aposCancelamento = link.status === 'cancelado';
+  const pago = await deps.armazem.aplicarEvento(p.unidade, p.orderNsu, {
+    evento: 'paid', paraStatus: 'pago', deStatus: ['intencao', 'criado', 'cancelado'], pagamento,
+    ...(aposCancelamento ? { revisao: marca('pagamento confirmado depois de cancelamento avisado') } : {}),
+  });
   if (pago.mudou && link.status === 'cancelado') {
     void deps.alertar(`⚠️ InfinitePay CONFIRMOU o pagamento de ${quem} depois de um cancelamento avisado e NÃO confirmado. Marquei o link como pago (o pagamento foi confirmado e o valor conferido). Confira no app.`).catch(() => false);
   }
