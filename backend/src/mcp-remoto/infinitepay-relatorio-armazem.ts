@@ -1,0 +1,180 @@
+/** As tabelas `infinitepay_importacoes`, `infinitepay_movimentos` e `infinitepay_vendas` como o conector as usa, e a versão em memória para os testes. */
+import { ErroDeEntrada } from '../franquia-mcp/travas.js';
+import type { ArmazemDeRelatorios, ImportacaoGuardada, MovimentoGuardado, NovaImportacao, TipoDeRelatorio, VendaGuardada } from './infinitepay-relatorio.js';
+
+const dia = (d: Date) => d.toISOString().slice(0, 10);
+const dia3 = (isoUtc: string) => new Date(Date.parse(isoUtc) - 3 * 3_600_000).toISOString().slice(0, 10);
+const comoData = (d: string) => new Date(`${d}T00:00:00.000Z`);
+export const FALHA_DO_BANCO_RELATORIO = 'não consegui gravar nem ler os relatórios no banco; nada foi gravado, tente em instantes';
+
+interface LinhaImportacao {
+  id: string; unitSlug: string; contaHash: string | null; contaFinal: string | null; relatorio: string; formato: string; leiaute: string | null; periodoInicio: Date | null; periodoFim: Date | null;
+  linhasLidas: number; linhasNovas: number; importadoPor: string; createdAt: Date;
+}
+interface LinhaMovimento { tipo: string; data: Date; dataPrevista: Date | null; valorCentavos: number; descricao: string }
+interface LinhaVenda { quando: Date; valorBrutoCentavos: number; valorLiquidoCentavos: number | null; forma: string; parcelas: number | null; bandeira: string | null; status: string | null }
+
+/** O pedaço do cliente do Prisma que o armazém usa (facilita o teste e a troca por transação). */
+export interface BancoDeRelatorios {
+  $executeRaw(consulta: TemplateStringsArray, ...valores: unknown[]): Promise<number>;
+  $transaction<T>(fn: (tx: BancoDeRelatorios) => Promise<T>, opcoes?: { timeout?: number; maxWait?: number }): Promise<T>;
+  infinitepayImportacao: {
+    findUnique(a: { where: { unitSlug_sha256: { unitSlug: string; sha256: string } }; select: { id: true } }): Promise<{ id: string } | null>;
+    findMany(a: { where: Record<string, unknown>; orderBy: { createdAt: 'asc' } }): Promise<LinhaImportacao[]>;
+    create(a: { data: Record<string, unknown>; select: { id: true } }): Promise<{ id: string }>;
+    update(a: { where: { id: string }; data: { linhasNovas: number } }): Promise<unknown>;
+  };
+  infinitepayMovimento: {
+    createMany(a: { data: Array<Record<string, unknown>>; skipDuplicates: true }): Promise<{ count: number }>;
+    findMany(a: { where: Record<string, unknown>; orderBy: Array<Record<string, 'asc' | 'desc'>>; take: number }): Promise<LinhaMovimento[]>;
+  };
+  infinitepayVenda: {
+    createMany(a: { data: Array<Record<string, unknown>>; skipDuplicates: true }): Promise<{ count: number }>;
+    findMany(a: { where: Record<string, unknown>; orderBy: { quando: 'asc' }; take: number }): Promise<LinhaVenda[]>;
+  };
+}
+
+const faixa = (de?: string, ate?: string) => ({ ...(de ? { gte: comoData(de) } : {}), ...(ate ? { lte: comoData(ate) } : {}) });
+
+export function armazemDeRelatoriosPrisma(db: BancoDeRelatorios): ArmazemDeRelatorios {
+  return {
+    async jaImportado(unidade, sha256) {
+      return Boolean(await db.infinitepayImportacao.findUnique({ where: { unitSlug_sha256: { unitSlug: unidade, sha256 } }, select: { id: true } }));
+    },
+    async unidadesComArquivo(sha256) {
+      const linhas = await db.infinitepayImportacao.findMany({ where: { sha256 }, orderBy: { createdAt: 'asc' } });
+      return [...new Set(linhas.map((l) => l.unitSlug))];
+    },
+    async unidadesComConta(contaHash) {
+      const linhas = await db.infinitepayImportacao.findMany({ where: { contaHash }, orderBy: { createdAt: 'asc' } });
+      return [...new Set(linhas.map((l) => l.unitSlug))];
+    },
+    async gravar(i: NovaImportacao) {
+      try {
+        return await db.$transaction(
+          async (tx) => {
+            // duas importações da MESMA conta em unidades diferentes ao mesmo tempo passariam as duas pela checagem de antes: a trava por conta as põe em fila,
+            // e a segunda relê quem já tem a conta (a primeira já gravou ao soltar a trava) e recusa
+            if (i.contaHash) {
+              await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`infinitepay-conta:${i.contaHash}`}::text, 0))`;
+              const donas = (await tx.infinitepayImportacao.findMany({ where: { contaHash: i.contaHash }, orderBy: { createdAt: 'asc' } })).filter((l) => l.unitSlug !== i.unidade);
+              if (donas.length > 0) throw new ErroDeEntrada(`esta conta acabou de ser importada em ${[...new Set(donas.map((l) => l.unitSlug))].join(', ')} (importação ao mesmo tempo): a mesma conta em duas unidades contaria o dinheiro duas vezes. Nada foi gravado.`);
+            }
+            const imp = await tx.infinitepayImportacao.create({
+              data: {
+                unitSlug: i.unidade, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, sha256: i.sha256, bytes: i.bytes,
+                periodoInicio: i.periodoInicio ? comoData(i.periodoInicio) : null, periodoFim: i.periodoFim ? comoData(i.periodoFim) : null,
+                contaHash: i.contaHash ?? null, contaFinal: i.contaFinal ?? null,
+                linhasLidas: i.movimentos.length + i.vendas.length, linhasNovas: 0, importadoPor: i.importadoPor,
+              },
+              select: { id: true },
+            });
+            let novas = 0;
+            if (i.movimentos.length) {
+              novas += (
+                await tx.infinitepayMovimento.createMany({
+                  data: i.movimentos.map((m) => ({
+                    unitSlug: i.unidade, tipo: m.tipo, data: comoData(m.data), dataPrevista: m.dataPrevista ? comoData(m.dataPrevista) : null,
+                    valorCentavos: m.valorCentavos, descricao: m.descricao, chave: m.chave, importacaoId: imp.id,
+                  })),
+                  skipDuplicates: true,
+                })
+              ).count;
+            }
+            if (i.vendas.length) {
+              novas += (
+                await tx.infinitepayVenda.createMany({
+                  data: i.vendas.map((v) => ({
+                    unitSlug: i.unidade, quando: new Date(v.quando), valorBrutoCentavos: v.valorBrutoCentavos, valorLiquidoCentavos: v.valorLiquidoCentavos ?? null,
+                    forma: v.forma, parcelas: v.parcelas ?? null, bandeira: v.bandeira ?? null, status: v.status ?? null, chave: v.chave, importacaoId: imp.id,
+                  })),
+                  skipDuplicates: true,
+                })
+              ).count;
+            }
+            await tx.infinitepayImportacao.update({ where: { id: imp.id }, data: { linhasNovas: novas } });
+            return { id: imp.id, novas };
+          },
+          { timeout: 60_000, maxWait: 15_000 },
+        );
+      } catch (e) {
+        if (e instanceof ErroDeEntrada) throw e;
+        if (typeof e === 'object' && e !== null && (e as { code?: unknown }).code === 'P2002') throw new ErroDeEntrada('este arquivo já foi importado (ou está sendo importado agora por outra chamada); nada mudou');
+        throw new ErroDeEntrada(FALHA_DO_BANCO_RELATORIO);
+      }
+    },
+    async movimentos(f) {
+      const linhas = await db.infinitepayMovimento.findMany({
+        where: { unitSlug: f.unidade, ...(f.tipo ? { tipo: f.tipo } : {}), ...(f.de || f.ate ? { data: faixa(f.de, f.ate) } : {}) },
+        orderBy: [{ data: 'desc' }, { valorCentavos: 'desc' }],
+        take: f.limite,
+      });
+      return linhas.map((l): MovimentoGuardado => ({ tipo: l.tipo as 'extrato' | 'recebivel', data: dia(l.data), dataPrevista: l.dataPrevista ? dia(l.dataPrevista) : null, valorCentavos: l.valorCentavos, descricao: l.descricao }));
+    },
+    async vendas(f) {
+      const linhas = await db.infinitepayVenda.findMany({
+        where: { unitSlug: f.unidade, ...(f.de || f.ate ? { quando: { ...(f.de ? { gte: new Date(`${f.de}T00:00:00-03:00`) } : {}), ...(f.ate ? { lte: new Date(`${f.ate}T23:59:59.999-03:00`) } : {}) } } : {}) },
+        orderBy: { quando: 'asc' },
+        take: f.limite,
+      });
+      return linhas.map((l): VendaGuardada => ({ quando: l.quando.toISOString(), valorBrutoCentavos: l.valorBrutoCentavos, valorLiquidoCentavos: l.valorLiquidoCentavos, forma: l.forma, parcelas: l.parcelas, bandeira: l.bandeira, status: l.status }));
+    },
+    async importacoes(unidade, relatorio?: TipoDeRelatorio) {
+      const linhas = await db.infinitepayImportacao.findMany({ where: { unitSlug: unidade, ...(relatorio ? { relatorio } : {}) }, orderBy: { createdAt: 'asc' } });
+      return linhas.map((l): ImportacaoGuardada => ({
+        id: l.id, relatorio: l.relatorio, formato: l.formato, leiaute: l.leiaute, periodoInicio: l.periodoInicio ? dia(l.periodoInicio) : null, periodoFim: l.periodoFim ? dia(l.periodoFim) : null,
+        linhasLidas: l.linhasLidas, linhasNovas: l.linhasNovas, importadoPor: l.importadoPor, importadoEm: l.createdAt.toISOString(), contaHash: l.contaHash, contaFinal: l.contaFinal,
+      }));
+    },
+  };
+}
+
+/** Em memória, com a mesma regra de unicidade do banco (o que repete não entra e não conta como novo). Só para testes. */
+export function relatoriosEmMemoria(): ArmazemDeRelatorios & { importacoesGravadas: ImportacaoGuardada[]; shas: Set<string> } {
+  const importacoesGravadas: ImportacaoGuardada[] = [];
+  const unidadeDa = new Map<string, string>();
+  const shas = new Set<string>();
+  const movimentos: Array<MovimentoGuardado & { unidade: string; chave: string }> = [];
+  const vendas: Array<VendaGuardada & { unidade: string; chave: string }> = [];
+  let n = 0;
+  return {
+    importacoesGravadas,
+    shas,
+    async jaImportado(u, sha) {
+      return shas.has(`${u}|${sha}`);
+    },
+    async unidadesComArquivo(sha) {
+      return [...shas].filter((k) => k.endsWith(`|${sha}`)).map((k) => k.slice(0, k.length - sha.length - 1));
+    },
+    async unidadesComConta(hash) {
+      return [...new Set(importacoesGravadas.filter((i) => i.contaHash === hash).map((i) => unidadeDa.get(i.id)!))];
+    },
+    async gravar(i) {
+      shas.add(`${i.unidade}|${i.sha256}`);
+      let novas = 0;
+      for (const m of i.movimentos) {
+        if (movimentos.some((x) => x.unidade === i.unidade && x.tipo === m.tipo && x.chave === m.chave)) continue;
+        movimentos.push({ unidade: i.unidade, chave: m.chave, tipo: m.tipo, data: m.data, dataPrevista: m.dataPrevista ?? null, valorCentavos: m.valorCentavos, descricao: m.descricao });
+        novas += 1;
+      }
+      for (const v of i.vendas) {
+        if (vendas.some((x) => x.unidade === i.unidade && x.chave === v.chave)) continue;
+        vendas.push({ unidade: i.unidade, chave: v.chave, quando: v.quando, valorBrutoCentavos: v.valorBrutoCentavos, valorLiquidoCentavos: v.valorLiquidoCentavos ?? null, forma: v.forma, parcelas: v.parcelas ?? null, bandeira: v.bandeira ?? null, status: v.status ?? null });
+        novas += 1;
+      }
+      const id = `imp-${++n}`;
+      unidadeDa.set(id, i.unidade);
+      importacoesGravadas.push({ id, relatorio: i.relatorio, formato: i.formato, leiaute: i.leiaute, periodoInicio: i.periodoInicio ?? null, periodoFim: i.periodoFim ?? null, linhasLidas: i.movimentos.length + i.vendas.length, linhasNovas: novas, importadoPor: i.importadoPor, importadoEm: '2026-11-26T12:00:00.000Z', contaHash: i.contaHash ?? null, contaFinal: i.contaFinal ?? null });
+      return { id, novas };
+    },
+    async movimentos(f) {
+      return movimentos.filter((m) => m.unidade === f.unidade && (!f.tipo || m.tipo === f.tipo) && (!f.de || m.data >= f.de) && (!f.ate || m.data <= f.ate)).slice(0, f.limite);
+    },
+    async vendas(f) {
+      return vendas.filter((v) => v.unidade === f.unidade && (!f.de || dia3(v.quando) >= f.de) && (!f.ate || dia3(v.quando) <= f.ate)).slice(0, f.limite);
+    },
+    async importacoes(u, relatorio) {
+      return importacoesGravadas.filter((i) => unidadeDa.get(i.id) === u && (!relatorio || i.relatorio === relatorio)).map((i) => ({ ...i }));
+    },
+  };
+}

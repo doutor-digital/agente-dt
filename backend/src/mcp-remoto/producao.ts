@@ -60,6 +60,9 @@ import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from 
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
+import { armazemDeRelatoriosPrisma } from './infinitepay-relatorio-armazem.js';
+import { segredoDaContaDoAmbiente } from './infinitepay-relatorio.js';
+import { registrarImportacaoRelatoriosSePermitido, registrarLeituraRelatorios } from './infinitepay-relatorio-ferramentas.js';
 import { contaTramitacaoDaChave, criarContextoTramitacao, registrarFerramentasTramitacao, type ContaTramitacao } from './tramitacao.js';
 import { contasComChave } from '../lib/integracoes/chaves.js';
 import { registrarAdminSistemas } from './sistemas-admin.js';
@@ -643,7 +646,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   // O segredo do endereço do webhook vem SÓ de INFINITEPAY_WEBHOOK_SEGREDO (32+ caracteres), sem derivar do segredo do console: o endereço de cada link vale por até 90 dias e girar
   // SESSION_JWT_SECRET faria os avisos dos links vivos darem 404. Sem o segredo: nenhum link é criado e a rota nem é montada (ver ligar-infinitepay-acailandia.sh, que o gera uma vez).
   const segredoDoAviso = segredoDoAvisoDoAmbiente();
-  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook não é montado');
+  if (!segredoDoAviso) logger.warn('mcp-remoto: INFINITEPAY_WEBHOOK_SEGREDO ausente ou com menos de 32 caracteres — criar link da InfinitePay fica desligado e o webhook responde 503');
   const escritaInfinitepay = criarEscritaInfinitepay({
     armazem: armazemDeEscritaPrisma(prisma as never),
     alertar: (texto) => enviarTelegram(texto),
@@ -653,7 +656,13 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
     },
   });
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
-  if (segredoDoAviso) montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  // a rota é montada SEMPRE: sem o segredo ela responde 503 e avisa o João (um 404 faria a InfinitePay desistir de avisar o pagamento de links vivos)
+  montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), log: logger });
+  // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
+  const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);
+  // o hash da conta do extrato é um HMAC com este segredo (INFINITEPAY_CONTA_SEGREDO, 32+ caracteres, SÓ do ambiente: sem ele a importação recusa)
+  const segredoDaContaInfinitepay = segredoDaContaDoAmbiente();
+  if (!segredoDaContaInfinitepay) logger.warn('mcp-remoto: INFINITEPAY_CONTA_SEGREDO ausente ou com menos de 32 caracteres — a importação de relatórios da InfinitePay fica desligada');
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());
@@ -731,6 +740,9 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       registrarFerramentasInfinitepay(server, infinitepay, auditar);
       // criar link da InfinitePay: só quem está na lista de escrita E só se alguma unidade está em INFINITEPAY_ESCRITA_UNIDADES (vazio = a ferramenta nem existe)
       registrarEscritaInfinitepaySePermitido(server, infinitepay, escritaInfinitepay, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
+      // a descrição do lançamento pode ter o nome de quem pagou: só quem escreve no conector a vê (os números saem para todos)
+      registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar, { descricoes: escritores.has(quem.userId) });
+      registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay, segredoDaConta: segredoDaContaInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.

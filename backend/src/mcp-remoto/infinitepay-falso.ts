@@ -76,8 +76,13 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
         mudou = true;
       }
       l.ultimoEvento = e.evento;
-      if (e.revisao) l.revisao = acumularRevisao(l.revisao, e.revisao);
-      return { mudou, atual: { ...l } };
+      let marcou = false;
+      if (e.revisao) {
+        const novo = acumularRevisao(l.revisao, e.revisao);
+        marcou = novo !== l.revisao;
+        l.revisao = novo;
+      }
+      return { mudou, marcou, atual: { ...l } };
     },
   };
 }

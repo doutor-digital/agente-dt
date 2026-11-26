@@ -82,15 +82,17 @@ test('Postgres de verdade: a migration aplica; duas instâncias disputando o tet
     assert.equal(e3.mudou, true);
     assert.ok(e3.atual?.liquidadoEm);
     // estorno avisado NÃO desfaz o pago: marca revisão (coluna nova) e o status segue
-    const e4 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'refunded', revisao: 'estorno avisado, NÃO confirmado pela API' });
+    const e4 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'refunded', revisao: '[estorno avisado] estorno avisado, NÃO confirmado pela API' });
     assert.equal(e4.atual?.status, 'pago');
-    assert.equal(e4.atual?.revisao, 'estorno avisado, NÃO confirmado pela API');
+    assert.equal(e4.atual?.revisao, '[estorno avisado] estorno avisado, NÃO confirmado pela API');
+    assert.equal(e4.marcou, true);
     assert.equal(e4.atual?.ultimoEvento, 'refunded');
     // as marcas ACUMULAM no banco (compara e troca): cancelamento depois do estorno não apaga o estorno, e a mesma marca de novo não duplica
-    const e5 = await b.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: 'cancelamento avisado em x, NÃO confirmado pela API' });
-    assert.match(e5.atual?.revisao ?? '', /^estorno avisado.* \| cancelamento avisado/);
-    const e6 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: 'cancelamento avisado em y, NÃO confirmado pela API' });
+    const e5 = await b.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: '[cancelamento avisado] cancelamento avisado em x, NÃO confirmado pela API' });
+    assert.match(e5.atual?.revisao ?? '', /^\[estorno avisado\].* \| \[cancelamento avisado\]/);
+    const e6 = await a.armazem.aplicarEvento(UNI, 'dup-1', { evento: 'canceled', revisao: '[cancelamento avisado] cancelamento avisado em y, NÃO confirmado pela API' });
     assert.equal(e6.atual?.revisao, e5.atual?.revisao, 'a mesma marca não duplica');
+    assert.equal(e6.marcou, false, 'e quem não acrescentou nada não é quem avisa');
 
     // a leitura do conector lê a tabela de verdade
     const lista = await infinitepayLinks(a.ctx, {});

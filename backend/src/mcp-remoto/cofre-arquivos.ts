@@ -26,7 +26,7 @@ import { chmod, mkdir, open, readdir, readFile, stat, unlink, type FileHandle } 
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 
-export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'jpg' | 'png' | 'txt' | 'mp4' | 'mov' | 'm4a' | 'mp3' | 'wav';
+export type TipoDeArquivo = 'pdf' | 'doc' | 'docx' | 'xlsx' | 'jpg' | 'png' | 'txt' | 'csv' | 'ofx' | 'mp4' | 'mov' | 'm4a' | 'mp3' | 'wav';
 
 export const TIPOS: Record<TipoDeArquivo, { ext: string; mime: string; legivel: string }> = {
   pdf: { ext: 'pdf', mime: 'application/pdf', legivel: 'PDF' },
@@ -36,6 +36,8 @@ export const TIPOS: Record<TipoDeArquivo, { ext: string; mime: string; legivel: 
   jpg: { ext: 'jpg', mime: 'image/jpeg', legivel: 'imagem JPEG' },
   png: { ext: 'png', mime: 'image/png', legivel: 'imagem PNG' },
   txt: { ext: 'txt', mime: 'text/plain; charset=utf-8', legivel: 'texto (.txt)' },
+  csv: { ext: 'csv', mime: 'text/plain; charset=utf-8', legivel: 'planilha CSV (.csv)' },
+  ofx: { ext: 'ofx', mime: 'text/plain; charset=utf-8', legivel: 'extrato OFX (.ofx)' },
   mp4: { ext: 'mp4', mime: 'video/mp4', legivel: 'vídeo MP4' },
   mov: { ext: 'mov', mime: 'video/quicktime', legivel: 'vídeo MOV' },
   m4a: { ext: 'm4a', mime: 'audio/mp4', legivel: 'áudio M4A' },
@@ -51,12 +53,14 @@ const FAMILIA_ISO: readonly TipoDeArquivo[] = ['mp4', 'mov', 'm4a'];
 
 /** extensão que a pessoa pode ter escrito → o tipo que o conteúdo tem de ter */
 const TIPO_DA_EXTENSAO: Record<string, TipoDeArquivo> = {
-  pdf: 'pdf', doc: 'doc', docx: 'docx', xlsx: 'xlsx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt',
+  pdf: 'pdf', doc: 'doc', docx: 'docx', xlsx: 'xlsx', jpg: 'jpg', jpeg: 'jpg', png: 'png', txt: 'txt', csv: 'csv', ofx: 'ofx',
   mp4: 'mp4', mov: 'mov', m4a: 'm4a', mp3: 'mp3', wav: 'wav',
 };
 const TODAS_AS_EXTENSOES = Object.keys(TIPO_DA_EXTENSAO);
-/** o que o envio COMUM aceita (a planilha .xlsx e vídeo/áudio só entram quando o pedido os lista em `tipos`) */
-export const EXTENSOES_ACEITAS = TODAS_AS_EXTENSOES.filter((e) => e !== 'xlsx' && !ehMidia(TIPO_DA_EXTENSAO[e]!));
+/** tipos que só entram quando o pedido os lista em `tipos`: o envio comum (ClickSign etc.) não os aceita */
+const SO_POR_PEDIDO: readonly TipoDeArquivo[] = ['xlsx', 'csv', 'ofx'];
+/** o que o envio COMUM aceita (a planilha .xlsx, CSV, OFX e vídeo/áudio só entram quando o pedido os lista em `tipos`) */
+export const EXTENSOES_ACEITAS = TODAS_AS_EXTENSOES.filter((e) => !SO_POR_PEDIDO.includes(TIPO_DA_EXTENSAO[e]!) && !ehMidia(TIPO_DA_EXTENSAO[e]!));
 
 export const LIMITES_PADRAO = {
   /** tamanho máximo do arquivo */
@@ -126,7 +130,7 @@ const comeca = (b: Buffer, ...bytes: number[]) => b.length >= bytes.length && by
  *    nem como script (`#!`). Texto só entra com a extensão .txt (ou sem extensão): ver `validarArquivo`. O download sai como
  *    text/plain com `nosniff`.
  */
-export function detectarTipo(b: Buffer): TipoDeArquivo | null {
+export function detectarTipo(b: Buffer, permitirOfx = true): TipoDeArquivo | null {
   if (comeca(b, 0x25, 0x50, 0x44, 0x46, 0x2d)) return 'pdf';
   if (comeca(b, 0xff, 0xd8, 0xff)) return 'jpg';
   if (comeca(b, 0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)) return 'png';
@@ -143,6 +147,7 @@ export function detectarTipo(b: Buffer): TipoDeArquivo | null {
   }
   const midia = detectarMidia(b);
   if (midia) return midia;
+  if (permitirOfx && ehOfx(b)) return 'ofx';
   if (b.length > 0 && ehTexto(b) && !comecaComoMarcacaoOuScript(b)) return 'txt';
   return null;
 }
@@ -167,6 +172,21 @@ function detectarMidia(b: Buffer): TipoDeArquivo | null {
   if (comeca(b, 0x49, 0x44, 0x33) && b.length >= 10 && b[3]! >= 2 && b[3]! <= 4 && b[4]! < 0xff && [6, 7, 8, 9].every((i) => b[i]! < 0x80)) return 'mp3';
   if (b.length >= 4 && b[0] === 0xff && (b[1]! & 0xe0) === 0xe0 && (b[1]! & 0x18) !== 0x08 && (b[1]! & 0x06) !== 0) return 'mp3';
   return null;
+}
+
+/**
+ * Extrato OFX (o relatório que a InfinitePay e os bancos exportam): texto puro que começa por `OFXHEADER:` (v1, SGML) ou por `<?xml` e tem `<OFX>` logo
+ * no começo (v2). Só passa se for texto sem byte de controle, não tiver DOCTYPE/ENTITY (nada de entidade externa) nem `<script`. Nada o interpreta como
+ * XML ou HTML: o importador só lê as marcas que conhece, e o arquivo nunca é servido de volta (o envio tem destino, e download de envio com destino é recusado).
+ */
+function ehOfx(b: Buffer): boolean {
+  if (b.length === 0 || b.length > 20 * 1024 * 1024 || !ehTexto(b)) return false;
+  const cabeca = b.toString('latin1', 0, Math.min(b.length, 4096)).replace(/^\u00ef\u00bb\u00bf/, '').trimStart();
+  const v1 = /^OFXHEADER:\s*\d+/.test(cabeca) && /<OFX>/i.test(cabeca);
+  const v2 = /^<\?xml[^>]*\?>/.test(cabeca) && /<OFX>/i.test(cabeca);
+  if (!v1 && !v2) return false;
+  const tudo = b.toString('latin1');
+  return !/<!DOCTYPE|<!ENTITY|<script/i.test(tudo);
 }
 
 /** O primeiro conteúdo de verdade (depois do BOM UTF-8 e de espaços/quebras de linha, sem limite de quantidade) é `<` ou `#!`? */
@@ -207,7 +227,7 @@ export function nomeSeguro(bruto: string | undefined, tipo: TipoDeArquivo): stri
 }
 
 /** Confere nome + conteúdo. Devolve o tipo e o nome a guardar, ou lança a razão da recusa (em português, para a pessoa). */
-export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffer, tamanhoMax: number): { tipo: TipoDeArquivo; nome: string } {
+export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffer, tamanhoMax: number, permitirOfx = true): { tipo: TipoDeArquivo; nome: string } {
   if (conteudo.length === 0) throw new ErroDeCofre('tipo', 'O arquivo está vazio.', 400);
   if (conteudo.length > tamanhoMax) throw new ErroDeCofre('tamanho', `O arquivo passa do limite de ${Math.floor(tamanhoMax / 1024 / 1024)} MB.`, 413);
   const ultimo = (nomeOriginal ?? '').split(/[\\/]/).pop() ?? '';
@@ -216,7 +236,9 @@ export function validarArquivo(nomeOriginal: string | undefined, conteudo: Buffe
   const depois = ponto > 0 ? ultimo.slice(ponto + 1).toLowerCase() : '';
   const ext = /^[a-z][a-z0-9]{1,4}$/.test(depois) ? depois : '';
   const extConhecida = Object.hasOwn(TIPO_DA_EXTENSAO, ext);
-  const tipo = detectarTipo(conteudo);
+  let tipo = detectarTipo(conteudo, permitirOfx);
+  // CSV é texto: o conteúdo não o distingue de um .txt, então só a extensão .csv (e texto de verdade por baixo) o faz CSV
+  if (tipo === 'txt' && ext === 'csv') tipo = 'csv';
   if (!tipo) {
     if (ext && !extConhecida) {
       throw new ErroDeCofre('tipo', `Arquivo .${ext.slice(0, 10)} não é aceito. Aceitamos: ${EXTENSOES_ACEITAS.map((e) => `.${e}`).join(' ')}.`, 415);
@@ -455,12 +477,13 @@ export class CofreDeArquivos {
     if (!e || e.estado !== 'enviando') throw new ErroDeCofre('estado', 'Este envio não está mais aberto.', 409);
     let caminho: string | undefined;
     try {
-      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, e.tamanhoMax);
+      // o OFX só é reconhecido como tal no envio que o pede: nos demais o arquivo é tratado como sempre foi (texto .txt aceito, XML recusado)
+      const { tipo, nome } = validarArquivo(nomeOriginal, conteudo, e.tamanhoMax, Boolean(e.tipos?.includes('ofx')));
       if (e.tipos && !e.tipos.includes(tipo)) {
         throw new ErroDeCofre('tipo', `Para este envio só aceitamos ${e.tipos.map((x) => TIPOS[x].legivel).join(', ')}. Este arquivo é ${TIPOS[tipo].legivel}.`, 415);
       }
-      // planilha (xlsx) só entra quando o pedido a lista em `tipos`; o envio comum não a aceita
-      if (!e.tipos && tipo === 'xlsx') throw new ErroDeCofre('tipo', 'Arquivo Excel (.xlsx) não é aceito neste envio. Aceitamos: PDF, Word, JPG, PNG ou texto.', 415);
+      // planilha (xlsx), CSV e extrato OFX só entram quando o pedido os lista em `tipos`; o envio comum não os aceita
+      if (!e.tipos && SO_POR_PEDIDO.includes(tipo)) throw new ErroDeCofre('tipo', `Arquivo ${TIPOS[tipo].legivel} não é aceito neste envio. Aceitamos: PDF, Word, JPG, PNG ou texto.`, 415);
       // vídeo/áudio também: só no envio que o pede (arquivo_pedir_upload com midia=true)
       if (!e.tipos && ehMidia(tipo)) throw new ErroDeCofre('tipo', `Vídeo e áudio não são aceitos neste envio (este é ${TIPOS[tipo].legivel}). Se é para transcrever, peça o link de novo com arquivo_pedir_upload usando midia=true.`, 415);
       const sha256Hex = createHash('sha256').update(conteudo).digest('hex');

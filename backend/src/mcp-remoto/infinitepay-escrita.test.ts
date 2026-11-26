@@ -280,6 +280,8 @@ test('CPF e CNPJ com pontuação variada continuam recusados (a regra antiga de 
     await assert.rejects(() => criarLink(m.ctx, m.esc, QUEM, { valor: 10, descricao: d }), /não pode ter CPF/, d);
   }
   assert.equal(m.pedidos.length, 0);
+  // listas de números pequenos (grupos de até 2 dígitos) não são documento
+  for (const d of ['Sessões 01 02 03 04 05 06', 'Sessões 1, 2, 3, 4, 5, 6', 'Sessões 01, 02, 03, 04, 05, 06 e 07', 'Sessões 01 02 03 04 05 06 07 08 09 10 11 12']) assert.equal(temDadoPessoal(d), false, d);
   for (const d of ['Avaliação 26/11/2026 - 150.00', 'Avaliação 26-11-2026 - R$ 1.500,00', 'Consulta 26/11/26 - 150,00', 'Pacote R$ 5.000,00', 'Pacote 4999.99', 'Pacote 12.345,67']) assert.equal(temDadoPessoal(d), false, d);
   // um CPF com cara de valor ("529.982.247,25" e "529982247.25") NÃO é valor: valor em dinheiro tem no máximo 7 dígitos (o teto é R$ 5.000)
   for (const d of ['CPF 529.982.247,25', 'CPF 529982247.25', 'cpf 529.982.247.25']) assert.equal(temDadoPessoal(d), true, d);

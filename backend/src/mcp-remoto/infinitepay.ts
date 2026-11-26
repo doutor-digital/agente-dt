@@ -102,6 +102,24 @@ export function criarContextoInfinitepay(contas: Map<string, ContaInfinitepay>, 
   return { contas, links, agora: op.agora ?? Date.now };
 }
 
+/**
+ * As marcas de REVISÃO se ACUMULAM, nunca se sobrescrevem: estorno avisado e depois cancelamento avisado ficam os dois (o estorno em revisão continua descontado do pago).
+ * Cada tipo de marca entra uma vez só (um aviso repetido não duplica). O texto de cada marca começa pelo seu tipo.
+ */
+export const MARCA = { estorno: '[estorno avisado]', cancelamento: '[cancelamento avisado]', pagamentoDepois: '[pagamento depois de cancelamento]' } as const;
+const SEPARADOR_DE_MARCAS = ' | ';
+/** Cada marca começa pela sua ETIQUETA entre colchetes; a comparação é pela etiqueta EXATA no começo de cada marca, nunca por pedaço de texto (a marca "pagamento depois de cancelamento" não engole um cancelamento novo). */
+const etiquetaDe = (marca: string): string | undefined => /^\[[^\]]+\]/.exec(marca)?.[0];
+export function temMarca(revisao: string | null | undefined, etiqueta: (typeof MARCA)[keyof typeof MARCA]): boolean {
+  return Boolean(revisao?.split(SEPARADOR_DE_MARCAS).some((m) => etiquetaDe(m) === etiqueta));
+}
+export function acumularRevisao(atual: string | null | undefined, nova: string): string {
+  if (!atual) return nova;
+  const e = etiquetaDe(nova);
+  if (e && atual.split(SEPARADOR_DE_MARCAS).some((m) => etiquetaDe(m) === e)) return atual;
+  return `${atual}${SEPARADOR_DE_MARCAS}${nova.replaceAll(SEPARADOR_DE_MARCAS, ' / ')}`;
+}
+
 export const FUSO = 'America/Sao_Paulo';
 const MAX_LINKS = 200;
 const MAX_LEITURA = 1000;
@@ -228,7 +246,7 @@ export async function infinitepayLinks(
   for (const l of todos) {
     // nos pagos e estornados o valor do status é o PAGO (pode ser maior que o do link, com taxa repassada); nos demais, o do link
     const centavos = (l.status === 'pago' || l.status === 'estornado') && l.valorPagoCentavos !== null ? l.valorPagoCentavos : l.valorCentavos;
-    const estornoEmRevisao = l.status === 'pago' && Boolean(l.revisao?.includes('estorno avisado'));
+    const estornoEmRevisao = l.status === 'pago' && temMarca(l.revisao, MARCA.estorno);
     const g = (porStatus[l.status] ??= { quantidade: 0, valor: 0 });
     g.quantidade += 1;
     // o valor do status `pago` é o MESMO de resumo.valorPago: o pago com estorno em revisão conta na quantidade, mas o dinheiro dele está em valorEstornadoNaoConfirmado
