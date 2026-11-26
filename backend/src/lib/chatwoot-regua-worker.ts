@@ -530,8 +530,10 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
       for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);
-      const { disparos, perdidas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade, ajustes.regua);
+      const { disparos, perdidas, seguradas } = decidirRegua(c, { vistos, feitos: feitosDaConversa }, agora, unidade, ajustes.regua);
       for (const r of perdidas) resumo.perdidas[r] = (resumo.perdidas[r] ?? 0) + 1;
+      // retomada de lead que não saiu porque a conversa tem consulta de pé ou avaliou há pouco: fica no log (quem pôs a etiqueta pergunta por que não saiu)
+      if (seguradas) logger.debug({ caixa, conversa: c.id, regras: seguradas }, `${ID_REGUA}: retomada de lead segurada — a conversa tem consulta de pé ou avaliou há pouco`);
       for (const d of disparos) {
         // robô desligado na tela «Robôs»: nem envia, nem deixa nota, nem registra (se religarem, ainda dentro do prazo, sai)
         if (ajustes.desligados.has(d.regra)) {
