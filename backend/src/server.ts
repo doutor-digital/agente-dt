@@ -88,6 +88,7 @@ import { startCrmTarefasWorker, stopCrmTarefasWorker } from './lib/crm-tarefas-w
 import { startCrmDemoraWorker, stopCrmDemoraWorker } from './lib/crm-demora-worker.js';
 import { paginaTarefasHandler } from './controllers/tarefas.controller.js';
 import { startChatwootAgendaWorker } from './lib/chatwoot-agenda.js';
+import { retomarVigiasDoRegistro } from './lib/chatwoot-ia.js';
 import { startChatwootDuplicadosWorker, stopChatwootDuplicadosWorker } from './lib/chatwoot-duplicados.js';
 import { startChatwootCapiWorker, stopChatwootCapiWorker } from './lib/chatwoot-capi.js';
 
@@ -276,6 +277,8 @@ async function main(): Promise<void> {
   // Um líder só. Em 04/09/2026 dois containers rodaram lado a lado por 18 h e
   // cada follow-up saiu duas vezes (148 pacientes). Quem detém o lease no banco
   // roda os workers; o outro processo espera — inclusive na janela do deploy.
+  /** o timer da retomada da vigia «Sofia parou» (sai em `parar`: quem perdeu a liderança não rearma nada) */
+  let retomadaDaVigia: NodeJS.Timeout | null = null;
   await iniciarSupervisorDosWorkers({
     iniciar: () => {
       startWhatsappCostScheduler();
@@ -326,11 +329,16 @@ async function main(): Promise<void> {
       startCrmTarefasWorker();
       startCrmDemoraWorker();
       startChatwootAgendaWorker();
+      // o alerta «Sofia parou» guarda os pendentes em memória e um deploy os apaga: 90 s depois de subir, reconstrói do Registro (sofia_evento, 24 h)
+      retomadaDaVigia = setTimeout(() => void retomarVigiasDoRegistro(), 90_000);
+      retomadaDaVigia.unref();
       startChatwootDuplicadosWorker();
       startChatwootCapiWorker();
       iniciarVigiaDeQualidade();
     },
     parar: () => {
+      if (retomadaDaVigia) clearTimeout(retomadaDaVigia);
+      retomadaDaVigia = null;
       pararVigiaDeQualidade();
       stopParadosWorker();
       stopMotivoNoCabecalhoWorker();
