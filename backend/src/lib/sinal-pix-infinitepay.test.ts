@@ -10,7 +10,8 @@ import { contaInfinitepayDaConfig, criarContextoInfinitepay, type ContaInfinitep
 import { criarEscritaInfinitepay, descricaoLimpa } from '../mcp-remoto/infinitepay-escrita.js';
 import { armazemEmMemoria } from '../mcp-remoto/infinitepay-falso.js';
 import { urlDoAviso } from '../mcp-remoto/infinitepay-webhook.js';
-import { gerarSinalPix, type BancoDoSinal, type DepsDoSinal, type LinhaDoSinal } from './sinal-pix.js';
+import { acompanharRemarcacao, gerarSinalPix, type BancoDoSinal, type DepsDoSinal, type LinhaDoSinal } from './sinal-pix.js';
+import { motivoDaTarefaDoSinal } from '../agent/sinal-pix-tool.js';
 import { clienteDoCartao, criadorDeLinkDoSinal, depsDoSinalPorVia, descricaoDoSinal, nomeParaAPagina, telefoneParaAPagina } from './sinal-infinitepay.js';
 
 const UNI = 'doutor-hernia-acailandia';
@@ -255,11 +256,15 @@ test('só a recusa 400/422 repete sem nome e telefone: timeout, 5xx e chave recu
   }
 });
 
-test('o retry sem nome/telefone SÓ acontece quando nome ou telefone foram mesmo enviados (sem eles, a recusa 400 vai direto para o fallback)', async () => {
-  const m = montar({ cliente: {}, criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 400 (x)', 400); } });
+test('recusa 400 mesmo quando só a opção de endereço foi enviada (sem nome nem telefone): repete UMA vez sem ela e o sinal sai pela InfinitePay', async () => {
+  let n = 0;
+  const m = montar({ cliente: {}, criar: async (p) => { if (++n === 1) throw new ErroInfinitepay('a InfinitePay respondeu 400 (options inválidas)', 400); return { url: `https://checkout.infinitepay.io/x?lenc=${p.orderNsu}` }; } });
   const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
-  assert.equal(m.ip.pedidos.length, 1, 'uma tentativa só');
-  assert.equal(r.tipo === 'link' && r.copiaECola, true);
+  assert.equal(r.tipo === 'link' && r.via, 'infinitepay');
+  assert.equal(m.ip.pedidos.length, 2);
+  assert.equal(m.ip.pedidos[0]!.semEndereco, true);
+  assert.equal(m.ip.pedidos[1]!.semEndereco, undefined, 'a segunda vai sem a opção');
+  assert.equal(m.asaas.chamadas.length, 0);
 });
 
 // ── a criação SEM RESPOSTA CLARA: o link pode existir, então NÃO sai o Pix do Asaas (cobrança em dobro) ─────────────────────────────
@@ -426,4 +431,45 @@ test('nenhum CPF, telefone ou nome vai para o log do criador (só o pedido à In
   const todo = linhasDeLog.join('\n');
   assert.ok(linhasDeLog.length > 0, 'o teste enxergou o log');
   assert.doesNotMatch(todo, /Maria|99981234567|\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/);
+});
+
+test('outra geração do MESMO cartão ainda em andamento (comercial e Resgate dividem o cartão): desiste sem mandar a equipe «enviar o Pix» — o motivo diz que já existe um sinal em andamento', async () => {
+  const m = montar();
+  m.db.rows.push({ id: 'em-curso', unitId: 'u1', clinica: 'doutor-hernia-acailandia', leadId: '5829035', linkId: 'reserva:x', url: '', valorCentavos: 5000, venceEm: '2026-11-29', consultaEm: CONSULTA, status: 'criando', paymentId: null, criadoEm: new Date(AGORA.getTime() - 60_000), pagoEm: null, avisadoEm: null });
+  const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  assert.equal(r.tipo, 'falhou');
+  if (r.tipo !== 'falhou') return;
+  assert.equal(r.motivo, 'em-andamento');
+  assert.match(r.detalhe, /já existe um sinal em andamento/);
+  assert.equal(m.ip.pedidos.length, 0);
+  assert.equal(m.asaas.chamadas.length, 0);
+  assert.equal(motivoDaTarefaDoSinal(r.motivo), 'sinal_em_andamento');
+  assert.equal(motivoDaTarefaDoSinal('incerto'), 'sinal_incerto');
+  for (const mo of ['sem-chave', 'teto', 'asaas', 'baixa-desligada'] as const) assert.equal(motivoDaTarefaDoSinal(mo), 'sinal_pix_falhou');
+});
+
+test('a linha «incerto» não pôde ser gravada: tenta 3 vezes e a falha AVISA que a referência não ficou guardada (nunca em silêncio)', async () => {
+  const m = montar({ criar: async () => { throw new ErroInfinitepay('a InfinitePay respondeu 503', 503); } });
+  let tentativas = 0;
+  const original = m.db.banco.updateMany;
+  m.db.banco.updateMany = async (a) => {
+    if (a.data.status === 'incerto') {
+      tentativas++;
+      throw new Error('banco fora');
+    }
+    return original(a);
+  };
+  const r = await gerarSinalPix(UNIT, 5829035, CONSULTA, m.deps);
+  assert.equal(tentativas, 3);
+  assert.equal(r.tipo === 'falhou' && r.motivo, 'incerto');
+  assert.match(r.tipo === 'falhou' ? r.detalhe : '', /NÃO ficou guardada no agente/);
+  assert.equal(m.asaas.chamadas.length, 0, 'mesmo assim nada de Pix do Asaas');
+});
+
+test('remarcação: o sinal «incerto» também acompanha a data nova (a confirmação não sai com a data antiga)', async () => {
+  const m = montar();
+  m.db.rows.push({ id: 'i1', unitId: 'u1', clinica: 'doutor-hernia-acailandia', leadId: '5829035', linkId: 'sinal-x-1', url: '', valorCentavos: 5000, venceEm: '2026-11-29', consultaEm: '2026-11-30T09:00', status: 'incerto', paymentId: null, criadoEm: AGORA, pagoEm: null, avisadoEm: null, via: 'infinitepay' });
+  const n = await acompanharRemarcacao({ slug: UNI }, 5829035, '2026-12-02T10:00', m.db.banco, AGORA);
+  assert.equal(n, 1);
+  assert.equal(m.db.rows[0]!.consultaEm, '2026-12-02T10:00');
 });

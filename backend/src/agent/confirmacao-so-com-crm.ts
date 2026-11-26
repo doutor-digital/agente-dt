@@ -521,7 +521,7 @@ export async function abrirTarefaParaEquipe(args: {
   leadId: number;
   kommo: Pick<KommoClient, 'createTask' | 'getLead'>;
   recorder: Pick<TraceRecorder, 'step'>;
-  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado' | 'anexo_nao_lido' | 'sinal_pix_falhou' | 'sinal_pix_sem_registro' | 'sinal_incerto';
+  motivo: 'comprovante' | 'desmarcada' | 'insistiu_na_clinica' | 'cadastro_duplicado' | 'agenda_sem_conferir' | 'conferir_extrato' | 'comprovante_recusado' | 'anexo_nao_lido' | 'sinal_pix_falhou' | 'sinal_pix_sem_registro' | 'sinal_incerto' | 'sinal_em_andamento';
   dedupe?: Dedupe;
   agora?: () => number;
   /** Avisa o João quando a tarefa não saiu: o paciente já ouviu "a equipe confirma em 1 hora". */
@@ -543,7 +543,7 @@ export async function abrirTarefaParaEquipe(args: {
 }): Promise<'criada' | 'repetida' | 'falhou'> {
   const { slug, unitId, leadId, kommo, recorder, motivo } = args;
   const dedupe = args.dedupe ?? { avisoRecente, marcarAviso };
-  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido', sinal_pix_falhou: 'sinal_pix_falhou', sinal_pix_sem_registro: 'sinal_pix_sem_registro', sinal_incerto: 'sinal_incerto' }[motivo];
+  const chaveBase = { comprovante: 'comprovante_so_equipe', desmarcada: 'consulta_desmarcada_afirmada', insistiu_na_clinica: 'taxa_insistiu_na_clinica', cadastro_duplicado: 'cadastro_possivel_duplicado', agenda_sem_conferir: 'agenda_horario_sem_conferir', conferir_extrato: 'conferir_extrato', comprovante_recusado: 'comprovante_nao_aceito', anexo_nao_lido: 'anexo_nao_lido', sinal_pix_falhou: 'sinal_pix_falhou', sinal_pix_sem_registro: 'sinal_pix_sem_registro', sinal_incerto: 'sinal_incerto', sinal_em_andamento: 'sinal_em_andamento' }[motivo];
   const chave = args.chaveExtra ? `${chaveBase}:${args.chaveExtra}` : chaveBase;
   try {
     if (await dedupe.avisoRecente(unitId, leadId, chave, args.janelaMs ?? (motivo === 'comprovante' || motivo === 'comprovante_recusado' || motivo === 'anexo_nao_lido' ? JANELA_COMPROVANTE_MS : undefined))) return 'repetida';
@@ -570,6 +570,7 @@ export async function abrirTarefaParaEquipe(args: {
       anexo_nao_lido: `VER ANEXO · ${slug}${quem} · o paciente mandou uma imagem/PDF e o servidor NÃO conseguiu ler (download, visão ou tipo de arquivo que não lê). Pode ser o comprovante da taxa: abrir o anexo no Kommo; a IA não marca consulta sem ler o comprovante.`,
       sinal_pix_falhou: `ENVIAR O PIX DO SINAL · ${slug}${quem} · o paciente escolheu garantir a vaga com o sinal e a IA NÃO conseguiu gerar o Pix (link do Asaas). Disse a ele que a equipe envia o Pix em instantes: gerar a cobrança PIX do sinal no Asaas da unidade e mandar por aqui em até 1 h. NÃO é a chave fixa da clínica.`,
       sinal_pix_sem_registro: `CONFERIR O PIX DO SINAL · ${slug}${quem} · a IA gerou o link do sinal no Asaas e mandou ao paciente, mas o link NÃO ficou registrado no agente: a baixa automática não vai enxergar o pagamento. Conferir no Asaas da unidade se ele pagou (referência sofia-sinal:${slug}:<cartão>) e marcar «✓ Consulta pg antecipado» à mão.`,
+      sinal_em_andamento: `SINAL EM ANDAMENTO · ${slug}${quem} · já existe um sinal em andamento para este cartão (outra geração, do comercial ou do Resgate, ainda está entregando o link ao paciente). NÃO envie outro Pix nem outro link. A IA disse que o sinal chega por aqui em instantes: só confira se ele não chegar.`,
       sinal_incerto: `CONFIRMAR O LINK DO SINAL · ${slug}${quem} · a InfinitePay não respondeu com clareza ao criar o link do sinal: ele PODE existir. A IA NÃO mandou link nem Pix e disse ao paciente que a equipe confirma em instantes. Confirmar o link no app da InfinitePay ANTES de cobrar de novo (o paciente nunca pode ficar com dois meios de pagar): se existir, mandar o mesmo link; se não existir, mandar o Pix do sinal.`,
       comprovante_recusado: `VER COMPROVANTE · ${slug}${quem} · a IA NÃO aceitou o comprovante que o paciente mandou e pediu outro; a consulta NÃO foi marcada. Se ele disser que já pagou, conferir no extrato e lançar a consulta.`,
     }[motivo];
@@ -599,6 +600,7 @@ export async function abrirTarefaParaEquipe(args: {
       anexo_nao_lido: `a tarefa «ver anexo» (imagem/PDF que o servidor não conseguiu ler) não saiu (lead ${leadId}): ${erro}. O paciente pode ter mandado o comprovante e ninguém da equipe sabe: avisar à mão.`,
       comprovante_recusado: `a tarefa «ver comprovante» (comprovante NÃO aceito pela IA) não saiu (lead ${leadId}): ${erro}. O paciente foi convidado a mandar outro comprovante e a equipe não sabe do motivo: avisar à mão se ele insistir.`,
       sinal_pix_sem_registro: `a IA mandou o link do sinal (lead ${leadId}) que NÃO ficou registrado E a tarefa «conferir o Pix do sinal» NÃO saiu: ${erro}. Conferir no Asaas da unidade se o paciente pagou.`,
+      sinal_em_andamento: `há um sinal em andamento (lead ${leadId}) e a tarefa «sinal em andamento» NÃO saiu: ${erro}. NÃO mande outro Pix; conferir se o paciente recebeu o link.`,
       sinal_incerto: `a IA NÃO mandou o link do sinal (lead ${leadId}) porque a InfinitePay não respondeu com clareza (o link PODE existir) E a tarefa «confirmar o link do sinal» NÃO saiu: ${erro}. Confirmar no app da InfinitePay antes de cobrar de novo.`,
       sinal_pix_falhou: `a IA NÃO gerou o Pix do sinal (lead ${leadId}) E a tarefa «enviar o Pix do sinal» NÃO saiu: ${erro}. O paciente escolheu o sinal e ninguém da equipe sabe: mandar o Pix à mão.`,
       conferir_extrato: `a IA MARCOU uma consulta pelo comprovante de Pix (lead ${leadId}) e a tarefa «conferir no extrato» NÃO saiu: ${erro}. Ninguém foi avisado de conferir o pagamento: conferir à mão.`,

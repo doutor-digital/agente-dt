@@ -374,3 +374,11 @@ test('textoDoSinal: link INCERTO (a InfinitePay não respondeu com clareza): a S
   const sem = textoDoSinal(incerto, s, false);
   assert.match(sem, /NÃO prometa que a equipe envia/);
 });
+
+test('textoDoSinal: já existe um sinal em andamento — a Sofia não gera outro nem inventa link, e diz que ele chega em instantes', () => {
+  const s = sinalDaUnidade(comSinal())!;
+  const t = textoDoSinal({ tipo: 'falhou', motivo: 'em-andamento', detalhe: 'já existe um sinal em andamento' }, s, true);
+  assert.match(t, /Já existe um sinal em andamento/);
+  assert.match(t, /NÃO gere outro, NÃO invente link nem chave Pix/);
+  assert.doesNotMatch(t, /equipe envia/);
+});

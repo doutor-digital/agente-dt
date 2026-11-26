@@ -108,9 +108,9 @@ export function criadorDeLinkDoSinal(kommo: Pick<KommoClient, 'getLead' | 'getCo
     try {
       r = await tentar(true);
     } catch (err) {
-      // A InfinitePay RECUSOU o pedido (400/422) e ele levava nome/telefone: pode ser ela não aceitar esses campos. Tenta UMA vez sem eles (e sem o endereço) antes de desistir, para o campo
-      // extra nunca tirar o sinal da InfinitePay. Sem nome nem telefone no pedido não há o que tirar. Outra falha (timeout/5xx, chave, nosso teto ou portão) não repete.
-      if (!levaNomeOuTelefone || !(err instanceof Error) || err instanceof LinkIncertoDoSinal || !/^a InfinitePay respondeu (400|422)\b/.test(err.message)) throw err;
+      // A InfinitePay RECUSOU o pedido (400/422): pode ser ela não aceitar nome/telefone ou a opção de endereço (o pedido sempre leva ao menos esta). Tenta UMA vez sem eles antes de desistir, para o
+      // campo extra nunca tirar o sinal da InfinitePay. Outra falha (timeout/5xx, chave, nosso teto ou portão) não repete.
+      if (!(err instanceof Error) || err instanceof LinkIncertoDoSinal || !/^a InfinitePay respondeu (400|422)\b/.test(err.message)) throw err;
       logger.warn({ unit: p.slug, motivo: mascararPii(err.message).slice(0, 200) }, 'sinal-infinitepay: a InfinitePay recusou o pedido com nome/telefone — tento de novo sem eles');
       r = await tentar(false);
     }

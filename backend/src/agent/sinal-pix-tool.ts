@@ -15,7 +15,7 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
-import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type MotivoDaFalha, type ResultadoDoSinal } from '../lib/sinal-pix.js';
 import { depsDoSinalPorVia } from '../lib/sinal-infinitepay.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
@@ -60,6 +60,11 @@ export function registrarLeadDoSinal(traceId: string, leadId: number): void {
   leadDoTurno.set(traceId, leadId);
 }
 
+/** A tarefa da equipe para cada falha. NUNCA «enviar o Pix» quando já há um sinal em andamento ou um link que talvez exista: seria cobrar o paciente duas vezes. */
+export function motivoDaTarefaDoSinal(motivo: MotivoDaFalha): 'sinal_incerto' | 'sinal_em_andamento' | 'sinal_pix_falhou' {
+  return motivo === 'incerto' ? 'sinal_incerto' : motivo === 'em-andamento' ? 'sinal_em_andamento' : 'sinal_pix_falhou';
+}
+
 /** O que a ferramenta devolve à Sofia para cada desfecho. Puro: o teste confere as frases. */
 export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAberta: boolean): string {
   const sinal = `R$ ${fmtBRL(s.sinal)}`;
@@ -97,6 +102,12 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     );
   }
   // falhou: a Sofia nunca fala do erro nem inventa um Pix
+  if (r.motivo === 'em-andamento') {
+    return (
+      'Já existe um sinal em andamento para este paciente (outra geração está entregando o link). NÃO gere outro, NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ' +
+      'Diga em UMA frase que o link do sinal já está sendo enviado e chega por aqui em instantes (sem prometer prazo exato).'
+    );
+  }
   if (r.motivo === 'incerto') {
     return (
       'NÃO consegui gerar o pagamento do sinal agora. NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ' +
@@ -171,7 +182,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {
-        const detalhe = `Motivo: ${r.motivo === 'incerto' ? `NÃO envie o Pix antes de conferir: ${r.detalhe}` : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
+        const detalhe = `Motivo: ${r.motivo === 'incerto' ? `NÃO envie o Pix antes de conferir: ${r.detalhe}` : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? r.detalhe : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
         if (kommo) {
           const t = await abrirTarefaParaEquipe({
             slug: fresca.slug,
@@ -179,7 +190,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
             leadId,
             kommo,
             recorder,
-            motivo: r.motivo === 'incerto' ? 'sinal_incerto' : 'sinal_pix_falhou',
+            motivo: motivoDaTarefaDoSinal(r.motivo),
             detalhe,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');

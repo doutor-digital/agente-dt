@@ -20,6 +20,7 @@ import {
   pagamentosDesde,
   valoresDoSim,
   baixarSinalDoLinkPago,
+  ehSinalIncerto,
   leadDaReferenciaDoSinal,
   _esquecerChavesRecusadas,
   decidirInfinitepay,
@@ -616,4 +617,43 @@ test('referência de sinal: só o formato exato da Sofia (cartão em base 36 + 8
   assert.equal(leadDaReferenciaDoSinal('sinal-teste-abc'), null);
   assert.equal(leadDaReferenciaDoSinal('sinal-teste-0a1b2c3d9'), null);
   assert.equal(leadDaReferenciaDoSinal('dd-20261126-817b591793'), null);
+});
+
+
+test('sinal INCERTO que vence: a nota manda conferir o app da InfinitePay e o Pix antes de liberar o horário e NUNCA diz «nada foi cobrado»', async () => {
+  const nota = notaDoVencimento(ip({ status: 'incerto', url: '' }));
+  assert.match(nota, /sinal INCERTO venceu: confira no app da InfinitePay e no Pix antes de liberar o horário/);
+  assert.doesNotMatch(nota, /Nada foi cobrado/i);
+  // depois de virar `expirado` (nota que falhou e é refeita) a linha sem URL continua sendo reconhecida como incerta
+  assert.equal(ehSinalIncerto(ip({ status: 'expirado', url: '' })), true);
+  assert.equal(ehSinalIncerto(ip({ status: 'expirado' })), false);
+  assert.match(notaDoVencimento(ip()), /Nada foi cobrado do paciente/);
+  // na varredura: o cartão recebe a nota do incerto
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
+  sinaisNoBanco.length = 0;
+  sinaisNoBanco.push(ip({ status: 'incerto', url: '', venceEm: somarDias(HOJE_ISO, -5), criadoEm: new Date() }));
+  registrarInfinitepayDoServidor({ ctx: {} as never, esc: { armazem: { porOrderNsu: async () => doLivro({ status: 'criado', transactionNsu: null }) } } as never });
+  const k = kommoFalso();
+  try {
+    await varrerUnidade(UNIDADE, false, null, semConfirmar, k.deps.kommo);
+  } finally {
+    registrarInfinitepayDoServidor(null);
+  }
+  assert.equal(sinaisNoBanco[0]!.status, 'expirado');
+  assert.equal(k.notas.length, 1);
+  assert.match(k.notas[0]!.texto, /sinal INCERTO venceu/);
+  assert.doesNotMatch(k.notas[0]!.texto, /Nada foi cobrado/i);
+});
+
+test('sinal pago sem linha em «só no papel»/desligado: NÃO abre tarefa nem manda Telegram (só registra no log)', async () => {
+  sinaisNoBanco.length = 0;
+  const feitos: string[] = [];
+  const alertas = { telegram: async (t: string) => void feitos.push(t), tarefa: async () => void feitos.push('tarefa') };
+  const ref = `sinal-${(5829035).toString(36)}-abcd1234`;
+  for (const lista of ['', 'outra-unidade']) {
+    process.env.SINAL_PIX_SLUGS = lista;
+    await baixarSinalDoLinkPago(evento({ orderNsu: ref }), null, kommoFalso().deps.kommo, semConfirmar, alertas);
+  }
+  assert.deepEqual(feitos, []);
+  process.env.SINAL_PIX_SLUGS = 'doutor-hernia-araguaina';
 });

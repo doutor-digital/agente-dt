@@ -350,7 +350,7 @@ export async function gerarSinalPix(
   let f: Fase1 = await fase1();
   // outra geração do MESMO paciente em curso (retry da ferramenta, outra unidade, outra instância): espera o link dela em vez de criar o seu
   for (let voltas = 0; f.tipo === 'espera'; voltas++) {
-    if (voltas >= ESPERA_MAXIMA_VOLTAS) return { tipo: 'falhou', motivo: 'em-andamento', detalhe: 'outra geração do mesmo sinal não terminou' };
+    if (voltas >= ESPERA_MAXIMA_VOLTAS) return { tipo: 'falhou', motivo: 'em-andamento', detalhe: 'já existe um sinal em andamento para este cartão: outra geração ainda está entregando o link' };
     await esperar(1000);
     f = await fase1();
   }
@@ -380,9 +380,18 @@ export async function gerarSinalPix(
       if (err instanceof LinkIncertoDoSinal) {
         // NÃO vai para o Asaas: o link pode existir. A linha guarda a referência (`incerto`) para o aviso de pagamento dele ainda dar a baixa e para um novo pedido não criar outro.
         const motivo = mascararPii(err.message).slice(0, 300);
-        await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: err.orderNsu, url: '', status: 'incerto', via: 'infinitepay' } }).catch((e: unknown) => logger.error({ err: String(e), unit: unit.slug, leadId, orderNsu: err.orderNsu }, 'sinal-pix: não consegui guardar a referência do link incerto'));
+        // até 3 tentativas: a reserva morre em 5 min, e sem a linha `incerto` um novo pedido criaria outra cobrança. Se nenhuma gravar, a falha leva a referência e AVISA que não ficou guardada.
+        let guardou = false;
+        for (let t = 0; t < 3 && !guardou; t++) {
+          try {
+            guardou = (await deps.banco.updateMany({ where: { id: reserva.id }, data: { linkId: err.orderNsu, url: '', status: 'incerto', via: 'infinitepay' } })).count === 1;
+          } catch (e) {
+            logger.error({ err: String(e), unit: unit.slug, leadId, orderNsu: err.orderNsu, tentativa: t + 1 }, 'sinal-pix: não consegui guardar a referência do link incerto');
+          }
+          if (!guardou && t < 2) await esperar(500);
+        }
         logger.error({ unit: unit.slug, leadId, orderNsu: err.orderNsu, motivo }, 'sinal-pix: a InfinitePay não respondeu com clareza — o link PODE existir; NÃO mando o Pix do Asaas (cobrança em dobro) e a equipe é avisada');
-        return { tipo: 'falhou', motivo: 'incerto', detalhe: `a InfinitePay não respondeu com clareza e o link ${err.orderNsu} pode existir: conferir no app antes de cobrar de novo (${motivo})`.slice(0, 500) };
+        return { tipo: 'falhou', motivo: 'incerto', detalhe: `a InfinitePay não respondeu com clareza e o link ${err.orderNsu} pode existir: conferir no app antes de cobrar de novo${guardou ? '' : ' (ATENÇÃO: a referência NÃO ficou guardada no agente: um novo pedido do paciente pode criar outro link)'} (${motivo})`.slice(0, 500) };
       }
       // recusa CERTA (400/422, criação desligada na unidade, teto, portão, conector não carregado): nada foi criado, o Asaas segue
       fallback = mascararPii(err instanceof Error ? err.message : String(err)).slice(0, 300);
@@ -501,7 +510,7 @@ export async function acompanharRemarcacao(
   const fuso = fusoDoSinal(unit);
   const agoraLocal = instanteLocal(agora, fuso);
   const desde = new Date(agora.getTime() - VALIDADE_DO_SINAL_DIAS * 86_400_000);
-  const linhas = await banco.findMany({ where: { clinica: unidadeDona(unit.slug), leadId: String(leadId), status: { in: ['pago', 'pendente'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
+  const linhas = await banco.findMany({ where: { clinica: unidadeDona(unit.slug), leadId: String(leadId), status: { in: ['pago', 'pendente', 'incerto'] }, criadoEm: { gte: desde } }, orderBy: { criadoEm: 'desc' } });
   let n = 0;
   for (const l of linhas) {
     if (l.consultaEm < agoraLocal || l.consultaEm === novoQuando) continue;

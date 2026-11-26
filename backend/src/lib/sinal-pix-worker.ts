@@ -124,8 +124,13 @@ const ehInfinitepay = (l: Pick<LinhaDoSinal, 'via'>) => l.via === 'infinitepay';
 const provedor = (l: Pick<LinhaDoSinal, 'via'>) => (ehInfinitepay(l) ? 'InfinitePay' : 'Asaas');
 
 export const notaDoPagamento = (l: LinhaDoSinal, paymentId: string) => `💸 Sinal de ${reais(l.valorCentavos)} pago no ${provedor(l)} (${paymentId}). O restante é pago no dia da consulta.`;
+/** Sinal cuja criação NÃO teve resposta clara (nunca teve URL): a equipe pode ter cobrado à mão, então «nada foi cobrado» seria mentira. */
+export const ehSinalIncerto = (l: Pick<LinhaDoSinal, 'status' | 'via' | 'url'>) => l.status === 'incerto' || (l.via === 'infinitepay' && !l.url);
+
 export const notaDoVencimento = (l: LinhaDoSinal) =>
-  `⏳ O link do sinal de ${reais(l.valorCentavos)} venceu em ${diaCurto(l.venceEm)} sem pagamento. Nada foi cobrado do paciente: a SDR decide (novo link, pagar no dia ou liberar o horário).` +
+  ehSinalIncerto(l)
+    ? `⏳ sinal INCERTO venceu: confira no app da InfinitePay e no Pix antes de liberar o horário. A criação do link do sinal de ${reais(l.valorCentavos)} não teve resposta clara (o link pode existir e a equipe pode ter cobrado à mão), e nenhum pagamento foi confirmado até ${diaCurto(l.venceEm)}.`
+    : `⏳ O link do sinal de ${reais(l.valorCentavos)} venceu em ${diaCurto(l.venceEm)} sem pagamento. Nada foi cobrado do paciente: a SDR decide (novo link, pagar no dia ou liberar o horário).` +
   // o aviso de pagamento da InfinitePay é o único jeito de o sistema saber (a API dela não lista pagamentos): se ele se perdeu, só o app mostra
   (ehInfinitepay(l) ? ' Confira no app da InfinitePay se ele pagou mesmo assim (o aviso automático pode não ter chegado).' : '');
 
@@ -325,7 +330,12 @@ export async function baixarSinalDoLinkPago(
   if (!linha) {
     // Link do conector (criado à mão pelo claude.ai) não tem sinal: é normal. Mas uma referência `sinal-…` é da Sofia: o dinheiro entrou e NENHUM cartão foi baixado. Ninguém pode ficar sem saber.
     const lead = leadDaReferenciaDoSinal(e.orderNsu);
-    if (lead === null || estado(unit.slug) === 'desligado') return;
+    if (lead === null) return;
+    // «só no papel» (ou desligado) NÃO abre tarefa nem manda Telegram: só registra no log
+    if (estado(unit.slug) !== 'ligado') {
+      logger.warn({ unit: unit.slug, orderNsu: e.orderNsu, leadId: lead }, `${ID_SINAL_PIX}: link de sinal pago sem linha, mas a baixa não está ligada nesta unidade — não avisei`);
+      return;
+    }
     const texto = `⚠️ ${unit.slug}: o link do SINAL ${e.orderNsu} (R$ ${(e.valorCentavos / 100).toFixed(2).replace('.', ',')}) foi PAGO na InfinitePay, mas não há sinal registrado para ele no agente: o cartão ${lead} NÃO foi marcado e o paciente NÃO foi avisado. Conferir e marcar «✓ Consulta pg antecipado» à mão.`;
     logger.error({ unit: unit.slug, orderNsu: e.orderNsu, leadId: lead }, `${ID_SINAL_PIX}: link de sinal PAGO sem linha em sinais_pix — avisei a equipe`);
     await alertas.telegram(texto).catch(() => undefined);
