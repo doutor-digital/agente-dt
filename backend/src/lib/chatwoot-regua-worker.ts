@@ -613,9 +613,15 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         if (!novo) continue;
         // a mensagem cita os outros horários do mesmo dia: o lembrete deles seria a MESMA mensagem outra vez, então a regra também é dada como feita para eles
         // (só quando a mensagem é a de verdade: a nota de «falta campo»/«sem template»/«no Kommo» não avisou ninguém de nada)
-        const cobertas = d.cobre && !faltou && !semTemplate && !seguradaNoKommo && !d.interna ? d.cobre : [];
-        for (const ch of cobertas) {
-          await armazem.registrar({ caixa, conversationId: c.id, regra, chave: ch, modo: 'coberto', texto: `coberto pela mensagem de ${d.chave}` }).catch(() => false);
+        const cobertas: string[] = []; // só as que ESTA chamada registrou (as que já existiam são de outra mensagem e ficam)
+        if (d.cobre && !faltou && !semTemplate && !seguradaNoKommo && !d.interna) {
+          for (const ch of d.cobre) {
+            try {
+              if (await armazem.registrar({ caixa, conversationId: c.id, regra, chave: ch, modo: 'coberto', texto: `coberto pela mensagem de ${d.chave}` })) cobertas.push(ch);
+            } catch (err) {
+              logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, chave: ch }, `${ID_REGUA}: não consegui registrar o horário coberto — o lembrete dele pode sair também`);
+            }
+          }
         }
         mensagens++;
         try {

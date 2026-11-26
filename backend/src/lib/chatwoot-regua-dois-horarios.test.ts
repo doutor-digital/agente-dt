@@ -118,3 +118,42 @@ test('agenda: grava o campo quando muda, limpa quando deixa de valer, e não mex
   assert.deepEqual(mudancas(atual, { ...d, outros_horarios_do_dia: '' }), {}, 'nunca houve e não há: nada a gravar');
   assert.deepEqual(mudancas(atual, { ...d, outros_horarios_do_dia: undefined }), {}, 'sem a informação: nada a gravar');
 });
+
+// ── correções da revisão ──────────────────────────────────────────────────────────────────────────
+
+test('agenda: só entram no lembrete os horários do MESMO tipo (uma sessão da tarde não vira «e 14:30» na avaliação da manhã)', () => {
+  const avaliacao = ag({ categoryName: 'Avaliação' });
+  const sessaoTarde = ag({ idSchedule: 2, categoryName: 'Sessão', timeLocal: '14:30:00' });
+  const avaliacaoTarde = ag({ idSchedule: 3, categoryName: 'Avaliação', timeLocal: '16:00:00' });
+  assert.equal(outrosHorariosDoDia(avaliacao, [avaliacao, sessaoTarde], '2026-11-17'), '');
+  assert.equal(outrosHorariosDoDia(avaliacao, [avaliacao, sessaoTarde, avaliacaoTarde], '2026-11-17'), '16:00');
+});
+
+test('agenda: a nota da agenda não mostra valor em branco quando o campo é limpo', () => {
+  const { descricao } = agendaMod as unknown as { descricao: (m: Record<string, string>) => string };
+  assert.equal(descricao({ outros_horarios_do_dia: '' }), 'outros horários do dia = (nenhum)');
+  assert.equal(descricao({ outros_horarios_do_dia: '14:30' }), 'outros horários do dia = 14:30');
+});
+
+test('«Robôs»: o registro «coberto» não conta como mensagem enviada nem como nota, e não aparece na aba «Enviados»', async () => {
+  const E = await import('./robos-estado.js');
+  const agora = Z('2026-11-18T15:00:00Z');
+  const base = { caixa: 3, conversationId: 7, criadoEm: Z('2026-11-17T12:00:00Z') };
+  const banco = {
+    async linhas() { return []; },
+    async salvar() {},
+    async disparos() {
+      return [
+        { ...base, regra: 'consulta-vespera', chave: '2026-11-18T09:00', modo: 'ligado', texto: 'Olá, Maria.' },
+        { ...base, regra: 'consulta-vespera', chave: '2026-11-18T14:30', modo: 'coberto', texto: 'coberto pela mensagem de 2026-11-18T09:00' },
+      ];
+    },
+  };
+  const visao = await E.visaoDosRobos(banco as never, 'doutor-hernia-parauapebas', { agora, aprovados: null });
+  const vespera = visao.robos.find((r) => r.regra === 'consulta-vespera')!;
+  assert.equal(vespera.enviados7d, 1, 'só a mensagem de verdade');
+  assert.equal(vespera.notas7d, 0);
+  const env = await E.enviadosDaUnidade(banco as never, 'doutor-hernia-parauapebas', async () => null, agora);
+  assert.equal(env.total, 1);
+  assert.equal(env.itens.length, 1);
+});

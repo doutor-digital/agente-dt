@@ -81,9 +81,11 @@ export function outrosHorariosDoDia(vale: SpineSchedule, lista: SpineSchedule[],
   const minha = hora(vale.timeLocal);
   if (!minha || !vale.dayLocal || vale.dayLocal < hoje || !['Agendado', 'Confirmado'].includes(situacaoDoChatwoot(vale))) return '';
   const outras = new Set<string>();
+  const categoria = categoriaDoChatwoot(vale.categoryName);
   for (const x of lista) {
     const h = hora(x.timeLocal);
-    if (x === vale || !h || x.dayLocal !== vale.dayLocal || h <= minha || !['Agendado', 'Confirmado'].includes(situacaoDoChatwoot(x))) continue;
+    // só o que é do MESMO tipo: uma sessão da tarde não entra no lembrete da avaliação da manhã (e o lembrete dela não pode ser dado como feito)
+    if (x === vale || !h || x.dayLocal !== vale.dayLocal || h <= minha || categoriaDoChatwoot(x.categoryName) !== categoria || !['Agendado', 'Confirmado'].includes(situacaoDoChatwoot(x))) continue;
     outras.add(h);
   }
   return [...outras].sort().join(', ');
@@ -141,7 +143,7 @@ export function mudancas(atual: Record<string, unknown>, d: Desejado, hoje?: str
 const NOMES: Record<string, string> = { data_consulta: 'data', hora_consulta: 'hora', situacao_consulta: 'situação', categoria_consulta: 'categoria', etapa: 'etapa', [ATRIBUTO_OUTROS_HORARIOS]: 'outros horários do dia' };
 export function descricao(m: Record<string, string>): string {
   return Object.entries(m)
-    .map(([k, v]) => `${NOMES[k] ?? k} = ${k === 'data_consulta' ? v.split('-').reverse().join('/') : v}`)
+    .map(([k, v]) => `${NOMES[k] ?? k} = ${k === 'data_consulta' ? v.split('-').reverse().join('/') : v === '' ? '(nenhum)' : v}`)
     .join(' · ');
 }
 

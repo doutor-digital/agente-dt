@@ -949,6 +949,14 @@ test('dois horários no dia: a mensagem cita os dois e o worker dá o lembrete d
   await cicloDaCaixa(deps(b.armazem, c3.chat), 2, 'x', 'ligado', U, quando);
   assert.deepEqual(b.disparos, []);
 
+  // o horário coberto JÁ estava registrado (de outra mensagem) e o envio é recusado: o desfazer não apaga o que não é desta chamada
+  const e = armazemFalso();
+  await e.armazem.registrar({ caixa: 3, conversationId: 1, regra: 'consulta-vespera', chave: '2026-11-18T14:30', modo: 'ligado', texto: 'mensagem antiga' });
+  const c5 = chatFalso(() => [bruta(1, { attrs: sessao })], { falhaAoEscrever: () => recusa });
+  await cicloDaCaixa(deps(e.armazem, c5.chat), 2, 'x', 'ligado', U, new Date(quando.getTime() - 600_000));
+  await cicloDaCaixa(deps(e.armazem, c5.chat), 2, 'x', 'ligado', U, quando);
+  assert.deepEqual(e.disparos.map((d) => `${d.chave}|${d.modo}`), ['2026-11-18T14:30|ligado'], 'só o registro antigo sobrou');
+
   // a nota de «falta campo» (seco) não cobre nada: ela não avisou ninguém de horário nenhum
   const c = armazemFalso();
   const { TEXTOS_PARAU } = await import('./chatwoot-regua-textos.js');

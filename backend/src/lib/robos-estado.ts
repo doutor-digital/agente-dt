@@ -259,6 +259,7 @@ export async function visaoDosRobos(banco: BancoDosRobos, slug: string, o: { ago
   const conta = new Map<string, { enviados: number; notas: number; seco: number }>();
   for (const l of linhas) {
     if (!caixas.includes(l.caixa)) continue; // nunca outra unidade, mesmo que o banco devolva
+    if (l.modo === 'coberto') continue; // registro de «este horário já foi citado em outra mensagem»: não é mensagem nem nota, não entra na conta
     const robo = regraDoCatalogo(baseDaRegra(l.regra));
     if (!robo) continue;
     const s = situacaoDoRegistro(l, robo.interna);
@@ -397,7 +398,7 @@ export async function enviadosDaUnidade(
 ): Promise<Enviados> {
   const caixas = caixasDaUnidade(slug);
   const desde = new Date(agora.getTime() - DIAS_DO_REGISTRO * 86_400_000);
-  const linhas = (await banco.disparos(caixas, desde, LIMITE_DE_LINHAS)).filter((l) => caixas.includes(l.caixa) && l.criadoEm.getTime() >= desde.getTime());
+  const linhas = (await banco.disparos(caixas, desde, LIMITE_DE_LINHAS)).filter((l) => caixas.includes(l.caixa) && l.criadoEm.getTime() >= desde.getTime() && l.modo !== 'coberto');
   const validas = linhas
     .map((l) => ({ l, robo: regraDoCatalogo(baseDaRegra(l.regra)) }))
     .filter((x): x is { l: LinhaDeDisparo; robo: Robo } => !!x.robo)
