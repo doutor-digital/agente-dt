@@ -611,6 +611,18 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
         }
         const novo = await armazem.registrar({ caixa, conversationId: c.id, regra, chave: d.chave, modo, texto: template ? `[template ${template.nome}] ${texto}` : texto });
         if (!novo) continue;
+        // a mensagem cita os outros horários do mesmo dia: o lembrete deles seria a MESMA mensagem outra vez, então a regra também é dada como feita para eles
+        // (só quando a mensagem é a de verdade: a nota de «falta campo»/«sem template»/«no Kommo» não avisou ninguém de nada)
+        const cobertas: string[] = []; // só as que ESTA chamada registrou (as que já existiam são de outra mensagem e ficam)
+        if (d.cobre && !faltou && !semTemplate && !seguradaNoKommo && !d.interna) {
+          for (const ch of d.cobre) {
+            try {
+              if (await armazem.registrar({ caixa, conversationId: c.id, regra, chave: ch, modo: 'coberto', texto: `coberto pela mensagem de ${d.chave}` })) cobertas.push(ch);
+            } catch (err) {
+              logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, chave: ch }, `${ID_REGUA}: não consegui registrar o horário coberto — o lembrete dele pode sair também`);
+            }
+          }
+        }
         mensagens++;
         try {
           await deps.chat.mensagem(c.id, texto, privada, template);
@@ -626,7 +638,10 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
           resumo.falhas++;
           const status = statusDoErro(err);
           // seco e nota: tenta de novo no próximo ciclo. Ligado: só desfaz se o Chatwoot RECUSOU (4xx); sem resposta pode ter ido.
-          if (modo === 'seco' || semTemplate || (status !== undefined && status >= 400 && status < 500)) await armazem.desfazer(c.id, regra, d.chave, caixa).catch(() => undefined);
+          if (modo === 'seco' || semTemplate || (status !== undefined && status >= 400 && status < 500)) {
+            await armazem.desfazer(c.id, regra, d.chave, caixa).catch(() => undefined);
+            for (const ch of cobertas) await armazem.desfazer(c.id, regra, ch, caixa).catch(() => undefined);
+          }
           logger.warn({ err: String(err), caixa, conversa: c.id, regra: d.regra, modo, template: template?.nome }, `${ID_REGUA}: não consegui ${privada ? 'deixar a nota' : 'mandar a mensagem'}`);
           continue;
         }
