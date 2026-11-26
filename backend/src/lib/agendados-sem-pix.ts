@@ -52,12 +52,20 @@ export const ESPERA_ENTRE_ENVIOS_MIN = 15;
 
 const somarDias = (dia: string, n: number): string => new Date(Date.parse(`${dia}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
 
-/** Primeiro dia de Pix que vale como «pagou» para esta marcação. */
-export const pixDesde = (a: Pick<Agendado, 'agendadoEm'>): string => somarDias(a.agendadoEm, -PIX_ANTES_DO_AGENDAMENTO_DIAS);
+/**
+ * Primeiro dia de Pix que vale para esta marcação, tanto para «pagou» quanto para «Pix de parente»: 7 dias antes da marcação. Quando a data da marcação é INCERTA (CONFIRMADO: a
+ * alteração é a confirmação da régua, que roda toda manhã), vale desde 30 dias antes da consulta: quem pagou ao marcar, semanas atrás, não vira «outra data».
+ */
+export const pixDesde = (a: Pick<Agendado, 'agendadoEm' | 'dia' | 'marcacaoIncerta'>): string => {
+  const estreita = somarDias(a.agendadoEm, -PIX_ANTES_DO_AGENDAMENTO_DIAS);
+  if (!a.marcacaoIncerta) return estreita;
+  const larga = somarDias(a.dia, -LEITURA_ANTES_DA_CONSULTA_DIAS);
+  return larga < estreita ? larga : estreita;
+};
 /** Primeiro dia de extrato a LER para esta marcação (a janela larga: ver LEITURA_ANTES_DA_CONSULTA_DIAS). */
 export const leituraDesde = (a: Pick<Agendado, 'agendadoEm' | 'dia'>): string => {
   const larga = somarDias(a.dia, -LEITURA_ANTES_DA_CONSULTA_DIAS);
-  const estreita = pixDesde(a);
+  const estreita = somarDias(a.agendadoEm, -PIX_ANTES_DO_AGENDAMENTO_DIAS);
   return larga < estreita ? larga : estreita;
 };
 
@@ -184,7 +192,7 @@ export function conferirAgendados(agendados: ReadonlyArray<Agendado>, pix: Reado
     if (o.bancoLidoEm == null || a.alteradoEmMs > o.bancoLidoEm - MARGEM_DO_BANCO_MIN * 60_000) return { agendado: a, resultado: 'conferir', motivo: 'marcado-depois-do-banco' };
     if (a.marcacaoIncerta) return { agendado: a, resultado: 'conferir', motivo: 'marcacao-confirmada' };
     // Pix de valor de consulta, no período, que não é de NINGUÉM conhecido: pode ser parente pagando. Não dá para dizer «não achei».
-    const desde = somarDias(a.agendadoEm, -1);
+    const desde = pixDesde(a); // a MESMA janela do «pagou»: Pix aceito para pagar a marcação também conta como possível Pix de parente
     const deOutroConhecido = (p: PixRecebido) => agendados.some((b) => nivelDoPar(b, p) === 'igual') || conhecidos.some((n) => nivelPixPessoa(p, n) === 'igual');
     const solto = naoEmpresa.some((p) => !reivindicados.has(p.id) && valorOk(p) && p.dia >= desde && p.dia <= o.hoje && !deOutroConhecido(p));
     if (solto) return { agendado: a, resultado: 'conferir', motivo: 'pix-de-outro-nome' };

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chaveDoNome, compararNomes, compararTokens, entradasDoBanco, nivelPixPessoa, nomeDaDescricao, tokensDoNome, valoresDaOperacaoInvalidos, valoresDaUnidade } from './pix-casamento.js';
+import { ehPix, chaveDoNome, compararNomes, compararTokens, entradasDoBanco, nivelPixPessoa, nomeDaDescricao, tokensDoNome, valoresDaOperacaoInvalidos, valoresDaUnidade } from './pix-casamento.js';
 import type { LancamentoPluggy } from './integracoes/pluggy.js';
 
 // nomes e documentos INVENTADOS (o repositório é público)
@@ -84,4 +84,25 @@ test('comparar por tokens dá o mesmo resultado que comparar por nome (a versão
   for (const [a, b] of [['Maria da Silva Costa', 'MARIA COSTA'], ['Joao Souza', 'Joao Sousa'], ['Pedro Dias Henr', 'Pedro Henrique Dias'], ['Ana', 'Ana Lima']] as const) {
     assert.equal(compararTokens(tokensDoNome(a), tokensDoNome(b)), compararNomes(a, b));
   }
+});
+
+test('É PIX pelo método de pagamento que a Pluggy manda (PIX); a descrição só vale quando o banco não informa o método', () => {
+  const r = entradasDoBanco([
+    lanc('a', 'MARIA SILVA', 250, { metodoDePagamento: 'PIX' }), // descrição SEM o prefixo «Pix»
+    lanc('b', 'Transferência recebida JOANA LIMA', 150, { metodoDePagamento: 'PIX', pagador: 'Joana Lima' }),
+    lanc('c', 'Pix FULANO TESTE', 99, { metodoDePagamento: 'TED' }), // a descrição diz Pix mas o método é TED: não é Pix
+    lanc('d', 'Pix ANA COSTA', 80), // sem método: vale a descrição
+    lanc('e', 'Vendas Visa Débito', 500, { metodoDePagamento: 'OTHER' }),
+    lanc('f', 'Pix 12.345.678 CLINICA TESTE LTDA', 70, { metodoDePagamento: 'PIX', pagadorTipoDocumento: 'PJ' }),
+  ]);
+  assert.deepEqual(r.pix.map((p) => p.id), ['a', 'b', 'd', 'f']);
+  assert.deepEqual(r.pix[0]!.nomes, ['MARIA SILVA'], 'sem prefixo, o texto inteiro da descrição é o nome');
+  assert.equal(r.pix[1]!.nomes[0], 'Joana Lima', 'o campo do pagador vem primeiro; o resto da descrição é só mais um candidato (e não casa com ninguém)');
+  assert.equal(r.pix[3]!.empresa, true);
+  assert.deepEqual(r.outras, { lancamentos: 1, centavos: 9900 }, 'o TED com descrição «Pix» não é Pix');
+  assert.deepEqual(r.cartaoVendas, { lancamentos: 1, centavos: 50000 });
+  assert.equal(ehPix({ descricao: 'qualquer', metodoDePagamento: 'PIX' }), true);
+  assert.equal(ehPix({ descricao: 'Pix X', metodoDePagamento: 'OTHER' }), false);
+  assert.equal(ehPix({ descricao: 'Pix X' }), true);
+  assert.equal(ehPix({ descricao: 'Boleto X' }), false);
 });

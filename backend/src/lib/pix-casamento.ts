@@ -83,12 +83,21 @@ export interface EntradasDoBanco {
 
 const centavosDe = (v: number): number => Math.round(Math.abs(v) * 100);
 
-/** «Pix NOME SOBRENOME» → «NOME SOBRENOME». Descrição de pessoa jurídica («Pix 12.345.678 EMPRESA LTDA») não tem nome de paciente. */
-export function nomeDaDescricao(descricao: string | null | undefined): string | null {
+/**
+ * «Pix NOME SOBRENOME» → «NOME SOBRENOME». Descrição de pessoa jurídica («Pix 12.345.678 EMPRESA LTDA») não tem nome de paciente.
+ * Com `jaEPix` (o método de pagamento diz que é Pix) a descrição pode vir SEM o prefixo («MARIA SILVA»): então o texto inteiro é o nome, se não tiver número.
+ */
+export function nomeDaDescricao(descricao: string | null | undefined, jaEPix = false): string | null {
   const m = /^\s*pix(?:\s+(?:recebido|enviado))?\s+(.+)$/i.exec(descricao ?? '');
-  const resto = m?.[1]?.trim();
+  const resto = (m?.[1] ?? (jaEPix && !/^\s*pix\s*$/i.test(descricao ?? '') ? descricao : null))?.trim();
   if (!resto || /\d/.test(resto)) return null;
   return resto;
+}
+
+/** É Pix? O método de pagamento que a Pluggy manda (`paymentMethod` = PIX) manda; sem ele (banco que não informa), vale o prefixo «Pix» da descrição. */
+export function ehPix(l: Pick<LancamentoPluggy, 'metodoDePagamento' | 'descricao'>): boolean {
+  if (l.metodoDePagamento) return l.metodoDePagamento === 'PIX';
+  return /^\s*pix\b/i.test(l.descricao);
 }
 
 type LancamentoComConta = LancamentoPluggy & { contaTipo?: string | null };
@@ -102,8 +111,8 @@ export function entradasDoBanco(lancamentos: ReadonlyArray<LancamentoComConta>):
   for (const l of lancamentos) {
     if (l.tipo !== 'entrada' || l.status === 'PENDING' || l.contaTipo === 'CREDIT') continue;
     const centavos = centavosDe(l.valor);
-    if (/^\s*pix\b/i.test(l.descricao)) {
-      const nomes = [l.pagador, nomeDaDescricao(l.descricao)].filter((n): n is string => !!n && tokensDoNome(n).length > 0);
+    if (ehPix(l)) {
+      const nomes = [l.pagador, nomeDaDescricao(l.descricao, l.metodoDePagamento === 'PIX')].filter((n): n is string => !!n && tokensDoNome(n).length > 0);
       const unicos = nomes.filter((n, i) => nomes.findIndex((m) => semAcento(m) === semAcento(n)) === i);
       out.pix.push({
         id: l.id,

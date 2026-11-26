@@ -134,6 +134,24 @@ test('MARCADO DEPOIS DA LEITURA DO BANCO: banco lido 11:59, marcação 11:40, Pi
   assert.equal(conf([marcadoAs1140], [px('p1', 'MARIA SILVA', 250, { dia: HOJE })])[0]!.resultado, 'pagou');
 });
 
+test('CONFIRMADA (data da marcação incerta): o Pix vale desde 30 dias antes da consulta — quem pagou ao marcar, semanas atrás, é «pagou», não «outra data»; AGENDADA segue com 7 dias antes da marcação', () => {
+  const confirmada = ag('Maria Silva', { marcacaoIncerta: true, agendadoEm: '2026-11-26', dia: '2026-11-27' }); // confirmada hoje de manhã pela régua
+  const pagouAoMarcar = [px('p1', 'MARIA SILVA', 250, { dia: '2026-11-05' })]; // 22 dias antes
+  assert.equal(conf([confirmada], pagouAoMarcar)[0]!.resultado, 'pagou');
+  assert.equal(pixDesde(confirmada), '2026-10-28', 'consulta − 30 dias');
+  const agendada = ag('Maria Silva', { marcacaoIncerta: false, agendadoEm: '2026-11-26', dia: '2026-11-27' });
+  const [v] = conf([agendada], pagouAoMarcar);
+  assert.deepEqual([v!.resultado, v!.motivo], ['conferir', 'data']);
+  assert.equal(pixDesde(agendada), '2026-11-19', 'marcação − 7 dias');
+});
+
+test('«Pix de parente» usa a MESMA janela do «pagou» (marcação − 7 dias), não marcação − 1: Pix de valor de consulta de um desconhecido 5 dias antes da marcação deixa o agendado «a conferir»', () => {
+  const [v] = conf([ag('Maria Silva')], [px('p1', 'ROBERTO PARENTE ALVES', 250, { dia: '2026-11-20' })]); // marcada 25/11; janela 18/11
+  assert.deepEqual([v!.resultado, v!.motivo], ['conferir', 'pix-de-outro-nome']);
+  const [fora] = conf([ag('Maria Silva')], [px('p1', 'ROBERTO PARENTE ALVES', 250, { dia: '2026-11-10' })]); // antes da janela: não conta
+  assert.equal(fora!.resultado, 'sem_pix');
+});
+
 test('marcação CONFIRMADA (a alteração é a confirmação): nunca «não achei»; com Pix certo, pagou', () => {
   const confirmada = ag('Maria Silva', { marcacaoIncerta: true });
   assert.deepEqual([conf([confirmada], [])[0]!.resultado, conf([confirmada], [])[0]!.motivo], ['conferir', 'marcacao-confirmada']);
