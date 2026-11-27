@@ -154,7 +154,7 @@ test('queda geral: 1.000 erros de crédito em 1.000 chamadas alarma e diz a caus
   assert.equal(v.alarme, true);
   assert.equal(v.causa, 'credito');
   assert.equal(v.escopo, 'rede');
-  assert.match(v.motivo, /100% das chamadas falhando nos últimos 10 min \(1000 de 1000, na rede toda\)/);
+  assert.match(v.motivo, /100% das chamadas falhando nos últimos 10 min \(1000 de 1000, em 39 unidades, na rede toda\)/);
   assert.match(v.motivo, /saldo de crédito/);
 });
 
