@@ -30,6 +30,7 @@ import { registrarIntegracoes } from './integracoes.js';
 import { registrarMetaEventos, type FonteRastreio } from './meta-eventos.js';
 import { Pendentes, registrarEscritaKommo, type FonteEscrita } from './kommo-escrita.js';
 import { registrarDisparo } from './disparo.js';
+import { registrarRecuperacaoAgenda } from './recuperacao-agenda.js';
 import { registrarArquivosSePermitido } from './arquivos.js';
 import { dominiosPermitidos } from './baixar-url.js';
 import { registrarAnexosSistemas } from './sistemas-anexo.js';
@@ -762,6 +763,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
         registrarEscritaKommo(server, kommo, fonteDeEscrita, pendentes, quem.userId, auditar);
         // Disparo de campanha: preparar e mostrar. Aprovar e retomar NÃO existem aqui (são do João, no painel do console).
         registrarDisparo(server, fonteDeDisparo, `conector:${quem.userId}`, auditar);
+        // Retorno da lista de recuperação de avaliações (quantos voltaram a marcar e a comparecer): só leitura, só para quem escreve. Só contagem.
+        registrarRecuperacaoAgenda(server, undefined, auditar);
         // Sistema novo (RH/Caixa): alterar dados em dois passos, mudar usuário, criar convite — a mesma lista de quem altera cartões.
         registrarEscritaSistemas(server, sistemas, pendentesSistemas, quemSistemas, auditar);
         // ... e criar/alterar ESTRUTURA do banco (tabela, coluna, índice, view, política), também em dois passos. DROP não existe.
