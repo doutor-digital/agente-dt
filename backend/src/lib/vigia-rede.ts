@@ -46,6 +46,12 @@ export const LIMIARES = {
    * tráfego para provar) é um episódio NOVO: aviso novo, não "ainda falhando há 11 h".
    */
   recorrenciaMs: 30 * 60_000,
+  /** Sem prova de recuperação (falha/parada/frase) só se considera outro episódio depois de uma pausa MUITO longa: um deploy ou a troca de líder não pode repetir o aviso. */
+  recorrenciaSemProvaMs: 3 * 60 * 60_000,
+  /** Depois que uma causa (saldo/falha) é resolvida, a frase de queda e a "IA parada" das últimas janelas ainda são consequência dela. */
+  causaRecenteMs: 35 * 60_000,
+  /** Causa ainda ABERTA conta como recente se foi vista nas últimas horas (de madrugada os erros chegam esparsos). */
+  causaAbertaVistaMs: 3 * 60 * 60_000,
   /** Lembrete: no máximo a cada 2 h enquanto durar. */
   lembreteMs: 2 * 60 * 60_000,
   /**
@@ -287,7 +293,7 @@ export function avaliar(obs: Observacao): Problema[] {
  *   saldo ou IA falhando → cobrem "IA parada" e "frase de queda" (são o efeito).
  * Sem causa conhecida, parada e frase avisam sozinhas — aí são a única pista.
  */
-export function suprimir(problemas: Problema[]): Problema[] {
+export function suprimir(problemas: Problema[], causaRecente = false): Problema[] {
   const causa = (p: Problema) => p.ativo && (p.tipo === 'credito' || p.tipo === 'falha');
   const credito = new Map(problemas.filter((p) => p.ativo && p.tipo === 'credito').map((p) => [p.familia, p.chave]));
   const primeiraCausa = problemas.find(causa);
@@ -295,8 +301,21 @@ export function suprimir(problemas: Problema[]): Problema[] {
     if (!p.ativo) return p;
     if (p.tipo === 'falha' && credito.has(p.familia)) return { ...p, suprimidoPor: credito.get(p.familia) };
     if ((p.tipo === 'parada' || p.tipo === 'frase') && primeiraCausa) return { ...p, suprimidoPor: primeiraCausa.chave };
+    // a causa acabou de ser resolvida e a janela da frase ainda tem as desculpas dela: não é "causa desconhecida"
+    if ((p.tipo === 'parada' || p.tipo === 'frase') && causaRecente) return { ...p, suprimidoPor: 'causa-recente' };
     return p;
   });
+}
+
+/** Houve saldo/falha aberto (visto há pouco) ou resolvido há pouco? Então frase e parada ainda são o rastro dela. */
+export function haCausaRecente(estados: Iterable<EstadoAlerta>, agora: Date): boolean {
+  for (const e of estados) {
+    if (!/^(credito|falha):/.test(e.chave)) continue;
+    if (e.resolvidoEm === null) {
+      if (agora.getTime() - e.ultimoVistoEm.getTime() < LIMIARES.causaAbertaVistaMs) return true;
+    } else if (agora.getTime() - e.resolvidoEm.getTime() < LIMIARES.causaRecenteMs) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -320,7 +339,8 @@ export function decidir(p: Problema, estado: EstadoAlerta | null, agora: Date, l
   if (p.ativo) {
     if (estado.ultimoAvisoEm === null) return 'novo';
     // sumiu por um bom tempo e voltou: é outro episódio (o estado fica aberto quando de madrugada não há tráfego que prove a volta)
-    if (agora.getTime() - estado.ultimoVistoEm.getTime() > LIMIARES.recorrenciaMs && (!p.reabreSoComProva || p.podeFechar(estado))) return 'novo';
+    const pausa = agora.getTime() - estado.ultimoVistoEm.getTime();
+    if (p.reabreSoComProva ? pausa > LIMIARES.recorrenciaMs && p.podeFechar(estado) : pausa > LIMIARES.recorrenciaSemProvaMs) return 'novo';
     return agora.getTime() - estado.ultimoAvisoEm.getTime() >= lembreteMs ? 'lembrete' : 'atualizar';
   }
   if (!p.podeFechar(estado)) return 'nada';
@@ -338,15 +358,25 @@ const ONDE_PAGAR: Record<Familia, string> = {
 };
 
 /** Classe do erro em português, sem repetir texto do provedor (que não tem por que ir para o Telegram). */
-export function classeDominante(grupos: GrupoDeErro[]): string {
-  if (!grupos.length) return 'erro desconhecido';
-  const maior = [...grupos].sort((a, b) => b.chamadas - a.chamadas)[0].mensagem.toLowerCase();
-  if (/\b(401|403)\b|api key|unauthor|forbidden|not scoped|permission|authentication/.test(maior)) return 'chave recusada pelo provedor (401/403)';
-  if (/\b429\b|rate.?limit|too many requests/.test(maior)) return 'limite de uso do provedor (429)';
-  if (/\b(500|502|503|504|529)\b|overloaded|unavailable|bad gateway/.test(maior)) return 'provedor instável ou sobrecarregado (5xx)';
-  if (/timeout|timed out|abort|econn|enotfound|fetch failed|network/.test(maior)) return 'timeout ou falha de rede';
-  if (/\b400\b|invalid_request|invalid body|not valid json/.test(maior)) return 'pedido recusado pelo provedor (400)';
+function classeDoTexto(msg: string): string {
+  const m = msg.toLowerCase();
+  if (/\b(401|403)\b|api key|unauthor|forbidden|not scoped|permission|authentication/.test(m)) return 'chave recusada pelo provedor (401/403)';
+  if (/\b429\b|rate.?limit|too many requests/.test(m)) return 'limite de uso do provedor (429)';
+  if (/\b(500|502|503|504|529)\b|overloaded|unavailable|bad gateway/.test(m)) return 'provedor instável ou sobrecarregado (5xx)';
+  if (/timeout|timed out|abort|econn|enotfound|fetch failed|network/.test(m)) return 'timeout ou falha de rede';
+  if (/\b400\b|invalid_request|invalid body|not valid json/.test(m)) return 'pedido recusado pelo provedor (400)';
   return 'erro desconhecido';
+}
+
+/**
+ * Classe do erro em português, sem repetir texto do provedor (que não tem por que ir para o Telegram). Cada grupo é classificado
+ * e as chamadas SOMAM por classe: erros com request-id diferente no começo viram grupos de 1 e não podem decidir sozinhos.
+ */
+export function classeDominante(grupos: GrupoDeErro[]): string {
+  const porClasse = new Map<string, number>();
+  for (const g of grupos) porClasse.set(classeDoTexto(g.mensagem), (porClasse.get(classeDoTexto(g.mensagem)) ?? 0) + g.chamadas);
+  const ordem = [...porClasse.entries()].sort((a, b) => b[1] - a[1]);
+  return ordem.length ? ordem[0][0] : 'erro desconhecido';
 }
 
 const FUSO = 'America/Sao_Paulo';
@@ -389,6 +419,8 @@ export interface ContextoDoTexto {
   agora: Date;
   /** quando o problema começou (do estado salvo, ou do primeiro erro) */
   desde: Date;
+  /** fim conhecido do problema (crédito: a hora do ÚLTIMO erro; de madrugada a prova de volta chega horas depois) */
+  fim?: Date;
   /** frase de queda nos últimos 30 min (entra no aviso de saldo: é o dano ao paciente) */
   frases?: Frases;
 }
@@ -407,10 +439,13 @@ export function montarTexto(p: Problema, tipo: 'novo' | 'lembrete' | 'voltou', c
 
   if (p.tipo === 'credito' && p.familia) {
     const o = ONDE_PAGAR[p.familia];
-    if (tipo === 'voltou') return `✅ Voltou: crédito da ${fam}. Ficou ${dur} fora (desde ${desde}, normalizou às ${horaBrasilia(ctx.agora, ctx.agora)}).`;
+    if (tipo === 'voltou') {
+      const fim = ctx.fim ?? ctx.agora;
+      return `✅ Voltou: crédito da ${fam}. Ficou ${duracao(fim.getTime() - ctx.desde.getTime())} fora (${desde} até o último erro, às ${horaBrasilia(fim, ctx.agora)}).`;
+    }
     const dano = danoDaFrase(ctx.frases);
     // Unidade pode ter chave própria (unit.anthropicApiKey / chave da OpenAI): com 1 só unidade atingida, pode ser a chave dela e não a da rede.
-    const so1 = p.unidades.length === 1 ? ` Só 1 unidade atingida (pode ser a chave própria dela, não a da rede).` : '';
+    const so1 = p.unidades.length === 1 ? ` Só 1 unidade apareceu até agora; se for só ela, pode ser a chave própria dela e não a da rede.` : '';
     if (tipo === 'lembrete') {
       return `🔴 Ainda sem crédito na ${fam}: já são ${dur} (desde ${desde}).${dano} Pague em ${o} e ligue a recarga automática.`;
     }
@@ -494,8 +529,9 @@ export interface RegistroDeAviso {
 export async function rodarVigia(deps: DepsDaRodada): Promise<RegistroDeAviso[]> {
   const agora = deps.agora ?? new Date();
   const obs = await coletar(deps.leitura, agora);
-  const problemas = suprimir(avaliar(obs));
-  const estados = new Map((await deps.store.listar()).map((e) => [e.chave, e]));
+  const lista = await deps.store.listar();
+  const problemas = suprimir(avaliar(obs), haCausaRecente(lista, agora));
+  const estados = new Map(lista.map((e) => [e.chave, e]));
   const saida: RegistroDeAviso[] = [];
   const emAberto: Problema[] = []; // ativos, avisados e sem consequência de outro: candidatos ao lembrete conjunto
   let lembreteDevido = false;
@@ -525,7 +561,7 @@ export async function rodarVigia(deps: DepsDaRodada): Promise<RegistroDeAviso[]>
       if (p.ativo && acao !== 'voltou') await deps.store.visto(p.chave, p.vistoEm);
 
       const desde = estado && !estado.resolvidoEm && !reabrir ? estado.abertoEm : p.inicioEm;
-      const texto = montarTexto(p, acao, { agora, desde, frases: obs.frases });
+      const texto = montarTexto(p, acao, { agora, desde, fim: acao === 'voltou' ? estado?.ultimoVistoEm : undefined, frases: obs.frases });
       const entregue = await deps.enviar(texto);
       saida.push({ chave: p.chave, acao, texto, entregue });
       if (!entregue) continue; // não marca: a próxima rodada tenta de novo

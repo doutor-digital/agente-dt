@@ -7,6 +7,7 @@ import {
   duracao,
   emSilencioNoturno,
   familiaDoModelo,
+  haCausaRecente,
   horaBrasilia,
   LIMIARES,
   montarTexto,
@@ -480,4 +481,52 @@ test('CRÉDITO: com uma só unidade atingida o aviso diz que pode ser a chave pr
   assert.match(t, /chave própria/);
   obs.errosSaldoJanela[0].unidades = ['Salto', 'Tatuí'];
   assert.doesNotMatch(montarTexto(achar(avaliar(obs), 'credito:openai'), 'novo', { agora: d(T0), desde: d(T0) }), /chave própria/);
+});
+
+test('decidir: sem prova de recuperação, só uma pausa de MAIS de 3 h vira episódio novo (deploy/troca de líder de 40 min não repete o aviso)', () => {
+  const quarentaMin = aberto({ ultimoVistoEm: d(T0 - 40 * MIN), ultimoAvisoEm: d(T0 - 40 * MIN) });
+  assert.equal(decidir(problema({ tipo: 'frase', chave: 'frase' }), quarentaMin, d(T0)), 'atualizar');
+  const quatroHoras = aberto({ ultimoVistoEm: d(T0 - 4 * H), ultimoAvisoEm: d(T0 - 4 * H) });
+  assert.equal(decidir(problema({ tipo: 'frase', chave: 'frase' }), quatroHoras, d(T0)), 'novo');
+});
+
+test('haCausaRecente: saldo/falha aberto visto há pouco, ou resolvido há menos de 35 min; o resto não conta', () => {
+  const e = (chave: string, extra: Partial<EstadoAlerta>): EstadoAlerta => ({ chave, abertoEm: d(T0 - 9 * H), ultimoVistoEm: d(T0 - 9 * H), ultimoAvisoEm: d(T0 - 9 * H), lembretes: 0, resolvidoEm: null, ...extra });
+  assert.equal(haCausaRecente([], d(T0)), false);
+  assert.equal(haCausaRecente([e('credito:openai', { ultimoVistoEm: d(T0 - 2 * H) })], d(T0)), true);
+  assert.equal(haCausaRecente([e('credito:openai', {})], d(T0)), false, 'aberto, mas sem sinal há 9 h: não é rastro recente');
+  assert.equal(haCausaRecente([e('falha:anthropic', { resolvidoEm: d(T0 - 20 * MIN) })], d(T0)), true);
+  assert.equal(haCausaRecente([e('falha:anthropic', { resolvidoEm: d(T0 - 40 * MIN) })], d(T0)), false);
+  assert.equal(haCausaRecente([e('frase', { resolvidoEm: d(T0 - 5 * MIN) })], d(T0)), false, 'frase e parada não são causa');
+});
+
+test('RODADA: logo depois da recarga, a frase de queda que ainda está na janela NÃO vira alarme de "causa desconhecida"', async () => {
+  const volta = T0 - 20 * MIN; // recarga: erros até aqui, sucessos depois
+  const chamadas = trafego(T0 - 2 * D, T0, (t) => [
+    t <= volta ? { t, status: 'error', model: 'claude-sonnet-5', unidade: 'u1', mensagem: ANTHROPIC_SEM_SALDO } : { t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' },
+  ]);
+  const frases: FraseEnviada[] = [0, 1, 2, 3, 4, 5].map((i) => ({ t: volta - i * 2 * MIN, conversa: `c${i}`, unidade: 'u1' }));
+  const leitura = leituraEmMemoria(chamadas, frases, (i) => i, [100, 100, 100, 100]);
+  const store = storeEmMemoria();
+  const enviados: string[] = [];
+  const enviar = async (t: string) => (enviados.push(t), true);
+  for (let t = T0 - 4 * H; t <= T0; t += 5 * MIN) await rodarVigia({ leitura, store, agora: d(t), enviar });
+  assert.equal(enviados.filter((x) => /FRASE DE QUEDA|PARADA/.test(x)).length, 0, enviados.join('\n---\n'));
+  assert.equal(enviados.filter((x) => x.startsWith('✅ Voltou: crédito')).length, 1);
+});
+
+test('texto: "voltou" do crédito conta a duração até o ÚLTIMO ERRO (de madrugada a prova de volta chega horas depois)', () => {
+  const obs = obsVazia();
+  const p = achar(avaliar(obs), 'credito:anthropic');
+  const desde = d(T0 - 14 * H);
+  const ultimoErro = d(T0 - 4 * H);
+  const t = montarTexto(p, 'voltou', { agora: d(T0), desde, fim: ultimoErro });
+  assert.match(t, /Ficou 10 h fora/);
+  assert.doesNotMatch(t, /14 h/);
+});
+
+test('texto: a classe dominante SOMA as chamadas por classe (request-id diferente no começo não decide sozinho)', () => {
+  const g = (mensagem: string, chamadas: number) => ({ familia: 'anthropic' as const, mensagem, chamadas, unidades: [], primeiro: d(T0), ultimo: d(T0) });
+  const grupos = [...Array.from({ length: 50 }, (_, i) => g(`503 overloaded_error req_${i}`, 1)), g('403 permission denied', 3)];
+  assert.match(classeDominante(grupos), /5xx/);
 });
