@@ -17,7 +17,7 @@ import { SpineService } from './spine.service.js';
 import { KommoClient } from './kommo.service.js';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { limparCacheEsquema } from '../lib/kommo-schema.js';
-import { syncLeadToSpine, type DepsDoPrimeiroContato } from './spine-sync.service.js';
+import { _limparJanelasParaTeste, SpineSyncService, syncLeadToSpine, type DepsDoPrimeiroContato } from './spine-sync.service.js';
 import { MOTIVO_SEM_CASAMENTO } from '../lib/cadastro-todo-lead.js';
 import { leadAchadoNoMotivo, leadParaConverter } from './paciente-existente.js';
 import { _limparRecentesParaTeste, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
@@ -38,6 +38,8 @@ spine.createClient = async () => {
   return { ok: true, data: { idClient: 888 } };
 };
 spine.searchClients = async () => ({ ok: true, data: { clients: [] } });
+let buscasDeNome = 0;
+spine.searchLeads = async () => { buscasDeNome++; return { ok: true, data: { leads: [{ idLead: 4321, name: 'Maria da Silva', whatsapp: null, idSource: null }] } }; };
 
 const lidos: string[] = []; // o que o teste viu o sincronizador ler no Kommo
 let titulo = 'Maria Souza Lima';
@@ -129,6 +131,8 @@ beforeEach(() => {
   vinculos.length = 0;
   lidos.length = 0;
   vinculoAtual = null;
+  buscasDeNome = 0;
+  _limparJanelasParaTeste();
   titulo = 'Maria Souza Lima';
   nomeDoContato = 'Maria Souza Lima';
   telefoneDoContato = '+55 11 98888-7777';
@@ -373,4 +377,66 @@ test('sem telefone nenhum, não pede retentar (causa permanente: vale a espera d
   const r = await syncLeadToSpine(unidade(), 52, PC(deps(), null));
   assert.equal(r.ok, false);
   assert.equal(r.retentar, undefined);
+});
+
+// ── resolvido: o que a franquia já tinha não vira lead duplicado nem some do botão "cadastrar paciente" ──────────────────────────
+
+const MOTIVO_LEAD_ACHADO = 'lead já existe na franquia (idLead 4321, nome "Maria Souza Lima", achado pelo telefone no índice): não criei lead — o lead NÃO foi vinculado ao cartão';
+const MOTIVO_PACIENTE_ACHADO = 'paciente já existe na franquia (idClient 9001, achado pelo telefone no índice): não criei lead';
+
+test('lead já existia (só o motivo): o agendamento/o botão Enviar NÃO cria lead duplicado, mesmo sem soLead', async () => {
+  casamento('ligado');
+  vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_LEAD_ACHADO };
+  const r = await syncLeadToSpine(unidade(), 90);
+  assert.equal(r.ok, true);
+  assert.equal(r.jaExistia, true);
+  assert.deepEqual(feitos, [], 'nem lead, nem paciente');
+});
+
+test('paciente já existia (só o motivo): também não cria lead por cima', async () => {
+  casamento('ligado');
+  vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_PACIENTE_ACHADO };
+  const r = await syncLeadToSpine(unidade(), 91);
+  assert.equal(r.ok, true);
+  assert.deepEqual(feitos, []);
+});
+
+test('botão "cadastrar paciente" (prepararPaciente): lead achado SÓ vira o idLead do paciente se o nome bate; senão o paciente nasce sem converter o lead', async () => {
+  vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_LEAD_ACHADO };
+  titulo = 'Maria Souza Lima';
+  const igual = await SpineSyncService.prepararPaciente(unidade(), 92);
+  assert.equal(igual.ok, true, JSON.stringify(igual));
+  assert.equal(igual.payload?.idLead, 4321);
+  titulo = 'Joana Souza Lima'; // o cartão é de outra pessoa (a filha)
+  const outra = await SpineSyncService.prepararPaciente(unidade(), 92);
+  assert.equal(outra.ok, true, JSON.stringify(outra));
+  assert.equal(outra.payload?.idLead, null, 'o lead da mãe não é convertido');
+});
+
+test('botão "cadastrar paciente" com vínculo ANTIGO que adotou o lead achado (id + motivo, sem nome): não manda o lead adotado como idLead', async () => {
+  vinculoAtual = { spineIdLead: 6071221, spineIdClient: null, status: 'ok', motivo: 'lead já existe na franquia (idLead 6071221, achado pelo telefone no índice): não criei lead' };
+  const r = await SpineSyncService.prepararPaciente(unidade(), 93);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.payload?.idLead, null);
+});
+
+test('botão "cadastrar paciente": telefone que já é de paciente da franquia NÃO cadastra outro; lead criado por nós segue como sempre; sem vínculo = "sem-lead"', async () => {
+  vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_PACIENTE_ACHADO };
+  const jaPaciente = await SpineSyncService.prepararPaciente(unidade(), 94);
+  assert.equal(jaPaciente.ok, false);
+  assert.match(jaPaciente.motivo ?? '', /já é de um paciente/);
+  vinculoAtual = { spineIdLead: 55, spineIdClient: null, status: 'ok', motivo: null };
+  assert.equal((await SpineSyncService.prepararPaciente(unidade(), 95)).payload?.idLead, 55);
+  vinculoAtual = null;
+  assert.equal((await SpineSyncService.prepararPaciente(unidade(), 96)).etapa, 'sem-lead');
+});
+
+test('o nome do lead achado é buscado UMA vez por franquia/janela: dois achados seguidos dividem a mesma leitura (e a unidade e o "-resgate" também)', async () => {
+  const d = deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice', criado: new Date('2026-11-20T12:00:00Z') } });
+  delete (d as { nomeDoLead?: unknown }).nomeDoLead;
+  await syncLeadToSpine(unidade(), 97, PC(d));
+  vinculoAtual = null;
+  await syncLeadToSpine(unidade({ id: 'u-bebedouro-resgate', slug: 'bebedouro-resgate' } as Partial<Unit>), 98, PC(d));
+  assert.equal(buscasDeNome, 1, 'uma chamada à franquia, não duas');
+  assert.deepEqual(leadAchadoNoMotivo(String((vinculos[0] as { create: Record<string, unknown> }).create.motivo)), { id: 4321, nome: 'Maria da Silva' });
 });

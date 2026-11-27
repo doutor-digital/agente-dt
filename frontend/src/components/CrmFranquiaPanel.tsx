@@ -750,12 +750,12 @@ function Esteira({
   form: Form;
 }) {
   const temToken = status?.hasToken ?? false;
-  const c: Record<string, number> = hist?.contagem ?? {};
+  const c = hist?.contagem;
   const jaExistiam = (hist?.contagem.jaExistiam?.lead ?? 0) + (hist?.contagem.jaExistiam?.paciente ?? 0);
   // "ok" inclui quem a franquia já tinha (o telefone já era lead/paciente lá): esses não foram enviados por nós
-  const enviados = Math.max(0, (c.ok ?? 0) - jaExistiam);
-  const falharam = c.falhou ?? 0;
-  const esperando = c.ignorado ?? 0;
+  const enviados = Math.max(0, (c?.ok ?? 0) - jaExistiam);
+  const falharam = c?.falhou ?? 0;
+  const esperando = c?.ignorado ?? 0;
   const pacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
 
   const passos: {

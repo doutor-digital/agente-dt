@@ -9,9 +9,9 @@ import { conferirCartaoDestaUnidade } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
-import { decidirCadastro, motivoDeLeadJaExistente, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE } from './paciente-existente.js';
+import { decidirCadastro, leadParaConverter, motivoDeLeadJaExistente, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE, tipoDoVinculo } from './paciente-existente.js';
 import { nomeProvisorioDoLead } from '../lib/nome-provisorio.js';
-import { DIAS_DE_LEADS_RECENTES, lembrarLeadCriado, verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
+import { DIAS_DE_LEADS_RECENTES, franquiaDe, lembrarLeadCriado, verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
 import { conferirOrigemIaSofia, type ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
 import { chaveDaFranquia, espacarCriacao } from '../lib/franquia-espacamento.js';
 import { chaveDoTelefone, conferirImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
@@ -76,17 +76,17 @@ const PALAVRAS_DE_CONVERSA = new Set([
   // papel, não nome: "Paciente", "Pai", "Filha" — o perfil do WhatsApp de quem escreve pelo aparelho de outra pessoa (visto em Rio Verde, 27/11/2026)
   'paciente', 'pacientes', 'pai', 'mae', 'mamae', 'papai', 'filha', 'esposa', 'esposo', 'marido', 'avo', 'vovo', 'amigo', 'amiga',
   'vizinho', 'vizinha', 'patroa', 'patrao', 'namorado', 'namorada', 'genro', 'cunhada', 'cunhado', 'sogra', 'sogro',
-  'tia', 'madrinha', 'padrinho',
+  'tia', 'tio', 'madrinha', 'padrinho',
   // frase, não nome: "AMANHÃ FALAMOS", "PACIENTE BRASILEIRO FALANDO", "Vendo Avon"
   'amanha', 'hoje', 'ontem', 'falamos', 'falando', 'falar', 'falei', 'vendo', 'compro', 'vendemos', 'vende', 'ligar', 'ligo',
   'aguardo', 'aguardando', 'retorno', 'retornando', 'avon', 'revenda', 'revendedor', 'revendedora',
-  // recado de status e frase religiosa: "Deus é fiel" (a palavra "deus" tem regra própria — "João de Deus" é nome)
-  'fiel', 'amem', 'aleluia', 'abencoado', 'abencoada', 'bencao', 'louvado', 'oracao', 'gratidao', 'disponivel', 'online', 'offline',
+  // recado de status e frase religiosa: "Deus é fiel" cai no verbo "é" e em "deus" (regras próprias — "João de Deus" e "Maria Fiel Souza" são nomes)
+  'amem', 'aleluia', 'abencoado', 'abencoada', 'bencao', 'louvado', 'oracao', 'gratidao', 'disponivel', 'online', 'offline',
   'mensagem', 'mensagens', 'recado', 'viajando',
 ]);
 
 /** Parentesco que também é sobrenome ou apelido ("Carlos Souza Filho", "Neto Silva"): só barra quando é a ÚNICA palavra de nome. */
-const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'neto', 'sobrinho', 'primo', 'irmao', 'irma', 'tio']);
+const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'neto', 'sobrinho', 'primo', 'irmao', 'irma']);
 const PARTICULAS_ANTES_DE_DEUS = new Set(['de', 'do', 'dos']);
 const PEDACO_DE_EMAIL = /@|gmail|hotmail|outlook|yahoo|icloud|\.com\b|\.net\b/;
 
@@ -399,6 +399,11 @@ export async function prepararLead(unit: Unit, kommoLeadId: number, primeiroCont
   if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
     return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
   }
+  // O telefone já era lead ou paciente na franquia (achado no 1º contato; só o motivo foi gravado, nenhum id): está RESOLVIDO. Sem isto o botão
+  // "Enviar" do painel e o agendamento criariam um lead duplicado por cima do que a recepção já cadastrou.
+  if (jaTem?.status === 'ok' && tipoDoVinculo(jaTem.motivo) !== 'criado') {
+    return { ok: false, etapa: 'ja-enviado' };
+  }
 
   return montarPayload(unit, kommoLeadId, primeiroContato);
 }
@@ -431,7 +436,16 @@ export async function prepararPaciente(
   if (vinculo?.spineIdClient) {
     return { ok: false, etapa: 'ja-cadastrado', spineIdClient: vinculo.spineIdClient };
   }
-  if (!vinculo?.spineIdLead) {
+  const tipo = vinculo?.status === 'ok' ? tipoDoVinculo(vinculo.motivo) : 'criado';
+  if (tipo === 'paciente-ja-existia') {
+    return {
+      ok: false,
+      etapa: 'sem-lead',
+      motivo: `o telefone já é de um paciente da franquia (${vinculo?.motivo ?? ''}) — nada a cadastrar por aqui; a consulta se marca no cadastro dele`,
+    };
+  }
+  // Lead que o 1º contato apenas ACHOU pelo telefone (só o motivo): o paciente nasce por este botão, mas só converte aquele lead se o nome bate (abaixo).
+  if (!vinculo?.spineIdLead && tipo !== 'lead-ja-existia') {
     return {
       ok: false,
       etapa: 'sem-lead',
@@ -449,6 +463,9 @@ export async function prepararPaciente(
     };
   }
 
+  // o lead que vira paciente: o criado por nós, ou o achado SÓ se o nome bate (nome e sobrenome) — o nome do cartão vem do perfil do WhatsApp
+  const idLead = leadParaConverter(vinculo, base.name).id;
+
   const partes = base.name.trim().split(/\s+/).filter((x) => x.length >= 2);
   if (partes.length < 2) {
     return {
@@ -459,7 +476,7 @@ export async function prepararPaciente(
         name: base.name,
         whatsapp: base.whatsapp ? SpineService.normalizarWhatsapp(base.whatsapp) : null,
         idSource: base.idSource,
-        idLead: vinculo.spineIdLead,
+        idLead,
         addressCity: base.addressCity,
         addressUf: base.addressUf,
       },
@@ -482,7 +499,7 @@ export async function prepararPaciente(
       name: base.name,
       whatsapp: fone,
       idSource: base.idSource,
-      idLead: vinculo.spineIdLead,
+      idLead,
       addressCity: base.addressCity,
       addressUf: base.addressUf,
     },
@@ -555,9 +572,39 @@ async function nomeDoLeadNaFranquia(unit: Unit, achado: Extract<JaCadastrado, { 
   const janela = nasceu
     ? { initialDate: diaIso(nasceu - DIA_MS), endDate: diaIso(nasceu + 2 * DIA_MS) }
     : { initialDate: diaIso(agora - (DIAS_DE_LEADS_RECENTES + 1) * DIA_MS), endDate: diaIso(agora + DIA_MS) };
-  const r = await SpineService.searchLeads(unit, janela);
-  if (!r.ok || !r.data) return null;
-  return r.data.leads.find((l) => l.idLead === achado.id)?.name ?? null;
+  const nomes = await leadsDaJanela(unit, janela);
+  return nomes.get(achado.id) ?? null;
+}
+
+/** A busca por janela guardada POR FRANQUIA (5 min; 2 min se falhou): vários achados na mesma rajada/dia dividem uma leitura só, e uma franquia lenta não vira uma chamada por mensagem. */
+const VALIDADE_DA_JANELA_MS = 5 * 60_000;
+const VALIDADE_DA_JANELA_COM_FALHA_MS = 2 * 60_000;
+const janelasLidas = new Map<string, { em: number; falhou: boolean; valor: Promise<Map<number, string | null>> }>();
+
+function leadsDaJanela(unit: Unit, janela: { initialDate: string; endDate: string }): Promise<Map<number, string | null>> {
+  const chave = `${franquiaDe(unit)}|${janela.initialDate}|${janela.endDate}`;
+  const agora = Date.now();
+  const g = janelasLidas.get(chave);
+  if (g && agora - g.em < (g.falhou ? VALIDADE_DA_JANELA_COM_FALHA_MS : VALIDADE_DA_JANELA_MS)) return g.valor;
+  const entrada = {
+    em: agora,
+    falhou: false,
+    valor: SpineService.searchLeads(unit, janela).then((r) => {
+      if (!r.ok || !r.data) throw new Error(r.error ?? 'a franquia não respondeu');
+      return new Map(r.data.leads.map((l) => [l.idLead, l.name] as [number, string | null]));
+    }),
+  };
+  if (janelasLidas.size > 200) janelasLidas.clear();
+  janelasLidas.set(chave, entrada);
+  // falha não derruba quem chama (o nome fica desconhecido e o lead achado nunca é convertido); só marca a falha para o cache curto
+  const vazio = entrada.valor.catch(() => { entrada.falhou = true; entrada.em = Date.now(); return new Map<number, string | null>(); });
+  entrada.valor = vazio;
+  return vazio;
+}
+
+/** Só teste. */
+export function _limparJanelasParaTeste(): void {
+  janelasLidas.clear();
 }
 
 /** Telefones (por franquia) com um cadastro em andamento: dois cartões do mesmo número não criam em paralelo. */

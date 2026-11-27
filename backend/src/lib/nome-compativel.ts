@@ -9,18 +9,24 @@
  */
 import { ehNomeProvisorio } from './nome-provisorio.js';
 
-/** Tratamento e parentesco não são nome: "Dona Maria" e "Dona Ana" não são a mesma pessoa. Pulados antes de comparar. */
-const NAO_SAO_NOME = new Set([
+/** Tratamento: não identifica ninguém e pode faltar de um lado ("Dona Maria Souza" × "Maria Souza" é a mesma pessoa). Pulado antes de comparar. */
+const TRATAMENTO = new Set([
   'dona', 'seu', 'sr', 'sra', 'srta', 'senhor', 'senhora', 'dr', 'dra', 'doutor', 'doutora', 'prof', 'profa', 'professor', 'professora',
-  'mae', 'mamae', 'pai', 'papai', 'vo', 'vovo', 'tia', 'tio', 'filha', 'irma', 'irmao', 'esposa', 'marido', 'avo',
-  'sogra', 'sogro', 'prima', 'primo', 'sobrinha', 'sobrinho', 'neta', 'paciente',
+]);
+
+/**
+ * Parentesco e sufixo de geração DIFERENCIAM pessoas: "Maria Souza Filha" não é "Maria Souza" (é a filha dela), "Tia Ana" não é "Ana", "Pedro Neto" não
+ * é "Pedro". Não entram na comparação das palavras, mas precisam ser IGUAIS dos dois lados — presente de um lado só (ou diferente) = NÃO casa.
+ */
+const MARCAS = new Set([
+  'mae', 'mamae', 'pai', 'papai', 'vo', 'vovo', 'avo', 'tia', 'tio', 'irma', 'irmao', 'esposa', 'marido', 'sogra', 'sogro', 'prima', 'primo', 'paciente',
+  'filha', 'filho', 'neta', 'neto', 'sobrinha', 'sobrinho', 'bisneta', 'bisneto', 'junior', 'jr', 'segundo', 'terceiro',
 ]);
 
 /** Partículas de sobrenome: não identificam ninguém ("Mãe da Ana" × "Tia da Ana" não casa pelo "da"). */
 const PARTICULAS = new Set(['da', 'de', 'do', 'das', 'dos', 'e', 'di', 'del', 'della', 'la', 'le', 'van', 'von', 'y', 'dal']);
 
-/** As palavras do nome, minúsculas, sem acento, sem tratamento nem partícula. Vazio se não há nome utilizável (ausente ou provisório). */
-export function palavrasDoNome(nome: string | null | undefined): string[] {
+function palavrasBrutas(nome: string | null | undefined): string[] {
   const bruto = String(nome ?? '').trim();
   if (!bruto || ehNomeProvisorio(bruto)) return [];
   return bruto
@@ -29,21 +35,33 @@ export function palavrasDoNome(nome: string | null | undefined): string[] {
     .toLowerCase()
     .split(/\s+/)
     .map((p) => p.replace(/[^a-z]/g, ''))
-    .filter((p) => p.length >= 2 && !NAO_SAO_NOME.has(p) && !PARTICULAS.has(p));
+    .filter((p) => p.length >= 2 && !TRATAMENTO.has(p) && !PARTICULAS.has(p));
+}
+
+/** As palavras do nome, minúsculas, sem acento, sem tratamento, partícula, parentesco nem sufixo de geração. Vazio se não há nome utilizável (ausente ou provisório). */
+export function palavrasDoNome(nome: string | null | undefined): string[] {
+  return palavrasBrutas(nome).filter((p) => !MARCAS.has(p));
+}
+
+function marcasDoNome(nome: string | null | undefined): string[] {
+  return [...new Set(palavrasBrutas(nome).filter((p) => MARCAS.has(p)))].sort();
 }
 
 /**
- * Mesmo nome E mesmo sobrenome (primeira e última palavra), os dois lados com pelo menos duas palavras; e, se os dois têm nome do meio, um em comum.
- * "Maria Souza" casa com "Maria José Souza"; "Maria José Souza" NÃO casa com "Maria Aparecida"; "Maria" sozinha nunca casa.
+ * Mesmo nome, mesmo sobrenome (primeira e última palavra), mesmas marcas de parentesco/geração e o MESMO conjunto de nomes do meio — os dois
+ * lados com pelo menos duas palavras. Na dúvida, NÃO:
+ *  - "Maria Souza" × "Maria Souza Filha": não casa (a filha); "Maria Souza" × "Maria Eduarda Souza": não casa (nome do meio de um lado só);
+ *  - "Maria Aparecida Souza" × "Maria Eduarda Souza": não casa; "Maria Aparecida Souza" × "Maria Aparecida Lima Souza": casa (um do meio em comum).
  */
 export function nomesCompletosCompativeis(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = palavrasDoNome(a);
   const y = palavrasDoNome(b);
   if (x.length < 2 || y.length < 2) return false;
   if (x[0] !== y[0] || x[x.length - 1] !== y[y.length - 1]) return false;
-  // nomes do meio: "Maria Aparecida Souza" × "Maria Eduarda Souza" são pessoas diferentes (mãe e filha). Quando os DOIS lados têm nome do meio, ao menos um tem de coincidir.
+  if (marcasDoNome(a).join('|') !== marcasDoNome(b).join('|')) return false;
   const meioX = x.slice(1, -1);
   const meioY = y.slice(1, -1);
-  if (meioX.length > 0 && meioY.length > 0 && !meioX.some((m) => meioY.includes(m))) return false;
+  if ((meioX.length === 0) !== (meioY.length === 0)) return false;
+  if (meioX.length > 0 && !meioX.some((m) => meioY.includes(m))) return false;
   return true;
 }

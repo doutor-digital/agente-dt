@@ -5,8 +5,8 @@ import { nomesCompletosCompativeis, palavrasDoNome } from './nome-compativel.js'
 
 test('mesmo nome e mesmo sobrenome casam, sem acento, caixa, pontuação, partícula nem nome do meio', () => {
   assert.equal(nomesCompletosCompativeis('Maria da Silva', 'maria SILVA'), true);
-  assert.equal(nomesCompletosCompativeis('Maria Souza', 'Maria José Souza'), true);
-  assert.equal(nomesCompletosCompativeis('José Carlos de Souza', 'JOSE C. SOUZA'), true);
+  assert.equal(nomesCompletosCompativeis('José Carlos de Souza', 'JOSE CARLOS SOUZA'), true);
+  assert.equal(nomesCompletosCompativeis('Maria Souza', 'MARIA  souza'), true);
 });
 
 test('só o primeiro nome igual NÃO basta: "Maria José Souza" × "Maria Aparecida" não casa', () => {
@@ -39,5 +39,23 @@ test('tratamento, parentesco e partícula não são nome: "Mãe da Ana" × "Tia 
 test('mãe e filha com o MESMO nome e sobrenome mas nome do meio diferente NÃO casam; sem nome do meio de um lado, casa', () => {
   assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Eduarda Souza'), false);
   assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Aparecida Lima Souza'), true);
-  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Souza'), true);
+});
+
+test('nome do meio de UM lado só NÃO casa (o lead que criamos quase sempre tem 2 palavras; filho com nome composto é o caso comum)', () => {
+  assert.equal(nomesCompletosCompativeis('Maria Eduarda Souza', 'Maria Souza'), false);
+  assert.equal(nomesCompletosCompativeis('João Pedro Santos', 'João Santos'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Souza', 'Maria José Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Souza'), false);
+  assert.equal(nomesCompletosCompativeis('José Carlos de Souza', 'JOSE C. SOUZA'), false);
+});
+
+test('sufixo de geração / parentesco de UM lado só NÃO casa: "Maria Souza Filha" não é "Maria Souza"', () => {
+  assert.equal(nomesCompletosCompativeis('Maria Souza Filha', 'Maria Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Souza', 'Maria Souza Filha'), false);
+  assert.equal(nomesCompletosCompativeis('Pedro Silva Neto', 'Pedro Silva'), false);
+  assert.equal(nomesCompletosCompativeis('Carlos Souza Júnior', 'Carlos Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Ana Lima Sobrinha', 'Ana Lima'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Souza Neta', 'Maria Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Tia Ana Lima', 'Ana Lima'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Souza Filha', 'maria souza FILHA'), true, 'a mesma marca dos dois lados casa');
 });

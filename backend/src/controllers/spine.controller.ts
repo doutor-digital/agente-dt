@@ -590,7 +590,9 @@ export async function pendentesHandler(req: Request, res: Response): Promise<voi
       nomeLimpo: semNome ? null : SpineSyncService.limparNome(titulo),
       criadoEm: l.created_at ? new Date(l.created_at * 1000).toISOString() : null,
       spineIdLead: v?.spineIdLead ?? null,
-      situacao: v?.spineIdLead
+      // "enviado" (a tela diz "já está lá") também para o que a franquia já tinha: o 1º contato achou o telefone e só gravou o motivo.
+      // Como "pronto", o botão Enviar criaria um lead duplicado por cima do cadastro da recepção.
+      situacao: v?.spineIdLead || (v?.status === 'ok' && tipoDoVinculo(v.motivo) !== 'criado')
         ? ('enviado' as const)
         : semNome
           ? ('sem-nome' as const)

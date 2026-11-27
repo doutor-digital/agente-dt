@@ -8,7 +8,8 @@ import type { Request, Response } from 'express';
 import { prisma } from '../lib/prisma.js';
 import { SpineService } from '../services/spine.service.js';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
-import { listLeadLinksHandler, prontidaoHandler } from './spine.controller.js';
+import { KommoClient } from '../services/kommo.service.js';
+import { listLeadLinksHandler, pendentesHandler, prontidaoHandler } from './spine.controller.js';
 
 const agora = new Date();
 const link = (kommoLeadId: number, o: Record<string, unknown>) => ({
@@ -112,4 +113,19 @@ test('prontidão: carga do índice CORTADA pelo teto aparece como problema', asy
   const peca = (await chamar(prontidaoHandler)).pecas.find((p: { id: string }) => p.id === 'indice-telefones');
   assert.equal(peca.ok, false);
   assert.match(peca.detalhe, /CORTADA/);
+});
+
+test('pendentes: lead que a franquia JÁ tinha (só o motivo) aparece como "enviado" ("já está lá"), nunca como "pronto" — o botão Enviar duplicaria', async () => {
+  (KommoClient.prototype as unknown as Record<string, unknown>).listLeadsDesde = async () => [
+    { id: 1, name: 'Maria Souza Lima', created_at: 1 }, { id: 2, name: 'Ana Paula Lima', created_at: 1 }, { id: 3, name: 'Joana Souza Lima', created_at: 1 }, { id: 4, name: 'Rosa Maria Dias', created_at: 1 },
+  ];
+  unidade = { ...unidade, kommoSubdomain: 'teste', kommoAccessToken: 'tok' };
+  links = [
+    link(1, { motivo: 'lead já existe na franquia (idLead 300, nome "Maria Souza Lima", achado pelo telefone no índice): não criei lead' }),
+    link(2, { motivo: 'paciente já existe na franquia (idClient 9001, achado pelo telefone no índice): não criei lead' }),
+    link(3, { spineIdLead: 100 }),
+  ];
+  const r = await chamar(pendentesHandler);
+  const porLead = Object.fromEntries(r.leads.map((l: { kommoLeadId: number; situacao: string }) => [l.kommoLeadId, l.situacao]));
+  assert.deepEqual(porLead, { 1: 'enviado', 2: 'enviado', 3: 'enviado', 4: 'pronto' });
 });

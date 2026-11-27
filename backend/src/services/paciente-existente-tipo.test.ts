@@ -42,7 +42,11 @@ test('CASO REAL: o cartão tem o perfil da MÃE, a consulta é da FILHA — o le
 
 test('a própria dona do lead agendando (nome e sobrenome batem): converte o lead achado', () => {
   assert.deepEqual(leadParaConverter(achado('Maria Souza Lima'), 'Maria Souza Lima'), { id: 4321, achadoDescartado: null });
-  assert.deepEqual(leadParaConverter(achado('Maria Souza'), 'Maria José Souza'), { id: 4321, achadoDescartado: null });
+  assert.deepEqual(leadParaConverter(achado('Maria Souza'), 'Maria Souza'), { id: 4321, achadoDescartado: null });
+  // nome do meio de um lado só: na dúvida, não converte (a filha "Maria Eduarda Souza" no lead da mãe "Maria Souza")
+  assert.equal(leadParaConverter(achado('Maria Souza'), 'Maria Eduarda Souza').id, null);
+  // sufixo de geração: "Maria Souza Filha" não converte o lead "Maria Souza"
+  assert.equal(leadParaConverter(achado('Maria Souza'), 'Maria Souza Filha').id, null);
 });
 
 test('"Maria José Souza" × lead "Maria Aparecida": só o primeiro nome igual não converte', () => {
