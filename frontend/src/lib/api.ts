@@ -99,6 +99,8 @@ export interface Automacao {
   estado: EstadoAutomacao;
   /** `true` = ninguém mexeu na tela e o valor ainda vem da variável de ambiente. */
   vemDoAmbiente: boolean;
+  /** `true` = esta unidade está FORA desta automação por regra do código: nunca liga, mesmo com `*`. */
+  fora?: boolean;
   /** O csv cru da variável, pra conferir sem abrir o Docker. */
   ambiente: string;
 }

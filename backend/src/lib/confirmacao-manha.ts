@@ -13,11 +13,12 @@
  * Caxias e Petrópolis ficam FORA por padrão e por código (`UNIDADES_FORA`): mesmo com a lista `*`, a chave nelas vale desligada.
  */
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { UNIDADES_FORA_DAS_FALTAS } from './automacoes.js';
 
 export const ID_CONFIRMACAO_MANHA = 'confirmacao-manha';
 
 /** Unidades onde a pergunta da manhã e a oferta de datas NUNCA ligam, nem com `*` (pedido do João, 27/11/2026). */
-export const UNIDADES_FORA: readonly string[] = ['doutor-hernia-caxias', 'doutor-hernia-petropolis'];
+export const UNIDADES_FORA: readonly string[] = UNIDADES_FORA_DAS_FALTAS;
 
 /** O estado da automação na unidade, recusando as unidades de fora. Vale também para a chave irmã `remarcar-oferta`. */
 export function estadoDoPlano(slug: string, id: string, raw: string | undefined): Estado {
@@ -41,6 +42,23 @@ function minutosEntre(a: string, b: string): number {
 }
 
 /** Consulta de HOJE, entre 1 h 30 e 5 h à frente. `quando` e `agoraLocal` no relógio da clínica. */
+/**
+ * As faltas estão ligadas nesta unidade — a manhã OU a oferta de horários LIGADA (não «só no papel», que não muda nada para o paciente)?
+ * Com qualquer uma ligada, a Sofia e a pergunta convivem na mesma conversa e as travas de «1»/«2» solto e de resposta depois da consulta valem.
+ */
+export function faltasLigadas(slug: string, env: NodeJS.ProcessEnv = process.env): boolean {
+  return estadoDoPlano(slug, ID_CONFIRMACAO_MANHA, env.CONFIRMACAO_MANHA_SLUGS) === 'ligado' || estadoDoPlano(slug, 'remarcar-oferta', env.REMARCAR_OFERTA_SLUGS) === 'ligado';
+}
+
+/**
+ * Por onde a pergunta da manhã SAIRIA agora. O seco usa a MESMA conta do envio real (`pedirConfirmacao`): janela de 24 h aberta = texto pelo
+ * chat; fechada = só o modelo aprovado da manhã; sem ele, não sai nada. Conversa ilegível (`null`) conta como janela fechada.
+ */
+export function canalDaManha(janelaAberta: boolean, modeloDaManha: number | null): 'texto' | 'modelo' | 'sem_modelo' {
+  if (janelaAberta) return 'texto';
+  return modeloDaManha ? 'modelo' : 'sem_modelo';
+}
+
 export function dentroDaJanelaDaManha(quando: string, agoraLocal: string): boolean {
   if (quando.slice(0, 10) !== agoraLocal.slice(0, 10)) return false;
   const min = minutosEntre(agoraLocal, quando);

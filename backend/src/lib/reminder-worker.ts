@@ -51,7 +51,7 @@ import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
 import { clinicaAtendendoAgora } from './cutucada-apos-equipe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_VARREDURA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
+import { canalDaManha, estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_VARREDURA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
 import { oferecerNovoHorario } from './remarcar-oferta.js';
 import { vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import {
@@ -301,7 +301,8 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
         ...(modeloDaUnidade ? {} : { botoes: BOTOES_D1 }),
       });
       foiPeloChat = true;
-      enviado = textoDoChat;
+      // só a manhã guarda o texto enviado; a véspera e o reforço guardam o de sempre (com a unidade desligada, nada muda)
+      if (toque === 'd0') enviado = textoDoChat;
       if (!modeloDaUnidade) via = 'chat_botoes';
     } catch (err) {
       logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: chat direto falhou, indo pelo caminho de texto');
@@ -557,6 +558,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
  * margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga): fica só com a véspera.
  * Decisão em `confirmacao-manha.ts` (pura); aqui só se juntam os fatos. Caminho de envio e tratador da resposta são os da véspera.
  */
+/** Mensagens novas da manhã já mandadas na hora cheia (relógio da unidade), por unidade: o teto de `MAX_ENVIOS_POR_VARREDURA` vale por hora. */
+const enviosDaHora = new Map<string, { hora: string; n: number }>();
+
 async function lembrarManhaUnidade(unit: Unit): Promise<void> {
   const estado = estadoDaManha(unit.slug);
   if (estado === 'desligado' || !unit.spineEnabled || !unit.spineToken) return;
@@ -578,9 +582,13 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
   const conta: Record<string, number> = { enviados: 0, seco: 0 };
   const soma = (k: string) => (conta[k] = (conta[k] ?? 0) + 1);
   let pipes: KommoPipeline[] | null = null;
+  // O teto é por HORA (a varredura é de 15 em 15 min): quatro varreduras não podem somar quatro rajadas
+  const horaCheia = agoraLocalISO.slice(0, 13);
+  const gasto = enviosDaHora.get(unit.id);
+  const jaEnviadosNestaHora = gasto?.hora === horaCheia ? gasto.n : 0;
 
   for (const link of links) {
-    if (conta.enviados >= MAX_ENVIOS_POR_VARREDURA) {
+    if (jaEnviadosNestaHora + conta.enviados >= MAX_ENVIOS_POR_VARREDURA) {
       soma('adiados_pelo_teto');
       continue;
     }
@@ -647,17 +655,25 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         continue;
       }
       if (estado === 'seco') {
-        soma('seco');
-        registrarSimulacao(unit, ID_CONFIRMACAO_MANHA, {
-          leadId: link.kommoLeadId,
-          acao: 'mandaria',
-          alvo: 'mensagem',
-          valor: textoConfirmacaoManha({
-            nome: primeiroNomeDoPaciente(lead.name ?? null, null), quando, especialista: consulta.especialista,
-            endereco: unit.clinicAddress, horaDoEnvio: hora, oferece: oferecerNovoHorario(unit.slug) === 'ligado', comBotoes: true,
-          }),
-          deEtapa: etapa,
+        // As MESMAS checagens do envio real: janela de 24 h e modelo aprovado. Sem elas o seco prometeria envios que a unidade não faz.
+        const canal = canalDaManha(janelaAberta(oficiais), botDaManha(unit));
+        const preview = textoConfirmacaoManha({
+          nome: primeiroNomeDoPaciente(lead.name ?? null, null), quando, especialista: consulta.especialista,
+          endereco: unit.clinicAddress, horaDoEnvio: hora, oferece: oferecerNovoHorario(unit.slug) === 'ligado', comBotoes: true,
         });
+        if (canal === 'sem_modelo') {
+          soma('seco_nao_mandaria_sem_modelo');
+          registrarSimulacao(unit, ID_CONFIRMACAO_MANHA, {
+            leadId: link.kommoLeadId, acao: 'pularia', alvo: 'mensagem', deEtapa: etapa,
+            motivo: 'fora da janela de 24 h e a unidade não tem o modelo da manhã (manha_salesbot_id): não mandaria nada',
+          });
+        } else {
+          soma(canal === 'texto' ? 'seco_mandaria_texto' : 'seco_mandaria_modelo');
+          registrarSimulacao(unit, ID_CONFIRMACAO_MANHA, {
+            leadId: link.kommoLeadId, acao: 'mandaria', alvo: 'mensagem', deEtapa: etapa,
+            valor: canal === 'texto' ? preview : `modelo aprovado da manhã (Salesbot ${botDaManha(unit)}) — fora da janela de 24 h`,
+          });
+        }
         continue;
       }
       const via = await pedirConfirmacao({
@@ -672,7 +688,10 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         horaLocal: hora,
       });
       soma(via);
-      if (via !== 'nada') conta.enviados++;
+      if (via !== 'nada') {
+        conta.enviados++;
+        enviosDaHora.set(unit.id, { hora: horaCheia, n: jaEnviadosNestaHora + conta.enviados });
+      }
     } catch (err) {
       soma('erros');
       logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação da manhã: falha no lead');

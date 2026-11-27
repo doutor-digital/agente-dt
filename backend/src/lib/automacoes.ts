@@ -66,7 +66,12 @@ export interface Automacao {
   quandoVazio: 'desligado' | 'todas' | 'seco';
   /** Onde a regra mora, pra quem for ler o código depois. */
   arquivo: string;
+  /** Unidades que o CÓDIGO recusa, mesmo com `*` ou linha gravada: a tela mostra «fora» e o estado vale «desligado». */
+  foraDasUnidades?: readonly string[];
 }
+
+/** Caxias e Petrópolis ficam fora das chaves de faltas (pedido do João, 27/11/2026). */
+export const UNIDADES_FORA_DAS_FALTAS: readonly string[] = ['doutor-hernia-caxias', 'doutor-hernia-petropolis'];
 
 export const AUTOMACOES: readonly Automacao[] = [
   // ── movem cartão ────────────────────────────────────────────────────────────────────────────
@@ -280,12 +285,13 @@ export const AUTOMACOES: readonly Automacao[] = [
     oQueFaz:
       'No próprio dia da consulta, de 5 h a 1 h 30 antes do horário (e só com a clínica atendendo, 8h–20h), manda UMA mensagem curta ("sua consulta é hoje, às 14:30. Você consegue vir?") com os botões Confirmo / Preciso remarcar. Confirmou: o mesmo tratador da véspera marca CONFIRMADO na franquia e no cartão. Pediu para remarcar: segue a chave «Oferecer 2 horários a quem não vai conseguir ir».',
     pegadinha:
-      'NASCE DESLIGADA e exige «Só no papel» antes: a tela mostra a mensagem que mandaria e para quem. NUNCA liga em Caxias e Petrópolis (recusado em código, mesmo com `*`). Não pergunta a quem já confirmou (CONFIRMADO na franquia, «confirmo» à véspera ou ao reforço desta consulta, «Agendamento confirmado» da Sofia há menos de 12 h), a quem pediu para remarcar, a quem escreveu que não vem, nem a cartão em etapa de cancelado/perdido/em espera. Não sai onde a véspera é do robô do Kommo (chave «Véspera pelo robô do Kommo» fora de «Desligado»): lá o lembrete do dia já é do robô. A varredura é a cada 15 min. Consulta antes das 9h30 não tem margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga) e fica só com a véspera; entre 9h30 e 10h30 a janela é curta (só depois que a clínica abre). Canal: com a janela de 24 h aberta vai texto pelo chat; FECHADA, só sai se a unidade tiver o modelo aprovado da manhã (`pipeline_intents.manha_salesbot_id` — o da véspera diz "amanhã" e NÃO serve); sem modelo, não manda nada e não abre tarefa (tenta de novo na varredura seguinte, enquanto a janela existir). Se o Kommo falhar ao ler o cartão, as etapas ou a conversa, o paciente é pulado nessa varredura (nunca pergunta sem ter conferido). Conversa que não deu para ler conta como janela fechada. No WhatsApp Lite: no máximo 10 mensagens novas por unidade por varredura de hora em hora. Marca própria (`confirmacao_d0:<horário>`): uma pergunta por consulta, horário novo é pergunta nova.',
+      'NASCE DESLIGADA e exige «Só no papel» antes: a tela mostra a mensagem que mandaria e para quem. NUNCA liga em Caxias e Petrópolis (recusado em código, mesmo com `*`). Não pergunta a quem já confirmou (CONFIRMADO na franquia, «confirmo» à véspera ou ao reforço desta consulta, «Agendamento confirmado» da Sofia há menos de 12 h), a quem pediu para remarcar, a quem escreveu que não vem, nem a cartão em etapa de cancelado/perdido/em espera. Não sai onde a véspera é do robô do Kommo (chave «Véspera pelo robô do Kommo» fora de «Desligado»): lá o lembrete do dia já é do robô. A varredura é a cada 15 min. Consulta antes das 9h30 não tem margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga) e fica só com a véspera; entre 9h30 e 10h30 a janela é curta (só depois que a clínica abre). Canal: com a janela de 24 h aberta vai texto pelo chat; FECHADA, só sai se a unidade tiver o modelo aprovado da manhã (`pipeline_intents.manha_salesbot_id` — o da véspera diz "amanhã" e NÃO serve); sem modelo, não manda nada e não abre tarefa (tenta de novo na varredura seguinte, enquanto a janela existir). Se o Kommo falhar ao ler o cartão, as etapas ou a conversa, o paciente é pulado nessa varredura (nunca pergunta sem ter conferido). Conversa que não deu para ler conta como janela fechada. No WhatsApp Lite: no máximo 10 mensagens novas por unidade POR HORA (a varredura é de 15 em 15 min, o teto vale para a hora inteira). Marca própria (`confirmacao_d0:<horário>`): uma pergunta por consulta, horário novo é pergunta nova.',
     risco: 'manda-mensagem',
     temSeco: true,
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/confirmacao-manha.ts',
+    foraDasUnidades: UNIDADES_FORA_DAS_FALTAS,
   },
   {
     id: 'remarcar-oferta',
@@ -300,6 +306,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     exigeSecoAntes: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/remarcar-oferta.ts',
+    foraDasUnidades: UNIDADES_FORA_DAS_FALTAS,
   },
   {
     id: 'confirmar-sessao',

@@ -136,3 +136,34 @@ test('as duas chaves estão no catálogo: nascem desligadas, têm modo seco e ex
   }
   assert.deepEqual(verificarCatalogo(), []);
 });
+
+test('o seco usa a MESMA conta do envio: janela aberta = texto; fechada com modelo = modelo; fechada sem modelo = não manda nada', () => {
+  assert.equal(m.canalDaManha(true, null), 'texto');
+  assert.equal(m.canalDaManha(true, 123), 'texto');
+  assert.equal(m.canalDaManha(false, 123), 'modelo');
+  assert.equal(m.canalDaManha(false, null), 'sem_modelo');
+});
+
+test('faltasLigadas: só LIGADO conta (seco não muda nada para o paciente), e Caxias/Petrópolis nunca', () => {
+  const env = (o: Record<string, string>) => o as NodeJS.ProcessEnv;
+  assert.equal(m.faltasLigadas('doutor-hernia-olimpia', env({})), false);
+  assert.equal(m.faltasLigadas('doutor-hernia-olimpia', env({ CONFIRMACAO_MANHA_SLUGS: 'doutor-hernia-olimpia' })), true);
+  assert.equal(m.faltasLigadas('doutor-hernia-olimpia', env({ REMARCAR_OFERTA_SLUGS: '*' })), true);
+  assert.equal(m.faltasLigadas('doutor-hernia-caxias', env({ CONFIRMACAO_MANHA_SLUGS: '*', REMARCAR_OFERTA_SLUGS: '*' })), false);
+});
+
+test('o painel mostra Caxias e Petrópolis como «fora» (desligado, sem como ligar), mesmo com «*»', async () => {
+  const { panoramaDaUnidade } = await import('./automacoes-estado.js');
+  const env = { CONFIRMACAO_MANHA_SLUGS: '*', REMARCAR_OFERTA_SLUGS: '*' } as NodeJS.ProcessEnv;
+  for (const slug of ['doutor-hernia-caxias', 'doutor-hernia-petropolis']) {
+    for (const id of ['confirmacao-manha', 'remarcar-oferta']) {
+      const l = panoramaDaUnidade(slug, env).find((x) => x.id === id)!;
+      assert.equal(l.estado, 'desligado', `${slug} ${id}`);
+      assert.equal(l.fora, true);
+    }
+  }
+  const o = panoramaDaUnidade('doutor-hernia-olimpia', env).find((x) => x.id === 'confirmacao-manha')!;
+  assert.equal(o.estado, 'ligado');
+  assert.equal(o.fora, false);
+  assert.equal(panoramaDaUnidade('doutor-hernia-caxias', env).find((x) => x.id === 'parados')!.fora, false, 'outras automações não mudam');
+});

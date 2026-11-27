@@ -10,6 +10,7 @@ import { nomeApresentavel, saudacao, vocativo } from './nome-apresentavel.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { ID_CONFIRMACAO_DIA_UTIL } from './confirmacao-unidade.js';
 import { ID_REMARCAR_OFERTA, oferecerNovoHorario, textoTarefaRemarcarComOferta } from './remarcar-oferta.js';
+import { faltasLigadas } from './confirmacao-manha.js';
 import { registrarSimulacao } from './so-no-papel.js';
 
 export type RespostaD1 = 'confirmou' | 'remarcar';
@@ -47,6 +48,7 @@ export function classificarRespostaD1(texto: string): RespostaD1 | null {
   const negativo = /\bn[aã]o\b|remarc|reagend|cancel|desmarc|outro (dia|hor[aá]rio)|imprevisto/.test(s);
   if (/^2\b/.test(s) || negativo) return 'remarcar';
   if (/^[✅👍]/u.test(s)) return 'confirmou';
+  if (/^consigo( vir)?( sim)?$/.test(s)) return 'confirmou';
   if (/^(1|ok|okay|sim|confirmo|confirmado|confirmada|confirma|confirmar|estarei|vou sim|pode confirmar|isso)\b/.test(s) || /\bconfirm/.test(s)) {
     return 'confirmou';
   }
@@ -458,6 +460,12 @@ export function ultimaFalaFoiAPergunta(ultima: { createdAt: Date; meta: unknown 
   return typeof origem === 'string' && origem.startsWith('confirmacao_');
 }
 
+/** O toque EXPLÍCITO num dos botões da pergunta («Confirmo» / «Preciso remarcar»): ninguém digita isso por acaso, vale mesmo depois de outra fala. */
+export function ehToqueNoBotao(texto: string): boolean {
+  const t = texto.trim().toLowerCase().replace(/[!.…\s]+$/g, '');
+  return BOTOES_D1.some((b) => b.toLowerCase() === t);
+}
+
 export async function tratarRespostaD1(args: {
   unit: Unit;
   leadId: number;
@@ -466,8 +474,11 @@ export async function tratarRespostaD1(args: {
   kommo: KommoClient;
   /** Trace desta mensagem: a mensagem atual já foi gravada com ele e não conta como "anterior". */
   traceId?: string;
+  /** Só para teste: a consulta que a franquia devolve (o padrão é `consultaDoLead`). */
+  consultaDoLead?: typeof consultaDoLead;
 }): Promise<ResultadoRespostaD1 | null> {
   const { unit, leadId, texto, conv, kommo, traceId } = args;
+  const lerConsulta = args.consultaDoLead ?? consultaDoLead;
   if (conv.confirmacaoD1Resposta && traceId && conv.confirmacaoD1EnviadaEm) {
     const anteriores = await prisma.message.findMany({
       where: {
@@ -490,19 +501,30 @@ export async function tratarRespostaD1(args: {
   if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > janelaDaResposta(unit.slug)) return null;
   const resposta = classificarRespostaD1(texto);
   if (!resposta) return null;
-  // Com a oferta de horários ligada a Sofia fala em opções ("1"/"2"/"quinta 14h"): se a última fala nossa NÃO foi a pergunta de confirmação, o
-  // "1" é escolha de horário (ou conversa), nunca «confirmo» — confirmar presença que o paciente não deu é o pior erro desta tela.
-  if (oferecerNovoHorario(unit.slug) === 'ligado') {
-    const ultima = await prisma.message
-      .findFirst({ where: { conversationId: conv.id, role: 'assistant' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true, meta: true } })
-      .catch(() => null);
-    if (!ultimaFalaFoiAPergunta(ultima, conv.confirmacaoD1EnviadaEm)) return null;
+  // FALTAS LIGADAS (manhã OU oferta de horários): a Sofia fala em opções ("1) quinta  2) sexta") e a pergunta da manhã é rearmada para quem está
+  // conversando. Um "1" ou "sim" solto, depois de uma fala nossa que NÃO foi a pergunta, é escolha de horário ou conversa — nunca «confirmo»:
+  // confirmar presença que o paciente não deu é o pior erro desta tela. O toque explícito no botão «Confirmo» / «Preciso remarcar» vale sempre.
+  // Se não der para ler a conversa, FALHA FECHADO: não confirma, a mensagem segue com a Sofia.
+  const faltas = faltasLigadas(unit.slug);
+  if (faltas && !ehToqueNoBotao(texto)) {
+    try {
+      const ultima = await prisma.message.findFirst({
+        where: { conversationId: conv.id, role: 'assistant' },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true, meta: true },
+      });
+      if (!ultimaFalaFoiAPergunta(ultima, conv.confirmacaoD1EnviadaEm)) return null;
+    } catch (err) {
+      logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: não consegui ler a última fala — não confirmo, segue com a Sofia');
+      return null;
+    }
   }
 
-  const consulta = await consultaDoLead(unit, leadId).catch(() => null);
+  const consulta = await lerConsulta(unit, leadId).catch(() => null);
   // Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não, obrigada" é conversa
-  // solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda.
-  if (janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS) {
+  // solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda. Com as faltas ligadas vale SEMPRE: a pergunta da
+  // manhã fica sem resposta até a noite, e um "ok" às 18h não pode virar CONFIRMADO numa falta.
+  if (faltas || janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS) {
     const agoraLocal = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 16);
     if (!respostaDentroDaJanelaLonga(consulta, agoraLocal)) return null;
   }
@@ -544,8 +566,15 @@ export async function tratarRespostaD1(args: {
       // A frase curta abaixo sai SEMPRE, na frente: se a Sofia estiver calada nesta etapa, em pausa ou fora do horário, o paciente não fica no vazio
       // (antes ele recebia a resposta pronta). A tarefa (prazo de 1 h) é a rede de segurança da equipe.
       const espera = `Sem problema${nome}! 🙏 Já vou ver os horários mais próximos para você. Se preferir, me diga qual dia e período ficam melhores.`;
-      await kommo.sendChatReply({ leadId, text: espera, chatId: null, talkId: null, contactId: null });
-      await prisma.message
+      // a frase pode falhar (Kommo fora): a tarefa abaixo abre DE QUALQUER JEITO — é a única rede de segurança
+      const falou = await kommo
+        .sendChatReply({ leadId, text: espera, chatId: null, talkId: null, contactId: null })
+        .then(() => true)
+        .catch((err) => {
+          logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: a frase de espera falhou — a tarefa abre mesmo assim');
+          return false;
+        });
+      if (falou) await prisma.message
         .create({ data: { conversationId: conv.id, role: 'assistant', content: espera, meta: { origem: 'remarcar_oferta_espera' } } })
         .catch(() => undefined);
       await kommo

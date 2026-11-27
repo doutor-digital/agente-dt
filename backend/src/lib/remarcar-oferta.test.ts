@@ -16,7 +16,7 @@ process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-o
 const { composeSystemPrompt } = await import('../agent/prompt-composer.js');
 const o = await import('./remarcar-oferta.js');
 const { classificarRespostaD1 } = await import('./confirmacao-d1.js');
-const { tratarRespostaD1, podeSerRespostaD1, ehRepeticaoDaRespostaD1, ultimaFalaFoiAPergunta, RESPOSTA_OFERTA_SOFIA } = await import('./confirmacao-d1.js');
+const { tratarRespostaD1, podeSerRespostaD1, ehRepeticaoDaRespostaD1, ultimaFalaFoiAPergunta, ehToqueNoBotao, RESPOSTA_OFERTA_SOFIA } = await import('./confirmacao-d1.js');
 const { prisma } = await import('./prisma.js');
 const { recarregarAutomacoes } = await import('./automacoes-estado.js');
 
@@ -112,6 +112,10 @@ function kommoFalso() {
     } as never,
   };
 }
+/** Uma consulta de pé: amanhã às 14:30, confirmada pela franquia. */
+const amanha = () => new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 10);
+const consultaDePe = async () => ({ idSchedule: 9, quando: `${amanha()}T14:30`, salvo: `${amanha()}T14:30`, estado: 'confirmada', mudou: false, especialista: null, idStatus: 37 }) as never;
+const consultaQuePassou = async () => ({ idSchedule: 9, quando: '2020-01-01T14:30', salvo: '2020-01-01T14:30', estado: 'confirmada', mudou: false, especialista: null, idStatus: 37 }) as never;
 const conversa = () => ({ id: 'c1', contactName: 'Maria', confirmacaoD1EnviadaEm: new Date(Date.now() - 3600_000), confirmacaoD1Resposta: null }) as never;
 const U = (slug: string) => ({ ...unidade(slug), spineEnabled: false, spineToken: null }) as unknown as Unit;
 
@@ -119,7 +123,7 @@ test('LIGADA: «Preciso remarcar» NÃO recebe «vou pedir para a equipe» — r
   process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
   try {
     const { kommo, chamadas } = kommoFalso();
-    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo });
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
     assert.equal(r, 'remarcar_sofia');
     assert.equal(chamadas.respostas.length, 1, 'uma frase de espera: se a Sofia estiver calada o paciente não fica no vazio');
     assert.match(chamadas.respostas[0], /ver os horários mais próximos/);
@@ -185,4 +189,90 @@ test('LIGADA + a Sofia já falou depois da pergunta: o «1» do paciente vai par
     (prisma.message as unknown as { findFirst: unknown }).findFirst = original;
     restaurar();
   }
+});
+
+// ── revisão do sênior (PR #523) ───────────────────────────────────────────────────────────────────────
+
+function comFindFirst<T>(fn: () => Promise<unknown>, corpo: () => Promise<T>): Promise<T> {
+  const original = prisma.message.findFirst;
+  (prisma.message as unknown as { findFirst: unknown }).findFirst = fn;
+  return corpo().finally(() => { (prisma.message as unknown as { findFirst: unknown }).findFirst = original; });
+}
+
+test('a trava do «1» solto vale com SÓ A MANHÃ ligada (sem a oferta): a Sofia falou depois da pergunta → nada é confirmado', async () => {
+  delete process.env.REMARCAR_OFERTA_SLUGS;
+  process.env.CONFIRMACAO_MANHA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await comFindFirst(async () => ({ createdAt: new Date(), meta: null }), () =>
+      tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: '1', conv: conversa(), kommo }));
+    assert.equal(r, null);
+    assert.equal(chamadas.respostas.length, 0);
+  } finally { delete process.env.CONFIRMACAO_MANHA_SLUGS; restaurar(); }
+});
+
+test('FALHA FECHADO: se a leitura da última fala dá erro, NÃO confirma — a mensagem segue com a Sofia', async () => {
+  process.env.CONFIRMACAO_MANHA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await comFindFirst(async () => { throw new Error('banco fora'); }, () =>
+      tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'sim', conv: conversa(), kommo }));
+    assert.equal(r, null);
+    assert.equal(chamadas.respostas.length, 0);
+    assert.equal(chamadas.tarefas.length, 0);
+  } finally { delete process.env.CONFIRMACAO_MANHA_SLUGS; }
+});
+
+test('o toque EXPLÍCITO no botão não passa pela trava (nem lê a conversa); o «1» solto passa', async () => {
+  process.env.CONFIRMACAO_MANHA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    for (const [texto, leu] of [['Confirmo', 0], ['Preciso remarcar', 0], ['1', 1], ['ok', 1]] as const) {
+      let leituras = 0;
+      const { kommo } = kommoFalso();
+      await comFindFirst(async () => { leituras++; return { createdAt: new Date(), meta: null }; }, () =>
+        tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto, conv: conversa(), kommo }));
+      assert.equal(leituras, leu, texto);
+    }
+    assert.equal(ehToqueNoBotao(' Confirmo! '), true);
+    assert.equal(ehToqueNoBotao('1'), false);
+    assert.equal(ehToqueNoBotao('confirmo, mas posso chegar 13h30?'), false);
+  } finally { delete process.env.CONFIRMACAO_MANHA_SLUGS; }
+});
+
+test('faltas ligadas: resposta SEM consulta futura confirmada (já passou, franquia fora) nunca vira CONFIRMADO; com tudo desligado, como sempre', async () => {
+  process.env.CONFIRMACAO_MANHA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await comFindFirst(async () => null, () =>
+      tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'ok', conv: conversa(), kommo, consultaDoLead: consultaQuePassou }));
+    assert.equal(r, null, 'consulta que já passou = conversa solta, nunca CONFIRMADO numa falta');
+    assert.equal(chamadas.respostas.length, 0);
+    const semFranquia = await comFindFirst(async () => null, () =>
+      tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'ok', conv: conversa(), kommo, consultaDoLead: async () => null }));
+    assert.equal(semFranquia, null, 'franquia sem resposta: fecha, não confirma');
+    const dePe = await comFindFirst(async () => null, () =>
+      tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'ok', conv: conversa(), kommo, consultaDoLead: consultaDePe }));
+    assert.equal(dePe, 'confirmou', 'consulta de pé e a pergunta foi a última fala: confirma');
+  } finally { delete process.env.CONFIRMACAO_MANHA_SLUGS; }
+  const { kommo, chamadas } = kommoFalso();
+  const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'ok', conv: conversa(), kommo });
+  assert.equal(r, 'confirmou', 'desligadas: idêntico ao de antes');
+  assert.match(chamadas.respostas[0], /Confirmado/);
+});
+
+test('a frase de espera falhou: a tarefa de segurança de 1 h abre mesmo assim', async () => {
+  process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    (kommo as unknown as { sendChatReply: unknown }).sendChatReply = async () => { throw new Error('Kommo fora'); };
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
+    assert.equal(r, 'remarcar_sofia');
+    assert.equal(chamadas.tarefas.length, 1);
+  } finally { restaurar(); }
+});
+
+test('«Consigo sim» confirma; «não consigo» remarca', () => {
+  for (const t of ['Consigo sim', 'consigo', 'Consigo vir', 'consigo vir sim!']) assert.equal(classificarRespostaD1(t), 'confirmou', t);
+  assert.equal(classificarRespostaD1('não consigo ir'), 'remarcar');
+  assert.equal(classificarRespostaD1('consigo chegar às 15h30?'), null, 'pergunta não é confirmação');
 });

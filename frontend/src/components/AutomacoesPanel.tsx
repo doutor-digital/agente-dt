@@ -270,7 +270,15 @@ function Linha({
         <div className="min-w-[14rem] flex-1">
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium text-zinc-100">{a.nome}</span>
-            {a.vemDoAmbiente && (
+            {a.fora && (
+              <span
+                className="rounded border border-zinc-600 px-1.5 py-px text-[10px] uppercase tracking-wider text-zinc-400"
+                title="Esta unidade está fora desta automação por regra do código: ela nunca liga aqui, nem com * na lista."
+              >
+                fora
+              </span>
+            )}
+            {a.vemDoAmbiente && !a.fora && (
               <span
                 className="rounded border border-zinc-700 px-1.5 py-px text-[10px] uppercase tracking-wider text-zinc-500"
                 title={`Ninguém mexeu nesta tela — o valor ainda vem de ${a.chave} no .env da VPS: "${a.ambiente || '(vazio)'}"`}
@@ -329,7 +337,7 @@ function Linha({
               <button
                 key={e}
                 type="button"
-                disabled={salvando}
+                disabled={salvando || a.fora}
                 onClick={() => pedir(e)}
                 title={e === 'seco' ? 'Decide e mostra em "o que ela faria", mas não toca no Kommo' : undefined}
                 className={`rounded-md px-2.5 py-1 text-xs font-medium transition disabled:opacity-50 ${corDoBotao(e, a.estado === e)}`}

@@ -167,6 +167,8 @@ export interface LinhaDaTela extends Automacao {
   vemDoAmbiente: boolean;
   /** O csv cru da variável, pra conferir contra a VPS sem abrir o Docker. */
   ambiente: string;
+  /** A unidade está FORA desta automação por regra do código (`foraDasUnidades`): estado «desligado», sem como ligar. */
+  fora: boolean;
 }
 
 export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = process.env): LinhaDaTela[] {
@@ -175,11 +177,13 @@ export function panoramaDaUnidade(slug: string, ambiente: NodeJS.ProcessEnv = pr
     const gravado = estadoGravado(slug, a.id);
     // o calendário tem DUAS listas no .env: na primeira e fora de _APLICAR é "só no papel", não "ligado"
     const doAmbiente = a.chaveAplicar ? estadoDoAmbienteComAplicar(slug, raw, ambiente[a.chaveAplicar]) : estadoDoAmbiente(slug, raw, a.id);
+    const fora = a.foraDasUnidades?.includes(slug) === true;
     return {
       ...a,
-      estado: gravado ?? doAmbiente,
+      estado: fora ? 'desligado' : (gravado ?? doAmbiente),
       vemDoAmbiente: gravado === null,
       ambiente: (raw ?? '').trim(),
+      fora,
     };
   });
 }
