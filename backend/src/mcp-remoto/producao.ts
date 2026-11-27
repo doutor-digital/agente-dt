@@ -64,6 +64,7 @@ import { JanelaDeContagem } from './limites.js';
 import { registrarInfinitepayDoServidor } from '../lib/infinitepay-servidor.js';
 import { criarEscritaInfinitepay, registrarEscritaInfinitepaySePermitido } from './infinitepay-escrita.js';
 import { montarRotaDoWebhookInfinitepay, segredoDoAvisoDoAmbiente, urlDoAviso } from './infinitepay-webhook.js';
+import { ligarFocus } from './focus-nfe-ligacao.js';
 import { clienteCompartilhado, lerItensDoAmbiente, resolverEmpresas, type ItemConfigurado } from '../lib/integracoes/pluggy.js';
 import { criarContextoPluggy, empresasDoPluggy, registrarPluggySePermitido } from './pluggy.js';
 import { registrarRendimentoSePermitido } from './pluggy-rendimento.js';
@@ -682,6 +683,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const segredoDaContaInfinitepay = segredoDaContaDoAmbiente();
   if (!segredoDaContaInfinitepay) logger.warn('mcp-remoto: INFINITEPAY_CONTA_SEGREDO ausente ou com menos de 32 caracteres — a importação de relatórios da InfinitePay fica desligada');
   manterAtualizado(contasInfinitepayDoAmbiente, (contas) => (infinitepay.contas = contas), 'as contas da InfinitePay');
+  // Focus NFe (NFS-e Nacional para o que não passa pelo Asaas): nasce DESLIGADA; sem FOCUS_NFE_UNIDADES não há ferramenta, rota, leitura do banco nem aviso (ver focus-nfe-ligacao.ts)
+  const focus = ligarFocus({ app, prisma: prisma as never, alertar: (texto) => enviarTelegram(texto), log: logger });
   // Pluggy (leitura bancária): o cliente HTTP é um só no processo (a chave de 2 h e o cache ficam nele; o webhook invalida o mesmo cache). Sem variáveis, nada disto existe.
   const pluggy = criarContextoPluggy([], clienteCompartilhado());
   const tramitacao = criarContextoTramitacao(new Map());
@@ -761,6 +764,8 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       // a descrição do lançamento pode ter o nome de quem pagou: só quem escreve no conector a vê (os números saem para todos)
       registrarLeituraRelatorios(server, infinitepay, relatoriosInfinitepay, auditar, { descricoes: escritores.has(quem.userId) });
       registrarImportacaoRelatoriosSePermitido(server, infinitepay, { cofre, baseUrl: () => new URL(urlPublica).origin, armazem: relatoriosInfinitepay, segredoDaConta: segredoDaContaInfinitepay }, quem.userId, escritores, auditar, { email: quem.email });
+      // nota fiscal pela Focus NFe: só quem altera cartões e só se a unidade está em FOCUS_NFE_UNIDADES (vazio = as ferramentas nem existem)
+      focus?.registrar(server, quem.userId, escritores, auditar, { email: quem.email, clientId: quem.clientId });
       registrarFerramentasTramitacao(server, tramitacao, auditar);
       registrarMetaEventos(server, () => rastreio, auditar);
       // Arquivos: o portão testado confere a lista; cada envio é só de quem o pediu.
@@ -800,7 +805,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
       if (operadoresChatwoot.has(quem.userId)) registrarFerramentasChatwoot(server, chatwoot, quem.email || `usuario:${quem.userId}`, auditar, () => escolhedoresDeConta.has(quem.userId));
       registrarVideoSePermitido(server, video, quem.userId, leitoresVideo, auditar);
       registrarTranscricaoSePermitido(server, transcritor, quem.userId, leitoresVideo, auditar);
-      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, infinitepay: infinitepay.contas, ...(escritores.has(quem.userId) && pluggy.fonte ? { pluggy: empresasDoPluggy(pluggy) } : {}), gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
+      registrarIntegracoes(server, () => ({ franquia: franquia?.unidades ?? new Map(), kommo: kommo.unidades, bling: bling.contas, asaas: asaas.contas, convenia: convenia.contas, tiquetaque: tiquetaque.contas, tramitacao: tramitacao.contas, sistemas: contasDoRh(sistemas.contas), zenfisio: zenfisio.contas, infinitepay: infinitepay.contas, ...(focus && escritores.has(quem.userId) ? { focus: focus.contas() } : {}), ...(escritores.has(quem.userId) && pluggy.fonte ? { pluggy: empresasDoPluggy(pluggy) } : {}), gerais: chatwoot.conta && operadoresChatwoot.has(quem.userId) ? ['chatwoot_* (Chatwoot, o atendimento novo em atendimento.doutordigitalconsultoria.com: conversas, contatos, caixas, etiquetas, agentes, equipes, automações; criar e alterar direto, apagar e mandar mensagem a cliente em dois passos)'] : [] }), auditar);
       registrarCerebro(server, slugs, cacheCerebro, auditar);
       if (franquia) {
         const deps: DepsRelatorio = { franquia, kommo, telefonesDosLeads, vinculosDosLeads };

@@ -3168,6 +3168,57 @@ model InfinitepayLink {
 }
 
 // ============================================================================
+// FOCUS NFE — NOTAS FISCAIS DE SERVIÇO (NFS-e Nacional) EMITIDAS PELO CONECTOR (26/11/2026)
+// ============================================================================
+//
+// A API da Focus NFe não tem rota que liste notas da NFS-e Nacional (só consultar pela referência): este é o livro do que o conector emitiu. Também é o livro dos
+// tetos da emissão e a trava de "nota repetida" (`chaveDuplicata`). NÃO guarda CPF, nome nem endereço do paciente: só o documento mascarado. `unitSlug` sem chave
+// estrangeira de propósito (como a auditoria do conector): a unidade pode sair do ar sem apagar o histórico fiscal. Homologação e produção ficam na mesma tabela
+// (`ambiente`) e NUNCA se misturam nos tetos nem na numeração.
+model FocusNota {
+  id                  String    @id @default(cuid())
+  unitSlug            String    @map("unit_slug")
+  /// homologacao | producao
+  ambiente            String
+  /// a referência enviada à Focus (única por token/empresa): só letras e números
+  referencia          String
+  /// intencao (gravada ANTES de chamar a Focus) | recusada | incerto | processando_autorizacao | autorizado | erro_autorizacao | negado | cancelado
+  status              String    @default("intencao")
+  serieDps            Int       @map("serie_dps")
+  numeroDps           Int       @map("numero_dps")
+  valorCentavos       Int       @map("valor_centavos")
+  dataCompetencia     String    @map("data_competencia")
+  /// só o documento mascarado do tomador (nunca inteiro)
+  tomadorMascarado    String    @map("tomador_mascarado")
+  /// de onde sai a nota (ex.: id da venda na InfinitePay), sem dado pessoal; entra na trava de nota repetida
+  origem              String?
+  /// hash de unidade + ambiente + documento do tomador + valor + competência + origem: nota ativa com a mesma chave é recusada
+  chaveDuplicata      String    @map("chave_duplicata")
+  criadoPor           String    @map("criado_por")
+  numeroNfse          String?   @map("numero_nfse")
+  codigoVerificacao   String?   @map("codigo_verificacao")
+  urlConsulta         String?   @map("url_consulta")
+  urlDanfse           String?   @map("url_danfse")
+  caminhoXml          String?   @map("caminho_xml")
+  emitidaEm           DateTime? @map("emitida_em")
+  canceladaEm         DateTime? @map("cancelada_em")
+  /// texto de revisão (ex.: cancelamento pedido e negado): o João/a contabilidade conferem
+  revisao             String?
+  ultimoEvento        String?   @map("ultimo_evento")
+  ultimoEventoEm      DateTime? @map("ultimo_evento_em")
+  erro                String?
+  createdAt           DateTime  @default(now()) @map("created_at")
+  updatedAt           DateTime  @updatedAt @map("updated_at")
+
+  @@unique([unitSlug, ambiente, referencia])
+  /// o número da DPS é único por unidade, ambiente e série: o banco recusa dois iguais mesmo que a trava falhe
+  @@unique([unitSlug, ambiente, serieDps, numeroDps])
+  @@index([unitSlug, ambiente, createdAt])
+  @@index([chaveDuplicata])
+  @@map("focus_notas")
+}
+
+// ============================================================================
 // INFINITEPAY — RELATÓRIOS IMPORTADOS (26/11/2026)
 // ============================================================================
 //
