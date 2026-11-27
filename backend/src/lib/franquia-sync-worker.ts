@@ -41,6 +41,7 @@ import { CAMPO_VALOR_DA_CONSULTA, consultaEhHoje, decidirValorDaConsulta, precos
 import { gravarValorDaConsulta, robotPodeTrocar, valorNoCartao } from './valor-consulta-aplicar.js';
 import { marcasNoBanco, type MarcasDoValor } from './valor-consulta-marca.js';
 import { fusoDaUnidade } from './fuso.js';
+import { registrarMudancasDaAgenda } from './agenda-historico.js';
 import {
   CAMPO_ID_CLIENT, PREFIXO_CONFLITO, TAG_CONFLITO, ID_AUTOMACAO as AUTOMACAO_1610, anotarRoboPos, idsDoConflito, cartaoTravadoNoConflito, cartoesComMaisDeUmPaciente, chaveDaDevolucao, chaveDaFalta, chaveDaSujeira, chaveDaTarefaDeDevolucao,
   chaveDoRoboPos, tarefaDaSujeira,
@@ -2419,6 +2420,9 @@ async function sincronizarUnidade(unit: Unit, deps: { kommo?: KommoClient } = {}
   if (!tr.ok) logger.warn({ unit: unit.slug, erro: tr.error }, 'franquia-sync: tratamentos indisponíveis');
   resumo.agendamentos = agendamentos.length;
   resumo.tratamentos = tratamentos.length;
+  // Histórico das mudanças de status da agenda (chave `recuperacao-agenda`; desligada = não faz nada). Usa a leitura que já foi feita
+  // aqui, não chama a franquia de novo, e nunca lança: o sincronizador segue igual se o banco falhar.
+  if (ag.ok) await registrarMudancasDaAgenda(unit, agendamentos, { truncada: ag.data?.truncada });
 
   // agrupa por paciente (a agenda não traz idClient; o nome é a chave)
   const porPaciente = new Map<string, { nome: string; idClient: number | null; consultas: SpineSchedule[]; tratamento: SpineTreatment | null }>();

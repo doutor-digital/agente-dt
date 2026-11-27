@@ -3245,3 +3245,37 @@ model InfinitepayVenda {
   @@index([importacaoId])
   @@map("infinitepay_vendas")
 }
+
+// ===========================================================================
+// Histórico da agenda da franquia (26/11/2026)
+// ===========================================================================
+// A franquia só devolve o ESTADO ATUAL de cada agendamento (e só o último `modified`): quando um agendamento muda de status o anterior
+// se perde. Esta tabela guarda o que a franquia não guarda. Sem FK para `units` de propósito: o histórico não some junto com a
+// unidade (o `agente_dt` não tem como recriá-lo). Nenhum nome nem telefone de paciente: só a chave `paciente_chave` (HMAC com segredo, ver `agenda-historico.ts`).
+
+/// Uma linha por MUDANÇA de um agendamento (ou pela 1ª vez que o vimos). Só acrescenta.
+model AgendaStatusEvento {
+  id               String    @id @default(cuid())
+  unitId           String    @map("unit_id")
+  /// o id do agendamento na franquia
+  idSchedule       Int       @map("id_schedule")
+  /// quem é o paciente SEM guardar o nome: hash da unidade + nome normalizado (a agenda da franquia só traz o nome; homônimos colidem)
+  pacienteChave    String    @map("paciente_chave")
+  /// o nome da categoria na franquia (AVALIAÇÃO, SESSÃO, RETORNO…)
+  categoria        String?
+  /// o status que o agendamento tinha antes (null = primeira vez que o vimos)
+  deStatus         Int?      @map("de_status")
+  paraStatus       Int?      @map("para_status")
+  /// o horário da consulta (UTC) agora e, se mudou de data, o de antes
+  inicioEm         DateTime  @map("inicio_em")
+  inicioAnteriorEm DateTime? @map("inicio_anterior_em")
+  /// a última alteração que a FRANQUIA registrou (`modified`): é a hora em que o desmarque foi lançado
+  modificadoEm     DateTime? @map("modificado_em")
+  /// quando NÓS vimos
+  vistoEm          DateTime  @default(now()) @map("visto_em")
+
+  @@index([unitId, idSchedule, vistoEm])
+  @@index([unitId, pacienteChave, vistoEm])
+  @@index([unitId, vistoEm])
+  @@map("agenda_status_eventos")
+}
