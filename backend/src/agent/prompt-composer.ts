@@ -28,6 +28,7 @@ import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from 
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
+import { bloqueiaProposta, decidirAdiamento, renderPacienteAdiou, type AdiamentoDoTurno, type AdiamentoGuardado } from './adiamento-propoe-dia.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -690,7 +691,7 @@ function renderPipelineIntents(unit: Unit): string {
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents)}`);
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents, { propoeDia: !!unit.spineEnabled && !!unit.spineToken && automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) })}`);
 }
 
 /**
@@ -705,9 +706,23 @@ function renderPipelineIntents(unit: Unit): string {
  * volta a conversar quando o paciente responde, porque EM ESPERA está nas etapas
  * permitidas.
  */
-function renderEsperaRules(intents: Record<string, number>): string {
+export function renderEsperaRules(intents: Record<string, number>, opcoes: { propoeDia?: boolean } = {}): string {
   const statusId = intents.waiting_deferred;
   if (!statusId) return '';
+  // Chave `adiamento-propoe-dia`: quem decide se se propõe horário é o bloco do turno (classificado pelo sistema), não esta regra. O corte de 21/10
+  // (despedida, recusa, "vou pensar" sem motivo) continua valendo quando o bloco NÃO aparece.
+  const regra3 = opcoes.propoeDia
+    ? `3. Responda ao adiamento: se ESTE turno trouxer o bloco <paciente_adiou>, siga-o (propor UM dia com DOIS horários reais de consultar_horarios; só marcar
+     se ele escolher). Sem esse bloco — despedida, recusa, "vou pensar" ou "te aviso" sem motivo nem data, horário já escolhido — NÃO proponha horário:
+     combine a volta, "combinado, te procuro no dia DD/MM para marcarmos sua consulta com o nosso especialista". Sem pressão e sem insistir. Nunca
+     prometa HORA de retorno. Só então chame mover_etapa (EM ESPERA, com a data). Se ele escolher um horário e você marcar com agendar_consulta, vale a regra
+     de "agendou" acima: o cartão sai de EM ESPERA como em qualquer marcação.`
+    : `3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
+     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.`;
+  const regra4 = opcoes.propoeDia
+    ? `4. Depois disso, não mande mais nada nesta conversa até a data — EXCETO responder se ele responder a uma proposta de horário (se escolher, marque;
+     se recusar, só combine a volta). Sem resposta dele, a retomada é automática na data.`
+    : `4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
   return `
 - EM ESPERA (statusId ${statusId}) — regras:
   1. Só quando o paciente QUER e adia. "Não tenho interesse", "não quero", "já resolvi"
@@ -725,9 +740,8 @@ function renderEsperaRules(intents: Record<string, number>): string {
      ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
      Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
-  3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
-     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.
-  4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
+  ${regra3}
+  ${regra4}`;
 }
 
 /**
@@ -2052,6 +2066,8 @@ export interface ComposeInput {
   horaNoTurno?: boolean;
   /** O instante do turno. O grafo fixa um por turno, para a hora não mudar entre as voltas das ferramentas. Padrão: agora. */
   agora?: Date;
+  /** Chave `adiamento-propoe-dia`: o paciente adiou COM motivo neste turno (classificado por `decidirAdiamento`). null/ausente = como sempre. */
+  adiamento?: AdiamentoDoTurno | null;
 }
 
 /**
@@ -2104,16 +2120,19 @@ function renderSoCumprimento(userMessage?: string): string {
  * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts) e paciente insistindo no preço
  * (preco-insistido.ts). Sem histórico (playground, régua), nada.
  */
-function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedirNome: boolean; blocos: string[] } {
+function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined, adiamento: AdiamentoDoTurno | null = null): { semPedirNome: boolean; blocos: string[] } {
   if (!historico || historico.length === 0) return { semPedirNome: false, blocos: [] };
   const repeticao = analisarRepeticao(historico);
   const blocos: string[] = [];
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
-  const encerrou = renderPacienteEncerrou(historico, {
-    perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
-  });
+  // Chave `adiamento-propoe-dia`: adiou COM motivo (classificado) → propõe o dia e dois horários, em vez do bloco de quem encerrou.
+  const encerrou = adiamento
+    ? renderPacienteAdiou(adiamento)
+    : renderPacienteEncerrou(historico, {
+        perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
+      });
   if (encerrou) blocos.push(encerrou);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
   // fontes, mandar "dizer o valor agora" sem o número certo convidaria a inventar ou trocar o valor (achado do Codex,
@@ -2592,7 +2611,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico);
+  const doHistorico = blocosDoHistorico(unit, input.historico, input.adiamento ?? null);
 
   if (unit.singlePromptMode) {
     const single: string[] = [];
@@ -2773,7 +2792,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico);
+  const doHistorico = blocosDoHistorico(unit, input.historico, input.adiamento ?? null);
 
   // Estes três mudam POR UNIDADE, não por paciente: o calendário vira uma vez
   // por dia (renderCalendario recebe a data sem hora, de propósito), o endereço
@@ -2933,6 +2952,8 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2951,6 +2972,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2969,6 +2992,8 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2998,6 +3023,25 @@ async function loadComposeInput(input: {
           return null;
         })
     : Promise.resolve(null);
+
+  // Chave `adiamento-propoe-dia`: o modelo leve começa AGORA, em paralelo com o resto do prompt; a trava "tem consulta de pé / em tratamento" chega
+  // depois (`resolverConsulta`). Só o turno do grafo pede (passa `adiamentoSaida`): régua de follow-up, prévias e avaliações nunca pagam a chamada.
+  // UMA classificação por turno: o agente roda o prompt a cada volta de ferramenta; a 1ª decide e as demais reusam (`pronto`).
+  let resolverConsulta: (tem: boolean) => void = () => undefined;
+  const reaproveita = !!input.adiamentoSaida?.pronto;
+  const adiamentoP: Promise<AdiamentoDoTurno | null> = reaproveita
+    ? Promise.resolve(input.adiamentoSaida?.valor ?? null)
+    : input.adiamentoSaida
+      ? decidirAdiamento({
+          unit: input.unit,
+          leadId: input.leadId,
+          falas: input.historico,
+          traceId: input.adiamentoSaida.traceId ?? null,
+          temConsultaOuTratamento: new Promise<boolean>((r) => (resolverConsulta = r)),
+        })
+      : Promise.resolve(null);
+  // Falha ao ler a consulta, a etapa ou a franquia = "TEM consulta" (não propõe): nunca se propõe horário novo no escuro.
+  let leituraFalhou = false;
 
   const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades, ofertaDaCampanha] = await Promise.all([
     prisma.messageTemplate.findMany({
@@ -3042,6 +3086,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'consultaDoLead falhou — sem bloco de consulta no prompt',
           );
+          leituraFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -3051,6 +3096,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'estadoEtapaDoLead falhou — sem bloco de etapa no prompt',
           );
+          leituraFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -3082,7 +3128,10 @@ async function loadComposeInput(input: {
   // tratar a pessoa como desconhecida. Caso Wilson, 15/09/2026.
   const etapaFinal =
     !estadoEtapa?.jaAgendadoOuPaciente && telefone && input.leadId
-      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => estadoEtapa)
+      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => {
+          leituraFalhou = true;
+          return estadoEtapa;
+        })
       : estadoEtapa;
 
   // O cartão diz que a pessoa já agendou ou é paciente, mas a consulta não foi a Sofia que marcou —
@@ -3097,11 +3146,30 @@ async function loadComposeInput(input: {
   const pacienteFranquia =
     input.leadId && input.unit.spineEnabled && perguntarAFranquia
       ? await pacienteNaFranquia(input.unit, input.leadId, [etapaFinal?.tituloDoCartao, contato?.contactName], telefone)
-          .catch(() => null)
+          .catch(() => {
+            leituraFalhou = true;
+            return null;
+          })
       : null;
+
+  // Chave `adiamento-propoe-dia`: o paciente adiou COM motivo? (modelo leve + schema; só com agenda, sem consulta de pé nem tratamento, e
+  // só com sinal de adiamento na fala). Falha ou dúvida = null = o comportamento de sempre. (O modelo já correu em paralelo, lá em cima.)
+  const temConsultaOuTratamento = bloqueiaProposta({
+    blocoDaConsulta: renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(input.unit), input.agora), pacienteFranquia),
+    jaAgendadoOuPaciente: etapaFinal?.jaAgendadoOuPaciente,
+    leituraFalhou,
+  });
+  resolverConsulta(temConsultaOuTratamento);
+  const adiamento = await adiamentoP;
+  if (input.adiamentoSaida && !reaproveita) {
+    input.adiamentoSaida.valor = adiamento;
+    // "pronto" só quando a leitura foi limpa: com falha, a próxima volta tenta de novo (e, falhando de novo, também não propõe)
+    input.adiamentoSaida.pronto = !leituraFalhou;
+  }
 
   return {
     ...input,
+    adiamento,
     templates,
     flaggedExamples: flagged,
     knowledge,
