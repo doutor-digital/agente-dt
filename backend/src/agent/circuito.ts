@@ -12,10 +12,11 @@
  * abre de novo. Assim o provedor volta sozinho quando se recuperar, sem
  * ninguém precisar mexer.
  *
- * Só falha de INFRAESTRUTURA conta (timeout, 5xx, conexão). Recusa legítima do
- * modelo, prompt inválido ou saldo esgotado não abrem o circuito: trocar de
+ * Só falha de INFRAESTRUTURA conta nas três seguidas (timeout, 5xx, conexão).
+ * Recusa legítima do modelo e prompt inválido não abrem o circuito: trocar de
  * provedor não resolveria, e abrir por isso tiraria do ar um provedor que está
- * perfeitamente de pé.
+ * perfeitamente de pé. Saldo/cota esgotados é caso à parte: abre NA HORA por
+ * `abrirCircuito` (a cadeia de reserva, `cadeia-reserva.ts`, decide quando).
  *
  * O estado vive em memória: cada réplica aprende por conta. É de propósito —
  * compartilhar em banco custaria uma ida ao Postgres em toda mensagem para
@@ -30,6 +31,9 @@ const FALHAS_PARA_ABRIR = Number(process.env.CIRCUITO_FALHAS) || 3;
 
 /** Quanto tempo fica cortado antes de deixar passar uma tentativa. */
 const DESCANSO_MS = Number(process.env.CIRCUITO_DESCANSO_MS) || 60_000;
+
+/** Descanso de um provedor sem saldo/cota: a sonda é barata (erro volta na hora), mas saldo não volta em segundos. */
+const DESCANSO_SALDO_MS = Number(process.env.CIRCUITO_SALDO_DESCANSO_MS) || 120_000;
 
 interface Estado {
   falhasSeguidas: number;
@@ -81,6 +85,18 @@ export function registrarFalha(p: Provedor, agora = Date.now()): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Corta o provedor AGORA, sem esperar três falhas: serve para erro que não passa sozinho — saldo/cota
+ * esgotados (ver `erro-de-saldo.ts`). Insistir só gasta uma chamada por mensagem. Depois do descanso
+ * uma tentativa sonda; se o saldo voltou, o circuito fecha sozinho (`registrarSucesso`).
+ * O descanso é maior que o de infra (que sonda por um timeout caro); aqui a sonda é barata, mas
+ * não precisa ser a cada minuto.
+ */
+export function abrirCircuito(p: Provedor, agora = Date.now(), descansoMs = DESCANSO_SALDO_MS): void {
+  const e = estadoDe(p);
+  e.abertoAte = agora + descansoMs;
 }
 
 /**

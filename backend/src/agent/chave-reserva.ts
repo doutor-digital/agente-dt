@@ -39,12 +39,12 @@ export function chaveReservaAnthropic(): string | null {
   return k ? k : null;
 }
 
-function mensagemDe(err: unknown): string {
+export function mensagemDe(err: unknown): string {
   return err instanceof Error ? err.message : String(err ?? '');
 }
 
 /** O SDK da Anthropic põe o status no erro e também no começo da mensagem ("401 {...}"). */
-function statusDe(err: unknown): number | null {
+export function statusDe(err: unknown): number | null {
   const e = err as { status?: unknown; response?: { status?: unknown } } | null | undefined;
   const s = e?.status ?? e?.response?.status;
   if (typeof s === 'number') return s;

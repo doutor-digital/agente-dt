@@ -79,9 +79,20 @@ import {
   registrarSucesso,
   registrarFalha,
   ehFalhaDeInfra,
+  abrirCircuito,
   type Provedor,
 } from './circuito.js';
 import { comChaveReserva, PROVEDOR_RESERVA } from './chave-reserva.js';
+import { ehErroDeSaldoOuCota } from './erro-de-saldo.js';
+import {
+  montarCadeia,
+  percorrerCadeia,
+  reservasGlobais,
+  cadeiaCompletaLigada,
+  rotuloDoProvedor,
+  resumoDasTentativas,
+  CadeiaEsgotadaError,
+} from './cadeia-reserva.js';
 import { conferirTeto, marcarAvisado, logarEstouro, type Veredito } from './teto-conversa.js';
 import { conferirTetoMensal, acaoAoEstourar, pausarContaAteProximoMes, type VereditoMensal } from './teto-mensal.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
@@ -113,8 +124,6 @@ import {
   withTimeout,
   AGENT_NODE_TIMEOUT_MS,
   FALLBACK_INDISPONIVEL,
-  escolherPlanoB,
-  PLANO_B_TIMEOUT_MS,
   LlmTimeoutError,
   textoDoTeto,
 } from './llm-policy.js';
@@ -895,6 +904,8 @@ export async function buildAgentGraph(
     let respondeuPlanoB = false;
     // Qual plano B respondeu (se algum): as chamadas de pós-processamento saem por ele, não pelo principal que caiu.
     let planoBEmUso: PlanoBEmUso | null = null;
+    // Chave reserva GLOBAL no ambiente liga a cadeia completa (saldo abre o circuito, reservas passam por ele). Sem ela, é o plano B de hoje.
+    const cadeiaViva = cadeiaCompletaLigada(reservasGlobais());
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
@@ -955,7 +966,18 @@ export async function buildAgentGraph(
           latencyMs: Math.round(performance.now() - t0),
         });
       }
-      if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
+      if (cadeiaViva && ehErroDeSaldoOuCota(err)) {
+        // Saldo/cota não passa com o tempo (26/11: 15 h sem resposta): corta o provedor já e deixa as próximas mensagens irem
+        // direto pro reserva, sem pagar uma chamada morta cada uma. Só com a cadeia completa ligada (chave reserva global).
+        abrirCircuito(provider as Provedor);
+        logger.error({ provider, unit: unit.slug, erro: erroPrincipal.slice(0, 300) }, 'provedor de IA sem saldo/cota — circuito aberto, indo pro reserva');
+        await recorder.step({
+          kind: 'ERROR',
+          title: `💳 ${provider} sem saldo/cota — circuito aberto, a cadeia de reserva assume até ele voltar`,
+          payload: { provider, erro: erroPrincipal.slice(0, 300) },
+          latencyMs: Math.round(performance.now() - t0),
+        });
+      } else if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
         logger.error(
           { provider, unit: unit.slug, erro: erroPrincipal },
           'provedor de IA cortado após falhas seguidas — indo direto pro plano B',
@@ -966,56 +988,76 @@ export async function buildAgentGraph(
           payload: { provider, erro: erroPrincipal },
         });
       }
-      const planoB = escolherPlanoB(unit, !!env.OPENAI_API_KEY);
-      if (planoB) {
+      // Cadeia de reserva (cadeia-reserva.ts): sem chave reserva global é só o plano B de hoje; com ela, todos os outros provedores.
+      const passosDeReserva = montarCadeia({
+        unit,
+        principal: provider as Provedor,
+        temChaveOpenAiNoAmbiente: !!env.OPENAI_API_KEY,
+      });
+      if (passosDeReserva.length > 0) {
         try {
-          const modeloB = createChatModel(
-            { ...unit, llmProvider: planoB.provider },
-            { model: planoB.modelName, temperature: config.temperature, maxTokens: config.maxTokens },
-          );
-          const modeloBComTools = (
-            tools.length > 0
-              ? (modeloB as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(
-                  planoB.provider === 'google'
-                    ? toolsParaGemini(tools)
-                    : planoB.provider === 'openai'
-                      ? toolsParaOpenAI(tools)
-                      : tools,
-                )
-              : modeloB
-          ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
+          const vencedora = await percorrerCadeia({
+            passos: passosDeReserva,
+            comCircuito: cadeiaViva,
+            chamar: async (passo) => {
+              const modeloB = createChatModel(
+                { ...unit, ...passo.credenciais, llmProvider: passo.provider },
+                { model: passo.modelName, temperature: config.temperature, maxTokens: config.maxTokens },
+              );
+              const modeloBComTools = (
+                tools.length > 0
+                  ? (modeloB as unknown as { bindTools: (t: unknown[]) => unknown }).bindTools(
+                      passo.provider === 'google'
+                        ? toolsParaGemini(tools)
+                        : passo.provider === 'openai'
+                          ? toolsParaOpenAI(tools)
+                          : tools,
+                    )
+                  : modeloB
+              ) as unknown as Parameters<typeof invokeChatModel>[0]['model'];
 
-          response = (await withTimeout(
-            invokeChatModel({
-              model: modeloBComTools,
-              // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
-              messages: mensagensParaPlanoB(planoB.provider, finalMessages),
-              unitId: unit.id,
-              traceId: recorder.traceId,
-              modelName: planoB.modelName,
-              provider: planoB.provider,
-              tools,
-              conversaId: idDaConversa,
-            }),
-            PLANO_B_TIMEOUT_MS,
-          )) as AIMessage;
+              return invokeChatModel({
+                model: modeloBComTools,
+                // Os blocos de raciocínio da Anthropic só valem no modelo que os gerou: o plano B de outro provedor não os recebe.
+                messages: mensagensParaPlanoB(passo.provider, finalMessages),
+                unitId: unit.id,
+                traceId: recorder.traceId,
+                modelName: passo.modelName,
+                // A chave reserva global aparece separada em llm_calls ("google-reserva"): dá pra ver quanto ela gastou.
+                provider: rotuloDoProvedor(passo),
+                tools,
+                conversaId: idDaConversa,
+              });
+            },
+          });
+          response = vencedora.resposta as AIMessage;
+          const planoB = { provider: vencedora.passo.provider, modelName: vencedora.passo.modelName };
 
           respondeuPlanoB = true;
-          planoBEmUso = { provider: planoB.provider, modelName: planoB.modelName };
+          planoBEmUso = { ...planoB, credenciais: vencedora.passo.credenciais };
           await recorder.step({
             kind: 'THINKING',
-            title: `🔁 Plano B: ${planoB.provider} (${planoB.modelName}) respondeu no lugar do modelo principal`,
-            payload: { erroPrincipal, planoB },
+            title:
+              `🔁 Plano B: ${planoB.provider} (${planoB.modelName}${vencedora.passo.origemChave === 'reserva-global' ? ', chave reserva' : ''}) respondeu no lugar do modelo principal` +
+              (vencedora.tentativas.length > 1 ? ` — ${resumoDasTentativas(vencedora.tentativas)}` : ''),
+            payload: { erroPrincipal, planoB, chaveReserva: vencedora.passo.origemChave === 'reserva-global', tentativas: vencedora.tentativas },
             latencyMs: Math.round(performance.now() - t0),
           });
         } catch (err2) {
+          const tentativas = err2 instanceof CadeiaEsgotadaError ? err2.tentativas : undefined;
+          const ultimo = err2 instanceof CadeiaEsgotadaError ? err2.ultimoErro : err2;
           await recorder.step({
             kind: 'ERROR',
-            title: '⏱️ IA indisponível — principal e plano B falharam',
+            title:
+              passosDeReserva.length > 1
+                ? `⏱️ IA indisponível — principal e ${passosDeReserva.length} reservas falharam${tentativas ? ` (${resumoDasTentativas(tentativas)})` : ''}`
+                : '⏱️ IA indisponível — principal e plano B falharam',
             payload: {
               erroPrincipal,
-              erroPlanoB: err2 instanceof Error ? err2.message : String(err2),
-              planoB,
+              erroPlanoB: ultimo instanceof Error ? ultimo.message : String(ultimo ?? err2),
+              // só provedor e modelo: o passo carrega a chave reserva, que nunca vai pro rastro
+              planoB: { provider: passosDeReserva[0].provider, modelName: passosDeReserva[0].modelName },
+              tentativas,
             },
             latencyMs: Math.round(performance.now() - t0),
           });

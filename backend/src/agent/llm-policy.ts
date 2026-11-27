@@ -28,7 +28,7 @@ export interface PlanoB {
   modelName: string;
 }
 
-interface UnitCreds {
+export interface UnitCreds {
   llmProvider: string | null;
   anthropicApiKey: string | null;
   anthropicModel: string | null;
