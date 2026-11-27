@@ -53,6 +53,8 @@ test('a causa «outra» conta: 19 erros sem causa + 1 de crédito é FORA por ca
 test('uma unidade em laço (100 erros) + outra com 1 erro NÃO é FORA, mas erros espalhados são', () => {
   assert.equal(decidirSaude([linha({ total: 111, erros: 101, unidadesComErro: 2, maiorUnidade: 100, errosIndisponivel: 101 })]).estado, 'ok');
   assert.equal(decidirSaude([linha({ total: 111, erros: 101, unidadesComErro: 5, maiorUnidade: 60, errosIndisponivel: 101 })]).estado, 'fora');
+  // madrugada, 2 unidades falando (8 + 2 erros), crédito: sem volume para ser «laço», é FORA
+  assert.equal(decidirSaude([linha({ total: 10, erros: 10, unidadesComErro: 2, maiorUnidade: 8, errosCredito: 10 })]).estado, 'fora');
 });
 
 test('404 em texto puro do Traefik (rota sumiu) é servidor INACESSÍVEL; 404 com o JSON do app é vigia CEGO', () => {

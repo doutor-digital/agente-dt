@@ -16,14 +16,15 @@ const log = (o) => console.log(JSON.stringify(o));
 async function consultar() {
   const url = env('HEALTH_URL');
   try {
-    new URL(url);
+    // só https: o token vai no cabeçalho, e um http:// o mandaria em claro no 1º salto
+    if (new URL(url).protocol !== 'https:' && !env('VIGIA_PERMITE_HTTP')) throw new Error('so https');
   } catch {
     return { status: 404, corpo: { error: 'url_invalida' } }; // segredo mal colado (sem https://): é o vigia que está cego, não o servidor que caiu
   }
   let ultimo = { status: null, corpo: null };
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
-      const r = await fetch(url, { headers: { 'X-Health-Token': env('HEALTH_IA_TOKEN'), Accept: 'application/json' }, signal: AbortSignal.timeout(20_000) });
+      const r = await fetch(url, { headers: { 'X-Health-Token': env('HEALTH_IA_TOKEN'), Accept: 'application/json' }, signal: AbortSignal.timeout(20_000), redirect: 'manual' });
       const texto = await r.text();
       let corpo = null;
       try {

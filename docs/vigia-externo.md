@@ -29,7 +29,7 @@ GitHub Actions (cron, a cada ~10 min)
 
 | Estado | Quando |
 |---|---|
-| `fora` | 90% ou mais das chamadas falhando na REDE inteira, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, nenhuma com mais de 70% dos erros, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
+| `fora` | 90% ou mais das chamadas falhando na REDE inteira, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, nenhuma com mais de 70% dos erros (esta última só a partir de 20 erros), sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
 | `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor (inclusive um provedor a 100%: a chave de reserva ou o outro provedor pode estar atendendo; o aviso diz o provedor e a causa) com pelo menos 5 chamadas; os dois com erro em 2 unidades ou mais |
 | `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
 | `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida**, inclusive com outro incidente já aberto (um deploy ou reinício de ~1 min não pode acordar ninguém) |
@@ -50,7 +50,7 @@ No GitHub: Settings > Secrets and variables > Actions > New repository secret.
 | Segredo | Valor | Obrigatório |
 |---|---|---|
 | `HEALTH_URL` | `https://<domínio do agente em produção>/api/health/ia` (o host que o roteador do Traefik serve, ver `AGENT_DOMAIN` no `docker-compose.yml`; não está escrito aqui porque o repositório é público) | sim |
-| `HEALTH_IA_TOKEN` | um texto aleatório longo, por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (o `env_file` do `docker-compose.yml`) | sim |
+| `HEALTH_IA_TOKEN` | um texto aleatório longo (mínimo 16 caracteres; menos que isso o servidor trata como não configurado), por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (o `env_file` do `docker-compose.yml`) | sim |
 | `TELEGRAM_BOT_TOKEN` | token do bot DD-Avisos (o mesmo `TELEGRAM_BOT_TOKEN` do servidor) | recomendado (é o canal que já funciona hoje) |
 | `TELEGRAM_CHAT_ID` | o chat do João no Telegram (o mesmo `TELEGRAM_CHAT_JOAO` do servidor; ver `backend/src/lib/telegram.ts`) | junto com o token |
 | `KAPSO_API_KEY` | a chave do Kapso (a que o servidor usa como `KAPSO_API_KEY`) | para o WhatsApp |
@@ -98,6 +98,7 @@ Os dois PRs saem do `main` e não dependem um do outro. `backend/src/lib/causa-e
 
 ## Limites conhecidos
 
+- O vigia só aceita `HEALTH_URL` https (o token vai no cabeçalho) e não segue redirecionamento. `HEALTH_URL` ausente deixa o vigia desligado e VERDE, com `::warning::` no log; o aviso de teste mensal não detecta isso.
 - Chamada `cancelled` (prazo estourado pelo chamador) não conta, como no monitor interno: um provedor que TRAVA e cujas chamadas morrem no prazo fica invisível. Cobrir isso pede um alarme de proporção de `cancelled`, outro PR.
 - Um incidente em que só UMA unidade tem tráfego (madrugada) fica abaixo da regra de 2 unidades até uma segunda falar. É o preço de a chave poder ser por unidade; decisão do sênior.
 - Erros de chamada sem `unit_id` não entram na contagem de unidades.

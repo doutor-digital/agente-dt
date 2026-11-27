@@ -75,7 +75,8 @@ function causaDe(l: LinhaDoProvedor): Causa {
 }
 
 /** Erro espalhado: 2 unidades ou mais com erro e nenhuma respondendo por mais de 70% deles. */
-const espalhado = (l: LinhaDoProvedor) => l.unidadesComErro >= 2 && (l.erros === 0 || l.maiorUnidade / l.erros <= 0.7);
+// O «laço» (uma unidade com mais de 70% dos erros) só vale com volume (20+ erros): com 10 erros e 2 unidades falando é só madrugada.
+const espalhado = (l: LinhaDoProvedor) => l.unidadesComErro >= 2 && (l.erros < 20 || l.maiorUnidade / l.erros <= 0.7);
 
 const taxa = (l: LinhaDoProvedor) => (l.total > 0 ? l.erros / l.total : 0);
 const pct = (x: number) => `${Math.round(x * 100)}%`;

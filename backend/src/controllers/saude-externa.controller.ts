@@ -18,13 +18,14 @@ export function tokenConfere(recebido: string, esperado: string): boolean {
 /**
  * `GET /api/health/ia`: ok / degradado / fora, para o vigia externo (GitHub Actions). Não é o /health do orquestrador.
  *
- * FECHADO POR PADRÃO (OWASP A01/A02): sem `HEALTH_IA_TOKEN` no servidor a rota responde 404, e com ele exige o mesmo valor
+ * FECHADO POR PADRÃO (OWASP A01/A02): sem `HEALTH_IA_TOKEN` (ou com menos de 16 caracteres) no servidor a rota responde 404, e com ele exige o mesmo valor
  * no cabeçalho `X-Health-Token`. Os dados são só contagens, mas dizer de graça a qualquer um que a IA caiu, e quando, não
  * tem motivo para ser público. Falha de banco não vira 200: responde 503 SEM `estado` (o vigia trata como servidor inacessível, com a espera de 2 rodadas).
  */
 export async function saudeIaExternaHandler(req: Request, res: Response): Promise<void> {
   const esperado = (process.env.HEALTH_IA_TOKEN ?? '').trim();
-  if (!esperado) {
+  // token curto é tratado como não configurado: sem limitador de tentativas, só um segredo longo (openssl rand -hex 32) resiste a chute
+  if (esperado.length < 16) {
     res.status(404).json({ error: 'not_found' });
     return;
   }

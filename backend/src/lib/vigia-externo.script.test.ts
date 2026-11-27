@@ -76,6 +76,7 @@ function rodar(dir: string, extra: Record<string, string> = {}): Promise<{ codig
         PATH: process.env.PATH ?? '',
         ESTADO_ARQUIVO: join(dir, 'estado/vigia.json'),
         ESPERA_ENTRE_TENTATIVAS_MS: '5',
+        VIGIA_PERMITE_HTTP: '1', // os servidores falsos são http://127.0.0.1
         HEALTH_URL: `http://127.0.0.1:${portas.saude}/api/health/ia`,
         HEALTH_IA_TOKEN: 'segredo-do-teste',
         KAPSO_BASE: `http://127.0.0.1:${portas.kapso}/meta/whatsapp/v24.0`,
@@ -233,6 +234,15 @@ test('o log do Actions (público) não traz tipo de incidente, causa, status, un
   const r = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')));
   assert.equal(r.codigo, 0, r.saida);
   for (const proibido of ['credito', 'crédito', 'fora', 'autenticacao', 'status', 'codigo', 'motivo', '5599988887777', 'inacessivel']) assert.ok(!r.saida.toLowerCase().includes(proibido.toLowerCase()), `o log trouxe «${proibido}»: ${r.saida}`);
+});
+
+test('HEALTH_URL com http:// (token em claro) é recusada: vigia CEGO, sem chamar o servidor', { skip: PULAR }, async () => {
+  reset();
+  saude = FORA;
+  const dir = mkdtempSync(join(tmpdir(), 'vigia-'));
+  await rodar(dir, { VIGIA_PERMITE_HTTP: '' });
+  await rodar(dir, { VIGIA_PERMITE_HTTP: '' });
+  assert.match(recebidos.find((x) => x.rota.startsWith('telegram'))!.corpo.text, /CEGO/);
 });
 
 test('HEALTH_URL ainda não cadastrada: sai VERDE (exit 0) com aviso, sem mandar nada e sem gastar e-mail de falha', { skip: PULAR }, async () => {

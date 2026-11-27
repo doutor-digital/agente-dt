@@ -59,6 +59,8 @@ test('token: confere em tempo constante, recusa diferente e de tamanho diferente
   assert.equal(tokenConfere('', 'abc123'), false);
 });
 
+const SEGREDO = 'segredo-longo-de-teste-0123456789abcdef';
+
 function chamar(token: string | undefined, env: string | undefined) {
   const antes = process.env.HEALTH_IA_TOKEN;
   if (env === undefined) delete process.env.HEALTH_IA_TOKEN;
@@ -88,15 +90,16 @@ function chamar(token: string | undefined, env: string | undefined) {
 test('FECHADO por padrão: sem HEALTH_IA_TOKEN no servidor é 404; token errado ou ausente é 401', async () => {
   assert.equal((await chamar('qualquer', undefined)).status, 404);
   assert.equal((await chamar('qualquer', '   ')).status, 404);
-  assert.equal((await chamar(undefined, 'segredo')).status, 401);
-  assert.equal((await chamar('errado', 'segredo')).status, 401);
+  assert.equal((await chamar('curto', 'curto')).status, 404, 'token com menos de 16 caracteres = não configurado');
+  assert.equal((await chamar(undefined, SEGREDO)).status, 401);
+  assert.equal((await chamar('errado', SEGREDO)).status, 401);
 });
 
 test('banco fora: 503 SEM `estado` (o vigia não pode ler «fora» num soluço do banco), pelo caminho real do controller', async () => {
   // DATABASE_URL de teste aponta para uma porta fechada: a consulta lança de verdade
   const { esquecerSaudeGuardada } = await import('./saude-externa.js');
   esquecerSaudeGuardada();
-  const r = await chamar('segredo', 'segredo');
+  const r = await chamar(SEGREDO, SEGREDO);
   assert.equal(r.status, 503);
   assert.deepEqual(r.corpo, { error: 'db_unavailable' });
   assert.ok(!('estado' in (r.corpo as object)));
