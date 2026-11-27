@@ -157,18 +157,41 @@ describe('invocarComVoltas — o laço, com um modelo falso', () => {
 });
 
 describe('vaziaDepoisDaVolta — a Sofia muda de verdade continua reprovando', () => {
-  const nomes = ctx.nomesDeCampo;
   it('volta feita e terminou sem texto nem chamada → resposta_vazia', () => {
-    assert.equal(vaziaDepoisDaVolta(1, '', [], nomes)?.regra, 'resposta_vazia');
+    assert.equal(vaziaDepoisDaVolta(1, '', [], ctx)?.regra, 'resposta_vazia');
   });
   it('volta feita e terminou só no bastidor de novo (estourou as voltas) → resposta_vazia', () => {
-    assert.equal(vaziaDepoisDaVolta(2, '', [{ name: 'aplicar_tag', id: 'z' }], nomes)?.regra, 'resposta_vazia');
+    assert.equal(vaziaDepoisDaVolta(2, '', [{ name: 'aplicar_tag', id: 'z' }], ctx)?.regra, 'resposta_vazia');
   });
   it('terminou numa ferramenta de verdade → avalia a chamada planejada, como antes', () => {
-    assert.equal(vaziaDepoisDaVolta(1, '', [{ name: 'consultar_horarios', id: 'z' }], nomes), null);
+    assert.equal(vaziaDepoisDaVolta(1, '', [{ name: 'consultar_horarios', id: 'z' }], ctx), null);
+  });
+  it('terminou num bastidor que a produção RECUSARIA (etapa 143, título sem nome dito) → NÃO é muda: lá a recusa volta e ela fala', () => {
+    assert.equal(vaziaDepoisDaVolta(1, '', [{ name: 'mover_etapa', id: 'z', args: { statusId: 143 } }], ctx), null);
+    assert.equal(vaziaDepoisDaVolta(1, '', [{ name: 'atualizar_titulo_lead', id: 'z', args: { nome: 'Joana' } }], ctx), null);
+  });
+  it('terminou numa chamada sem id → caminho antigo, sem falha nova', () => {
+    assert.equal(vaziaDepoisDaVolta(1, '', [{ name: 'aplicar_tag' }], ctx), null);
   });
   it('sem volta, ou com fala → nada a acrescentar', () => {
-    assert.equal(vaziaDepoisDaVolta(0, '', [], nomes), null);
-    assert.equal(vaziaDepoisDaVolta(1, 'Fica na Av. Ville Roy', [], nomes), null);
+    assert.equal(vaziaDepoisDaVolta(0, '', [], ctx), null);
+    assert.equal(vaziaDepoisDaVolta(1, 'Fica na Av. Ville Roy', [], ctx), null);
+  });
+});
+
+describe('a sequência que o sênior reproduziu: aplicar_tag e depois mover_etapa(143), as duas sem texto', () => {
+  it('o laço para na recusa (sem 2ª volta) e o resultado NÃO vira resposta_vazia', async () => {
+    const respostas = [
+      ia('', [{ name: 'aplicar_tag', id: 't1', args: { tag: 'Quente' } }]),
+      ia('', [{ name: 'mover_etapa', id: 't2', args: { statusId: 143 } }]),
+    ];
+    const r = await invocarComVoltas(async () => respostas.shift() as AIMessage, [new HumanMessage('oi')], ctx, textoDe);
+    assert.equal(r.voltas, 1);
+    assert.equal(vaziaDepoisDaVolta(r.voltas, '', (r.resposta.tool_calls ?? []) as never, ctx), null);
+  });
+  it('statusId que não é número (string, null) a produção recusaria → sem volta', () => {
+    assert.equal(producaoAceitaria({ name: 'mover_etapa', args: { statusId: '110676935' } }, ctx), false);
+    assert.equal(producaoAceitaria({ name: 'mover_etapa', args: { statusId: null } }, ctx), false);
+    assert.equal(producaoAceitaria({ name: 'mover_etapa', args: { statusId: 110676935 } }, ctx), true);
   });
 });

@@ -54,8 +54,9 @@ export function ehDeBastidor(nome: string, nomesDeCampo: ReadonlySet<string> = n
 /** PURA: a produção aceitaria esta chamada de bastidor? Quando ela recusaria com um texto que muda a fala, não há volta. */
 export function producaoAceitaria(c: ChamadaDeFerramenta, ctx: ContextoDaVolta): boolean {
   if (c.name === 'mover_etapa') {
-    const etapa = Number(c.args?.statusId);
-    return Number.isFinite(etapa) && !ETAPAS_RECUSADAS.has(etapa);
+    // número de verdade, como o zod da produção exige ("123" ou null seriam recusados lá)
+    const etapa = c.args?.statusId;
+    return typeof etapa === 'number' && Number.isFinite(etapa) && !ETAPAS_RECUSADAS.has(etapa);
   }
   if (c.name === 'atualizar_titulo_lead') {
     const nome = typeof c.args?.nome === 'string' ? c.args.nome : '';
@@ -138,12 +139,15 @@ export function vaziaDepoisDaVolta(
   voltas: number,
   textoFinal: string,
   chamadasFinais: readonly ChamadaDeFerramenta[],
-  nomesDeCampo: ReadonlySet<string>,
+  ctx: ContextoDaVolta,
 ): Falha | null {
   if (voltas === 0) return null;
   if (textoFinal.trim() !== '') return null;
-  // Terminou numa ferramenta de verdade (consultar_horarios…): é a chamada planejada que se avalia, como sempre.
-  if (chamadasFinais.some((c) => !ehDeBastidor(c.name, nomesDeCampo))) return null;
+  // Muda de verdade: terminou sem chamada nenhuma, ou ainda pediria OUTRA volta de bastidor (estourou MAX_VOLTAS).
+  // Qualquer outra chamada — ferramenta de verdade, bastidor que a produção RECUSARIA (título sem nome, etapa
+  // 142/143), chamada sem id — segue o caminho antigo: avalia-se a chamada planejada. Na produção a recusa volta
+  // ao modelo, que fala; marcar "muda" aí seria o alarme falso que este arquivo existe para acabar.
+  if (chamadasFinais.length > 0 && !precisaDeOutraVolta(textoFinal, chamadasFinais, ctx)) return null;
   return {
     regra: 'resposta_vazia',
     detalhe: `a IA fez ${voltas} volta(s) só com ferramentas de bastidor e terminou sem falar nada ao paciente`,

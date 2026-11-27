@@ -253,14 +253,16 @@ export async function rodarCaso(
       args: (c.args ?? {}) as Record<string, unknown>,
     }));
 
-    const falhas = conferir(
-      { texto: g.text, ferramentas, gatilhosDoGuardrail: g.triggered },
-      caso.espera,
-      { unit, outrasUnidades: ctx.outrasUnidades, falasDoPaciente: falasDoPaciente.slice(-3) },
-    );
-    // As chamadas somadas das voltas escondiam a `resposta_vazia` de checks.ts: a Sofia que termina muda depois do bastidor reprova.
-    const vazia = vaziaDepoisDaVolta(voltas, g.text, (resposta.tool_calls ?? []) as ChamadaDeFerramenta[], contextoDaVolta.nomesDeCampo);
-    if (vazia && !falhas.some((f) => f.regra === 'resposta_vazia')) falhas.unshift(vazia);
+    // As chamadas somadas das voltas escondiam a `resposta_vazia` de checks.ts: a Sofia que termina muda depois do
+    // bastidor reprova — e SÓ com essa falha, como o `conferir` faz no caminho sem volta.
+    const vazia = vaziaDepoisDaVolta(voltas, g.text, (resposta.tool_calls ?? []) as ChamadaDeFerramenta[], contextoDaVolta);
+    const falhas = vazia
+      ? [vazia]
+      : conferir(
+          { texto: g.text, ferramentas, gatilhosDoGuardrail: g.triggered },
+          caso.espera,
+          { unit, outrasUnidades: ctx.outrasUnidades, falasDoPaciente: falasDoPaciente.slice(-3) },
+        );
 
     return {
       ...base,
