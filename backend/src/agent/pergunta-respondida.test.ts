@@ -46,9 +46,9 @@ test('tempo de dor: o paciente diz do jeito dele, antes mesmo de a Sofia pergunt
     ['faz uns 2 meses que eu sinto essa dor nas costas', 'faz uns 2 meses'],
     ['[áudio do cliente]: oi boa tarde eu tô com dor na coluna já faz um bom tempo, faz tempo mesmo', 'faz tempo'],
     ['dor desde janeiro, só piora', 'desde janeiro'],
-    ['desde o ano passado', 'desde o ano passado'],
-    ['uns 6 meses', '6 meses'],
-    ['ha anos eu convivo com isso', 'ha anos'],
+    ['sinto dor desde o ano passado', 'desde o ano passado'],
+    ['a dor tem uns 6 meses', '6 meses'],
+    ['ha anos eu convivo com essa dor', 'ha anos'],
   ] as const) {
     const r = jaRespondidas([p(fala)]).find((x) => x.tema === 'tempo de dor');
     assert.ok(r, `deveria contar: ${fala}`);
@@ -72,7 +72,7 @@ test('tempo de dor: idade, prazo que vem e "um dia" NÃO são o tempo da dor', (
 });
 
 test('tempo de dor: a fala logo depois da pergunta (só dela) é a resposta; outra pergunta não é', () => {
-  const respondeu = [ia('Entendi, Ana. E há quanto tempo você sente isso?'), p('não lembro direito, bastante')];
+  const respondeu = [ia('Entendi, Ana. E há quanto tempo você sente isso?'), p('uns 2 anos')];
   assert.ok(temas(respondeu).includes('tempo de dor'));
   const fugiu = [ia('Entendi, Ana. E há quanto tempo você sente isso?'), p('quanto custa a consulta?')];
   assert.ok(!temas(fugiu).includes('tempo de dor'));
@@ -290,4 +290,49 @@ test('chave nasce DESLIGADA: sem ligar, nada de bloco nem de lista enxugada; lig
   comChaveLigada('outra-unidade', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), false));
   comChaveLigada('unidade-de-teste', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), true));
   comChaveLigada('*', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), true));
+});
+
+// ── reprovação do sênior (#519) ─────────────────────────────────────────────────────────────────────────
+
+test('E: depois de "há quanto tempo?" ou "atrapalha a rotina?", "sim", "ok", um nome, o aviso do Lite e convênio sem "?" NÃO respondem', () => {
+  const lite = 'Você recebeu uma mensagem de mídia (ID da mensagem: 3EB0A1B2C3D4E5F6)';
+  for (const fala of ['sim', 'ok', 'Ana', 'não sei', lite, 'vocês atendem unimed', 'aceitam convênio']) {
+    assert.ok(!temas([ia('E há quanto tempo você sente essa dor?'), p(fala)]).includes('tempo de dor'), `tempo: ${fala}`);
+    assert.ok(!temas([ia('Essa dor atrapalha sua rotina?'), p(fala)]).includes('impacto na rotina'), `rotina: ${fala}`);
+  }
+  // com conteúdo, responde
+  for (const fala of ['uns 2 anos', '6 meses', 'desde janeiro', 'faz tempo', 'ontem']) {
+    assert.ok(temas([ia('E há quanto tempo você sente essa dor?'), p(fala)]).includes('tempo de dor'), `tempo: ${fala}`);
+  }
+  for (const fala of ['no trabalho principalmente', 'não consigo dormir', 'pra sentar e levantar', 'atrapalha muito']) {
+    assert.ok(temas([ia('Essa dor atrapalha sua rotina?'), p(fala)]).includes('impacto na rotina'), `rotina: ${fala}`);
+  }
+});
+
+test('F: "moro perto do hospital", "no Maranhão/Pará", "na mesma rua", "em local afastado" NÃO são cidade; cidade de verdade é', () => {
+  for (const fala of [
+    'moro perto do hospital', 'moro no Maranhão', 'moro no Pará', 'moro na mesma rua', 'moro em local afastado',
+    'moro em outra cidade', 'moro na capital', 'moramos no Tocantins', 'moro em MA', 'Sou do Maranhão',
+  ]) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['moro em Marabá', 'moro em marabá mesmo', 'moro em Canaã dos Carajás e trabalho aqui', 'moro no Rio de Janeiro', 'moro em São Paulo', 'Sou de Eldorado dos Carajás']) {
+    assert.ok(temas([p(fala)]).includes('cidade'), `deveria contar: ${fala}`);
+  }
+  assert.equal(jaRespondidas([p('moro em Marabá e trabalho em Parauapebas')]).find((r) => r.tema === 'cidade')?.trecho, 'moro em Marabá');
+});
+
+test('G: o tempo tem de ser DA DOR — "operei há 2 anos", "trabalho aqui faz 10 anos", "minha filha de 5 anos" não contam', () => {
+  for (const fala of ['operei há 2 anos', 'trabalho nessa empresa faz 10 anos', 'minha filha de 5 anos', 'sou casada há 8 anos', 'moro aqui há 4 anos', 'meu filho nasceu há 3 meses']) {
+    assert.ok(!temas([p(fala)]).includes('tempo de dor'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['dói há 2 anos', 'sinto dor nas costas faz 10 anos', 'a dor começou há uns 3 meses', 'tenho hérnia de disco desde 2019', 'dor na lombar há 6 meses', 'estou com dor desde janeiro']) {
+    assert.ok(temas([p(fala)]).includes('tempo de dor'), `deveria contar: ${fala}`);
+  }
+});
+
+test('o cartão lê pela gaveta canônica: tempo_de_dor e localizacao=cidade de verdade contam; localizacao=lombar não', () => {
+  assert.ok(temas([p('oi')], { tempo_de_dor: '2 anos' }).includes('tempo de dor'));
+  assert.ok(temas([p('oi')], { localizacao: 'Imperatriz' }).includes('cidade'));
+  assert.ok(!temas([p('oi')], { localizacao: 'lombar' }).includes('cidade'));
 });

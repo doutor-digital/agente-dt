@@ -13,6 +13,7 @@
  * ruim; deixar de perguntar a cidade e oferecer horário a quem mora longe é pior).
  */
 import { cidadeConhecida, pareceCidade, type Fatos } from './falta-para-agendar.js';
+import { canonizarFatos } from '../services/fatos-canonicos.js';
 import { perguntasDe, respostaVazia, type Fala } from './repeticao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
@@ -95,30 +96,81 @@ const TEMPO_VAGO = /\b(?:ha|faz)\s+(?:muito\s+|bastante\s+)?(?:tempo|tempao|anos
 const TEMPO_DESDE =
   /\bdesde\s+(?:o\s+|a\s+|de\s+)?(?:\d{4}|\d{1,2}\/\d{2,4}|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|ano\s+passado|mes\s+passado|semana\s+passada|ontem|anteontem|hoje|domingo|segunda|terca|quarta|quinta|sexta|sabado|crianca|adolescencia|natal|carnaval)/;
 
-function respostaDeTempo(texto: string): string | null {
+/** O tempo tem de ser DA DOR: palavra de dor/sintoma por perto, e nada que o ligue a outra coisa ("operei há 2 anos", "minha filha de 5 anos"). */
+const PALAVRA_DE_DOR =
+  /\b(?:dor|dores|doi|doendo|doeu|sinto|sentindo|sente|senti|formig\w*|dorm[eê]ncia|hernia|disco|protrusao|abaulamento|coluna|lombar|cervical|ciatic\w*|costas|pescoco|nuca|perna|braco|joelho|ombro|quadril|crise|crises|travad\w*|latej\w*|incomod\w*|problema|sintoma\w*|sofro|sofrendo|piora\w*|machuc\w*|lesao|inflam\w*|tratamento)\b/;
+/** O que vem antes e prende o tempo a OUTRA coisa: cirurgia, trabalho, idade de familiar, remédio, estado civil. */
+const OUTRA_COISA_ANTES =
+  /(?:oper\w+|cirurgi\w*|fiz|fez|filh\w*|neto|neta|bebe|crianca|idade|casad\w*|trabalh\w*|empresa|formad\w*|aposentad\w*|divorc\w*|separ\w*|nasc\w*|remedio|uso|usando|tomando|sobrinh\w*|mae|pai|marido|esposa|namor\w*|moro|moramos|mora|carteira|carro|casa)\s+(?:\w+\s+){0,3}(?:de\s+|ha\s+|faz\s+|ja\s+faz\s+)?$/;
+const JANELA_DE_DOR = 45;
+
+function ligadoADor(t: string, ini: number, fim: number): boolean {
+  if (!PALAVRA_DE_DOR.test(t.slice(Math.max(0, ini - JANELA_DE_DOR), Math.min(t.length, fim + JANELA_DE_DOR)))) return false;
+  return !OUTRA_COISA_ANTES.test(t.slice(Math.max(0, ini - 40), ini));
+}
+
+/**
+ * `comContexto`: o tempo precisa estar ligado à dor (conversa solta). Sem ele é a fala que responde DIRETO a "há quanto tempo?",
+ * onde "2 anos" basta; idade e prazo continuam recusados.
+ */
+function respostaDeTempo(texto: string, comContexto = true): string | null {
   const t = semAcento(falaLimpa(texto));
-  const c = TEMPO_COM_VERBO.exec(t) ?? TEMPO_VAGO.exec(t) ?? TEMPO_DESDE.exec(t);
-  if (c) return c[0].trim();
+  const ok = (m: RegExpExecArray | RegExpMatchArray): boolean => {
+    const ini = m.index ?? 0;
+    return !comContexto || ligadoADor(t, ini, ini + m[0].length);
+  };
+  for (const re of [TEMPO_COM_VERBO, TEMPO_VAGO, TEMPO_DESDE]) {
+    const m = new RegExp(re.source, 'g');
+    for (const c of t.matchAll(m)) if (ok(c)) return c[0].trim();
+  }
   for (const m of t.matchAll(TEMPO_SEM_VERBO)) {
     if (/^um\s+dia$/.test(m[0].trim())) continue; // "um dia eu levantei peso": não é quanto tempo
     if (/anos?$/.test(m[0]) && (IDADE.test(t) || Number(/\d+/.exec(m[0])?.[0] ?? 0) > 15)) continue;
     const antes = t.slice(Math.max(0, m.index - 20), m.index);
     if (/(?:dias?|semanas?|quinzenas?)$/.test(m[0]) && DE_DE_PRAZO.test(antes)) continue;
     if (PRAZO_COM_DE.test(antes)) continue;
-    if (!ANTES_DE_PRAZO.test(antes)) return m[0].trim();
+    if (!ANTES_DE_PRAZO.test(antes) && ok(m)) return m[0].trim();
   }
   return null;
 }
 
-// "moro em Marabá", "moramos no Pará", "resido na capital", "moro aqui perto", "sou de Parauapebas" (com maiúscula: "sou de
-// confiança" não é cidade), "venho de Eldorado", "aqui de Canaã".
+/** Resposta DIRETA a "há quanto tempo?": além das contas acima, "ontem", "semana passada", "faz tempo". */
+const TEMPO_CURTO = /\b(?:ontem|anteontem|hoje|semana\s+passada|mes\s+passado|ano\s+passado|faz\s+tempo|muito\s+tempo|bastante\s+tempo|recentemente)\b/;
+function respostaDiretaDeTempo(texto: string): string | null {
+  const t = semAcento(falaLimpa(texto));
+  return respostaDeTempo(texto, false) ?? TEMPO_CURTO.exec(t)?.[0] ?? null;
+}
+
+// "moro em Marabá", "moramos no Pará" (estado: não vale), "moro aqui", "sou de Parauapebas" (com maiúscula: "sou de confiança" não
+// é cidade), "venho de Eldorado", "aqui de Canaã". Fica de fora: "moro perto do hospital", "moro na mesma rua", "moro em local
+// afastado", "moro no Maranhão" — nada disso diz a cidade.
 const CIDADE_MORO =
-  /(?<![\p{L}])(?:[Mm]oro|[Mm]orando|[Mm]ora|[Mm]oramos|[Rr]esido|[Rr]esidente)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na|perto\s+d[aeo]s?|pr[oó]ximo\s+(?:a|de|do|da))\s+([\p{L}][\p{L}'.-]*)|aqui(?:\s+mesmo|\s+perto)?)/u;
-/** "moro em casa", "moro no sítio", "moro no centro": onde ele mora, não a cidade. */
-const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zona|bairro|centro|condominio|loteamento|residencial|setor|rua|avenida|av|interior|beira|predio|quarto|frente|fundos|cima|baixo|um|uma|outro|outra|onde|ca|la|ali)$/;
+  /(?<![\p{L}])(?:[Mm]oro|[Mm]orando|[Mm]ora|[Mm]oramos|[Rr]esido|[Rr]esidente)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na)\s+([\p{L}][\p{L}'.\-]*(?:\s+[\p{L}][\p{L}'.\-]*){0,4})|aqui(?:\s+mesmo)?(?![\p{L}]))/u;
+/** "moro em casa", "no sítio", "no centro", "na mesma rua", "em local afastado", "em outra cidade": onde ele mora, não a cidade. */
+const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zona|bairro|centro|condominio|loteamento|residencial|setor|rua|avenida|av|interior|beira|predio|quarto|frente|fundos|cima|baixo|um|uma|outro|outra|onde|ca|la|ali|mesma|mesmo|local|lugar|area|regiao|capital|cidade|litoral|campo|mata|sul|norte|leste|oeste|perto|longe|proximo|afastado|distrito|povoado)$/;
+/** Estado sozinho não é cidade (São Paulo e Rio de Janeiro ficam de fora da lista: são as duas coisas). */
+const ESTADOS = new Set([
+  'acre', 'alagoas', 'amapa', 'amazonas', 'bahia', 'ceara', 'espirito santo', 'goias', 'maranhao', 'mato grosso', 'mato grosso do sul',
+  'minas gerais', 'para', 'paraiba', 'parana', 'pernambuco', 'piaui', 'rio grande do norte', 'rio grande do sul', 'rondonia',
+  'roraima', 'santa catarina', 'sergipe', 'tocantins', 'distrito federal', 'brasil',
+]);
+/** Onde o nome do lugar termina: "moro em Marabá e trabalho em…", "moro em Marabá mesmo", "moro em Marabá desde 2010". */
+const FIM_DO_LUGAR = /(?:^|\s)(?:e|mas|que|pois|porque|desde|ha|faz|com|onde|hoje|mesmo|tambem|agora|ja|mais|bem|perto|longe|ai|la|sim|ne|so)(?:\s|$)|[,.;!?]/i;
+
+/** O trecho que sobrou depois de "moro em" é uma cidade? Só o nome do lugar (corta no "e", no "mesmo", na vírgula), nunca estado. */
+function lugarEhCidade(bruto: string): string | null {
+  // "moro na cidade de Canaã dos Carajás"
+  const cortado = bruto.replace(/^cidade\s+d[aeo]s?\s+/i, '').split(FIM_DO_LUGAR)[0].trim();
+  if (!cortado) return null;
+  const n = semAcento(cortado);
+  const primeira = n.split(/\s+/)[0];
+  if (NAO_E_CIDADE.test(primeira) || ESTADOS.has(n) || /^[a-z]{2}$/.test(n)) return null;
+  return pareceCidade(cortado) ? cortado : null;
+}
+
 // "vim do Instagram" não é cidade
 const CIDADE_SOU_DE =
-  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho|[Vv]im|[Vv]iemos|[Aa]qui|[Dd]aqui)\s+(?:d[aeo]s?|em)\s+(?!(?:Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)\p{Lu}[\p{L}'-]+/u;
+  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho|[Vv]im|[Vv]iemos|[Aa]qui|[Dd]aqui)\s+(?:d[aeo]s?|em)\s+(?!(?:Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
 const CIDADE_SOU_DAQUI = /(?<![\p{L}])[Ss]ou\s+daqui\b|(?<![\p{L}])[Ss]omos\s+daqui\b/u;
 
 /** "Não moro aqui", "nunca morei em Marabá", "já não sou daqui": o contrário de responder. */
@@ -129,11 +181,18 @@ function negado(t: string, indice: number): boolean {
 function respostaDeCidade(texto: string): string | null {
   const t = falaLimpa(texto);
   const moro = CIDADE_MORO.exec(t);
-  if (moro && !negado(t, moro.index) && !(moro[1] && NAO_E_CIDADE.test(semAcento(moro[1])))) return moro[0].trim();
-  for (const re of [CIDADE_SOU_DE, CIDADE_SOU_DAQUI]) {
-    const m = re.exec(t);
-    if (m && !negado(t, m.index)) return m[0].trim();
+  if (moro && !negado(t, moro.index)) {
+    if (!moro[1]) return moro[0].trim(); // "moro aqui"
+    const lugar = lugarEhCidade(moro[1]);
+    if (lugar) return `${moro[0].slice(0, moro[0].indexOf(moro[1]))}${lugar}`.trim();
   }
+  const sou = CIDADE_SOU_DE.exec(t);
+  if (sou && !negado(t, sou.index)) {
+    const lugar = lugarEhCidade(sou[1]);
+    if (lugar) return `${sou[0].slice(0, sou[0].indexOf(sou[1]))}${lugar}`.trim();
+  }
+  const daqui = CIDADE_SOU_DAQUI.exec(t);
+  if (daqui && !negado(t, daqui.index)) return daqui[0].trim();
   return null;
 }
 
@@ -149,6 +208,9 @@ const IMPACTO_RESPOSTA = new RegExp(
     String.raw`\bdificuldade\s+(?:pra|para|de|em)\s+(?:trabalhar|andar|dormir|sentar|levantar|ficar)`,
   ].join('|'),
 );
+
+/** Atividade da rotina que a dor atrapalha, dita como resposta direta ("trabalho", "dormir", "pra sentar"). */
+const IMPACTO_ATIVIDADE = /\b(?:trabalh\w*|dorm\w*|sono|andar|caminh\w*|sent\w+|levant\w*|abaix\w*|dirig\w*|cuidar|brincar|correr|trein\w*|academia|atividades?|rotina|dia\s+a\s+dia|servico|filhos?|carregar|pegar\s+peso|banho|vestir)\b/;
 
 function respostaDeImpacto(texto: string): string | null {
   const m = IMPACTO_RESPOSTA.exec(semAcento(falaLimpa(texto)));
@@ -168,8 +230,10 @@ const FATO_DO_TEMA: Record<Tema, string[]> = {
   'impacto na rotina': ['impacto', 'impacto_rotina', 'impacto_na_rotina', 'limitacao', 'limitacoes', 'atrapalha_rotina', 'impacto_dor'],
 };
 
-function doCartao(tema: Tema, fatos: Fatos | null | undefined): string | null {
-  if (!fatos) return null;
+function doCartao(tema: Tema, fatosBrutos: Fatos | null | undefined): string | null {
+  if (!fatosBrutos) return null;
+  // os mesmos apelidos que a escrita junta (tempo_de_dor -> tempo_dor, localizacao -> cidade): lê pela gaveta canônica
+  const fatos = canonizarFatos(fatosBrutos);
   if (tema === 'cidade') {
     // a MESMA conta da lista <falta_para_agendar>: `localizacao` (onde dói) e parte do corpo não são cidade
     if (!cidadeConhecida(fatos)) return null;
@@ -204,8 +268,10 @@ function respostaImediata(tema: Tema, fala: string, anterior: string | null): st
     if (/^(?:sim|n[aã]o|ok|okay|t[aá]|isso|aham|uhum|obrigad[oa]|pode\s+ser)\b/i.test(t)) return null;
     return t.slice(0, 60);
   }
-  if (PALAVRAS_DE_OUTRO_ASSUNTO.test(t) && palavras.length <= 6) return null;
-  return t.slice(0, 80);
+  // Tempo e rotina: só vale fala com CONTEÚDO que responde — tempo (número, "ontem", "faz tempo") ou atividade/verbo da rotina. "sim", "ok",
+  // um nome, o aviso de mídia do Lite e pergunta de convênio sem "?" não respondem nada: na dúvida a Sofia ainda pergunta.
+  if (tema === 'tempo de dor') return respostaDiretaDeTempo(t) ? t.slice(0, 80) : null;
+  return respostaDeImpacto(t) ?? (IMPACTO_ATIVIDADE.test(semAcento(t)) && !PALAVRAS_DE_OUTRO_ASSUNTO.test(t) ? t.slice(0, 80) : null);
 }
 
 /**

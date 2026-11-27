@@ -19,6 +19,8 @@
  * exato deixaria a lista mentindo que falta algo que já existe.
  */
 
+import { canonizarFatos } from '../services/fatos-canonicos.js';
+
 export type Fatos = Record<string, unknown>;
 
 /**
@@ -57,15 +59,22 @@ const PARTE_DO_CORPO = new Set([
   'perna', 'pernas', 'braco', 'bracos', 'quadril', 'joelho', 'ombro', 'gluteo', 'virilha', 'lado', 'lados', 'direito',
   'direita', 'esquerdo', 'esquerda', 'regiao', 'dor', 'dores', 'baixa', 'alta', 'parte', 'meio', 'inferior', 'superior',
   'toda', 'todo', 'ambos', 'ambas', 'pe', 'tornozelo', 'cotovelo', 'punho', 'mao', 'maos',
-  // ligações de frase ("dor na lombar que desce pra perna")
+]);
+/**
+ * Palavras de ligação de frase ("dor na lombar que desce pra perna"). Valem SÓ para dizer que o valor inteiro é frase de dor
+ * (`every`); nunca para dizer que há palavra de corpo (`some`) — senão "canaã dos carajás" e "rio de janeiro", em minúscula,
+ * deixariam de ser cidade.
+ */
+const LIGACAO = new Set([
   'de', 'do', 'da', 'dos', 'das', 'e', 'na', 'no', 'nas', 'nos', 'a', 'o', 'que', 'doi', 'pra', 'para', 'com', 'sem', 'desce', 'ate', 'mais', 'muito', 'forte',
 ]);
-const NEGATIVO = /^\s*(?:n[aã]o|nao|false|0|n)\b/i;
+/** "consegue vir": só resposta afirmativa conta ("não", "nunca", "talvez" não). */
+const AFIRMATIVO = /^\s*(?:sim|s|true|1|consegue|pode|ok|claro|com\s+certeza|tranquilo)\b/i;
 
 /**
  * Cidade de verdade, não onde dói. Cidade que tem nome de parte do corpo ("Braço do Norte", "Dores do Indaiá") passa: o que
- * se recusa é o valor feito SÓ de palavras de corpo/lado ("lombar", "Lado direito"), a frase comprida, ou o que tem palavra de
- * corpo e foi escrito em minúscula (a IA grava a dor em minúscula; a cidade, com inicial maiúscula).
+ * se recusa é o valor feito SÓ de palavras de corpo/lado/ligação ("lombar", "Lado direito"), a frase comprida, ou o que tem
+ * palavra de corpo e foi escrito em minúscula (a IA grava a dor em minúscula; a cidade, com inicial maiúscula).
  */
 export function pareceCidade(valor: unknown): boolean {
   const v = String(valor ?? '').trim();
@@ -79,17 +88,19 @@ export function pareceCidade(valor: unknown): boolean {
   if (palavras.length === 0) return false;
   // frase, não cidade (os conectores não contam: "São José do Rio Preto" tem 4 palavras de nome)
   if (palavras.filter((w) => !['de', 'do', 'da', 'dos', 'das', 'e'].includes(w)).length >= 6) return false;
-  if (palavras.every((w) => PARTE_DO_CORPO.has(w))) return false;
+  if (palavras.every((w) => PARTE_DO_CORPO.has(w) || LIGACAO.has(w))) return false;
   if (palavras.some((w) => PARTE_DO_CORPO.has(w)) && /^\p{Ll}/u.test(v)) return false;
   return true;
 }
 
+/**
+ * Os fatos passam por `canonizarFatos` ANTES de olhar a cidade: um cartão antigo com `localizacao: 'Imperatriz'` (o apelido que a
+ * escrita troca por `cidade`) continua valendo; `localizacao: 'lombar'` continua não valendo (`pareceCidade`).
+ */
 export function cidadeConhecida(fatos: Fatos): boolean {
-  if (CHAVES_CIDADE.some((k) => pareceCidade(fatos[k]))) return true;
-  return CHAVES_VEM_A_UNIDADE.some((k) => {
-    const v = String(fatos[k] ?? '').trim();
-    return v !== '' && !NEGATIVO.test(v);
-  });
+  const f = canonizarFatos(fatos);
+  if (CHAVES_CIDADE.some((k) => pareceCidade(f[k]))) return true;
+  return CHAVES_VEM_A_UNIDADE.some((k) => AFIRMATIVO.test(String(f[k] ?? '').trim()));
 }
 
 const CHECKLIST: Item[] = [

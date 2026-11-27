@@ -48,16 +48,22 @@ const JANELA_DO_AUDIO_LITE_MS = 5 * 60_000;
  */
 export function liteAudioSemLeitura(a: {
   humanMessage: string;
-  blocoOficial: string;
+  /** Os ids dos áudios que ESTE turno transcreveu (`saida.transcritos` de `blocoDaConversaOficial`): o áudio antigo já transcrito não vale pelo novo. */
+  transcritos: ReadonlySet<string>;
   leituraNoWebhook: boolean;
   msgs: MensagemOficial[] | null;
   agora?: number;
 }): boolean {
   if (!temMidiaSemArquivo(a.humanMessage) || a.leituraNoWebhook || !a.msgs) return false;
-  if (/\[áudio transcrito\]/.test(a.blocoOficial)) return false;
   const agora = a.agora ?? Date.now();
+  // algum áudio DESTE turno (recente, depois da última fala da Sofia) sem transcrição deste turno
   return desdeUltimaFalaDaSofia(a.msgs).some(
-    (m) => m.autor === 'paciente' && m.direcao === 'entrada' && m.anexo?.tipo === 'voice' && agora - m.em.getTime() < JANELA_DO_AUDIO_LITE_MS,
+    (m) =>
+      m.autor === 'paciente' &&
+      m.direcao === 'entrada' &&
+      m.anexo?.tipo === 'voice' &&
+      agora - m.em.getTime() < JANELA_DO_AUDIO_LITE_MS &&
+      !a.transcritos.has(m.id),
   );
 }
 
@@ -114,6 +120,8 @@ const JA_PEDIU = new RegExp(
   ].join('|'),
   'i',
 );
+
+const FERRAMENTAS_QUE_RESOLVEM = ['pausar_ia', 'resumir_lead_para_sdr', 'agendar_consulta', 'remarcar_consulta', 'cancelar_consulta', 'confirmar_presenca'];
 
 export function respostaJaTrataDaMidia(resposta: string): boolean {
   return JA_PEDIU.test(resposta);
@@ -179,7 +187,8 @@ export function respostaDeMidiaNaoLida(a: {
 }): { tipo: TipoDeMidia; texto: string } | null {
   const tipo = midiaNaoLidaDoTurno(a.entrada);
   if (!tipo) return null;
-  if (a.ferramentas.includes('pausar_ia') || a.ferramentas.includes('resumir_lead_para_sdr')) return null;
+  // passou para a equipe, ou o modelo AGENDOU/remarcou/cancelou/confirmou neste turno: a resposta dele fala disso, não se troca
+  if (FERRAMENTAS_QUE_RESOLVEM.some((f) => a.ferramentas.includes(f))) return null;
   if (respostaJaTrataDaMidia(a.resposta)) return null;
   if (jaFoiADaVez(a.falas)) return null;
   return { tipo, texto: fraseDeMidiaNaoLida(tipo, horariosNaMesa(a.falas, a.agoraLocal)) };

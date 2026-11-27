@@ -64,12 +64,14 @@ test('liteAudioSemLeitura: só ÁUDIO do paciente que a rota oficial lista e nin
   const agora = Date.parse('2026-11-27T13:00:00Z');
   const msg = (extra: Partial<MensagemOficial>): MensagemOficial =>
     ({ id: 'm1', em: new Date(agora - 60_000), autor: 'paciente', direcao: 'entrada', texto: '', anexo: { tipo: 'voice', link: null }, ...extra }) as MensagemOficial;
-  const base = { humanMessage: aviso, blocoOficial: '', leituraNoWebhook: false, msgs: [msg({})], agora };
+  const base = { humanMessage: aviso, transcritos: new Set<string>(), leituraNoWebhook: false, msgs: [msg({})], agora };
   // o áudio está listado (ainda sem link, ou com link mas sem transcrição): não foi lido
   assert.equal(liteAudioSemLeitura(base), true);
   assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ anexo: { tipo: 'voice', link: 'https://x/a.ogg' } })] }), true);
   // foi transcrito pela rota oficial, ou o webhook já leu
-  assert.equal(liteAudioSemLeitura({ ...base, blocoOficial: '<conversa_oficial>\n- 10:00 · Paciente: [áudio transcrito] "quero marcar"\n</conversa_oficial>' }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, transcritos: new Set(['m1']) }), false);
+  // o áudio ANTIGO já transcrito (outro id) não desliga a marca do áudio novo
+  assert.equal(liteAudioSemLeitura({ ...base, transcritos: new Set(['m0-antigo']) }), true);
   assert.equal(liteAudioSemLeitura({ ...base, leituraNoWebhook: true }), false);
   // figurinha/foto/reação: o aviso é o mesmo, mas não é áudio
   assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ anexo: { tipo: 'sticker', link: null } })] }), false);
@@ -160,4 +162,19 @@ test('unidade que não ouve áudio: o recado manda passar para a equipe e proíb
   assert.ok(!instrucaoAudioNaoTranscrito(false).includes(INSTRUCAO_DE_PASSAR_PARA_EQUIPE));
   assert.equal(midiaNaoLidaDoTurno(handoff), null);
   assert.equal(respostaDeMidiaNaoLida({ entrada: handoff, resposta: 'Certo!', ferramentas: [], falas: [p('...')], agoraLocal: AGORA }), null);
+});
+
+test('nit: o modelo AGENDOU/remarcou/cancelou/confirmou neste turno: a frase fixa não troca a resposta', () => {
+  for (const f of ['agendar_consulta', 'remarcar_consulta', 'cancelar_consulta', 'confirmar_presenca']) {
+    assert.equal(
+      respostaDeMidiaNaoLida({ entrada: AUDIO_SEM_OUVIR, resposta: 'Pronto, deixei marcado!', ferramentas: ['consultar_horarios', f], falas: [p('...')], agoraLocal: AGORA }),
+      null,
+      f,
+    );
+  }
+  // consultar a agenda sozinho não é resolver: a frase fixa ainda entra
+  assert.equal(
+    respostaDeMidiaNaoLida({ entrada: AUDIO_SEM_OUVIR, resposta: '', ferramentas: ['consultar_horarios'], falas: [p('...')], agoraLocal: AGORA })?.tipo,
+    'audio',
+  );
 });

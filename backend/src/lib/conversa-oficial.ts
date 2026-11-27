@@ -198,7 +198,8 @@ export async function blocoDaConversaOficial(args: {
   esperarImagem?: boolean;
   /** Fotos/PDFs que o webhook já trouxe e leu neste turno (aparecem também na rota oficial): não contam como a mídia do aviso. */
   midiaJaLidaNoWebhook?: number;
-  saida?: { msgs: MensagemOficial[] | null };
+  /** `transcritos`: os ids dos áudios do paciente que ESTE turno transcreveu (para saber se o áudio do turno foi lido). */
+  saida?: { msgs: MensagemOficial[] | null; transcritos?: Set<string> };
   /** Testes: leitura da rota oficial, espera e o histórico local trocáveis. */
   ler?: () => Promise<MensagemOficial[]>;
   dormir?: (ms: number) => Promise<void>;
@@ -263,6 +264,7 @@ export async function blocoDaConversaOficial(args: {
     itens.push({ ...m, transcricao });
   }
 
+  if (args.saida) args.saida.transcritos = new Set(itens.filter((m) => m.transcricao).map((m) => m.id));
   const daEquipe = itens.filter((m) => m.autor === 'equipe').length;
   await recorder.step({
     kind: 'THINKING',

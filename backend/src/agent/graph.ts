@@ -1611,7 +1611,7 @@ export async function buildAgentGraph(
           )) as AIMessage;
           textoRefeito = (refeita.tool_calls ?? []).length === 0 ? aiTextFromContent(refeita.content).trim() : '';
         } catch (err) {
-          logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
+          logger.warn({ err: String(err), unit: unit.slug }, 'repetição: a resposta refeita (sem o nome ou sem a pergunta repetida) falhou — fica a original');
         }
         const semOPedido = porNome ? !pedeNome(textoRefeito) : temasRepetidosNaResposta(textoRefeito, respondidas).length === 0;
         const serve = !!textoRefeito && semOPedido && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));

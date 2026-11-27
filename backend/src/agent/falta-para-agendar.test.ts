@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { renderFaltaParaAgendar } from './falta-para-agendar.js';
+import { cidadeConhecida, renderFaltaParaAgendar } from './falta-para-agendar.js';
 
 test('conversa nova: cobra o nome primeiro', () => {
   const b = renderFaltaParaAgendar({ interesse: 'sim' });
@@ -133,4 +133,29 @@ test('27/11: sem cidade a lista NÃO diz «você já tem tudo para marcar»', ()
   const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', preferencia_horario: 'terça 10h', localizacao: 'lombar' });
   assert.ok(!/já tem tudo/.test(b));
   assert.match(b, /Ainda falta, nesta ordem: cidade/);
+});
+
+test('reprovação C: cidade composta em MINÚSCULA continua cidade (as palavras de ligação não são corpo)', () => {
+  for (const cidade of ['canaã dos carajás', 'rio de janeiro', 'são josé do rio preto', 'eldorado dos carajás', 'marabá', 'parauapebas', 'são paulo']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', cidade });
+    assert.ok(!/cidade/.test(b), `${cidade} deveria contar`);
+  }
+  // e a frase de dor só de corpo + ligação continua recusada
+  for (const lixo of ['dor na lombar', 'dor na lombar que desce pra perna', 'lombar e quadril', 'do lado direito']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: lixo });
+    assert.match(b, /cidade → horário escolhido/, lixo);
+  }
+});
+
+test('reprovação D: cartão ANTIGO com localizacao=cidade de verdade conta; localizacao=lombar não', () => {
+  const base = { nome: 'Ana', queixa: 'dor', tempo_dor: '2 anos' };
+  assert.ok(!/cidade/.test(renderFaltaParaAgendar({ ...base, localizacao: 'Imperatriz' })));
+  assert.ok(cidadeConhecida({ localizacao: 'Imperatriz' }));
+  assert.ok(!cidadeConhecida({ localizacao: 'lombar' }));
+  assert.match(renderFaltaParaAgendar({ ...base, localizacao: 'lombar' }), /cidade → horário escolhido/);
+});
+
+test('nit: consegue_vir "nunca"/"talvez"/"não sei" NÃO conta; "sim"/"consegue" conta', () => {
+  for (const v of ['nunca', 'talvez', 'não sei', 'nao', 'depende']) assert.ok(!cidadeConhecida({ consegue_vir: v }), v);
+  for (const v of ['sim', 'Sim, consigo', 'consegue', 'true']) assert.ok(cidadeConhecida({ consegue_vir: v }), v);
 });

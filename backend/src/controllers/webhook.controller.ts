@@ -2003,7 +2003,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
     // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
-    const conversaLida: { msgs: MensagemOficial[] | null } = { msgs: porta.msgs };
+    const conversaLida: { msgs: MensagemOficial[] | null; transcritos?: Set<string> } = { msgs: porta.msgs };
     const blocoOficial = isChatMessage
       ? await blocoDaConversaOficial({
           unit,
@@ -2037,7 +2037,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
       !unit.audioHandoffEnabled &&
       liteAudioSemLeitura({
         humanMessage,
-        blocoOficial,
+        transcritos: conversaLida.transcritos ?? new Set<string>(),
         leituraNoWebhook: audios.length > 0,
         msgs: conversaLida.msgs,
       })
