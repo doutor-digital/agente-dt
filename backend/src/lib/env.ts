@@ -166,6 +166,24 @@ const schema = z.object({
   SUPORTE_LEMBRETE: z.string().optional(),
   /** Segredo do webhook do @ddchamados_bot (comandos /pausar /voltar /status): o Telegram o manda no cabeçalho X-Telegram-Bot-Api-Secret-Token. Sem ele o webhook recusa tudo. */
   TELEGRAM_CHAMADOS_SEGREDO: z.string().optional(),
+  /** Joaoof (agente do João, fase 1): `desligado` (padrão) | `seco` (decide e registra, não manda Telegram) | `ligado`. Ver `joaoof/config.ts`. */
+  JOAOOF_LIGADO: z.string().optional(),
+  /** Chave Anthropic do Joaoof. Opcional: sem ela o Joaoof usa a `ANTHROPIC_API_KEY` do servidor (a mesma da rede). O gasto dele fica separado em `llm_calls` (`joaoof.*`). */
+  JOAOOF_ANTHROPIC_API_KEY: z.string().optional(),
+  ANTHROPIC_API_KEY: z.string().optional(),
+  /** Segredo do webhook do Telegram do Joaoof (cabeçalho X-Telegram-Bot-Api-Secret-Token). Sem ele o webhook recusa tudo. */
+  JOAOOF_TELEGRAM_SEGREDO: z.string().optional(),
+  /** Bot PRÓPRIO do Joaoof no Telegram (opcional). Sem ele, o canal `joaoof` usa o DD-Avisos (`TELEGRAM_BOT_TOKEN`). */
+  JOAOOF_TELEGRAM_TOKEN: z.string().optional(),
+  JOAOOF_TELEGRAM_CHAT: z.string().optional(),
+  /** Teto do mês em R$ (padrão 300) e câmbio usado para converter o custo em dólar (padrão 5,8). */
+  JOAOOF_TETO_BRL: z.string().optional(),
+  JOAOOF_USD_BRL: z.string().optional(),
+  /** Modelos: barato (triagem em lote, padrão claude-haiku-4-5) e forte (só raciocínio difícil, padrão claude-sonnet-5). */
+  JOAOOF_MODELO_BARATO: z.string().optional(),
+  JOAOOF_MODELO_FORTE: z.string().optional(),
+  /** Segredo (≥16) que mascara o número de quem escreve no grupo antes de guardar. Sem ele, pessoa nenhuma é gravada. */
+  JOAOOF_SEGREDO_PESSOA: z.string().optional(),
 });
 
 const parsed = schema.safeParse(process.env);

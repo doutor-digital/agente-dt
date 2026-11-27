@@ -26,6 +26,12 @@ import {
   type TotaisDaFamilia,
 } from './vigia-rede.js';
 
+/**
+ * O Joaoof grava as chamadas dele em `llm_calls` (endpoint `joaoof.*`, `unit_id` nulo). Elas NÃO são a IA da rede: uma chamada boa dele não pode
+ * esconder «IA parada», uma sem crédito na chave DELE não pode abrir alarme para a rede, e uma boa não pode fechar um «sem crédito» da rede.
+ * Toda consulta ao `llm_calls` aqui (e em taxa-erro-worker e saude-externa) filtra `coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'`; um teste trava as três.
+ */
+
 export const VIGIA_TICK_MS = Number(process.env.VIGIA_REDE_TICK_MS) || 5 * 60_000;
 /** O começo da frase de queda: o texto pode ganhar um enfeite depois, o começo não muda. */
 export const PREFIXO_DA_FRASE = FALLBACK_INDISPONIVEL.slice(0, 40);
@@ -50,6 +56,7 @@ export function criarLeituraDoBanco(): Leitura {
           CROSS JOIN t
           LEFT JOIN units u ON u.id = c.unit_id
          WHERE c.status = 'error'
+           AND coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
            AND c.created_at >= t.agora - (${janelaMin}::int * interval '1 minute')
            AND c.created_at <= t.agora
          GROUP BY 1, 2`;
@@ -71,7 +78,8 @@ export function criarLeituraDoBanco(): Leitura {
                (count(*) FILTER (WHERE c.status = 'error'))::int AS erro
           FROM llm_calls c
           CROSS JOIN t
-         WHERE c.created_at >= t.agora - (${janelaMin}::int * interval '1 minute')
+         WHERE coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
+           AND c.created_at >= t.agora - (${janelaMin}::int * interval '1 minute')
            AND c.created_at <= t.agora
          GROUP BY 1`;
       const out: Record<Familia, TotaisDaFamilia> = { anthropic: { ok: 0, erro: 0 }, openai: { ok: 0, erro: 0 } };
@@ -86,6 +94,7 @@ export function criarLeituraDoBanco(): Leitura {
           FROM llm_calls c
           CROSS JOIN t
          WHERE c.status = 'success'
+           AND coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
            AND c.created_at >= t.agora - interval '24 hours'
            AND c.created_at <= t.agora
          GROUP BY 1`;
@@ -100,6 +109,7 @@ export function criarLeituraDoBanco(): Leitura {
         SELECT (SELECT count(*)::int
                   FROM llm_calls c
                  WHERE c.status = 'success'
+                   AND coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
                    AND c.created_at >= t.agora - (g.d * interval '7 days') - (${janelaMin}::int * interval '1 minute')
                    AND c.created_at < t.agora - (g.d * interval '7 days')) AS n
           FROM t, generate_series(1, ${semanas}::int) AS g(d)`;

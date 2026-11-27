@@ -263,6 +263,7 @@ import {
 import { digitandoHandler } from '../controllers/whatsapp-meta.controller.js';
 import { suporteMenuWebhookHandler } from '../controllers/suporte-menu.controller.js';
 import { telegramChamadosWebhookHandler } from '../controllers/suporte-bot-chamados.controller.js';
+import { joaoofTelegramWebhookHandler } from '../controllers/joaoof-telegram.controller.js';
 import {
   apagarConhecimentoHandler,
   criarConhecimentoHandler,
@@ -311,6 +312,8 @@ apiRouter.post('/webhooks/suporte-menu', suporteMenuWebhookHandler);
 apiRouter.post('/webhooks/suporte-menu/:evento', suporteMenuWebhookHandler);
 // Comandos /pausar /voltar /status do @ddchamados_bot (Telegram). O segredo vem no cabeçalho X-Telegram-Bot-Api-Secret-Token, nunca na URL.
 apiRouter.post('/webhooks/telegram-chamados', telegramChamadosWebhookHandler);
+// Joaoof (27/11/2026): a volta do João pelo Telegram. Segredo no cabeçalho; sem JOAOOF_TELEGRAM_SEGREDO recusa tudo.
+apiRouter.post('/webhooks/telegram-joaoof', joaoofTelegramWebhookHandler);
 // Painel do suporte (suporte.doutordigitalconsultoria.com): só administrador geral.
 apiRouter.get('/suporte/demandas', requireAuth, requireSuperAdmin, listarDemandasHandler);
 apiRouter.post('/suporte/demandas/:protocolo/resolver', requireAuth, requireSuperAdmin, resolverHandler);

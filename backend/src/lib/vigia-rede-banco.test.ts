@@ -62,3 +62,23 @@ test('o detector da frase de queda procura o começo REAL da frase que o pacient
   // em produção a frase é gravada em messages.content com este começo (conferido em 27/11/2026: 111 ocorrências)
   assert.match(PREFIXO_DA_FRASE, /^Opa, tive uma instabilidade rapidinha/);
 });
+
+test('TODA consulta do vigia ao llm_calls ignora as chamadas do Joaoof (endpoint joaoof.*; endpoint nulo continua valendo)', () => {
+  const fonte = readFileSync(new URL('./vigia-rede-banco.ts', import.meta.url), 'utf8');
+  const consultas = fonte.match(/FROM llm_calls c/g) ?? [];
+  const filtradas = fonte.match(/AND coalesce\(c\.endpoint, ''\) NOT LIKE 'joaoof\.%'|WHERE coalesce\(c\.endpoint, ''\) NOT LIKE 'joaoof\.%'/g) ?? [];
+  assert.equal(consultas.length, 4);
+  assert.equal(filtradas.length, consultas.length, 'cada consulta tem de filtrar o Joaoof');
+  // o coalesce é o que impede `NULL NOT LIKE …` (que é NULL) de derrubar as linhas antigas, sem endpoint
+  assert.doesNotMatch(fonte, /c\.endpoint NOT LIKE/);
+});
+
+test('as outras consultas da rede ao llm_calls (taxa de erro, saúde externa) também ignoram as chamadas do Joaoof', () => {
+  for (const arq of ['taxa-erro-worker.ts', 'saude-externa.ts']) {
+    const fonte = readFileSync(new URL(`./${arq}`, import.meta.url), 'utf8');
+    const consultas = fonte.match(/from llm_calls c/gi) ?? [];
+    const filtradas = fonte.match(/and coalesce\(c\.endpoint, ''\) NOT LIKE 'joaoof\.%'/g) ?? [];
+    assert.ok(consultas.length > 0, arq);
+    assert.equal(filtradas.length, consultas.length, `${arq}: cada consulta ao llm_calls tem de ignorar o Joaoof`);
+  }
+});
