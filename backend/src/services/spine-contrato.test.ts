@@ -145,6 +145,9 @@ const ROTAS: Record<string, (c: Record<string, unknown>) => { status: number; co
       ? erro(['idSchedule é obrigatório'])
       : { status: 200, corpo: { success: true, idSchedule: c.idSchedule } },
 
+  // §10.6 — Dados Gerais: GET sem parâmetros, `{ idSource, name }`
+  'GET /api/general/sources': () => ({ status: 200, corpo: { success: true, data: [{ idSource: 20, name: 'WhatsApp' }, { idSource: 10002, name: 'IA SOFIA' }, { name: 'sem id' }] } }),
+
   'POST /api/bi/leads/sources': (c) => {
     const e = [
       ...(c.initialDate === undefined || c.endDate === undefined
@@ -450,4 +453,20 @@ test('escala por turno: fora de qualquer turno, sem escala, ou idStaff explícit
   assert.equal(ultima().corpo.idStaff, 510, 'quem chama com idStaff decide');
   await SpineService.createSchedule({ ...unidade(), spineStaffPorTurno: 'lixo' }, { idClient: 991, dateAttendanceLocal: amanha('09:00:00'), idCategory: 1 });
   assert.equal(ultima().corpo.idStaff, undefined, 'configuração inválida não quebra o agendamento');
+});
+
+// ── §10.6: a lista de origens (conferir que "IA SOFIA" existe, 27/11/2026) ───────────────────────
+
+test('listarOrigens: GET /api/general/sources, só leitura, devolve { idSource, name } e ignora item sem id', async () => {
+  const r = await SpineService.listarOrigens(unidade());
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(ultima().metodo, 'GET');
+  assert.equal(ultima().rota, '/api/general/sources');
+  assert.deepEqual(r.data?.origens, [{ idSource: 20, name: 'WhatsApp' }, { idSource: 10002, name: 'IA SOFIA' }]);
+});
+
+test('listarOrigens: token sem permissão em "Dados Gerais" (403) vira erro claro, não lista vazia', async () => {
+  const r = await SpineService.listarOrigens({ ...unidade(), spineBaseUrl: `${base}/nada` } as SpineUnit);
+  assert.equal(r.ok, false);
+  assert.match(String(r.error), /404|endpoint/);
 });

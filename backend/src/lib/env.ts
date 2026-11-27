@@ -110,6 +110,8 @@ const schema = z.object({
   FRANQUIA_REVISAO_SECO: z.string().optional(),
   /** Cadastrar TODO lead na franquia, como lead e na 1ª mensagem (27/10/2026) — nasce desligada; a tela manda (csv; `*` = todas). */
   CADASTRO_TODO_LEAD_SLUGS: z.string().optional(),
+  /** Cadastrar TODO lead no 1º contato, sem triagem pela IA e com origem IA SOFIA (27/11/2026) — nasce desligada; a tela manda (csv; `*` = todas). */
+  CADASTRO_LEAD_PRIMEIRO_CONTATO_SLUGS: z.string().optional(),
   /** Telefones da rede (csv, número completo; compara pelos últimos 8 dígitos) que a IA nunca cadastra na franquia. */
   NUMEROS_INTERNOS: z.string().optional(),
   /** Regras de 16/10/2026 do casamento cartão × paciente e da jornada (csv; `*` = todas; vazio = desligado — a tela manda). */

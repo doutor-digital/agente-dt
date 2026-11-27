@@ -7,6 +7,7 @@ import { AgendaService } from '../services/agenda.service.js';
 import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { apagarDoCache } from '../lib/cache-agenda.js';
+import { conferirOrigemIaSofia } from '../lib/franquia-origem-ia.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -661,6 +662,23 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
       : 'Desligado — nenhum lead é enviado.',
     comoResolver: 'Ligue em Espelhar leads. Escrita é permanente: a franquia não apaga lead.',
   });
+
+  // A origem "IA SOFIA" (cadastro de lead no 1º contato): sem ela na franquia, o lead não sai. Só leitura (GET /api/general/sources).
+  if (unit.spineToken) {
+    const o = await conferirOrigemIaSofia(unit);
+    pecas.push({
+      id: 'origem-ia-sofia',
+      titulo: 'Origem "IA SOFIA" existe na franquia',
+      ok: o.situacao === 'ok',
+      detalhe:
+        o.situacao === 'ok'
+          ? `A origem ${o.idSource} ("${o.nome}") está na lista da franquia.`
+          : o.situacao === 'faltando'
+            ? `ATENÇÃO: ${o.motivo}.`
+            : `Não deu para conferir: ${o.motivo}.`,
+      comoResolver: 'Peça à franquia que crie a origem "IA SOFIA" (ou confira o id em units.spine_ia_source_id) antes de ligar o cadastro no 1º contato.',
+    });
+  }
 
   const semNome = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'ignorado' } });
   const falhas = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'falhou' } });
