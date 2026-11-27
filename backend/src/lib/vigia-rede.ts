@@ -157,6 +157,12 @@ export interface Problema {
   numeros: Record<string, number | string>;
   /** há prova de que voltou? (só é consultado com o problema inativo e aberto) */
   podeFechar: (estado: EstadoAlerta) => boolean;
+  /**
+   * Para reabrir como episódio NOVO depois de uma pausa, o problema também precisa ter dado prova de que passou (`podeFechar`).
+   * Só o crédito liga isto: de madrugada os erros de uma queda que continua chegam esparsos (um a cada 40 min) e isso NÃO é
+   * um problema novo — só é novo se houve uma chamada boa no meio.
+   */
+  reabreSoComProva?: boolean;
   /** consequência de outro problema ativo: não gera aviso próprio */
   suprimidoPor?: string;
 }
@@ -196,6 +202,7 @@ export function avaliar(obs: Observacao): Problema[] {
       vistoEm: ultimoErro,
       unidades: unirUnidades(grupos),
       numeros: { chamadas, janelaMin: L.saldoJanelaMin },
+      reabreSoComProva: true,
       // voltou = uma chamada boa DEPOIS do último erro de saldo que o vigia viu
       podeFechar: (e) => {
         const s = obs.ultimoSucesso[familia];
@@ -313,7 +320,7 @@ export function decidir(p: Problema, estado: EstadoAlerta | null, agora: Date, l
   if (p.ativo) {
     if (estado.ultimoAvisoEm === null) return 'novo';
     // sumiu por um bom tempo e voltou: é outro episódio (o estado fica aberto quando de madrugada não há tráfego que prove a volta)
-    if (agora.getTime() - estado.ultimoVistoEm.getTime() > LIMIARES.recorrenciaMs) return 'novo';
+    if (agora.getTime() - estado.ultimoVistoEm.getTime() > LIMIARES.recorrenciaMs && (!p.reabreSoComProva || p.podeFechar(estado))) return 'novo';
     return agora.getTime() - estado.ultimoAvisoEm.getTime() >= lembreteMs ? 'lembrete' : 'atualizar';
   }
   if (!p.podeFechar(estado)) return 'nada';

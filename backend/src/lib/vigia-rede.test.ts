@@ -432,6 +432,14 @@ test('decidir: problema aberto que some e volta depois de mais de 30 min é avis
   assert.equal(decidir(problema(), recente, d(T0)), 'atualizar');
 });
 
+test('decidir: crédito com erros ESPARSOS de madrugada (sem chamada boa no meio) é o MESMO episódio, não aviso novo', () => {
+  const esparso = aberto({ ultimoVistoEm: d(T0 - 50 * MIN), ultimoAvisoEm: d(T0 - 50 * MIN) });
+  const semProva = problema({ reabreSoComProva: true, podeFechar: () => false });
+  assert.equal(decidir(semProva, esparso, d(T0)), 'atualizar');
+  const comProva = problema({ reabreSoComProva: true, podeFechar: () => true });
+  assert.equal(decidir(comProva, esparso, d(T0)), 'novo');
+});
+
 test('RODADA: reabertura depois de uma pausa longa manda aviso NOVO com o "desde" do episódio novo', async () => {
   const erro = (t: number): ChamadaLlm => ({ t, status: 'error', model: 'claude-sonnet-5', unidade: 'u1', mensagem: ANTHROPIC_SEM_SALDO });
   const ok = (t: number): ChamadaLlm => ({ t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' });
