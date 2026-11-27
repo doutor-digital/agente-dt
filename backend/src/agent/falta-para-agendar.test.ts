@@ -187,3 +187,20 @@ test('nit: cidade com nome de corpo FRACO em minúscula continua cidade (alta fl
     assert.ok(cidadeConhecida({ cidade: v }), v);
   }
 });
+
+// ── 4ª rodada do sênior (#519) ────────────────────────────────────────────────────────────────────────
+
+test('placeholder e "não sei a cidade" NÃO são cidade (medido em 30 dias de fatos reais)', () => {
+  for (const v of [
+    'não informado', 'Não informada', 'não especificada', 'nao especificado', 'não sei', 'não sei a cidade', 'sem cidade', 'Sem informação',
+    'desconhecida', 'Cidade desconhecida', 'fora de Marabá', 'Fora de Imperatriz', 'Interior do Pará', 'interior', 'outra cidade', 'Outro estado',
+    '?', '-', '--', 'n/a', 'N/A', 'NA', 'nenhuma', 'indefinido',
+  ]) {
+    assert.ok(!cidadeConhecida({ cidade: v }), `não deveria contar: ${v}`);
+    assert.match(renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: v }), /cidade → horário escolhido/, v);
+  }
+  // cidades de verdade que começam parecido continuam valendo
+  for (const v of ['Natal', 'Nova Iguaçu', 'Não-Me-Toque', 'Foz do Iguaçu', 'Fortaleza', 'Interlagos', 'Sem Peixe'.replace('Sem Peixe', 'Santa Inês')]) {
+    assert.ok(cidadeConhecida({ cidade: v }), `deveria contar: ${v}`);
+  }
+});

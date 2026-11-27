@@ -356,8 +356,8 @@ test('4: "Vim de Uber", "sou de Deus", "Aqui da Igreja" NÃO viram cidade', () =
   assert.ok(temas([p('Sou de Eldorado dos Carajás')]).includes('cidade'));
 });
 
-test('5: "Ana", "Ombros", "Lombar (L4-L5)" em resposta a "Em qual cidade você mora?" NÃO viram cidade', () => {
-  for (const fala of ['Ana', 'Ombros', 'Lombar (L4-L5)', 'João Pedro', 'joelhos', 'hérnia de disco']) {
+test('5: "Ana", "Josiane", "Kelly", "Dona Maria", "Ombros" em resposta a "Em qual cidade você mora?" NÃO viram cidade', () => {
+  for (const fala of ['Ana', 'Josiane', 'Kelly', 'Dona Maria', 'Seu José', 'Lombar (L4-L5)', 'João Pedro', 'joelhos', 'hérnia de disco', 'Ombros']) {
     assert.ok(!temas([ia('Em qual cidade você mora?'), p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
   }
   for (const fala of ['Marabá', 'Canaã dos Carajás', 'Lucas do Rio Verde', 'alta floresta']) {
@@ -384,4 +384,21 @@ test('nits: "a 2 anos" sem h, "há 5 anos" depois da cidade, bairro "Vila Nova"'
   assert.ok(!temas([p('moro na Vila Nova')]).includes('cidade'));
   assert.ok(!temas([p('moro no Jardim Tropical')]).includes('cidade'));
   assert.ok(temas([p('moro em Vila Velha')]).includes('cidade'));
+});
+
+test('4ª rodada: "Sou da Assembleia de Deus" não é cidade; palavra solta que não é cidade conhecida, na dúvida, não aceita', () => {
+  for (const fala of ['Sou da Assembleia de Deus', 'sou da Congregação Cristã', 'Sou da Paróquia São José']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  // uma palavra desconhecida pode ser o nome dele; com "moro em" é explícito e vale
+  assert.ok(!temas([ia('Em qual cidade você mora?'), p('Xambioá')]).includes('cidade'));
+  assert.ok(temas([p('moro em Xambioá')]).includes('cidade'));
+  assert.ok(temas([ia('Em qual cidade você mora?'), p('Parauapebas')]).includes('cidade'));
+  assert.ok(temas([ia('Em qual cidade você mora?'), p('Santa Inês')]).includes('cidade'));
+});
+
+test('4ª rodada: "moro em não informado" e placeholders no "moro em" também não valem', () => {
+  for (const fala of ['moro em não sei onde', 'moro em outra cidade', 'moro no interior']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), fala);
+  }
 });

@@ -109,11 +109,23 @@ function afirmaClaramente(valor: unknown): boolean {
  * "Lado direito"), a frase comprida, e o que tem palavra de corpo FORTE escrita em minúscula (a IA grava a dor em minúscula; a cidade, com
  * inicial maiúscula). Cidade com nome de corpo fraco ("Braço do Norte", "Alta Floresta", "Dores do Indaiá") passa, em maiúscula ou não.
  */
+/**
+ * "Não sei a cidade" escrito como valor: negação ("não informado", "sem cidade"), placeholder ("não especificada", "desconhecida", "n/a",
+ * "?", "-") e lugar sem nome ("fora de Marabá", "interior…", "outra cidade"). Medido em 30 dias de fatos reais, passavam como cidade.
+ */
+const SEM_CIDADE =
+  /^(?:nao|sem|nenhum|nenhuma|indefinid\w*|n\/?a|na)(?:\s|$|\/)|\b(?:informad[oa]s?|especificad[oa]s?|desconhecid[oa]s?|nao\s+sei)\b|^fora(?:\s|$)|^interior(?:\s|$)|^outr[oa]s?\s+(?:cidade|local|lugar|estado|regiao)|^[^a-z]*$/;
+function semCidadeDeFato(v: string): boolean {
+  const n = v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  return SEM_CIDADE.test(n);
+}
+
 export function pareceCidade(valor: unknown): boolean {
   const v = String(valor ?? '')
     .replace(/\([^)]*\)/g, ' ')
     .trim();
   if (v.length < 2 || v.length > 60 || !/\p{L}/u.test(v)) return false;
+  if (semCidadeDeFato(v)) return false;
   const palavras = v
     .toLowerCase()
     .normalize('NFD')

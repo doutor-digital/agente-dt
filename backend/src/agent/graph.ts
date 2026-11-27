@@ -37,6 +37,7 @@ import {
   falasDoHistorico,
   ferramentasDoTurno,
   INSTRUCAO_REFAZER_SEM_NOME,
+  pararDePedirNome,
   marcouCandidatoNoTurno,
   pedeNome,
   travaDaResposta,
@@ -1619,7 +1620,13 @@ export async function buildAgentGraph(
         // A refeita roda DEPOIS da trava de horário (vencido, inventado, "manhã ou tarde?"): ela não pode trazer horário que o rascunho
         // não tinha, nem um que já passou. Só repete os do rascunho.
         const semHorarioNovo = !refeitaTrazHorarioNovo(textoFinal, textoRefeito, agoraDaUnidade);
-        const serve = !!textoRefeito && semOPedido && semHorarioNovo && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
+        // As MESMAS travas que a resposta do modelo já passou acima (`aindaServe`): "manhã ou tarde?" sem horário, sondagem de objeção que ele
+        // não levantou, e o 3º pedido de nome. Falhou em qualquer uma: fica o rascunho original.
+        const passaAsTravasDoTurno =
+          !perguntaTurnoSemHorario(textoRefeito, agoraDaUnidade) &&
+          !objecaoInventada(falas, textoRefeito) &&
+          !(pararDePedirNome(repeticao) && pedeNome(textoRefeito));
+        const serve = !!textoRefeito && semOPedido && semHorarioNovo && passaAsTravasDoTurno && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;

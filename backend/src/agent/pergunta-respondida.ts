@@ -173,7 +173,7 @@ function lugarEhCidade(bruto: string): string | null {
 
 // "vim do Instagram", "sou de Deus", "venho de Uber" não são cidade; "aqui da Igreja" e "vim de…" (trajeto) nem entram
 const CIDADE_SOU_DE =
-  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho)\s+(?:d[aeo]s?|em)\s+(?!(?:Deus|Jesus|Cristo|Nossa|Senhor|Maria|Uber|Fam[ií]lia|Igreja|F[eé]|Paz|Ambul[âa]ncia|Carro|Moto|[ÔO]nibus|T[aá]xi|Empresa|Escola|Faculdade|Prefeitura|Aplicativo|App|Peixes|Aqu[aá]rio|[ÁA]ries|Touro|G[eê]meos|C[aâ]ncer|Le[aã]o|Virgem|Libra|Escorpi[aã]o|Sagit[aá]rio|Capric[oó]rnio|Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
+  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho)\s+(?:d[aeo]s?|em)\s+(?!(?:Assembleia|Congrega[çc][ãa]o|Par[óo]quia|Cat[óo]lica|Batista|Ordem|Associa[çc][ãa]o|Sindicato|Comunidade|Capela|Templo|Minist[ée]rio|Deus|Jesus|Cristo|Nossa|Senhor|Maria|Uber|Fam[ií]lia|Igreja|F[eé]|Paz|Ambul[âa]ncia|Carro|Moto|[ÔO]nibus|T[aá]xi|Empresa|Escola|Faculdade|Prefeitura|Aplicativo|App|Peixes|Aqu[aá]rio|[ÁA]ries|Touro|G[eê]meos|C[aâ]ncer|Le[aã]o|Virgem|Libra|Escorpi[aã]o|Sagit[aá]rio|Capric[oó]rnio|Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
 const CIDADE_SOU_DAQUI = /(?<![\p{L}])[Ss]ou\s+daqui\b|(?<![\p{L}])[Ss]omos\s+daqui\b/u;
 
 /** "Não moro aqui", "nunca morei em Marabá", "já não sou daqui": o contrário de responder. */
@@ -250,7 +250,21 @@ function doCartao(tema: Tema, fatosBrutos: Fatos | null | undefined): string | n
   return null;
 }
 
-/** Nome próprio comum: "Ana" respondendo "em qual cidade você mora?" é o paciente se apresentando, não a cidade. */
+/**
+ * Resposta CURTA à pergunta da cidade, sem "moro em": só vale o que se sabe ser cidade. Uma palavra capitalizada que não é cidade
+ * conhecida ("Ana", "Josiane", "Kelly", "Ombros") pode ser o nome do paciente: na dúvida não aceita (a Sofia pergunta de novo).
+ * Duas palavras ou mais passam se `pareceCidade` aprova e não começam por tratamento ("Dona Maria", "Seu José") nem por nome comum.
+ */
+const CIDADES_CONHECIDAS = new Set([
+  // as cidades das unidades da rede e das vizinhas
+  'caxias', 'petropolis', 'timbo', 'salto', 'tatui', 'araguaina', 'acailandia', 'balsas', 'canaa', 'canaa dos carajas', 'boa vista', 'rio verde',
+  'mossoro', 'imperatriz', 'parauapebas', 'maraba', 'bebedouro', 'taubate', 'capivari', 'cerquilho', 'boituva', 'olimpia', 'eldorado dos carajas',
+  'curionopolis', 'xinguara', 'redencao', 'conceicao do araguaia', 'tucurui', 'paragominas', 'castanhal', 'belem', 'santarem', 'altamira',
+  'sao luis', 'teresina', 'palmas', 'goiania', 'brasilia', 'fortaleza', 'natal', 'recife', 'salvador', 'manaus', 'cuiaba', 'campo grande',
+  'sao paulo', 'rio de janeiro', 'belo horizonte', 'curitiba', 'porto alegre', 'florianopolis', 'campinas', 'sorocaba', 'santos', 'ribeirao preto',
+  'sao jose do rio preto', 'itu', 'indaiatuba', 'piracicaba', 'jundiai', 'tocantinopolis', 'gurupi', 'colinas do tocantins', 'estreito', 'carolina',
+]);
+const TRATAMENTO = new Set(['dona', 'seu', 'sr', 'sra', 'dr', 'dra', 'tia', 'tio', 'pastor', 'pastora', 'irma', 'irmao', 'padre', 'doutor', 'doutora', 'senhor', 'senhora']);
 const NOMES_COMUNS = new Set([
   'ana', 'maria', 'joao', 'jose', 'pedro', 'paulo', 'carlos', 'marcos', 'lucas', 'luiz', 'luis', 'antonio', 'francisco', 'marcia', 'julia', 'juliana',
   'fernanda', 'patricia', 'camila', 'sandra', 'lucia', 'rita', 'rosa', 'sonia', 'teresa', 'carla', 'cintia', 'aline', 'bruno', 'rafael', 'daniel',
@@ -258,10 +272,16 @@ const NOMES_COMUNS = new Set([
   'claudia', 'cristina', 'vera', 'elaine', 'luciana', 'adriana', 'simone', 'silvia', 'regina', 'helena', 'beatriz', 'larissa', 'amanda', 'jessica',
   'leticia', 'vanessa', 'valeria', 'raimunda', 'francisca', 'antonia', 'sebastiao', 'raimundo', 'manoel', 'joaquim', 'alex', 'wellington', 'edson',
 ]);
+/** `true` quando a resposta curta NÃO pode ser aceita como cidade: pode ser nome de gente, ou não é cidade conhecida. */
 function pareceNome(t: string): boolean {
-  const p = semAcento(t).split(/\s+/).filter(Boolean);
-  if (!p.length || !NOMES_COMUNS.has(p[0])) return false;
-  return !(p.length >= 3 && ['do', 'da', 'de', 'dos', 'das'].includes(p[1])); // "Lucas do Rio Verde" é cidade
+  const n = semAcento(t).replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  const p = n.split(' ').filter(Boolean);
+  if (p.length === 0) return true;
+  if (CIDADES_CONHECIDAS.has(n)) return false;
+  if (p.length === 1) return true; // uma palavra que não é cidade conhecida: na dúvida, pode ser o nome dele
+  if (TRATAMENTO.has(p[0])) return true;
+  if (NOMES_COMUNS.has(p[0]) && !(p.length >= 3 && ['do', 'da', 'de', 'dos', 'das'].includes(p[1]))) return true;
+  return false;
 }
 
 const PALAVRAS_DE_OUTRO_ASSUNTO = /\b(?:pre[cç]o|valor|quanto|custa|hor[aá]rio|consulta|agendar|marcar|dia|plano|conv[eê]nio|pix)\b/i;
