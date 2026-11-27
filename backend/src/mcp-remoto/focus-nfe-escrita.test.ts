@@ -335,10 +335,38 @@ test('E0860: cIndOp (codigo_indicador_operacao) é OBRIGATÓRIO com IBS/CBS, jun
   assert.equal(PERFIS_FISCAIS[UNI]!.percentualTotalTributosSimples, undefined, 'o total de tributos real depende da contabilidade (Vera)');
 });
 
+test('revisão: CST/cClassTrib/cIndOp são UM bloco (o perfil não completa o que a pessoa deixou), pedir "não informar" não conflita com o percentual do perfil, e produção avisa das regras vindas da homologação', async () => {
+  const m = montar();
+  m.ctx.contas.set(UNI, { ...m.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, ibsCbs: { situacaoTributaria: '200', classificacaoTributaria: '200003', codigoIndicadorOperacao: '654321' }, percentualTotalTributosSimples: 4.5, opcaoSimplesNacional: 1 } });
+  m.focus.cadastro = { situacao: 'ativa', optanteSimples: false, optanteMei: false };
+  const f = pedido().fiscal!;
+  // a pessoa informa só o CST: o perfil NÃO completa cClassTrib e cIndOp
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ fiscal: { ...f, ibsCbs: { situacaoTributaria: '000' } } })), /classificacaoTributaria.*codigoIndicadorOperacao/);
+  // sem nada da pessoa, o trio vem inteiro do perfil e o resumo diz de onde
+  const sem = pedido();
+  delete sem.fiscal!.ibsCbs;
+  const ok = await prepararNota(m.ctx, m.esc, QUEM, sem);
+  assert.match(JSON.stringify((ok.resumo as { reformaTributaria: unknown }).reformaTributaria), /origemDoTrio.*perfil fiscal/);
+  // não ME/EPP pede para não informar mesmo com percentual no perfil: sem conflito
+  const pedirNao = pedido({ fiscal: { ...f, opcaoSimplesNacional: 1, naoInformarTotalTributos: true } });
+  delete pedirNao.fiscal!.percentualTotalTributosSimples;
+  assert.ok((await prepararNota(m.ctx, m.esc, QUEM, pedirNao)).confirmacao);
+  // produção: aviso das regras (IM e alíquota) que foram descobertas na homologação
+  const p = montar({ ambiente: 'producao', serie: 900 });
+  const prod = await prepararNota(p.ctx, p.esc, QUEM, pedido());
+  assert.ok(prod.avisos.some((x) => /PRODUÇÃO: esta nota sai SEM a inscrição municipal do prestador e SEM alíquota do ISS.*HOMOLOGAÇÃO/.test(x)));
+  // município sem a flag: avisa que o E0631 pode ocorrer
+  const semFlag = montar();
+  semFlag.ctx.contas.set(UNI, { ...semFlag.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, municipioAtivoNoSistemaNacional: undefined } });
+  assert.ok((await prepararNota(semFlag.ctx, semFlag.esc, QUEM, pedido())).avisos.some((x) => /E0631/.test(x)));
+});
+
 test('E0207: CPF com dígitos certos passa na checagem local, mas o aviso lembra que a Receita confere o cadastro (CPF fictício é recusado, até em homologação)', async () => {
   const m = montar();
   const r = await prepararNota(m.ctx, m.esc, QUEM, pedido());
   assert.ok(r.avisos.some((x) => /Receita confere o CPF.*até em homologação.*E0207/.test(x)));
+  const p = montar({ ambiente: 'producao', serie: 900 });
+  assert.ok(!(await prepararNota(p.ctx, p.esc, QUEM, pedido())).avisos.some((x) => /E0207/.test(x)), 'em produção o aviso de CPF fictício não aparece');
   await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ tomador: { cpf: '111.111.111-11', nome: NOME } })), /CPF inválido/);
 });
 

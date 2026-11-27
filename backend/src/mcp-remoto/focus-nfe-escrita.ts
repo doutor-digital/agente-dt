@@ -239,7 +239,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     if (docTipo === 'cnpj' && !(documento.length === 14 && cnpjValido(documento))) throw new ErroDeEntrada('tomador.cnpj: CNPJ inválido (dígitos verificadores não conferem). Nada foi preparado.');
   }
   // os dígitos verificadores só provam o formato: a Receita confere o CPF no cadastro dela, até em homologação (E0207)
-  if (docTipo === 'cpf' && documento) avisos.push('a Receita confere o CPF do tomador no cadastro dela, até em homologação: CPF com dígitos certos mas que não existe (fictício) é recusado pelo ambiente nacional (E0207). Use o CPF real do paciente.');
+  if (docTipo === 'cpf' && documento && conta.ambiente === 'homologacao') avisos.push('a Receita confere o CPF do tomador no cadastro dela, até em homologação: CPF com dígitos certos mas que não existe (fictício) é recusado pelo ambiente nacional (E0207). Use o CPF real do paciente.');
   if (!t.nome?.trim()) faltam.push('tomador.nome: o nome (ou razão social) de quem recebe a nota');
   const nome = t.nome?.trim() ? textoLimpoNome(t.nome) : '';
   const email = t.email?.trim() ? emailValido(t.email) : undefined;
@@ -311,6 +311,9 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
   if (aliqBruta === undefined) {
     if (!omitirAliquota) faltam.push('fiscal.aliquotaIss: a alíquota do ISS em % (a contabilidade informa), ou "parametrizada" se a alíquota vem do Sistema Nacional');
   } else aliq = aliqBruta === 'parametrizada' ? 'parametrizada' : aliquota(aliqBruta);
+  // regras descobertas na HOMOLOGAÇÃO (E0120, E0631): em produção valem as do ambiente nacional, que podem diferir: quem aprova confere com a contabilidade
+  if (conta.ambiente === 'producao' && (omitirAliquota || (perfil && perfil.enviarIM === false))) avisos.push('PRODUÇÃO: esta nota sai ' + [perfil?.enviarIM === false ? 'SEM a inscrição municipal do prestador' : '', omitirAliquota ? 'SEM alíquota do ISS' : ''].filter(Boolean).join(' e ') + ', regra descoberta na HOMOLOGAÇÃO (E0120/E0631). Confirme com a contabilidade que vale também em produção antes de aprovar');
+  if (opcao === 3 && regSimples === 1 && retencao === 1 && perfil && perfil.municipioAtivoNoSistemaNacional === undefined) avisos.push('não sei se este município está ativo no Sistema Nacional (perfil sem municipioAtivoNoSistemaNacional): ME/EPP regime 1 com ISS não retido pode ser recusada com E0631 se a alíquota for enviada');
   if (omitirAliquota && f.aliquotaIss !== undefined) avisos.push('a alíquota informada NÃO foi enviada: ME/EPP do Simples (regime 1) com ISS não retido em município fora do Sistema Nacional não leva alíquota no DPS (o ambiente nacional recusa com E0631)');
   let regEspecial: number | undefined;
   if (f.regimeEspecialTributacao === undefined) faltam.push('fiscal.regimeEspecialTributacao: o regime especial de tributação municipal (0 = nenhum; 1 ato cooperado; 2 estimativa; 3 microempresa municipal; 4 notário/registrador; 5 autônomo; 6 sociedade de profissionais; 9 outros)');
@@ -318,9 +321,12 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     regEspecial = inteiroEm(f.regimeEspecialTributacao, REGIMES_ESPECIAIS);
     if (regEspecial === undefined) throw new ErroDeEntrada('fiscal.regimeEspecialTributacao: use 0, 1, 2, 3, 4, 5, 6 ou 9');
   }
-  const cst = f.ibsCbs?.situacaoTributaria?.trim() || perfil?.ibsCbs?.situacaoTributaria;
-  const cClass = f.ibsCbs?.classificacaoTributaria?.trim() || perfil?.ibsCbs?.classificacaoTributaria;
-  const cIndOp = f.ibsCbs?.codigoIndicadorOperacao?.trim() || perfil?.ibsCbs?.codigoIndicadorOperacao;
+  // CST, cClassTrib e cIndOp são UM bloco (combinação aprovada pela contabilidade): se a pessoa informar qualquer um dos três, vale só o que ela informar (o perfil NÃO completa o que faltar)
+  const ibsDaPessoa = [f.ibsCbs?.situacaoTributaria, f.ibsCbs?.classificacaoTributaria, f.ibsCbs?.codigoIndicadorOperacao].some((x) => x?.trim());
+  const ibsFonte = ibsDaPessoa ? f.ibsCbs : perfil?.ibsCbs;
+  const cst = ibsFonte?.situacaoTributaria?.trim();
+  const cClass = ibsFonte?.classificacaoTributaria?.trim();
+  const cIndOp = ibsFonte?.codigoIndicadorOperacao?.trim();
   if (!cst) faltam.push('fiscal.ibsCbs.situacaoTributaria: o CST do IBS/CBS (3 dígitos); a Focus o marca como obrigatório (Reforma Tributária)');
   else if (!/^\d{3}$/.test(cst)) throw new ErroDeEntrada('fiscal.ibsCbs.situacaoTributaria: o CST tem 3 dígitos. Nada foi preparado.');
   if (!cClass) faltam.push('fiscal.ibsCbs.classificacaoTributaria: o cClassTrib do IBS/CBS (6 dígitos); a Focus o marca como obrigatório (Reforma Tributária)');
@@ -339,8 +345,9 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
 
   // o ambiente nacional recusa o DPS sem o grupo de total de tributos ("Element trib: Missing child element(s)"). ME/EPP (opção 3) leva SÓ o percentual do Simples: o indicador
   // `indicador_total_tributacao` é recusado para ME/EPP (E0712), então para ela o percentual é obrigatório, o valor REAL vem da contabilidade e sem ele a nota fica «a completar».
-  const pTot = f.percentualTotalTributosSimples !== undefined ? f.percentualTotalTributosSimples : perfil?.percentualTotalTributosSimples;
   const naoInformar = f.naoInformarTotalTributos === true;
+  // o percentual do perfil só vale quando a pessoa NÃO pediu para não informar (pedir o indicador de propósito não é conflito com o perfil)
+  const pTot = f.percentualTotalTributosSimples !== undefined ? f.percentualTotalTributosSimples : naoInformar ? undefined : perfil?.percentualTotalTributosSimples;
   if (naoInformar && opcao === 3) throw new ErroDeEntrada('fiscal.naoInformarTotalTributos: ME/EPP do Simples não pode usar o indicador de "não informar" (o ambiente nacional recusa com E0712): informe percentualTotalTributosSimples, o valor que a contabilidade passar. Nada foi preparado.');
   if (pTot === undefined && !naoInformar) {
     faltam.push(opcao === 3
@@ -430,7 +437,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     },
     regimeEspecialDeTributacao: `${regEspecial} — ${NOMES_DO_REGIME_ESPECIAL[regEspecial!]}`,
     totalAproximadoDeTributos: naoInformar ? 'NÃO informado (opção da contabilidade)' : `${pct(pTot!)} (total aproximado de tributos do Simples, Lei 12.741; ${f.percentualTotalTributosSimples !== undefined ? 'informado por quem pediu' : 'perfil da unidade'})`,
-    reformaTributaria: { cst, cClassTrib: cClass, cIndOp, consumidorFinal: SIM_NAO(f.consumidorFinal === true), indicadorDoDestinatario: '0 — o destinatário é o próprio tomador', finalidade: '0 — NFS-e regular' },
+    reformaTributaria: { cst, cClassTrib: cClass, cIndOp, origemDoTrio: ibsDaPessoa ? DE_QUEM_PEDIU : DO_PERFIL, consumidorFinal: SIM_NAO(f.consumidorFinal === true), indicadorDoDestinatario: '0 — o destinatário é o próprio tomador', finalidade: '0 — NFS-e regular' },
     dps: { serie: conta.serieDps ?? 1, numero: 'reservado na confirmação' },
     ...(origem ? { origem } : {}),
   };

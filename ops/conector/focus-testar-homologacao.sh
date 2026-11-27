@@ -31,6 +31,7 @@ for a in args:
         SERIE = int(a[8:]); continue
     m = re.fullmatch(r"--(cindop|cst|cclass|total-tributos|cpf|nome)=(.+)", a)
     if m: OPT[m.group(1)] = m.group(2); continue
+    if a == "--sem-aliquota": continue   # compatibilidade: agora a alíquota já vai omitida por padrão
     if a not in ("--com-aliquota", "--cancelar"):
         print("argumento desconhecido:", a); sys.exit(1)
 tok = ""
@@ -58,6 +59,8 @@ def limpa(t): return t.replace(tok, "[token]")
 
 agora = datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=-3)))
 ref = "ddteste" + format(int(time.time()), "x") + str(random.randint(10, 99))
+for k, rx in (("cindop", r"\d{6}"), ("cst", r"\d{3}"), ("cclass", r"\d{6}"), ("total-tributos", r"\d{1,2}(\.\d{1,4})?"), ("cpf", r"[\d.\-]{11,14}")):
+    if k in OPT and not re.fullmatch(rx, OPT[k]): print(f"ERRO: --{k} com formato inválido (use ponto decimal em --total-tributos)."); sys.exit(1)
 corpo = {
     "data_emissao": (agora - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%S-03:00"),
     "serie_dps": SERIE, "numero_dps": random.randint(1, 899999),
@@ -70,6 +73,7 @@ corpo = {
     "ibs_cbs_situacao_tributaria": OPT.get("cst", "000"), "ibs_cbs_classificacao_tributaria": OPT.get("cclass", "000001"),
     "percentual_total_tributos_simples_nacional": float(OPT.get("total-tributos", "6.0")),   # E0712: ME/EPP NÃO usa indicador_total_tributacao
 }
+if "cindop" not in OPT: print("AVISO: sem --cindop o ADN recusa com E0860 (esperado: o cIndOp real vem da contabilidade). Com um cIndOp de teste, o ADN pode exigir tomador (E0187): use --cpf= com um CPF REAL.")
 if "cindop" in OPT: corpo["codigo_indicador_operacao"] = OPT["cindop"]
 if "cpf" in OPT:
     corpo["cpf_tomador"] = re.sub(r"\D", "", OPT["cpf"]); corpo["razao_social_tomador"] = OPT.get("nome", "TOMADOR DE TESTE")
