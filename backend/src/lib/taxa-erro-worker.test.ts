@@ -206,6 +206,8 @@ test('queda geral: NÃO alarma com amostra minúscula, com 89% de erro, ou com u
 test('queda geral: UMA unidade em laço (100 erros) + outra com 1 erro NÃO é queda da rede, mesmo a 91% de erro', () => {
   const v = quedaGeral([rede({ total: 111, erros: 101, unidadesComErro: 2, maiorUnidade: 100, causas: { outra: 101 } })]);
   assert.equal(v.alarme, false);
+  // madrugada, 2 unidades falando (8 + 2 erros): sem volume para ser «laço», e a queda de crédito tem de alarmar
+  assert.equal(quedaGeral([rede({ total: 10, erros: 10, unidadesComErro: 2, maiorUnidade: 8, causas: { credito: 10 } })]).alarme, true);
   // com os erros espalhados (nenhuma unidade passa de 70%) alarma
   assert.equal(quedaGeral([rede({ total: 111, erros: 101, unidadesComErro: 5, maiorUnidade: 60, causas: { outra: 101 } })]).alarme, true);
 });

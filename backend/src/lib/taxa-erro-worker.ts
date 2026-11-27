@@ -72,6 +72,8 @@ const REDE_TAXA = Number(process.env.TAXA_ERRO_REDE_TAXA) || 0.9;
 const REDE_MINIMO = Number(process.env.TAXA_ERRO_REDE_MINIMO) || 5;
 /** Nenhuma unidade pode responder por mais que esta fração dos erros: acima disso é o problema DELA, não da rede. */
 const REDE_MAIOR_UNIDADE = Number(process.env.TAXA_ERRO_REDE_MAIOR_UNIDADE) || 0.7;
+/** Só vale como «laço» com volume: com 10 erros, uma unidade com 8 é o normal de uma madrugada com 2 unidades falando, não um laço. */
+const REDE_LACO_MINIMO_ERROS = Number(process.env.TAXA_ERRO_REDE_LACO_MINIMO) || 20;
 
 let timer: NodeJS.Timeout | null = null;
 let timerRede: NodeJS.Timeout | null = null;
@@ -199,7 +201,7 @@ export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
     const taxa = a.total > 0 ? a.erros / a.total : 0;
     if (a.total < REDE_MINIMO || taxa < REDE_TAXA) continue;
     if (a.unidadesComErro < 2) continue;
-    if (a.erros > 0 && a.maiorUnidade / a.erros > REDE_MAIOR_UNIDADE) continue;
+    if (a.erros >= REDE_LACO_MINIMO_ERROS && a.maiorUnidade / a.erros > REDE_MAIOR_UNIDADE) continue;
     const causa = causaDominante(a.causas);
     candidatas.push({
       alarme: true,
