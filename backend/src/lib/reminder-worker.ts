@@ -146,11 +146,16 @@ export function lembretesDoServidor(unit: Pick<Unit, 'slug' | 'spineEnabled' | '
 }
 
 /** Ids dos Salesbots que carregam os templates aprovados, guardados em `pipeline_intents`. */
-export function botsDeConfirmacao(unit: Pick<Unit, 'pipelineIntents'>): { d0: number | null; d1: number | null; d2: number | null } {
+export function botsDeConfirmacao(unit: Pick<Unit, 'pipelineIntents'>): { d1: number | null; d2: number | null } {
   const i = (unit.pipelineIntents ?? {}) as Record<string, unknown>;
   const num = (v: unknown): number | null => (typeof v === 'number' && v > 0 ? v : null);
-  // d0 = modelo da MANHÃ da consulta ("é hoje"), aprovado à parte: o da véspera diz "amanhã" e não serve.
-  return { d0: num(i.manha_salesbot_id), d1: num(i.confirmacao_salesbot_id), d2: num(i.reforco_salesbot_id) };
+  return { d1: num(i.confirmacao_salesbot_id), d2: num(i.reforco_salesbot_id) };
+}
+
+/** Modelo aprovado da MANHÃ da consulta ("é hoje"), à parte: o da véspera diz "amanhã" e não serve. Sem ele, fora da janela de 24 h a manhã não manda nada. */
+export function botDaManha(unit: Pick<Unit, 'pipelineIntents'>): number | null {
+  const v = ((unit.pipelineIntents ?? {}) as Record<string, unknown>).manha_salesbot_id;
+  return typeof v === 'number' && v > 0 ? v : null;
 }
 
 interface Envio {
@@ -175,7 +180,7 @@ interface Envio {
 async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'template' | 'tarefa' | 'nada'> {
   const { unit, kommo, leadId, consulta, toque, chave } = e;
   const bots = botsDeConfirmacao(unit);
-  const botTemplate = toque === 'd0' ? bots.d0 : toque === 'd1' ? bots.d1 : bots.d2;
+  const botTemplate = toque === 'd0' ? botDaManha(unit) : toque === 'd1' ? bots.d1 : bots.d2;
 
   /**
    * Grava a marca no instante em que o canal aceitou a mensagem.
@@ -547,7 +552,7 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
 }
 
 /**
- * A pergunta da MANHÃ da consulta (toque `d0`, chave `confirmacao-manha`). Roda a cada varredura (de hora em hora), não uma vez por dia
+ * A pergunta da MANHÃ da consulta (toque `d0`, chave `confirmacao-manha`). Roda a cada 15 min (`varrerManha`), não uma vez por dia
  * como a véspera: a consulta das 14h é perguntada entre 9h e 12h30, a das 18h entre 13h e 16h30. Consulta antes das 9h30 não tem
  * margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga): fica só com a véspera.
  * Decisão em `confirmacao-manha.ts` (pura); aqui só se juntam os fatos. Caminho de envio e tratador da resposta são os da véspera.
