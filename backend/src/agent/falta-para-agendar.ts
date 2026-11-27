@@ -54,42 +54,77 @@ interface Item {
  */
 const CHAVES_CIDADE = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'];
 const CHAVES_VEM_A_UNIDADE = ['consegue_vir', 'pode_vir', 'consegue_ir', 'vem_a_unidade'];
-const PARTE_DO_CORPO = new Set([
-  'lombar', 'lombares', 'coluna', 'cervical', 'toracica', 'toracico', 'costas', 'pescoco', 'nuca', 'ciatico', 'ciatica',
-  'perna', 'pernas', 'braco', 'bracos', 'quadril', 'joelho', 'ombro', 'gluteo', 'virilha', 'lado', 'lados', 'direito',
-  'direita', 'esquerdo', 'esquerda', 'regiao', 'dor', 'dores', 'baixa', 'alta', 'parte', 'meio', 'inferior', 'superior',
-  'toda', 'todo', 'ambos', 'ambas', 'pe', 'tornozelo', 'cotovelo', 'punho', 'mao', 'maos',
+/**
+ * Palavras de corpo que NUNCA são nome de cidade: com uma delas o valor em MINÚSCULA é lido como dor ("lombar crônica", "dor no
+ * pescoço com formigamento"). Singular, sem acento; o plural entra por `singular()`.
+ */
+const CORPO_FORTE = new Set([
+  'lombar', 'lombalgia', 'cervical', 'cervicalgia', 'toracico', 'toracica', 'dorsal', 'sacro', 'sacroiliaca', 'coluna', 'costas', 'lombo',
+  'pescoco', 'nuca', 'ciatico', 'ciatica', 'nervo', 'perna', 'coxa', 'panturrilha', 'calcanhar', 'tornozelo', 'joelho', 'quadril', 'quadris', 'bacia',
+  'pelve', 'gluteo', 'nadega', 'coccix', 'virilha', 'ombro', 'cotovelo', 'punho', 'mao', 'antebraco', 'dedo', 'cabeca', 'peito', 'barriga',
+  'abdomen', 'costela', 'vertebra', 'hernia', 'disco', 'protrusao', 'abaulamento', 'escoliose', 'artrose', 'tendao', 'musculo', 'articulacao',
+  'trapezio', 'escapula', 'omoplata', 'cintura', 'tronco', 'pe',
 ]);
 /**
- * Palavras de ligação de frase ("dor na lombar que desce pra perna"). Valem SÓ para dizer que o valor inteiro é frase de dor
- * (`every`); nunca para dizer que há palavra de corpo (`some`) — senão "canaã dos carajás" e "rio de janeiro", em minúscula,
- * deixariam de ser cidade.
+ * Palavras de corpo/lado que também aparecem em nome de cidade ("Braço do Norte", "Alta Floresta", "Dores do Indaiá", "Baixa Grande"):
+ * só contam quando o valor INTEIRO é feito de corpo/lado/ligação ("Lado direito", "dores nas costas"), nunca como sinal isolado.
+ */
+const CORPO_FRACO = new Set([
+  'braco', 'lado', 'direito', 'direita', 'esquerdo', 'esquerda', 'regiao', 'dor', 'baixa', 'baixo', 'alta', 'alto', 'parte', 'meio', 'inferior',
+  'superior', 'toda', 'todo', 'ambos', 'ambas', 'cima', 'embaixo', 'frente', 'tras', 'junto',
+]);
+/**
+ * Palavras de ligação e de frase de dor ("dor na lombar que desce pra perna"). Valem SÓ para dizer que o valor inteiro é frase de dor
+ * (`every`); nunca para dizer que há palavra de corpo — senão "canaã dos carajás" e "rio de janeiro", em minúscula, deixariam de ser cidade.
  */
 const LIGACAO = new Set([
-  'de', 'do', 'da', 'dos', 'das', 'e', 'na', 'no', 'nas', 'nos', 'a', 'o', 'que', 'doi', 'pra', 'para', 'com', 'sem', 'desce', 'ate', 'mais', 'muito', 'forte',
+  'de', 'do', 'da', 'dos', 'das', 'e', 'na', 'no', 'nas', 'nos', 'a', 'o', 'as', 'os', 'que', 'doi', 'pra', 'para', 'com', 'sem', 'desce', 'sobe',
+  'ate', 'mais', 'muito', 'forte', 'fraca', 'fraco', 'cronica', 'cronico', 'aguda', 'agudo', 'constante', 'intensa', 'leve', 'em', 'um', 'uma',
 ]);
-/** "consegue vir": só resposta afirmativa conta ("não", "nunca", "talvez" não). */
-const AFIRMATIVO = /^\s*(?:sim|s|true|1|consegue|pode|ok|claro|com\s+certeza|tranquilo)\b/i;
+
+/** "ombros" → "ombro", "pes" → "pe", "lombares" → "lombar", "dores" → "dor": o plural não esconde a parte do corpo. */
+function singular(w: string): string {
+  if (w.length > 3 && w.endsWith('es') && (CORPO_FORTE.has(w.slice(0, -2)) || CORPO_FRACO.has(w.slice(0, -2)))) return w.slice(0, -2);
+  if (w.length > 2 && w.endsWith('s') && (CORPO_FORTE.has(w.slice(0, -1)) || CORPO_FRACO.has(w.slice(0, -1)))) return w.slice(0, -1);
+  return w;
+}
+const ehCorpoForte = (w: string) => CORPO_FORTE.has(singular(w));
+const ehCorpoOuLigacao = (w: string) => CORPO_FORTE.has(singular(w)) || CORPO_FRACO.has(singular(w)) || LIGACAO.has(w);
+
+/** "consegue vir": só afirmação CLARA conta. Qualquer palavra fora desta lista (não, nunca, talvez, mas, longe, que…) derruba. */
+const PALAVRAS_DE_SIM = new Set(['sim', 's', 'true', '1', 'consegue', 'consigo', 'pode', 'posso', 'ok', 'claro', 'certeza', 'tranquilo', 'certo', 'positivo']);
+const PALAVRAS_NEUTRAS = new Set(['com', 'isso', 'vir', 'ir', 'e', 'tambem', 'la', 'ai', 'aqui', 'da', 'para', 'pra', 'a', 'unidade', 'clinica', 'sempre', 'ate']);
+function afirmaClaramente(valor: unknown): boolean {
+  const palavras = String(valor ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return palavras.length > 0 && palavras.every((w) => PALAVRAS_DE_SIM.has(w) || PALAVRAS_NEUTRAS.has(w)) && palavras.some((w) => PALAVRAS_DE_SIM.has(w));
+}
 
 /**
- * Cidade de verdade, não onde dói. Cidade que tem nome de parte do corpo ("Braço do Norte", "Dores do Indaiá") passa: o que
- * se recusa é o valor feito SÓ de palavras de corpo/lado/ligação ("lombar", "Lado direito"), a frase comprida, ou o que tem
- * palavra de corpo e foi escrito em minúscula (a IA grava a dor em minúscula; a cidade, com inicial maiúscula).
+ * Cidade de verdade, não onde dói. Recusa o valor feito SÓ de corpo/lado/ligação ("lombar", "Ombros", "Lombar (L4-L5)", "hérnia de disco",
+ * "Lado direito"), a frase comprida, e o que tem palavra de corpo FORTE escrita em minúscula (a IA grava a dor em minúscula; a cidade, com
+ * inicial maiúscula). Cidade com nome de corpo fraco ("Braço do Norte", "Alta Floresta", "Dores do Indaiá") passa, em maiúscula ou não.
  */
 export function pareceCidade(valor: unknown): boolean {
-  const v = String(valor ?? '').trim();
+  const v = String(valor ?? '')
+    .replace(/\([^)]*\)/g, ' ')
+    .trim();
   if (v.length < 2 || v.length > 60 || !/\p{L}/u.test(v)) return false;
   const palavras = v
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .split(/[^a-z]+/)
-    .filter(Boolean);
+    .filter((w) => w.length > 1 || w === 'e' || w === 'a' || w === 'o');
   if (palavras.length === 0) return false;
   // frase, não cidade (os conectores não contam: "São José do Rio Preto" tem 4 palavras de nome)
   if (palavras.filter((w) => !['de', 'do', 'da', 'dos', 'das', 'e'].includes(w)).length >= 6) return false;
-  if (palavras.every((w) => PARTE_DO_CORPO.has(w) || LIGACAO.has(w))) return false;
-  if (palavras.some((w) => PARTE_DO_CORPO.has(w)) && /^\p{Ll}/u.test(v)) return false;
+  if (palavras.every(ehCorpoOuLigacao)) return false;
+  if (palavras.some(ehCorpoForte) && /^\p{Ll}/u.test(v)) return false;
   return true;
 }
 
@@ -100,7 +135,7 @@ export function pareceCidade(valor: unknown): boolean {
 export function cidadeConhecida(fatos: Fatos): boolean {
   const f = canonizarFatos(fatos);
   if (CHAVES_CIDADE.some((k) => pareceCidade(f[k]))) return true;
-  return CHAVES_VEM_A_UNIDADE.some((k) => AFIRMATIVO.test(String(f[k] ?? '').trim()));
+  return CHAVES_VEM_A_UNIDADE.some((k) => afirmaClaramente(f[k]));
 }
 
 const CHECKLIST: Item[] = [

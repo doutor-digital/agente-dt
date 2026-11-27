@@ -178,3 +178,14 @@ test('nit: o modelo AGENDOU/remarcou/cancelou/confirmou neste turno: a frase fix
     'audio',
   );
 });
+
+test('7: o <conversa_oficial> com texto da equipe ou áudio recuperado conta como conteúdo; o que continua mídia sem leitura não', () => {
+  const comTexto = `<conversa_oficial>\nO que aconteceu no WhatsApp desde a sua última mensagem (rota oficial), em ordem:\n- 27/11 10:00 · Paciente: [áudio transcrito] "quero marcar na terça"\nConsidere estas mensagens do paciente como parte da conversa.\n</conversa_oficial>\n\n${AUDIO_SEM_OUVIR}`;
+  assert.equal(midiaNaoLidaDoTurno(comTexto), null);
+  assert.equal(respostaDeMidiaNaoLida({ entrada: comTexto, resposta: 'Perfeito, terça então!', ferramentas: [], falas: [p('...')], agoraLocal: AGORA }), null);
+  const daEquipe = `<conversa_oficial>\n- 27/11 10:00 · Equipe (Lia): "Oi, tudo bem? Posso te ajudar?"\nA EQUIPE HUMANA já falou.\n</conversa_oficial>\n\n${AUDIO_SEM_OUVIR}`;
+  assert.equal(midiaNaoLidaDoTurno(daEquipe), null);
+  // o bloco só com mídia que continua sem leitura NÃO conta como conteúdo
+  const semLeitura = `<conversa_oficial>\nO que aconteceu:\n- 27/11 10:00 · Paciente: [áudio]\n- 27/11 10:01 · Paciente: [mensagem vazia]\nConsidere estas mensagens.\n</conversa_oficial>\n\n${AUDIO_SEM_OUVIR}`;
+  assert.equal(midiaNaoLidaDoTurno(semLeitura), 'audio');
+});

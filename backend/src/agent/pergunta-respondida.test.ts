@@ -11,6 +11,7 @@ import {
   instrucaoRefazerSemPerguntaRepetida,
   jaRespondidas,
   perguntaJaRespondidaLigada,
+  refeitaTrazHorarioNovo,
   renderJaRespondido,
   rotulosRespondidos,
   temaDaPergunta,
@@ -335,4 +336,52 @@ test('o cartão lê pela gaveta canônica: tempo_de_dor e localizacao=cidade de 
   assert.ok(temas([p('oi')], { tempo_de_dor: '2 anos' }).includes('tempo de dor'));
   assert.ok(temas([p('oi')], { localizacao: 'Imperatriz' }).includes('cidade'));
   assert.ok(!temas([p('oi')], { localizacao: 'lombar' }).includes('cidade'));
+});
+
+// ── 3ª rodada do sênior (#519) ────────────────────────────────────────────────────────────────────────
+
+test('3: "mora" na 3ª pessoa NÃO é a cidade do paciente; só a 1ª pessoa', () => {
+  for (const fala of ['minha filha mora em São Paulo', 'meu marido mora em Marabá', 'ela mora em Imperatriz', 'minha mãe está morando em Belém']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['moro em Marabá', 'estou morando em Imperatriz', 'tô morando em Parauapebas', 'resido em Canaã dos Carajás', 'moramos em Redenção']) {
+    assert.ok(temas([p(fala)]).includes('cidade'), `deveria contar: ${fala}`);
+  }
+});
+
+test('4: "Vim de Uber", "sou de Deus", "Aqui da Igreja" NÃO viram cidade', () => {
+  for (const fala of ['Vim de Uber', 'sou de Deus', 'Aqui da Igreja', 'Sou de Jesus', 'Vim da Prefeitura', 'venho de Uber']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  assert.ok(temas([p('Sou de Eldorado dos Carajás')]).includes('cidade'));
+});
+
+test('5: "Ana", "Ombros", "Lombar (L4-L5)" em resposta a "Em qual cidade você mora?" NÃO viram cidade', () => {
+  for (const fala of ['Ana', 'Ombros', 'Lombar (L4-L5)', 'João Pedro', 'joelhos', 'hérnia de disco']) {
+    assert.ok(!temas([ia('Em qual cidade você mora?'), p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['Marabá', 'Canaã dos Carajás', 'Lucas do Rio Verde', 'alta floresta']) {
+    assert.ok(temas([ia('Em qual cidade você mora?'), p(fala)]).includes('cidade'), `deveria contar: ${fala}`);
+  }
+});
+
+test('6: a resposta refeita não pode trazer horário novo nem vencido; repetir os do rascunho pode', () => {
+  const agora = '2026-11-27T10:00';
+  const rascunho = 'Tenho terça 01/12 às 16h ou quarta 02/12 às 9h. E há quanto tempo você sente essa dor?';
+  assert.equal(refeitaTrazHorarioNovo(rascunho, 'Três anos é bastante. Tenho terça 01/12 às 16h ou quarta 02/12 às 9h, qual prefere?', agora), false);
+  assert.equal(refeitaTrazHorarioNovo(rascunho, 'Três anos é bastante. Tenho quinta 03/12 às 14h, pode ser?', agora), true);
+  assert.equal(refeitaTrazHorarioNovo(rascunho, 'Três anos é bastante. Tenho terça 01/12 às 17h, pode ser?', agora), true);
+  assert.equal(refeitaTrazHorarioNovo('E há quanto tempo dói?', 'Entendi! Tenho amanhã às 8h, pode ser?', agora), true);
+  assert.equal(refeitaTrazHorarioNovo('Tenho sexta 27/11 às 8h. Há quanto tempo?', 'Tenho sexta 27/11 às 8h, pode ser?', agora), true); // já passou
+  assert.equal(refeitaTrazHorarioNovo('E há quanto tempo dói?', 'Entendi, três anos é bastante. Onde mais dói?', agora), false);
+  assert.match(instrucaoRefazerSemPerguntaRepetida(['tempo de dor'], jaRespondidas([p('dói há 3 anos')])), /NÃO ofereça horário novo/);
+});
+
+test('nits: "a 2 anos" sem h, "há 5 anos" depois da cidade, bairro "Vila Nova"', () => {
+  assert.ok(temas([p('tenho dor na coluna a 2 anos')]).includes('tempo de dor'));
+  assert.ok(!temas([p('posso pagar daqui a 2 meses')]).includes('tempo de dor'));
+  assert.equal(jaRespondidas([p('moro em Canaã dos Carajás há 5 anos')]).find((r) => r.tema === 'cidade')?.trecho, 'moro em Canaã dos Carajás');
+  assert.ok(!temas([p('moro na Vila Nova')]).includes('cidade'));
+  assert.ok(!temas([p('moro no Jardim Tropical')]).includes('cidade'));
+  assert.ok(temas([p('moro em Vila Velha')]).includes('cidade'));
 });

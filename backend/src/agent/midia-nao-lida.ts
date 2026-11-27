@@ -83,6 +83,21 @@ function oQueEleEscreveu(entrada: string): string {
  * (com as marcas de "não deu pra ouvir" / "não foi possível ler"). Com texto dele junto, ou com qualquer mídia que foi lida
  * (a transcrição fica depois do marcador), devolve null: o modelo tem o que responder.
  */
+/**
+ * O texto EFETIVO do turno: o `<conversa_oficial>` que o webhook prega na frente traz o que a equipe falou e a transcrição do áudio
+ * recuperado. Quando o modelo responde a isso, a frase fixa NÃO pode trocar a resposta certa. Do bloco só entra o que tem texto entre
+ * aspas; o cabeçalho, as regras e as linhas "[áudio]", "[pic]", "[mensagem vazia]" (mídia que continua sem leitura) ficam de fora.
+ */
+function comOQueOBlocoTrouxe(entrada: string): string {
+  return entrada.replace(/<conversa_oficial>[\s\S]*?<\/conversa_oficial>/g, (bloco) =>
+    bloco
+      .split('\n')
+      .map((linha) => /·\s*[^:]+:\s*(.*)$/.exec(linha)?.[1] ?? '')
+      .filter((corpo) => corpo.includes('"'))
+      .join('\n'),
+  );
+}
+
 export function midiaNaoLidaDoTurno(entrada: string): TipoDeMidia | null {
   // Unidade que não ouve áudio (ou falha estrutural): o recado ao modelo manda PASSAR PARA A EQUIPE e proíbe pedir para escrever
   // (webhook.controller.ts, instrucaoAudioNaoTranscrito(true)). Pedir para escrever aqui contrariaria isso.
@@ -94,7 +109,7 @@ export function midiaNaoLidaDoTurno(entrada: string): TipoDeMidia | null {
   if (semConteudo) tipos.add(/imagem|foto/i.test(semConteudo[1]) ? 'imagem' : 'arquivo');
   if (tipos.size === 0) return null;
   // "[imagem sem conteúdo legível]" fica entre colchetes e sai na limpeza; o que sobrar é fala dele (ou transcrição lida)
-  if (oQueEleEscreveu(entrada)) return null;
+  if (oQueEleEscreveu(comOQueOBlocoTrouxe(entrada))) return null;
   return tipos.size === 1 ? [...tipos][0] : 'midia';
 }
 

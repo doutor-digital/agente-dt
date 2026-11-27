@@ -159,3 +159,31 @@ test('nit: consegue_vir "nunca"/"talvez"/"não sei" NÃO conta; "sim"/"consegue"
   for (const v of ['nunca', 'talvez', 'não sei', 'nao', 'depende']) assert.ok(!cidadeConhecida({ consegue_vir: v }), v);
   for (const v of ['sim', 'Sim, consigo', 'consegue', 'true']) assert.ok(cidadeConhecida({ consegue_vir: v }), v);
 });
+
+// ── 3ª rodada do sênior (#519) ────────────────────────────────────────────────────────────────────────
+
+test('1: consegue_vir só vale com afirmação CLARA; negação em qualquer lugar vence', () => {
+  for (const v of ['claro que não', 'pode ser que não', 'consegue não', 'ok mas moro longe', 'sim mas só aos sábados', 'não consigo', 'nunca', 'talvez', 'depende do horário']) {
+    assert.ok(!cidadeConhecida({ consegue_vir: v }), `não deveria contar: ${v}`);
+  }
+  for (const v of ['sim', 'Sim, consigo', 'consegue', 'true', 'claro', 'com certeza', 'ok', 'tranquilo']) {
+    assert.ok(cidadeConhecida({ consegue_vir: v }), `deveria contar: ${v}`);
+  }
+});
+
+test('2: partes do corpo no plural, com acento, com parênteses ou em frase NÃO são cidade', () => {
+  for (const v of [
+    'Ombros', 'joelhos', 'glúteos', 'pés', 'hérnia de disco', 'Cabeça', 'nádega', 'cóccix', 'Lombar (L4-L5)', 'lombares', 'costas', 'Pescoço',
+    'dores nas costas', 'Hérnia de Disco L4-L5', 'quadris', 'lombar crônica', 'dor no pescoço com formigamento', 'protrusão discal',
+  ]) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: v });
+    assert.match(b, /cidade → horário escolhido/, v);
+    assert.ok(!cidadeConhecida({ cidade: v }), v);
+  }
+});
+
+test('nit: cidade com nome de corpo FRACO em minúscula continua cidade (alta floresta, braço do norte, dores do indaiá)', () => {
+  for (const v of ['alta floresta', 'braço do norte', 'dores do indaiá', 'baixa grande', 'Alta Floresta']) {
+    assert.ok(cidadeConhecida({ cidade: v }), v);
+  }
+});

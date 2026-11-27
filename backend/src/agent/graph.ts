@@ -46,6 +46,7 @@ import {
   instrucaoRefazerSemPerguntaRepetida,
   jaRespondidas,
   perguntaJaRespondidaLigada,
+  refeitaTrazHorarioNovo,
   temasRepetidosNaResposta,
   type JaRespondida,
 } from './pergunta-respondida.js';
@@ -698,6 +699,7 @@ export async function buildAgentGraph(
     // O HumanMessage carrega o bloco <conversa_oficial> pregado na frente (webhook e salesbot).
     // Tudo que decide sobre O QUE O PACIENTE ESCREVEU — só um cumprimento, busca no RAG, nome —
     // precisa da mensagem crua, senão lê o bloco como se fosse fala dele.
+    const textoEfetivoDoTurno = lastHuman ? (typeof lastHuman.content === 'string' ? lastHuman.content : JSON.stringify(lastHuman.content)) : '';
     const userMessage = semBlocoOficial(
       lastHuman
         ? typeof lastHuman.content === 'string'
@@ -1614,7 +1616,10 @@ export async function buildAgentGraph(
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: a resposta refeita (sem o nome ou sem a pergunta repetida) falhou — fica a original');
         }
         const semOPedido = porNome ? !pedeNome(textoRefeito) : temasRepetidosNaResposta(textoRefeito, respondidas).length === 0;
-        const serve = !!textoRefeito && semOPedido && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
+        // A refeita roda DEPOIS da trava de horário (vencido, inventado, "manhã ou tarde?"): ela não pode trazer horário que o rascunho
+        // não tinha, nem um que já passou. Só repete os do rascunho.
+        const semHorarioNovo = !refeitaTrazHorarioNovo(textoFinal, textoRefeito, agoraDaUnidade);
+        const serve = !!textoRefeito && semOPedido && semHorarioNovo && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;
@@ -1639,7 +1644,8 @@ export async function buildAgentGraph(
       let midiaFixa = false;
       if (!trava && !passouPorSinal && !candidatoNoTurno && !respostaFixa && midiaNaoLidaLigada(unit.slug)) {
         const fixa = respostaDeMidiaNaoLida({
-          entrada: userMessage ?? '',
+          // o texto EFETIVO do turno, com o <conversa_oficial> (equipe, áudio recuperado): `userMessage` o tira
+          entrada: textoEfetivoDoTurno,
           resposta: textoFinal,
           ferramentas: ferramentasDoTurno(nonSystemMessages),
           falas,

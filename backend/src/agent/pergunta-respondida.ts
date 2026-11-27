@@ -14,6 +14,7 @@
  */
 import { cidadeConhecida, pareceCidade, type Fatos } from './falta-para-agendar.js';
 import { canonizarFatos } from '../services/fatos-canonicos.js';
+import { horariosOferecidos, horariosQueJaPassaram } from './horario-oferecido.js';
 import { perguntasDe, respostaVazia, type Fala } from './repeticao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
@@ -80,6 +81,8 @@ const UNID = String.raw`(?:dias?|semanas?|quinzenas?|mes|meses|anos?)`;
 const APROX = String.raw`(?:(?:uns|umas|cerca\s+de|quase|mais\s+de|menos\s+de|aproximadamente|mais\s+ou\s+menos)\s+)*`;
 // sem "tem/tenho": "tenho 40 anos" é a idade, não o tempo da dor
 const TEMPO_COM_VERBO = new RegExp(String.raw`\b(?:ha|faz|fazem|ja\s+faz)\s+${APROX}${NUM}\s+${UNID}\b`);
+// "a dor é a 2 anos" (escrito sem o h): só com palavra de dor por perto e nunca "daqui a 2 semanas", "dentro de", "até"
+const TEMPO_A_SEM_H = new RegExp(String.raw`(?<!daqui\s|dentro\s|ate\s|depois\s|antes\s|em\s)\ba\s+${APROX}${NUM}\s+(?:meses|mes|anos?)\b`);
 const TEMPO_SEM_VERBO = new RegExp(String.raw`\b${APROX}${NUM}\s+${UNID}\b`, 'g');
 /** "em 2 semanas", "daqui 15 dias", "por 3 meses": prazo que vem, não há quanto tempo dói. */
 const ANTES_DE_PRAZO = /(?:^|\s)(?:em|daqui|dentro|cada|por|pra|para|ate|depois|durante|nos|nas|ultimos|ultimas|proximos|proximas|antes|a)\s*$/;
@@ -119,7 +122,7 @@ function respostaDeTempo(texto: string, comContexto = true): string | null {
     const ini = m.index ?? 0;
     return !comContexto || ligadoADor(t, ini, ini + m[0].length);
   };
-  for (const re of [TEMPO_COM_VERBO, TEMPO_VAGO, TEMPO_DESDE]) {
+  for (const re of [TEMPO_COM_VERBO, TEMPO_VAGO, TEMPO_DESDE, ...(comContexto ? [TEMPO_A_SEM_H] : [])]) {
     const m = new RegExp(re.source, 'g');
     for (const c of t.matchAll(m)) if (ok(c)) return c[0].trim();
   }
@@ -145,9 +148,9 @@ function respostaDiretaDeTempo(texto: string): string | null {
 // é cidade), "venho de Eldorado", "aqui de Canaã". Fica de fora: "moro perto do hospital", "moro na mesma rua", "moro em local
 // afastado", "moro no Maranhão" — nada disso diz a cidade.
 const CIDADE_MORO =
-  /(?<![\p{L}])(?:[Mm]oro|[Mm]orando|[Mm]ora|[Mm]oramos|[Rr]esido|[Rr]esidente)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na)\s+([\p{L}][\p{L}'.\-]*(?:\s+[\p{L}][\p{L}'.\-]*){0,4})|aqui(?:\s+mesmo)?(?![\p{L}]))/u;
+  /(?<![\p{L}])(?:[Mm]oro|[Mm]oramos|[Rr]esido|(?:[Ee]stou|[Tt]ô|[Tt]o|[Ee]stamos)\s+[Mm]orando)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na)\s+([\p{L}][\p{L}'.\-]*(?:\s+[\p{L}][\p{L}'.\-]*){0,4})|aqui(?:\s+mesmo)?(?![\p{L}]))/u;
 /** "moro em casa", "no sítio", "no centro", "na mesma rua", "em local afastado", "em outra cidade": onde ele mora, não a cidade. */
-const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zona|bairro|centro|condominio|loteamento|residencial|setor|rua|avenida|av|interior|beira|predio|quarto|frente|fundos|cima|baixo|um|uma|outro|outra|onde|ca|la|ali|mesma|mesmo|local|lugar|area|regiao|capital|cidade|litoral|campo|mata|sul|norte|leste|oeste|perto|longe|proximo|afastado|distrito|povoado)$/;
+const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zona|bairro|centro|condominio|loteamento|residencial|setor|jardim|parque|conjunto|nucleo|vila|rua|avenida|av|interior|beira|predio|quarto|frente|fundos|cima|baixo|um|uma|outro|outra|onde|ca|la|ali|mesma|mesmo|local|lugar|area|regiao|capital|cidade|litoral|campo|mata|sul|norte|leste|oeste|perto|longe|proximo|afastado|distrito|povoado)$/;
 /** Estado sozinho não é cidade (São Paulo e Rio de Janeiro ficam de fora da lista: são as duas coisas). */
 const ESTADOS = new Set([
   'acre', 'alagoas', 'amapa', 'amazonas', 'bahia', 'ceara', 'espirito santo', 'goias', 'maranhao', 'mato grosso', 'mato grosso do sul',
@@ -155,7 +158,7 @@ const ESTADOS = new Set([
   'roraima', 'santa catarina', 'sergipe', 'tocantins', 'distrito federal', 'brasil',
 ]);
 /** Onde o nome do lugar termina: "moro em Marabá e trabalho em…", "moro em Marabá mesmo", "moro em Marabá desde 2010". */
-const FIM_DO_LUGAR = /(?:^|\s)(?:e|mas|que|pois|porque|desde|ha|faz|com|onde|hoje|mesmo|tambem|agora|ja|mais|bem|perto|longe|ai|la|sim|ne|so)(?:\s|$)|[,.;!?]/i;
+const FIM_DO_LUGAR = /(?:^|\s)(?:e|mas|que|pois|porque|desde|ha|há|faz|com|onde|hoje|mesmo|tambem|também|agora|ja|já|mais|bem|perto|longe|ai|aí|la|lá|sim|ne|né|so|só|a|ha)(?:\s|$)|[,.;!?]/i;
 
 /** O trecho que sobrou depois de "moro em" é uma cidade? Só o nome do lugar (corta no "e", no "mesmo", na vírgula), nunca estado. */
 function lugarEhCidade(bruto: string): string | null {
@@ -163,14 +166,14 @@ function lugarEhCidade(bruto: string): string | null {
   const cortado = bruto.replace(/^cidade\s+d[aeo]s?\s+/i, '').split(FIM_DO_LUGAR)[0].trim();
   if (!cortado) return null;
   const n = semAcento(cortado);
-  const primeira = n.split(/\s+/)[0];
+  const primeira = /^vila\s+(?:velha|rica)\b/.test(n) ? 'vilacidade' : n.split(/\s+/)[0];
   if (NAO_E_CIDADE.test(primeira) || ESTADOS.has(n) || /^[a-z]{2}$/.test(n)) return null;
   return pareceCidade(cortado) ? cortado : null;
 }
 
-// "vim do Instagram" não é cidade
+// "vim do Instagram", "sou de Deus", "venho de Uber" não são cidade; "aqui da Igreja" e "vim de…" (trajeto) nem entram
 const CIDADE_SOU_DE =
-  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho|[Vv]im|[Vv]iemos|[Aa]qui|[Dd]aqui)\s+(?:d[aeo]s?|em)\s+(?!(?:Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
+  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho)\s+(?:d[aeo]s?|em)\s+(?!(?:Deus|Jesus|Cristo|Nossa|Senhor|Maria|Uber|Fam[ií]lia|Igreja|F[eé]|Paz|Ambul[âa]ncia|Carro|Moto|[ÔO]nibus|T[aá]xi|Empresa|Escola|Faculdade|Prefeitura|Aplicativo|App|Peixes|Aqu[aá]rio|[ÁA]ries|Touro|G[eê]meos|C[aâ]ncer|Le[aã]o|Virgem|Libra|Escorpi[aã]o|Sagit[aá]rio|Capric[oó]rnio|Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
 const CIDADE_SOU_DAQUI = /(?<![\p{L}])[Ss]ou\s+daqui\b|(?<![\p{L}])[Ss]omos\s+daqui\b/u;
 
 /** "Não moro aqui", "nunca morei em Marabá", "já não sou daqui": o contrário de responder. */
@@ -247,6 +250,20 @@ function doCartao(tema: Tema, fatosBrutos: Fatos | null | undefined): string | n
   return null;
 }
 
+/** Nome próprio comum: "Ana" respondendo "em qual cidade você mora?" é o paciente se apresentando, não a cidade. */
+const NOMES_COMUNS = new Set([
+  'ana', 'maria', 'joao', 'jose', 'pedro', 'paulo', 'carlos', 'marcos', 'lucas', 'luiz', 'luis', 'antonio', 'francisco', 'marcia', 'julia', 'juliana',
+  'fernanda', 'patricia', 'camila', 'sandra', 'lucia', 'rita', 'rosa', 'sonia', 'teresa', 'carla', 'cintia', 'aline', 'bruno', 'rafael', 'daniel',
+  'gabriel', 'felipe', 'roberto', 'ricardo', 'eduardo', 'fabio', 'sergio', 'jorge', 'mario', 'marcelo', 'andre', 'diego', 'thiago', 'tiago', 'renato',
+  'claudia', 'cristina', 'vera', 'elaine', 'luciana', 'adriana', 'simone', 'silvia', 'regina', 'helena', 'beatriz', 'larissa', 'amanda', 'jessica',
+  'leticia', 'vanessa', 'valeria', 'raimunda', 'francisca', 'antonia', 'sebastiao', 'raimundo', 'manoel', 'joaquim', 'alex', 'wellington', 'edson',
+]);
+function pareceNome(t: string): boolean {
+  const p = semAcento(t).split(/\s+/).filter(Boolean);
+  if (!p.length || !NOMES_COMUNS.has(p[0])) return false;
+  return !(p.length >= 3 && ['do', 'da', 'de', 'dos', 'das'].includes(p[1])); // "Lucas do Rio Verde" é cidade
+}
+
 const PALAVRAS_DE_OUTRO_ASSUNTO = /\b(?:pre[cç]o|valor|quanto|custa|hor[aá]rio|consulta|agendar|marcar|dia|plano|conv[eê]nio|pix)\b/i;
 /** Resposta curta à pergunta da cidade que NÃO é cidade ("no centro", "bairro Nova Esperança", "em casa"). */
 const ONDE_MORA_SEM_CIDADE = /\b(?:bairro|centro|rua|avenida|av\.|casa|apartamento|s[ií]tio|fazenda|zona\s+rural|condom[ií]nio|loteamento)\b/i;
@@ -263,7 +280,7 @@ function respostaImediata(tema: Tema, fala: string, anterior: string | null): st
   const palavras = t.split(/\s+/).filter(Boolean);
   if (tema === 'cidade') {
     // nome de cidade tem até 4 palavras; o resto (dor, nome, pedido) é outra coisa dita no lugar da resposta
-    if (palavras.length > 4 || PALAVRAS_DE_OUTRO_ASSUNTO.test(t) || ONDE_MORA_SEM_CIDADE.test(t) || !pareceCidade(t)) return null;
+    if (palavras.length > 4 || PALAVRAS_DE_OUTRO_ASSUNTO.test(t) || ONDE_MORA_SEM_CIDADE.test(t) || !pareceCidade(t) || pareceNome(t)) return null;
     if (/\b(?:sinto|tenho|dor|doi|meu|minha|nome|chamo|chamar|pode|quero|queria|preciso|estou|to|vou|acho|nao|ja|ola|oi)\b/.test(semAcento(t))) return null;
     if (/^(?:sim|n[aã]o|ok|okay|t[aá]|isso|aham|uhum|obrigad[oa]|pode\s+ser)\b/i.test(t)) return null;
     return t.slice(0, 60);
@@ -370,7 +387,18 @@ export function instrucaoRefazerSemPerguntaRepetida(temas: readonly Tema[], ja: 
   return (
     '[instrução interna, não é fala do paciente] Seu rascunho pergunta de novo o que o paciente JÁ respondeu: ' +
     `${lembrete}. Reescreva a MESMA resposta SEM essa(s) pergunta(s): use o que ele disse (em meia frase, se couber), ` +
-    'mantenha o resto e o tom, e termine com o PRÓXIMO passo da conversa (a pergunta seguinte do roteiro, ou o horário se já for a hora). ' +
+    'mantenha o resto e o tom, e termine com o PRÓXIMO passo da conversa (a pergunta seguinte do roteiro). NÃO ofereça horário novo nem mude dia ou hora: se o rascunho já tinha horários, mantenha EXATAMENTE esses; se não tinha, não ponha nenhum. ' +
     'Responda só com a mensagem final.'
   );
+}
+
+/**
+ * A resposta refeita roda DEPOIS da trava de horário (vencido, inventado, "manhã ou tarde?"): ela não pode trazer horário que o
+ * rascunho não tinha, nem um que já passou. Só pode repetir os do rascunho.
+ */
+export function refeitaTrazHorarioNovo(rascunho: string, refeita: string, agoraLocal: string): boolean {
+  const antes = horariosOferecidos(rascunho, agoraLocal);
+  const depois = horariosOferecidos(refeita, agoraLocal);
+  const novos = depois.filter((h) => !antes.some((o) => o.data === h.data && o.hora === h.hora));
+  return novos.length > 0 || horariosQueJaPassaram(depois, agoraLocal).length > 0;
 }
