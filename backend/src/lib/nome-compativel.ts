@@ -18,10 +18,11 @@ const TRATAMENTO = new Set([
  * Parentesco e sufixo de geração DIFERENCIAM pessoas: "Maria Souza Filha" não é "Maria Souza" (é a filha dela), "Tia Ana" não é "Ana", "Pedro Neto" não
  * é "Pedro". Não entram na comparação das palavras, mas precisam ser IGUAIS dos dois lados — presente de um lado só (ou diferente) = NÃO casa.
  */
-const MARCAS = new Set([
+const PARENTESCO = new Set([
   'mae', 'mamae', 'pai', 'papai', 'vo', 'vovo', 'avo', 'tia', 'tio', 'irma', 'irmao', 'esposa', 'marido', 'sogra', 'sogro', 'prima', 'primo', 'paciente',
-  'filha', 'filho', 'neta', 'neto', 'sobrinha', 'sobrinho', 'bisneta', 'bisneto', 'junior', 'jr', 'segundo', 'terceiro',
 ]);
+/** Só valem como sufixo DEPOIS da primeira palavra: "Junior Santos" e "Neto Silva" têm o apelido como nome. */
+const GERACAO = new Set(['filha', 'filho', 'neta', 'neto', 'sobrinha', 'sobrinho', 'bisneta', 'bisneto', 'junior', 'jr', 'segundo', 'terceiro']);
 
 /** Partículas de sobrenome: não identificam ninguém ("Mãe da Ana" × "Tia da Ana" não casa pelo "da"). */
 const PARTICULAS = new Set(['da', 'de', 'do', 'das', 'dos', 'e', 'di', 'del', 'della', 'la', 'le', 'van', 'von', 'y', 'dal']);
@@ -38,13 +39,17 @@ function palavrasBrutas(nome: string | null | undefined): string[] {
     .filter((p) => p.length >= 2 && !TRATAMENTO.has(p) && !PARTICULAS.has(p));
 }
 
+function ehMarca(p: string, posicao: number): boolean {
+  return PARENTESCO.has(p) || (posicao > 0 && GERACAO.has(p));
+}
+
 /** As palavras do nome, minúsculas, sem acento, sem tratamento, partícula, parentesco nem sufixo de geração. Vazio se não há nome utilizável (ausente ou provisório). */
 export function palavrasDoNome(nome: string | null | undefined): string[] {
-  return palavrasBrutas(nome).filter((p) => !MARCAS.has(p));
+  return palavrasBrutas(nome).filter((p, i) => !ehMarca(p, i));
 }
 
 function marcasDoNome(nome: string | null | undefined): string[] {
-  return [...new Set(palavrasBrutas(nome).filter((p) => MARCAS.has(p)))].sort();
+  return [...new Set(palavrasBrutas(nome).filter((p, i) => ehMarca(p, i)))].sort();
 }
 
 /**

@@ -1296,7 +1296,9 @@ function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promis
         <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
           <p className="text-sm text-amber-300">
             {r.etapa === 'ja-enviado'
-              ? `Este lead já está na franquia com o id ${r.spineIdLead}. Não seria enviado de novo.`
+              ? r.spineIdLead
+                ? `Este lead já está na franquia com o id ${r.spineIdLead}. Não seria enviado de novo.`
+                : 'O telefone deste lead já estava na franquia (achado no 1º contato). Não seria enviado de novo.'
               : 'Não seria enviado agora.'}
           </p>
           {r.motivo && <p className="mt-1 text-xs leading-relaxed text-zinc-400">{r.motivo}</p>}
@@ -1382,6 +1384,11 @@ const MOTIVO_PACIENTE: Record<string, { titulo: string; explica: string }> = {
     titulo: 'Sem telefone',
     explica:
       'A franquia exige WhatsApp ou e-mail. Sem nenhum dos dois, a recepção fica com um nome sem como ligar.',
+  },
+  'ja-existe': {
+    titulo: 'O telefone já é de um paciente lá',
+    explica:
+      'A franquia já tem um paciente com este telefone. Nada seria cadastrado por aqui — a consulta se marca no cadastro dele.',
   },
   'ja-cadastrado': {
     titulo: 'Já é paciente lá',

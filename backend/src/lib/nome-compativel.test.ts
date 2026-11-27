@@ -59,3 +59,9 @@ test('sufixo de geração / parentesco de UM lado só NÃO casa: "Maria Souza Fi
   assert.equal(nomesCompletosCompativeis('Tia Ana Lima', 'Ana Lima'), false);
   assert.equal(nomesCompletosCompativeis('Maria Souza Filha', 'maria souza FILHA'), true, 'a mesma marca dos dois lados casa');
 });
+
+test('apelido que também é sufixo ("Junior", "Neto") como PRIMEIRA palavra é nome, não sufixo: "Junior Santos" casa com "Junior Santos"', () => {
+  assert.equal(nomesCompletosCompativeis('Junior Santos', 'JUNIOR SANTOS'), true);
+  assert.equal(nomesCompletosCompativeis('Neto Silva', 'Neto Silva'), true);
+  assert.equal(nomesCompletosCompativeis('Junior Santos', 'Carlos Santos Junior'), false);
+});

@@ -1220,6 +1220,8 @@ export interface SpineLeadPendente {
   spineIdSchedule?: number | null;
   agendadoPara?: string | null;
   situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
+  /** Só quando o vínculo é "ok": criado por nós, ou o telefone já era lead/paciente na franquia. */
+  tipo?: 'criado' | 'lead-ja-existia' | 'paciente-ja-existia' | null;
   motivo: string | null;
   tentativas: number;
 }
@@ -1233,7 +1235,7 @@ export interface SpinePendentesResponse {
 export interface SpinePatientPreview {
   ok: boolean;
   motivo?: string;
-  etapa?: 'desligado' | 'sem-lead' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
+  etapa?: 'desligado' | 'sem-lead' | 'ja-existe' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
   payload?: {
     name: string;
     whatsapp: string | null;

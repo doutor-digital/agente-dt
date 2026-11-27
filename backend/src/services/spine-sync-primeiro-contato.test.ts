@@ -401,16 +401,12 @@ test('paciente já existia (só o motivo): também não cria lead por cima', asy
   assert.deepEqual(feitos, []);
 });
 
-test('botão "cadastrar paciente" (prepararPaciente): lead achado SÓ vira o idLead do paciente se o nome bate; senão o paciente nasce sem converter o lead', async () => {
+test('botão "cadastrar paciente" (prepararPaciente): o lead ACHADO pelo telefone NUNCA vira o idLead do paciente — nem com o nome do cartão igual (o cartão tem o perfil da mãe)', async () => {
   vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_LEAD_ACHADO };
-  titulo = 'Maria Souza Lima';
-  const igual = await SpineSyncService.prepararPaciente(unidade(), 92);
-  assert.equal(igual.ok, true, JSON.stringify(igual));
-  assert.equal(igual.payload?.idLead, 4321);
-  titulo = 'Joana Souza Lima'; // o cartão é de outra pessoa (a filha)
-  const outra = await SpineSyncService.prepararPaciente(unidade(), 92);
-  assert.equal(outra.ok, true, JSON.stringify(outra));
-  assert.equal(outra.payload?.idLead, null, 'o lead da mãe não é convertido');
+  titulo = 'Maria Souza Lima'; // exatamente o nome do lead da mãe
+  const r = await SpineSyncService.prepararPaciente(unidade(), 92);
+  assert.equal(r.ok, true, JSON.stringify(r));
+  assert.equal(r.payload?.idLead, null, 'o lead da mãe não é convertido');
 });
 
 test('botão "cadastrar paciente" com vínculo ANTIGO que adotou o lead achado (id + motivo, sem nome): não manda o lead adotado como idLead', async () => {
@@ -424,8 +420,12 @@ test('botão "cadastrar paciente": telefone que já é de paciente da franquia N
   vinculoAtual = { spineIdLead: null, spineIdClient: null, status: 'ok', motivo: MOTIVO_PACIENTE_ACHADO };
   const jaPaciente = await SpineSyncService.prepararPaciente(unidade(), 94);
   assert.equal(jaPaciente.ok, false);
+  assert.equal(jaPaciente.etapa, 'ja-existe');
   assert.match(jaPaciente.motivo ?? '', /já é de um paciente/);
   vinculoAtual = { spineIdLead: 55, spineIdClient: null, status: 'ok', motivo: null };
+  assert.equal((await SpineSyncService.prepararPaciente(unidade(), 95)).payload?.idLead, 55);
+  // lead NOSSO cujo motivo foi reescrito com o prefixo de paciente por outro caminho: vale o lead, não o bloqueio
+  vinculoAtual = { spineIdLead: 55, spineIdClient: null, status: 'ok', motivo: MOTIVO_PACIENTE_ACHADO };
   assert.equal((await SpineSyncService.prepararPaciente(unidade(), 95)).payload?.idLead, 55);
   vinculoAtual = null;
   assert.equal((await SpineSyncService.prepararPaciente(unidade(), 96)).etapa, 'sem-lead');
@@ -438,5 +438,28 @@ test('o nome do lead achado é buscado UMA vez por franquia/janela: dois achados
   vinculoAtual = null;
   await syncLeadToSpine(unidade({ id: 'u-bebedouro-resgate', slug: 'bebedouro-resgate' } as Partial<Unit>), 98, PC(d));
   assert.equal(buscasDeNome, 1, 'uma chamada à franquia, não duas');
+  assert.deepEqual(leadAchadoNoMotivo(String((vinculos[0] as { create: Record<string, unknown> }).create.motivo)), { id: 4321, nome: 'Maria da Silva' });
+});
+
+test('a franquia NÃO respondeu ao ler o nome do lead achado: nada é gravado e a próxima mensagem tenta de novo (não vira "nome desconhecido" para sempre)', async () => {
+  const d = deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } });
+  d.nomeDoLead = async () => { throw new Error('timeout'); };
+  const r = await syncLeadToSpine(unidade(), 99, PC(d));
+  assert.equal(r.ok, false);
+  assert.equal(r.retentar, true);
+  assert.deepEqual(vinculos, [], 'vínculo intocado');
+  assert.deepEqual(feitos, [], 'e nada criado');
+});
+
+test('o lead achado não estava na leitura guardada (cadastrado depois dela): relê UMA vez antes de dar o nome como desconhecido', async () => {
+  const leitura: Array<Array<{ idLead: number; name: string; whatsapp: null; idSource: null }>> = [
+    [{ idLead: 1, name: 'Outra Pessoa', whatsapp: null, idSource: null }],
+    [{ idLead: 1, name: 'Outra Pessoa', whatsapp: null, idSource: null }, { idLead: 4321, name: 'Maria da Silva', whatsapp: null, idSource: null }],
+  ];
+  spine.searchLeads = async () => ({ ok: true, data: { leads: leitura[Math.min(buscasDeNome++, 1)] } });
+  const d = deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice', criado: new Date('2026-11-20T12:00:00Z') } });
+  delete (d as { nomeDoLead?: unknown }).nomeDoLead;
+  await syncLeadToSpine(unidade(), 100, PC(d));
+  assert.equal(buscasDeNome, 2);
   assert.deepEqual(leadAchadoNoMotivo(String((vinculos[0] as { create: Record<string, unknown> }).create.motivo)), { id: 4321, nome: 'Maria da Silva' });
 });

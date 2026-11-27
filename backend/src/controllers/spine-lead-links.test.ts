@@ -128,4 +128,5 @@ test('pendentes: lead que a franquia JÁ tinha (só o motivo) aparece como "envi
   const r = await chamar(pendentesHandler);
   const porLead = Object.fromEntries(r.leads.map((l: { kommoLeadId: number; situacao: string }) => [l.kommoLeadId, l.situacao]));
   assert.deepEqual(porLead, { 1: 'enviado', 2: 'enviado', 3: 'enviado', 4: 'pronto' });
+  assert.deepEqual(r.leads.map((l: { tipo: unknown }) => l.tipo), ['lead-ja-existia', 'paciente-ja-existia', 'criado', null]);
 });

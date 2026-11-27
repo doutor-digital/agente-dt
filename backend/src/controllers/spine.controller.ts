@@ -599,6 +599,7 @@ export async function pendentesHandler(req: Request, res: Response): Promise<voi
           : v?.status === 'falhou'
             ? ('falhou' as const)
             : ('pronto' as const),
+      tipo: v?.status === 'ok' ? tipoDoVinculo(v.motivo) : null,
       motivo: v?.motivo ?? null,
       tentativas: v?.tentativas ?? 0,
     };
