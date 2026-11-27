@@ -44,13 +44,13 @@ export type Encerramento = 'agradeceu' | 'concordou' | 'vai_se_organizar' | null
 // ---------------------------------------------------------------------------------------------------------------------
 
 /** Recusa de verdade: não é adiamento, é "não". Nunca recebe proposta de horário. */
-const RECUSOU = /n[ãa]o\s+(?:quero|tenho\s+interesse|me\s+interess)|j[áa]\s+(?:resolvi|me\s+resolvi|consegui\s+resolver)|desist|n[ãa]o\s+preciso|pare\s+de\s+me|me\s+tir[ae]\s+d[ao]/i;
+const RECUSOU = /n[ãa]o\s+(?:quero|tenho\s+interesse|me\s+interess|tenho\s+condi|vou\s+(?:fazer|querer|marcar)|pretendo)|j[áa]\s+(?:resolvi|me\s+resolvi|consegui\s+resolver|fechei|marquei\s+(?:em|com|outr))|fechei\s+com|desist|n[ãa]o\s+preciso|pare\s+de\s+me|me\s+tir[ae]\s+d[ao]/i;
 /** O motivo ou o quando do adiamento, nas palavras reais dos pacientes (relatório de 27/11, L1-04 e vizinhas). */
 const MOTIVO_DO_ADIAMENTO: RegExp[] = [
   // "vou falar/conversar/ver com meu marido/minha esposa/meu filho…"
-  /\b(?:falar|conversar|ver|combinar|decidir|consultar|ver\s+isso)\b[^.!?\n]{0,25}\bcom\s+(?:o\s+|a\s+)?(?:meu|minha|meus|minhas)\s+(?:marido|esposo|esposa|mulher|namorad[oa]|filh[oa]s?|m[ãa]e|pai|irm[ãa]o?|famil\w*|m[ée]dico|patr[ãa]o|chefe)/i,
+  /\b(?:falar|conversar|ver|combinar|decidir|consultar)\b[^.!?\n]{0,25}\bcom\s+(?:(?:meu|minha|meus|minhas|o|a)\s+)?(?:marido|esposo|esposa|mulher|namorad[oa]|filh[oa]s?|m[ãa]e|pai|irm[ãa]o?|famil\w*|m[ée]dico|patr[ãa]o|chefe)/i,
   // dinheiro: "só recebo dia 8", "quando eu receber", "no dia do pagamento", "esse mês não dá"
-  /\brecebo\b|\bquando\s+(?:eu\s+)?receber|\breceber\s+(?:o\s+)?(?:sal[áa]rio|pagamento|dinheiro)|\bsal[áa]rio\b|\bdia\s+do\s+pagamento|\bfinal\s+do\s+m[êe]s|\bes(?:s|t)[ea]\s+m[êe]s\s+n[ãa]o\s+d[áa]/i,
+  /\bs[óo]\s+recebo\b|\brecebo\s+(?:dia|s[óo]|no\s+dia|depois|em)\b|\bquando\s+(?:eu\s+)?(?:receber|pegar\s+o\s+sal[áa]rio)|\breceber\s+(?:o\s+)?(?:sal[áa]rio|pagamento|dinheiro)|\b(?:s[óo]|depois\s+d[oe]|at[ée]\s+o)\s+(?:meu\s+|o\s+)?sal[áa]rio|\bsal[áa]rio\s+(?:cair|sair|entrar)|\bdia\s+do\s+pagamento|\bfinal\s+do\s+m[êe]s|\bes(?:s|t)[ea]\s+m[êe]s\s+n[ãa]o\s+d[áa]/i,
   // data: "mês que vem", "semana que vem", "depois do dia 05", "depois do carnaval", "a partir do dia 10"
   /\bm[êe]s\s+que\s+vem|\bpr[óo]xim[oa]\s+(?:m[êe]s|semana)|\bsemana\s+que\s+vem|\bdepois\s+do\s+dia\s+\d|\bdepois\s+d[oae]s?\s+(?:feriado|carnaval|natal|ano\s+novo|f[ée]rias|viagem)|\ba\s+partir\s+d[eoa]\s+(?:dia\s+)?\d|\bs[óo]\s+(?:no\s+)?dia\s+\d/i,
   // viagem
@@ -64,7 +64,8 @@ const MOTIVO_DO_ADIAMENTO: RegExp[] = [
 export function adiouComMotivo(falas: Fala[] | undefined): boolean {
   if (!falas) return false;
   const { textos } = turnoDoPaciente(falas);
-  const tudo = textos.join('\n').trim();
+  // "…, pode ser?" / "…, tá bom?" fecha o adiamento com uma perguntinha de cortesia: não é pergunta ao Sofia.
+  const tudo = textos.join('\n').trim().replace(/[,;.\s]*(?:pode\s+ser|t[áa]\s+bom|tudo\s+bem|certo|beleza|combinado|ok)\s*\?+\s*$/i, '');
   if (!tudo || tudo.length > 300 || tudo.includes('?')) return false;
   if (RECUSOU.test(tudo)) return false;
   return MOTIVO_DO_ADIAMENTO.some((re) => re.test(tudo));

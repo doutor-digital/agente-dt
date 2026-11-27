@@ -318,6 +318,9 @@ test('o prompt: o passo da forma de pagamento sai de ANTES de marcar só com a c
   const ligada = renderRulesGlobal(atual);
   assert.match(ligada, /marcar \(sem perguntar a forma de pagamento\) → oferta do sinal \(Pix\), uma vez, DEPOIS de marcar/);
   assert.doesNotMatch(ligada, /dados → sinal \(Pix\)\./);
+  // os botões de exemplo não ensinam mais a pergunta de pagamento antes de marcar
+  assert.match(desligada, /"Sinal de R\$ 50" ou "Pagar no dia"/);
+  assert.doesNotMatch(ligada, /"Sinal de R\$ 50" ou "Pagar no dia"|"Pix antecipado" ou "Na clínica"/);
 });
 
 test('a refeita de "disse que reservou sem marcar" não manda checar "como vai pagar" com a chave ligada', () => {

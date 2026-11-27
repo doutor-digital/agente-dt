@@ -543,7 +543,7 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { slug?: string | nu
           : 'dia → horário → dados → Pix';
   // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
   // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
-  const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment
+  const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment || pixDepois
     ? '(escolher entre os horários que você ofereceu; '
     : comSinal
       ? `(escolher entre os horários que você ofereceu; "Sinal de R$ ${fmtBRL((unit?.sinalPixCentavos ?? 0) / 100)}" ou "Pagar no dia";\n  `

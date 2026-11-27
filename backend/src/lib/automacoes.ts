@@ -1112,7 +1112,7 @@ export const AUTOMACOES: readonly Automacao[] = [
     risco: 'comportamento',
     temSeco: false,
     quandoVazio: 'desligado',
-    arquivo: 'src/agent/pagamento-da-unidade.ts',
+    arquivo: 'src/agent/pix-depois-de-marcar.ts',
   },
   {
     id: 'adiamento-propoe-dia',

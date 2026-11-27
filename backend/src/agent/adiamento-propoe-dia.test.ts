@@ -31,6 +31,9 @@ test('adiou com motivo ou data: as frases reais dos pacientes', () => {
     'depois do dia 05 de dezembro eu vejo',
     'a partir do dia 10 eu consigo',
     'esse mês não dá, só no outro',
+    'vou falar com meu marido, pode ser?',
+    'vou conversar com o marido e te falo, tá bom?',
+    'só depois do meu salário',
   ]) {
     assert.equal(adiouComMotivo([OFERTA, p(frase)]), true, frase);
   }
@@ -48,6 +51,9 @@ test('NÃO é adiamento com motivo: despedida, recusa, "vou ver e te aviso" sem 
     'desisti de tratar',
     'vocês recebem convênio?',
     'se eu só receber dia 8, tem horário?',
+    'não tenho condições, meu salário é muito baixo',
+    'já fechei com outra clínica, obrigado',
+    'meu salário é baixo',
     'quero marcar para segunda',
     '',
   ]) {
@@ -115,4 +121,10 @@ test('EM ESPERA, regra 3: com a chave propõe dia + dois horários reais; sem a 
     assert.match(com, trecho);
   }
   assert.equal(renderEsperaRules({}, { propoeDia: true }), '', 'sem a etapa EM ESPERA, nada');
+});
+
+test('quem JÁ TEM consulta de pé segue cortado: a chave só vale sem consulta no prompt (graph.ts usa promptTemConsulta)', async () => {
+  const { promptTemConsulta } = await import('./reserva-sem-marcar.js');
+  assert.equal(promptTemConsulta('<consulta_do_paciente>\nEste paciente TEM consulta marcada: 20/10/2026 às 11:30\n</consulta_do_paciente>'), true);
+  assert.equal(promptTemConsulta('<regras_gerais>nada de consulta marcada</regras_gerais>'), false);
 });

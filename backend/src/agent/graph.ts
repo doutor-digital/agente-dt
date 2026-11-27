@@ -1205,7 +1205,8 @@ export async function buildAgentGraph(
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
       // Chave `adiamento-propoe-dia`: quem adiou COM motivo ("vou falar com meu marido", "só recebo dia 5") não é "encerrou" — a resposta propõe
       // o dia e dois horários, e a trava do horário inventado roda. Quem só agradece, se despede ou recusa segue cortado, como em 21/10.
-      const adiamentoPropoeDia = automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS);
+      // Quem JÁ TEM consulta de pé segue cortado (não se propõe segundo horário a quem já marcou).
+      const adiamentoPropoeDia = automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) && !promptTemConsulta(promptDoTurno);
       const encerrou = encerramentoParaCorte(falas, adiamentoPropoeDia);
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
