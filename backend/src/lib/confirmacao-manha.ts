@@ -33,15 +33,14 @@ export function estadoDaManha(slug: string, env: NodeJS.ProcessEnv = process.env
 /** Pergunta sai de, no máximo, 5 h antes (e nunca antes de a clínica abrir) até 1 h 30 antes: dá tempo de remarcar. */
 export const ANTECEDENCIA_MAX_MIN = 5 * 60;
 export const ANTECEDENCIA_MIN_MIN = 90;
-/** Mensagens novas por unidade em uma varredura: uma rajada de mensagens iguais é o que derruba número no WhatsApp Lite. */
-export const MAX_ENVIOS_POR_VARREDURA = 10;
+/** Mensagens novas por unidade POR HORA (somadas as varreduras de 15 min): uma rajada de mensagens iguais é o que derruba número no WhatsApp Lite. */
+export const MAX_ENVIOS_POR_HORA = 10;
 
 /** Minutos entre dois "AAAA-MM-DDTHH:mm" locais (b - a). NaN se algum não parece data. */
 function minutosEntre(a: string, b: string): number {
   return (Date.parse(`${b.slice(0, 16)}:00Z`) - Date.parse(`${a.slice(0, 16)}:00Z`)) / 60_000;
 }
 
-/** Consulta de HOJE, entre 1 h 30 e 5 h à frente. `quando` e `agoraLocal` no relógio da clínica. */
 /**
  * As faltas estão ligadas nesta unidade — a manhã OU a oferta de horários LIGADA (não «só no papel», que não muda nada para o paciente)?
  * Com qualquer uma ligada, a Sofia e a pergunta convivem na mesma conversa e as travas de «1»/«2» solto e de resposta depois da consulta valem.
@@ -59,6 +58,7 @@ export function canalDaManha(janelaAberta: boolean, modeloDaManha: number | null
   return modeloDaManha ? 'modelo' : 'sem_modelo';
 }
 
+/** Consulta de HOJE, entre 1 h 30 e 5 h à frente. `quando` e `agoraLocal` no relógio da clínica. */
 export function dentroDaJanelaDaManha(quando: string, agoraLocal: string): boolean {
   if (quando.slice(0, 10) !== agoraLocal.slice(0, 10)) return false;
   const min = minutosEntre(agoraLocal, quando);
@@ -85,6 +85,7 @@ export type MotivoDeNaoMandar =
   | 'clinica_fechada'
   | 'leitura_falhou'
   | 'ja_perguntou'
+  | 'tentou_ha_pouco'
   | 'etapa'
   | 'desistiu'
   | 'pediu_para_remarcar'
@@ -100,6 +101,8 @@ export interface FatosDaManha {
   consulta: { estado: string; quando?: string | null } | null;
   agoraLocal: string;
   perguntouHoje: boolean;
+  /** Houve tentativa SEM marca de «perguntei» (nota interna, modelo recusado, sem modelo) na última hora: não repete a cada varredura. */
+  tentouHaPouco?: boolean;
   /** Cartão fechado ou em etapa de quem não vem (`etapaSemVespera`). */
   etapaSemVespera: boolean;
   /** O paciente escreveu que não vem (`desistenciaEscrita`). */
@@ -128,6 +131,7 @@ export function decidirManha(f: FatosDaManha): DecisaoDaManha {
   if (!dentroDaJanelaDaManha(f.consulta.quando, f.agoraLocal)) return nao('fora_da_janela');
   if (!f.clinicaAtendendo) return nao('clinica_fechada');
   if (f.perguntouHoje) return nao('ja_perguntou');
+  if (f.tentouHaPouco) return nao('tentou_ha_pouco');
   if (f.etapaSemVespera) return nao('etapa');
   if (f.desistiu) return nao('desistiu');
   if (f.pediuParaRemarcar) return nao('pediu_para_remarcar');
@@ -150,13 +154,13 @@ export function textoConfirmacaoManha(args: {
   quando: string;
   especialista?: string | null;
   endereco?: string | null;
-  /** hora local do envio, para «Bom dia» / «Boa tarde» */
+  /** hora local do envio, para «Bom dia» / «Boa tarde» / «Boa noite» */
   horaDoEnvio: number;
   oferece: boolean;
   /** com os ids do chat a mensagem vai com botões e o rodapé muda */
   comBotoes: boolean;
 }): string {
-  const saud = args.horaDoEnvio < 12 ? 'Bom dia' : 'Boa tarde';
+  const saud = args.horaDoEnvio < 12 ? 'Bom dia' : args.horaDoEnvio < 18 ? 'Boa tarde' : 'Boa noite';
   const nome = (args.nome ?? '').trim();
   const quem = args.especialista ? ` com ${args.especialista}` : '';
   const onde = args.endereco ? `\n${args.endereco}` : '';

@@ -167,3 +167,15 @@ test('o painel mostra Caxias e Petrópolis como «fora» (desligado, sem como li
   assert.equal(o.fora, false);
   assert.equal(panoramaDaUnidade('doutor-hernia-caxias', env).find((x) => x.id === 'parados')!.fora, false, 'outras automações não mudam');
 });
+
+test('tentativa que não chegou ao paciente (nota interna, modelo falhou, sem modelo) não se repete a cada varredura de 15 min', () => {
+  assert.deepEqual(m.decidirManha(base({ tentouHaPouco: true })), { acao: 'pular', motivo: 'tentou_ha_pouco' });
+  assert.deepEqual(m.decidirManha(base({ tentouHaPouco: false })), { acao: 'mandar' });
+});
+
+test('a saudação acompanha a hora: bom dia, boa tarde, boa noite', () => {
+  const t = (h: number) => m.textoConfirmacaoManha({ nome: null, quando: `${HOJE}T19:30`, horaDoEnvio: h, oferece: false, comBotoes: false });
+  assert.match(t(9), /^Bom dia!/);
+  assert.match(t(14), /^Boa tarde!/);
+  assert.match(t(18), /^Boa noite!/);
+});

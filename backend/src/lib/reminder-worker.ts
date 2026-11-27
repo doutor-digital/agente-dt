@@ -51,7 +51,7 @@ import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
 import { clinicaAtendendoAgora } from './cutucada-apos-equipe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { canalDaManha, estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_VARREDURA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
+import { canalDaManha, estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_HORA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
 import { oferecerNovoHorario } from './remarcar-oferta.js';
 import { vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import {
@@ -558,7 +558,9 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
  * margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga): fica só com a véspera.
  * Decisão em `confirmacao-manha.ts` (pura); aqui só se juntam os fatos. Caminho de envio e tratador da resposta são os da véspera.
  */
-/** Mensagens novas da manhã já mandadas na hora cheia (relógio da unidade), por unidade: o teto de `MAX_ENVIOS_POR_VARREDURA` vale por hora. */
+/** Mensagens novas da manhã já mandadas na hora cheia (relógio da unidade), por unidade: o teto de `MAX_ENVIOS_POR_HORA` vale por hora. */
+/** Depois de uma tentativa que não chegou ao paciente, a manhã espera 1 h para tentar de novo naquele cartão. */
+const TENTATIVA_D0_MS = 60 * 60_000;
 const enviosDaHora = new Map<string, { hora: string; n: number }>();
 
 async function lembrarManhaUnidade(unit: Unit): Promise<void> {
@@ -588,7 +590,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
   const jaEnviadosNestaHora = gasto?.hora === horaCheia ? gasto.n : 0;
 
   for (const link of links) {
-    if (jaEnviadosNestaHora + conta.enviados >= MAX_ENVIOS_POR_VARREDURA) {
+    if (jaEnviadosNestaHora + conta.enviados >= MAX_ENVIOS_POR_HORA) {
       soma('adiados_pelo_teto');
       continue;
     }
@@ -607,8 +609,10 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       const quando = consulta.quando;
       const chave = chaveDaConfirmacao('d0', quando);
       const perguntouHoje = await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS);
+      const chaveTentativa = `confirmacao_d0_t:${quando.slice(0, 16)}`;
+      const tentouHaPouco = await avisoRecente(unit.id, link.kommoLeadId, chaveTentativa, TENTATIVA_D0_MS);
       const previa = decidirManha({
-        estado, vespera: quais.vespera, clinicaAtendendo: true, consulta, agoraLocal: agoraLocalISO, perguntouHoje,
+        estado, vespera: quais.vespera, clinicaAtendendo: true, consulta, agoraLocal: agoraLocalISO, perguntouHoje, tentouHaPouco,
         etapaSemVespera: false, desistiu: false, confirmadaNaFranquia: null, confirmouNoWhatsapp: false, pediuParaRemarcar: false,
       });
       if (previa.acao === 'pular') {
@@ -644,6 +648,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         consulta,
         agoraLocal: agoraLocalISO,
         perguntouHoje,
+        tentouHaPouco,
         etapaSemVespera: !!lead.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa }) !== null,
         desistiu: !!desistenciaEscrita(oficiais, marcadaEm),
         confirmadaNaFranquia: jaConfirmou({ idStatus: consulta.idStatus, oficiais }),
@@ -688,6 +693,9 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         horaLocal: hora,
       });
       soma(via);
+      // «nada» = nota interna, modelo que falhou ou janela fechada sem modelo: a marca de «perguntei» NÃO foi gravada e a varredura de 15 min
+      // repetiria a tentativa até 14 vezes. A marca de tentativa espaça em 1 h (no máximo 4 tentativas até a consulta).
+      if (via === 'nada') await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa).catch(() => undefined);
       if (via !== 'nada') {
         conta.enviados++;
         enviosDaHora.set(unit.id, { hora: horaCheia, n: jaEnviadosNestaHora + conta.enviados });

@@ -42,13 +42,17 @@ export function janelaDaResposta(slug: string): number {
   return automacaoLigada(slug, ID_CONFIRMACAO_DIA_UTIL, process.env.CONFIRMACAO_DIA_UTIL_SLUGS) ? JANELA_RESPOSTA_DIA_UTIL_MS : JANELA_RESPOSTA_D1_MS;
 }
 
-export function classificarRespostaD1(texto: string): RespostaD1 | null {
+/**
+ * `comConsigo`: «consigo (vir) (sim)» conta como confirmação. SÓ com as faltas ligadas na unidade (`faltasLigadas`): na rede sem chave o «consigo»
+ * segue indo para a Sofia, como no main — em 30 dias houve 39 «consigo», vários respondendo a um horário NOVO que a Sofia propôs.
+ */
+export function classificarRespostaD1(texto: string, comConsigo = false): RespostaD1 | null {
   const s = texto.trim().toLowerCase().replace(/[!.…]+$/g, '');
   if (!s) return null;
   const negativo = /\bn[aã]o\b|remarc|reagend|cancel|desmarc|outro (dia|hor[aá]rio)|imprevisto/.test(s);
   if (/^2\b/.test(s) || negativo) return 'remarcar';
   if (/^[✅👍]/u.test(s)) return 'confirmou';
-  if (/^consigo( vir)?( sim)?$/.test(s)) return 'confirmou';
+  if (comConsigo && /^consigo( vir)?( sim)?$/.test(s)) return 'confirmou';
   if (/^(1|ok|okay|sim|confirmo|confirmado|confirmada|confirma|confirmar|estarei|vou sim|pode confirmar|isso)\b/.test(s) || /\bconfirm/.test(s)) {
     return 'confirmou';
   }
@@ -405,12 +409,18 @@ export function ehRepeticaoDaRespostaD1(args: {
   /** Mensagens do PACIENTE anteriores a esta (sem a atual). */
   anteriores: Array<{ content: string; createdAt: Date }>;
   agora?: Date;
+  comConsigo?: boolean;
 }): boolean {
   const { conv, texto, anteriores } = args;
   const agora = args.agora ?? new Date();
   const ja = conv.confirmacaoD1Resposta;
-  if (!conv.confirmacaoD1EnviadaEm || (ja !== 'confirmou' && ja !== 'remarcar')) return false;
-  if (classificarRespostaD1(texto) !== ja) return false;
+  const ofertaFeita = ja === RESPOSTA_OFERTA_SOFIA;
+  if (!conv.confirmacaoD1EnviadaEm || (ja !== 'confirmou' && ja !== 'remarcar' && !ofertaFeita)) return false;
+  const cls = classificarRespostaD1(texto, args.comConsigo);
+  if (ofertaFeita) {
+    // Reentrega do Kommo do MESMO pedido de remarcar não gera 2ª oferta. Mas «1»/«2» soltos são a ESCOLHA do horário, nunca repetição.
+    if (cls !== 'remarcar' || /^\d$/.test(normalizarResposta(texto))) return false;
+  } else if (cls !== ja) return false;
   const alvo = normalizarResposta(texto);
   if (!alvo) return false;
   const desde = conv.confirmacaoD1EnviadaEm.getTime();
@@ -432,11 +442,12 @@ export function podeSerRespostaD1(
   texto: string,
   agora: Date = new Date(),
   janelaMs: number = JANELA_RESPOSTA_D1_MS,
+  comConsigo = false,
 ): boolean {
   if (!conv.confirmacaoD1EnviadaEm) return false;
   const idade = agora.getTime() - conv.confirmacaoD1EnviadaEm.getTime();
   if (idade > janelaMs + JANELA_REPETICAO_D1_MS) return false;
-  const resposta = classificarRespostaD1(texto);
+  const resposta = classificarRespostaD1(texto, comConsigo);
   if (!resposta) return false;
   if (!conv.confirmacaoD1Resposta) return idade <= janelaMs;
   return conv.confirmacaoD1Resposta === resposta;
@@ -458,12 +469,6 @@ export function ultimaFalaFoiAPergunta(ultima: { createdAt: Date; meta: unknown 
   if (!ultima || ultima.createdAt.getTime() < enviadaEm.getTime()) return true;
   const origem = (ultima.meta as { origem?: unknown } | null)?.origem;
   return typeof origem === 'string' && origem.startsWith('confirmacao_');
-}
-
-/** O toque EXPLÍCITO num dos botões da pergunta («Confirmo» / «Preciso remarcar»): ninguém digita isso por acaso, vale mesmo depois de outra fala. */
-export function ehToqueNoBotao(texto: string): boolean {
-  const t = texto.trim().toLowerCase().replace(/[!.…\s]+$/g, '');
-  return BOTOES_D1.some((b) => b.toLowerCase() === t);
 }
 
 export async function tratarRespostaD1(args: {
@@ -491,7 +496,7 @@ export async function tratarRespostaD1(args: {
       take: 20,
       select: { content: true, createdAt: true },
     });
-    if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores })) {
+    if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores, comConsigo: faltasLigadas(unit.slug) })) {
       logger.info({ unit: unit.slug, leadId, resposta: conv.confirmacaoD1Resposta }, 'confirmação D-1: repetição da resposta já tratada — sem IA');
       return 'repetida';
     }
@@ -499,14 +504,27 @@ export async function tratarRespostaD1(args: {
   }
   if (!conv.confirmacaoD1EnviadaEm || conv.confirmacaoD1Resposta) return null;
   if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > janelaDaResposta(unit.slug)) return null;
-  const resposta = classificarRespostaD1(texto);
-  if (!resposta) return null;
-  // FALTAS LIGADAS (manhã OU oferta de horários): a Sofia fala em opções ("1) quinta  2) sexta") e a pergunta da manhã é rearmada para quem está
-  // conversando. Um "1" ou "sim" solto, depois de uma fala nossa que NÃO foi a pergunta, é escolha de horário ou conversa — nunca «confirmo»:
-  // confirmar presença que o paciente não deu é o pior erro desta tela. O toque explícito no botão «Confirmo» / «Preciso remarcar» vale sempre.
-  // Se não der para ler a conversa, FALHA FECHADO: não confirma, a mensagem segue com a Sofia.
+  // «consigo» só confirma com as faltas ligadas (na rede sem chave segue indo para a Sofia, como antes)
   const faltas = faltasLigadas(unit.slug);
-  if (faltas && !ehToqueNoBotao(texto)) {
+  const resposta = classificarRespostaD1(texto, faltas);
+  if (!resposta) return null;
+
+  const consulta = await lerConsulta(unit, leadId).catch(() => null);
+  const agoraLocal = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 16);
+  // A consulta está de pé e no futuro? Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não,
+  // obrigada" é conversa solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda.
+  const consultaDePe = respostaDentroDaJanelaLonga(consulta, agoraLocal);
+  if (janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS && !consultaDePe) return null;
+
+  // FALTAS LIGADAS (manhã OU oferta de horários): a Sofia fala em opções ("1) quinta  2) sexta") e a pergunta da manhã é rearmada para quem está
+  // conversando. Duas travas, SÓ sobre o que poderia CONFIRMAR presença que o paciente não deu:
+  //  - «confirmou» com a consulta que não está de pé e no futuro (já passou, franquia sem resposta): um "ok" às 18h não vira CONFIRMADO numa falta;
+  //  - «confirmou» — e também o «1»/«2» solto, que pode ser a escolha de um horário — depois de uma fala nossa que NÃO foi a pergunta: é conversa
+  //    com a Sofia. Texto digitado passa pela trava, inclusive «Confirmo»: o webhook não distingue o toque no botão de quem digita.
+  // Se não der para ler a conversa, FALHA FECHADO: não confirma, a mensagem segue com a Sofia.
+  // «Preciso remarcar» (palavras) NUNCA é bloqueado: sem consulta ou sem franquia o main abria tarefa e respondia, e continua assim.
+  if (faltas && (resposta === 'confirmou' || /^\d$/.test(texto.trim()))) {
+    if (resposta === 'confirmou' && !consultaDePe) return null;
     try {
       const ultima = await prisma.message.findFirst({
         where: { conversationId: conv.id, role: 'assistant' },
@@ -518,15 +536,6 @@ export async function tratarRespostaD1(args: {
       logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: não consegui ler a última fala — não confirmo, segue com a Sofia');
       return null;
     }
-  }
-
-  const consulta = await lerConsulta(unit, leadId).catch(() => null);
-  // Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não, obrigada" é conversa
-  // solta, não resposta à pergunta (revisão do sênior, PR #394). Na rede (48 h) nada muda. Com as faltas ligadas vale SEMPRE: a pergunta da
-  // manhã fica sem resposta até a noite, e um "ok" às 18h não pode virar CONFIRMADO numa falta.
-  if (faltas || janelaDaResposta(unit.slug) > JANELA_RESPOSTA_D1_MS) {
-    const agoraLocal = SpineService.instanteNoFuso(new Date(), unit.spineTimezone || 'America/Sao_Paulo').slice(0, 16);
-    if (!respostaDentroDaJanelaLonga(consulta, agoraLocal)) return null;
   }
   const hora = consulta?.quando ? consulta.quando.slice(11, 16) : null;
   const quandoCurto = consulta?.quando ? diaCurto(consulta.quando) : null;
@@ -557,7 +566,8 @@ export async function tratarRespostaD1(args: {
     void confirmarNaFranquia({ unit, leadId, consulta, contactName: conv.contactName, kommo });
   } else {
     const oferta = oferecerNovoHorario(unit.slug);
-    if (oferta === 'ligado') {
+    // Sem consulta de pé (já passou, franquia sem resposta) não há o que remarcar: segue o caminho do main (resposta pronta + tarefa)
+    if (oferta === 'ligado' && consultaDePe) {
       // Grava o estado ANTES de tudo: o Kommo reentrega o webhook e o paciente toca de novo, e sem a marca cada toque abriria outra tarefa.
       await prisma.conversation
         .update({ where: { id: conv.id }, data: { confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } })
