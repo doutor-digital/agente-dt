@@ -18,7 +18,10 @@ import type { Request, Response } from 'express';
 const gzipAsync = promisify(gzip);
 const brotliAsync = promisify(brotliCompress);
 
-/** 5 min «frescos» (como era) + 1 dia em que o navegador pode rodar a cópia velha enquanto confere a nova por trás. */
+/**
+ * 5 min «frescos» (como era) + 1 dia em que o navegador pode rodar a cópia velha enquanto confere a nova por trás. O preço: depois dos 5 min, um conserto (ou um
+ * desligamento por chave) só chega no PRÓXIMO carregamento de cada pessoa, não no primeiro. Para voltar atrás mais rápido, baixe o número aqui.
+ */
 export const CACHE_DO_MENU_JS = 'public, max-age=300, stale-while-revalidate=86400';
 
 export type Codificacao = 'br' | 'gzip' | 'identity';
@@ -39,8 +42,10 @@ export function escolherCodificacao(acceptEncoding: string | undefined): Codific
   for (const parte of acceptEncoding.toLowerCase().split(',')) {
     const [nome, ...params] = parte.trim().split(';');
     if (!nome) continue;
-    const m = /^\s*q\s*=\s*([0-9.]+)\s*$/.exec(params.join(';'));
-    q[nome.trim()] = m ? Number(m[1]) : 1;
+    const bruto = params.join(';').trim();
+    // sem `q=` vale 1; `q=` malformado vale 0 (na dúvida, sem compressão); o resto fica entre 0 e 1 (RFC 9110)
+    const m = /^q\s*=\s*(\d(?:\.\d{0,3})?)$/.exec(bruto);
+    q[nome.trim()] = !bruto ? 1 : m ? Math.min(1, Number(m[1])) : 0;
   }
   const peso = (n: string): number => q[n] ?? q['*'] ?? 0;
   const br = peso('br'), gz = peso('gzip');
@@ -49,30 +54,37 @@ export function escolherCodificacao(acceptEncoding: string | undefined): Codific
   return 'identity';
 }
 
-let memo: { conteudo: string; pronto: Promise<MenuJsPronto> } | null = null;
+/** Os últimos conteúdos preparados (poucos: o conteúdo pode alternar entre dois valores se o banco oscilar; cada troca refazer o brotli seria 150 ms de CPU). */
+const MEMO_MAX = 4;
+const memo = new Map<string, Promise<MenuJsPronto>>();
 
-/** Hash e compressões do conteúdo, feitos uma vez por texto (pedidos simultâneos dividem a mesma promessa). Nunca lança: falha na compressão = sem compressão. */
+/**
+ * Hash e compressões do conteúdo, feitos uma vez por texto (pedidos simultâneos dividem a mesma promessa). Nunca lança. Se uma compressão falhar, este
+ * pedido sai sem compressão mas o resultado NÃO fica guardado: o próximo pedido tenta de novo (uma falha passageira não vale até o próximo deploy).
+ */
 export function prepararMenuJs(conteudo: string): Promise<MenuJsPronto> {
-  if (memo && memo.conteudo === conteudo) return memo.pronto;
+  const guardado = memo.get(conteudo);
+  if (guardado) return guardado;
   const cru = Buffer.from(conteudo, 'utf8');
+  const estado = { falhou: false };
   const pronto = (async (): Promise<MenuJsPronto> => {
     const hash = createHash('sha256').update(cru).digest('base64url').slice(0, 27);
+    const cair = (): Buffer => { estado.falhou = true; return cru; };
     const [gz, br] = await Promise.all([
-      gzipAsync(cru, { level: 9 }).catch(() => cru),
-      brotliAsync(cru, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: cru.length } }).catch(() => cru),
+      gzipAsync(cru, { level: 9 }).catch(cair),
+      brotliAsync(cru, { params: { [constants.BROTLI_PARAM_QUALITY]: 11, [constants.BROTLI_PARAM_SIZE_HINT]: cru.length } }).catch(cair),
     ]);
     return { hash, bytes: { identity: cru, gzip: gz, br } };
   })();
-  const mine = { conteudo, pronto };
-  memo = mine;
-  // falha impossível (os dois `catch` acima); por garantia, não deixa uma promessa quebrada guardada
-  pronto.catch(() => { if (memo === mine) memo = null; });
+  memo.set(conteudo, pronto);
+  void pronto.then(() => { if (estado.falhou && memo.get(conteudo) === pronto) memo.delete(conteudo); });
+  while (memo.size > MEMO_MAX) memo.delete(memo.keys().next().value as string);
   return pronto;
 }
 
 /** Para os testes: esquece o preparo guardado. */
 export function _esquecerMenuJsPronto(): void {
-  memo = null;
+  memo.clear();
 }
 
 /** Manda o `menu.js` já comprimido, com ETag forte (e o 304 do Express quando `If-None-Match` bate). */

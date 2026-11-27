@@ -73,6 +73,9 @@ test('escolherCodificacao: br se aceita, senão gzip, senão nada; respeita q=0 
   assert.equal(escolherCodificacao('*'), 'br');
   assert.equal(escolherCodificacao('gzip;q=0, *'), 'br');
   assert.equal(escolherCodificacao('deflate'), 'identity');
+  assert.equal(escolherCodificacao('br;q=abc, gzip;q=0.5'), 'gzip', 'q malformado vale 0');
+  assert.equal(escolherCodificacao('gzip;q=1.0'), 'gzip');
+  assert.equal(escolherCodificacao('br;q=7, gzip;q=1'), 'br', 'q acima de 1 vale 1');
 });
 
 test('com Accept-Encoding o menu.js vai comprimido e MUITO menor; descomprimido é byte a byte o de montarMenuJs', async () => {
@@ -138,6 +141,9 @@ test('conteúdo novo (a lista de contas ou o mapa de domínios mudou) = hash nov
   assert.equal(prepararMenuJs('console.log(1);'), a, 'mesmo texto, mesma promessa');
   const b = prepararMenuJs('console.log(2);');
   assert.notEqual(b, a);
+  // o conteúdo que alterna entre dois valores (banco oscilando) não refaz a compressão a cada vez
+  assert.equal(prepararMenuJs('console.log(1);'), a);
+  assert.equal(prepararMenuJs('console.log(2);'), b);
   const [pa, pb] = [await a, await b];
   assert.notEqual(pa.hash, pb.hash);
   assert.equal(gunzipSync(pb.bytes.gzip).toString(), 'console.log(2);');
