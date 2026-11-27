@@ -1,0 +1,76 @@
+name: vigia-externo
+
+# Vigia de FORA do servidor (27/11/2026). A Sofia ficou 15 h sem responder por falta de crédito e o aviso, que vivia dentro da
+# VPS (relay de e-mail, Evolution), não chegou a ninguém. Este job roda no GitHub, consulta GET /api/health/ia e avisa o João por
+# WhatsApp (Kapso) e Telegram: nenhum dos dois depende da VPS estar de pé.
+#
+# As regras (o que é ok/degradado/fora, o throttle de 30 min por tipo, o «voltou ao normal») estão em
+# backend/src/lib/watchdog-decisao.ts e são testadas na suíte do backend. O repositório é PÚBLICO: o script não imprime URL, token,
+# chave nem número, e só dispara por cron ou manualmente (nunca por pull_request, que não teria os segredos).
+#
+# SEGREDOS (Settings > Secrets and variables > Actions) — veja docs/vigia-externo.md:
+#   HEALTH_URL, HEALTH_IA_TOKEN                          (obrigatórios; o mesmo HEALTH_IA_TOKEN tem de estar no servidor)
+#   KAPSO_API_KEY, KAPSO_PHONE_NUMBER_ID, ALERTA_WHATSAPP_NUMERO, KAPSO_TEMPLATE   (WhatsApp)
+#   TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID                 (canal de reserva; basta um dos dois canais para o aviso sair)
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+    - cron: "0 12 1 * *" # dia 1, 09h de Brasília: aviso de TESTE (prova que o canal continua vivo)
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: "Mandar um aviso de TESTE agora (prova que o alerta chega)"
+        type: boolean
+        default: false
+
+concurrency:
+  # o aviso de TESTE tem fila própria: uma rodada de vigia pendente nunca o substitui (e ele a ela)
+  group: vigia-externo-${{ ((github.event_name == 'workflow_dispatch' && inputs.teste) || github.event.schedule == '0 12 1 * *') && 'teste' || 'ronda' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  vigiar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/scripts
+            backend/package.json
+            backend/src/lib/watchdog-decisao.ts
+          sparse-checkout-cone-mode: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      # O Actions não guarda nada entre rodadas; o estado (último aviso por tipo, início do incidente) vai no cache.
+      - uses: actions/cache/restore@v4
+        with:
+          path: estado
+          key: vigia-externo-estado-inicio
+          restore-keys: vigia-externo-estado-
+
+      - name: Vigiar
+        env:
+          MODO_TESTE: ${{ ((github.event_name == 'workflow_dispatch' && inputs.teste) || github.event.schedule == '0 12 1 * *') && '1' || '0' }}
+          MOTIVO_DO_TESTE: ${{ github.event_name == 'schedule' && 'mensal' || 'manual' }}
+          HEALTH_URL: ${{ secrets.HEALTH_URL }}
+          HEALTH_IA_TOKEN: ${{ secrets.HEALTH_IA_TOKEN }}
+          KAPSO_API_KEY: ${{ secrets.KAPSO_API_KEY }}
+          KAPSO_PHONE_NUMBER_ID: ${{ secrets.KAPSO_PHONE_NUMBER_ID }}
+          ALERTA_WHATSAPP_NUMERO: ${{ secrets.ALERTA_WHATSAPP_NUMERO }}
+          KAPSO_TEMPLATE: ${{ secrets.KAPSO_TEMPLATE }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: node .github/scripts/vigia-externo.mjs
+
+      - uses: actions/cache/save@v4
+        if: always() && !(github.event_name == 'workflow_dispatch' && inputs.teste) && github.event.schedule != '0 12 1 * *'
+        with:
+          path: estado
+          key: vigia-externo-estado-${{ github.run_id }}-${{ github.run_attempt }}
