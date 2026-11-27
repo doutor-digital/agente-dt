@@ -11,6 +11,7 @@ import { baixarUrl, dominiosPermitidos, DOMINIOS_PADRAO, hostPermitido, ipPrivad
 import { CofreDeArquivos, ErroDeCofre } from './cofre-arquivos.js';
 import { criarContextoSistemas, type ContaSistemas } from './sistemas.js';
 import { nomeLimpo, registrarAnexosSistemas, type DepsAnexo } from './sistemas-anexo.js';
+import { nomeConfere } from './sistemas-documento.js';
 
 // ── amostras ──────────────────────────────────────────────────────────────────────────────────────────
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
@@ -42,7 +43,7 @@ function servidor(o: { lancamento?: Record<string, unknown> | null; anexo?: (cor
           return r;
         }
         if (caminho === '/admin/v1/documento/conferir') {
-          const r = o.conferir ? o.conferir(op?.corpo) : { ok: true, alvo: { nome: 'Colaboradora Exemplo', unidade: 'Parauapebas' } };
+          const r = o.conferir ? o.conferir(op?.corpo) : { ok: true, alvo: { colaborador: 'Colaboradora Exemplo da Silva', unidade: 'Parauapebas' } };
           if (r instanceof Error) throw r;
           return r;
         }
@@ -311,7 +312,7 @@ test('anexar_url rh_colaborador: confere o colaborador ANTES de baixar, entrega 
   const a = ambiente(srv, { baixar: b.baixar as any });
   try {
     const k = await cliente(a);
-    const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Aviso de férias assinado', url: URL_ASSINADO });
+    const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Aviso de férias assinado', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
     assert.equal(r.erro, false, r.texto);
     const ordem = srv.chamadas.map((c) => c.caminho);
     assert.deepEqual(ordem, ['/admin/v1/documento/conferir', '/admin/v1/documento'], 'confere antes, entrega depois; nada de /anexo nem de consulta de lançamento');
@@ -322,10 +323,11 @@ test('anexar_url rh_colaborador: confere o colaborador ANTES de baixar, entrega 
     assert.match(doc!.corpo.nome, /\.pdf$/); assert.ok(!/\.pdf\.pdf$/.test(doc!.corpo.nome));
     assert.ok(Buffer.from(doc!.corpo.conteudo_b64, 'base64').equals(PDF));
     assert.equal(r.json.anexado, true);
-    assert.equal(r.json.destino.tipo, 'rh_colaborador'); assert.equal(r.json.destino.quemE.nome, 'Colaboradora Exemplo');
+    assert.equal(r.json.destino.tipo, 'rh_colaborador'); assert.equal(r.json.destino.quemE.colaborador, 'Colaboradora Exemplo da Silva');
     assert.match(r.json.proximoPasso, /pasta do colaborador/);
     const aud = a.auditoria.find((x) => x.ferramenta === 'sistemas_anexar_url')!;
     assert.deepEqual(aud.argumentos, { sistema: undefined, tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Aviso de férias assinado', host: CLICKSIGN });
+    assert.ok(!JSON.stringify(a.auditoria).includes('Silva'), 'o nome do colaborador não vai para a auditoria');
     assert.ok(!JSON.stringify(a.auditoria).includes('SEGREDOabc'), 'a assinatura do link não vai para a auditoria');
   } finally { a.limpar(); }
 });
@@ -336,9 +338,9 @@ test('anexar_url rh_colaborador: colaborador que o servidor não confirma, id in
   const a = ambiente(srv, { baixar: b.baixar as any });
   try {
     const k = await cliente(a);
-    const r1 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'nao-existe', tipo_documento: 'Advertência assinada', url: URL_ASSINADO });
+    const r1 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'nao-existe', tipo_documento: 'Advertência assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
     assert.ok(r1.erro, r1.texto);
-    const r2 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: "x'; drop table rh_docs; --", tipo_documento: 'Advertência assinada', url: URL_ASSINADO });
+    const r2 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: "x'; drop table rh_docs; --", tipo_documento: 'Advertência assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
     assert.ok(r2.erro && /id do colaborador/.test(r2.texto), r2.texto);
     const r3 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', url: URL_ASSINADO });
     assert.ok(r3.erro && /tipo_documento/.test(r3.texto), r3.texto);
@@ -350,7 +352,7 @@ test('anexar_url rh_colaborador: colaborador que o servidor não confirma, id in
   const a2 = ambiente(servidor({ conferir: () => ({ ok: true }) }), { baixar: b2.baixar as any });
   try {
     const k2 = await cliente(a2);
-    const r = await k2.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', url: URL_ASSINADO });
+    const r = await k2.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
     assert.ok(r.erro && /não confirmou o colaborador/.test(r.texto), r.texto);
     assert.equal(b2.chamadas.length, 0);
   } finally { a2.limpar(); }
@@ -362,11 +364,49 @@ test('anexar_url rh_colaborador: página HTML (ou zip) não vale e nada é grava
     const a = ambiente(srv, { baixar: baixa(corpo, { host: CLICKSIGN, ct }).baixar as any });
     try {
       const k = await cliente(a);
-      const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', url: URL_ASSINADO });
+      const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
       assert.ok(r.erro, r.texto);
       assert.equal(srv.chamadas.filter((c) => c.caminho === '/admin/v1/documento').length, 0, ct);
     } finally { a.limpar(); }
   }
+});
+
+test('anexar_url rh_colaborador: o NOME informado tem que bater com o cadastro do id ANTES de baixar (id errado não grava na pasta de outra pessoa)', async () => {
+  const b = baixa(PDF, { host: CLICKSIGN });
+  const srv = servidor();
+  const a = ambiente(srv, { baixar: b.baixar as any });
+  try {
+    const k = await cliente(a);
+    const base = { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Advertência assinada', url: URL_ASSINADO };
+    const outro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora Costa' });
+    assert.ok(outro.erro && /é de «Colaboradora Exemplo da Silva», não de «Colaboradora Costa»/.test(outro.texto), outro.texto);
+    const soPrimeiro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora' });
+    assert.ok(soPrimeiro.erro && /nome E sobrenome/.test(soPrimeiro.texto), soPrimeiro.texto);
+    const semNome = await k.chamar('sistemas_anexar_url', base);
+    assert.ok(semNome.erro && /nome_colaborador/.test(semNome.texto), semNome.texto);
+    assert.equal(b.chamadas.length, 0, 'nada baixado');
+    assert.equal(srv.chamadas.filter((c) => c.caminho === '/admin/v1/documento').length, 0, 'nada gravado');
+    // acento, caixa e "da" não atrapalham; campos de lançamento vazios não derrubam a chamada
+    const ok = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'COLABORADORA da silvá', lancamento: '', tipo: '' });
+    assert.equal(ok.erro, false, ok.texto);
+  } finally { a.limpar(); }
+  // servidor que não diz o nome: não grava
+  const b2 = baixa(PDF, { host: CLICKSIGN });
+  const a2 = ambiente(servidor({ conferir: () => ({ ok: true, alvo: { unidade: 'Parauapebas' } }) }), { baixar: b2.baixar as any });
+  try {
+    const k2 = await cliente(a2);
+    const r = await k2.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.ok(r.erro && /não disse o nome/.test(r.texto), r.texto);
+    assert.equal(b2.chamadas.length, 0);
+  } finally { a2.limpar(); }
+});
+
+test('nomeConfere: 1º nome igual e cada palavra inteira no cadastro', () => {
+  const cad = ['maria', 'heloisa', 'sabino', 'costa'];
+  assert.ok(nomeConfere(['maria', 'costa'], cad));
+  assert.ok(nomeConfere(['maria', 'heloisa', 'sabino'], cad));
+  for (const inf of [['maria'], ['heloisa', 'costa'], ['maria', 'silva'], ['mar', 'costa'], ['maria', 'cost']]) assert.ok(!nomeConfere(inf, cad), inf.join(' '));
+  assert.ok(!nomeConfere(['maria', 'costa'], []));
 });
 
 test('anexar_url caixa_lanc/fin_lanc continuam exigindo lancamento e tipo', async () => {

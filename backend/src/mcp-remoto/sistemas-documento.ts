@@ -189,11 +189,18 @@ export async function conferirColaborador(
   idBruto: unknown,
   tipoBruto: unknown,
   enviadoNome: string,
+  nomeBruto?: unknown,
 ): Promise<{ d: DestinoGuardado; quemE: Record<string, unknown> }> {
   const id = typeof idBruto === 'string' ? idBruto.trim() : '';
   const tipoDocumento = typeof tipoBruto === 'string' ? tipoBruto.trim() : '';
+  const nomeInformado = typeof nomeBruto === 'string' ? nomeBruto.trim() : '';
   if (!ID.test(id)) throw new ErroDeEntrada('rh_colaborador precisa do id do colaborador (rh_docs, col="colaboradores"; ache com sistemas_consultar)');
   if (tipoDocumento.length < 2) throw new ErroDeEntrada('diga o tipo do documento em tipo_documento (ex.: "Advertência assinada", "Ata de reunião", "Aviso de férias assinado")');
+  // a gravação é DIRETA: o nome que a pessoa confirmou é conferido com o do id ANTES de baixar (id errado = advertência na pasta de outra pessoa)
+  const palavrasInformadas = palavrasDoNome(nomeInformado);
+  if (palavrasInformadas.length < 2) {
+    throw new ErroDeEntrada('rh_colaborador precisa de nome_colaborador com nome E sobrenome do colaborador (como a pessoa confirmou): ele é conferido com o cadastro do id antes de gravar');
+  }
   const c = resolverSistema(ctx, sistema);
   const d: DestinoGuardado = { sistema: c.slug, alvo: 'rh_colaborador', id, tratRef: '', tipoDocumento, validade: '', assinar: false };
   const nome = nomeParaCurl(tipoDocumento).replace(/\./g, '-') || 'documento';
@@ -201,7 +208,32 @@ export async function conferirColaborador(
   if (!conf || conf.ok !== true || !conf.alvo || typeof conf.alvo !== 'object' || Array.isArray(conf.alvo)) {
     throw new ErroDeEntrada('o servidor não confirmou o colaborador (resposta fora do contrato): nada foi baixado. Avise o João; pode ser versão antiga do servidor do sistema.');
   }
-  return { d, quemE: conf.alvo as Record<string, unknown> };
+  const quemE = conf.alvo as Record<string, unknown>;
+  const doCadastro = typeof quemE.colaborador === 'string' ? quemE.colaborador : '';
+  if (!nomeConfere(palavrasInformadas, palavrasDoNome(doCadastro))) {
+    throw new ErroDeEntrada(
+      doCadastro
+        ? `o id ${id} é de «${doCadastro}», não de «${nomeInformado}»: nada foi baixado nem gravado. Confira o id com sistemas_consultar e com a pessoa.`
+        : 'o servidor não disse o nome do colaborador desse id: sem conferir o nome, não gravo. Nada foi baixado.',
+    );
+  }
+  return { d, quemE };
+}
+
+/** palavras do nome, sem acento e sem as ligações curtas (da, de, do, dos, e) */
+function palavrasDoNome(nome: string): string[] {
+  return nome
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((p) => p.length >= 3);
+}
+
+/** o 1º nome é IGUAL e cada palavra informada existe INTEIRA no nome do cadastro ("Maria Silva" não confere com "Maria Costa") */
+export function nomeConfere(informado: readonly string[], cadastro: readonly string[]): boolean {
+  if (informado.length < 2 || cadastro.length === 0 || informado[0] !== cadastro[0]) return false;
+  return informado.every((p) => cadastro.includes(p));
 }
 
 /** PASSO B: entrega os bytes BAIXADOS (sem cofre) pela mesma rota de `sistemas_anexar_envio`; `origem` = "url:<domínio>". */
