@@ -79,6 +79,8 @@ test('saúde contra o banco: ok → erro antigo não conta → fora por crédito
       createdAt: minutosAtras(3),
     })),
   });
+  // 3.000 chamadas `cancelled` (prazo estourado) na mesma janela NÃO diluem a taxa
+  await prisma.llmCall.createMany({ data: Array.from({ length: 3000 }, () => ({ unitId: unidades[0].id, provider: 'anthropic', model: 'm', status: 'cancelled', createdAt: minutosAtras(2) })) });
   S.esquecerSaudeGuardada();
   const fora = await S.consultarSaude();
   assert.equal(fora.estado, 'fora', JSON.stringify(fora));

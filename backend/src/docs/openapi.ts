@@ -57,6 +57,7 @@ function areaDe(path: string): string {
 function acessoDe(path: string): string {
   if (path.startsWith('/webhooks')) return 'Aberto (assinatura do serviço externo)';
   if (path === '/health') return 'Aberto';
+  if (path === '/health/ia') return 'Cabeçalho X-Health-Token (HEALTH_IA_TOKEN); 404 se não configurado';
   if (path.startsWith('/relatorios') || path === '/cerebro/unidades') return 'Chave de serviço (x-internal-key) ou super admin';
   if (path.startsWith('/debug') || path.startsWith('/users') || path.startsWith('/global-actions')) {
     return 'Super admin';
@@ -67,6 +68,7 @@ function acessoDe(path: string): string {
 
 const DESCRICOES: Record<string, string> = {
   'GET /health': 'Diz apenas que o servidor está de pé.',
+  'GET /health/ia': 'Saúde da IA para o vigia externo: ok, degradado ou fora, a causa e contagens por provedor (sem dado de unidade, paciente ou mensagem).',
   'GET /debug/diagnostico': 'Raio-x completo: banco, OpenAI, Claude, atendimento, juiz e unidades. Prova cada dependência em vez de só dizer "ok". Não consome crédito de IA.',
   'POST /auth/login': 'Entra no painel. Devolve um cookie de sessão assinado.',
   'POST /auth/logout': 'Encerra a sessão.',

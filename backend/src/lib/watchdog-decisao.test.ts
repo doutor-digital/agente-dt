@@ -73,8 +73,10 @@ test('DEGRADADO: um quarto da rede falhando com amostra decente, ou metade de um
   const a = decidirSaude([linha({ total: 100, erros: 30, unidadesComErro: 10, errosIndisponivel: 30 })]);
   assert.equal(a.estado, 'degradado');
   assert.equal(a.causa, 'indisponivel');
-  const b = decidirSaude([linha({ total: 200, erros: 10 }), linha({ escopo: 'anthropic', total: 10, erros: 6, unidadesComErro: 1 })]);
+  const b = decidirSaude([linha({ total: 200, erros: 10 }), linha({ escopo: 'anthropic', total: 10, erros: 6, unidadesComErro: 2 })]);
   assert.equal(b.estado, 'degradado');
+  // mas metade de um provedor só em UMA unidade (chave dela revogada, lote do juiz falhando) não é a IA degradada
+  assert.equal(decidirSaude([linha({ total: 200, erros: 10 }), linha({ escopo: 'openai', total: 10, erros: 6, unidadesComErro: 1 })]).estado, 'ok');
   assert.equal(decidirSaude([linha({ total: 100, erros: 10, unidadesComErro: 5 })]).estado, 'ok', '10% é ruído');
 });
 
@@ -165,11 +167,24 @@ test('tudo ok o tempo todo nunca avisa nada', () => {
   assert.equal(simular([[0, OK], [10, OK], [20, OK]]).avisos.length, 0);
 });
 
-test('servidor inacessível avisa uma vez e volta com «voltou»', () => {
+test('servidor inacessível: 1 rodada ruim NÃO avisa (deploy de 1 min); 2 seguidas avisam uma vez; volta com «voltou»', () => {
   const MUDO: Observacao = { tipo: 'inacessivel', causa: null, resumo: 'o servidor não respondeu' };
-  const { avisos } = simular([[0, MUDO], [10, MUDO], [20, OK], [30, OK]]);
-  assert.deepEqual(avisos.map((a) => a.tipo), ['novo', 'voltou']);
+  const { avisos } = simular([[0, MUDO], [10, MUDO], [20, MUDO], [30, OK], [40, OK]]);
+  assert.deepEqual(avisos.map((a) => [a.min, a.tipo]), [[10, 'novo'], [40, 'voltou']]);
   assert.match(avisos[0].texto, /NÃO RESPONDE/);
+  assert.match(avisos[0].texto, /Aberto há 10 min/, 'a duração conta desde a 1ª rodada ruim');
+});
+
+test('um solavanco de rede (1 rodada ruim e volta) não manda NADA: nem alerta, nem «voltou»', () => {
+  const MUDO: Observacao = { tipo: 'inacessivel', causa: null, resumo: 'x' };
+  const { avisos } = simular([[0, OK], [10, MUDO], [20, OK], [30, OK], [40, MUDO], [50, OK]]);
+  assert.equal(avisos.length, 0);
+});
+
+test('vigia cego também espera a 2ª rodada; «fora» não espera (já vem de 10 min de dados)', () => {
+  const CEGO: Observacao = { tipo: 'cego', causa: null, resumo: 'o endpoint respondeu 404' };
+  assert.deepEqual(simular([[0, CEGO], [10, CEGO]]).avisos.map((a) => a.min), [10]);
+  assert.deepEqual(simular([[0, FORA]]).avisos.map((a) => a.min), [0]);
 });
 
 test('o estado antigo (cache sem campos novos) não quebra a rodada', () => {

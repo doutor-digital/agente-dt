@@ -39,6 +39,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/scripts
+            backend/package.json
             backend/src/lib/watchdog-decisao.ts
           sparse-checkout-cone-mode: false
 

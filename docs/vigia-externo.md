@@ -19,6 +19,7 @@ GitHub Actions (cron, a cada ~10 min)
 
 - Responde `ok`, `degradado` ou `fora`, a causa (`credito`, `autenticacao`, `limite`, `indisponivel`, `outra`) e contagens da janela de 10 min por provedor, mais há quantos minutos foi o último sucesso.
 - **Barato**: UMA consulta em `llm_calls` pelo índice de `created_at`, sobre a última hora (o teste com 30 mil linhas confere que o plano usa índice), mais cache de 15 s em memória.
+- **`cancelled` fica fora da conta**: chamada em que quem chamou desistiu (prazo estourado) não é do provedor e diluiria a taxa justo quando o provedor trava.
 - **Sem dado sensível**: só números e o nome do provedor. Nada de unidade, telefone, lead ou texto de erro.
 - **Fechado por padrão**: sem `HEALTH_IA_TOKEN` no servidor responde 404; com ele exige o mesmo valor em `X-Health-Token` (401 se errar, comparação em tempo constante). O repositório é público; o endpoint não precisa ser.
 - Banco fora vira `503 {estado: "fora"}`, nunca 200.
@@ -28,10 +29,10 @@ GitHub Actions (cron, a cada ~10 min)
 | Estado | Quando |
 |---|---|
 | `fora` | 90% ou mais das chamadas falhando na rede inteira, ou em um provedor, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais. Exceção: a rede inteira com causa de conta (crédito, chave) vale com 1 unidade só (de madrugada pode ser a única que falou) |
-| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 |
+| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 chamadas e erro em 2 unidades ou mais |
 | `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
-| `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora |
-| `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo |
+| `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida** (um deploy ou reinício de ~1 min não pode acordar ninguém) |
+| `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo. Também só na 2ª rodada seguida |
 
 **Throttle e «voltou ao normal»**:
 
@@ -49,7 +50,7 @@ No GitHub: Settings > Secrets and variables > Actions > New repository secret.
 | `HEALTH_URL` | `https://automacao.doutordigitalconsultoria.com/api/health/ia` (ou o domínio do agente em produção; o roteador do Traefik aceita `AGENT_DOMAIN`, `automacao.` e `franquia.`) | sim |
 | `HEALTH_IA_TOKEN` | um texto aleatório longo, por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (`/opt/doutordigital/agente-dt/.env`) | sim |
 | `TELEGRAM_BOT_TOKEN` | token do bot DD-Avisos (o mesmo `TELEGRAM_BOT_TOKEN` do servidor) | recomendado (é o canal que já funciona hoje) |
-| `TELEGRAM_CHAT_ID` | `7822226023` (o chat do João, o mesmo do `telegram.ts`) | junto com o token |
+| `TELEGRAM_CHAT_ID` | o chat do João no Telegram (o mesmo `TELEGRAM_CHAT_JOAO` do servidor; ver `backend/src/lib/telegram.ts`) | junto com o token |
 | `KAPSO_API_KEY` | a chave do Kapso (a que o servidor usa como `KAPSO_API_KEY`) | para o WhatsApp |
 | `KAPSO_PHONE_NUMBER_ID` | o `phone_number_id` do número do Kapso que ENVIA o alerta | para o WhatsApp |
 | `ALERTA_WHATSAPP_NUMERO` | o WhatsApp do João com DDI e DDD, só números (ex. `5511999999999`) | para o WhatsApp |

@@ -5,6 +5,9 @@ import { filtrosSql } from './causa-erro-ia.js';
 /**
  * Saúde da IA para o vigia EXTERNO (`GET /api/health/ia`, consultado do GitHub Actions a cada 10 min).
  *
+ * `cancelled` (quem chamou desistiu: prazo estourado) fica FORA do total: não é do provedor, e contá-la diluiria a taxa justo quando
+ * o provedor trava.
+ *
  * BARATO: UMA consulta em `llm_calls`, só pelo índice de `created_at`, sobre a última hora (centenas de linhas), e o
  * resultado fica 15 s em memória (vigia, painel ou curioso batendo à vontade não multiplica a carga no banco).
  *
@@ -56,7 +59,7 @@ const F = filtrosSql('c.error_message');
 export const SQL_DA_SAUDE = `
   select c.provider as provider,
          grouping(c.provider)::int as rede,
-         count(*) filter (where c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as total,
+         count(*) filter (where c.status <> 'cancelled' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as total,
          count(*) filter (where c.status = 'error' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros,
          count(distinct c.unit_id) filter (where c.status = 'error' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as unidades,
          count(*) filter (where c.status = 'error' and ${F.credito} and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros_credito,

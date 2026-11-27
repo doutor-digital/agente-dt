@@ -171,15 +171,20 @@ test('NENHUM canal entrega: a rodada fica vermelha (exit 1) e o throttle NÃO é
   assert.equal(semNada.codigo, 1, 'sem canal configurado também fica vermelho');
 });
 
-test('servidor mudo avisa «NÃO RESPONDE»; 404 do endpoint avisa que o vigia está CEGO; tudo ok não manda nada', { skip: PULAR }, async () => {
+test('servidor mudo avisa «NÃO RESPONDE» só na 2ª rodada seguida; 404 do endpoint avisa que o vigia está CEGO; tudo ok não manda nada', { skip: PULAR }, async () => {
   reset();
-  const mudo = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')), { HEALTH_URL: 'http://127.0.0.1:9/api/health/ia' });
+  const dirMudo = mkdtempSync(join(tmpdir(), 'vigia-'));
+  const mudo = await rodar(dirMudo, { HEALTH_URL: 'http://127.0.0.1:9/api/health/ia' });
   assert.equal(mudo.codigo, 0, mudo.saida);
+  assert.equal(recebidos.length, 0, 'uma rodada ruim só (deploy, solavanco de rede) não acorda ninguém');
+  await rodar(dirMudo, { HEALTH_URL: 'http://127.0.0.1:9/api/health/ia' });
   assert.match(recebidos.find((x) => x.rota.startsWith('telegram'))!.corpo.text, /NÃO RESPONDE/);
 
   reset();
   saude = { status: 404, corpo: { error: 'not_found' } };
-  await rodar(mkdtempSync(join(tmpdir(), 'vigia-')));
+  const dirCego = mkdtempSync(join(tmpdir(), 'vigia-'));
+  await rodar(dirCego);
+  await rodar(dirCego);
   assert.match(recebidos.find((x) => x.rota.startsWith('telegram'))!.corpo.text, /CEGO/);
 
   reset();

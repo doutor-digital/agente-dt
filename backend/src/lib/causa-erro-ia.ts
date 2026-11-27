@@ -8,13 +8,13 @@
  * A ORDEM importa: «429 … no credits remaining» é crédito, não limite de taxa; «400 invalid_request_error … credit balance»
  * também é crédito (a Anthropic devolve 400 para saldo zerado).
  *
- * Códigos HTTP só valem em contexto de status (início da mensagem, «status 401», «error: 401», «http 401»): um «512 tokens»
+ * Códigos HTTP só valem em contexto de status (início da mensagem, «status 401», «error: 401», «Error code: 429», «http 401»): um «512 tokens»
  * no meio do texto não pode virar «provedor fora do ar».
  */
 
 export type Causa = 'credito' | 'autenticacao' | 'limite' | 'indisponivel' | 'outra';
 
-const COD = String.raw`(^|status( code)?[: ]+|error[: ]+|http[: ]+)\s*`;
+const COD = String.raw`(^|status( code)?[: ]+|error( code)?[: ]+|http[: ]+|code[: ]+)\s*`;
 
 export const PADROES = {
   credito: String.raw`credit balance|no credits?|out of credits?|insufficient[_ ]quota|exceeded your current quota|billing[_ ]hard[_ ]limit|billing[_ ]not[_ ]active|payment required|saldo (esgotado|insuficiente)|${COD}402\y`,

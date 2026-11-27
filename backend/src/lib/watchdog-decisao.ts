@@ -37,9 +37,12 @@ export interface Regras {
   foraMinimo: number;
   degradadoTaxa: number;
   degradadoMinimo: number;
+  /** Um PROVEDOR isolado: fração e amostra mínima para «degradado» (e precisa de erro em 2 unidades, como o «fora»). */
+  provedorDegradadoTaxa: number;
+  provedorDegradadoMinimo: number;
 }
 
-export const REGRAS_PADRAO: Regras = { foraTaxa: 0.9, foraMinimo: 5, degradadoTaxa: 0.25, degradadoMinimo: 10 };
+export const REGRAS_PADRAO: Regras = { foraTaxa: 0.9, foraMinimo: 5, degradadoTaxa: 0.25, degradadoMinimo: 10, provedorDegradadoTaxa: 0.5, provedorDegradadoMinimo: 5 };
 
 export interface Saude {
   estado: EstadoDaSaude;
@@ -100,7 +103,9 @@ export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_
   }
   const degradados: LinhaDoProvedor[] = [];
   if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa) degradados.push(rede);
-  for (const p of provedores) if (p.total >= 5 && taxa(p) >= 0.5) degradados.push(p);
+  for (const p of provedores) {
+    if (p.total >= regras.provedorDegradadoMinimo && taxa(p) >= regras.provedorDegradadoTaxa && p.unidadesComErro >= 2) degradados.push(p);
+  }
   if (degradados.length) {
     const l = degradados.sort((a, b) => taxa(b) - taxa(a))[0];
     return {
@@ -167,9 +172,19 @@ export interface Estado {
   okSeguidos: number;
   /** O que estava em aberto (para a mensagem de «voltou»). */
   ultimaObservacao: Observacao | null;
+  /** Rodadas seguidas em que o vigia não conseguiu LER a saúde (servidor mudo ou cego), ainda sem aviso. */
+  suspeitas: number;
+  suspeitaDesde: number | null;
 }
 
-export const ESTADO_VAZIO: Estado = { desde: null, ultimoAviso: {}, okSeguidos: 0, ultimaObservacao: null };
+export const ESTADO_VAZIO: Estado = { desde: null, ultimoAviso: {}, okSeguidos: 0, ultimaObservacao: null, suspeitas: 0, suspeitaDesde: null };
+
+/**
+ * `inacessivel` e `cego` só abrem incidente na 2ª rodada seguida: um deploy ou reinício de ~1 min (a retentativa de 8 s do
+ * script não cobre) não pode acordar ninguém, e o «voltou ao normal» que viria depois seria a 2ª mensagem falsa. «fora» e
+ * «degradado» já nascem de 10 min de dados do banco, então não precisam disso.
+ */
+export const SUSPEITAS_PARA_ABRIR = 2;
 
 /** No máximo 1 aviso por tipo a cada 30 min; incidente aberto há mais de 2 h lembra só de 2 em 2 h. */
 export const INTERVALO_MIN = 30;
@@ -231,6 +246,12 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
   // poda: aviso de mais de 24 h não segura throttle nenhum
   for (const [k, t] of Object.entries(e.ultimoAviso)) if (agoraMs - t > 24 * 3_600_000) delete e.ultimoAviso[k];
 
+  const cegueira = obs.tipo === 'inacessivel' || obs.tipo === 'cego';
+  if (!cegueira) {
+    e.suspeitas = 0;
+    e.suspeitaDesde = null;
+  }
+
   if (obs.tipo === 'ok') {
     if (e.desde === null) return { avisos: [], estado: { ...e, okSeguidos: 0, ultimaObservacao: null } };
     const okSeguidos = e.okSeguidos + 1;
@@ -240,11 +261,21 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
     return {
       avisos: [{ tipo: 'voltou', chave: 'voltou', texto: umaLinha(`VOLTOU AO NORMAL, Doutor Digital: ${antes} por cerca de ${minutos} min e a IA está respondendo de novo.`) }],
       // `ultimoAviso` fica: se a queda voltar em 10 min, o throttle de 30 min por tipo ainda vale (sem isso, oscilar = spam).
-      estado: { desde: null, ultimoAviso: e.ultimoAviso, okSeguidos: 0, ultimaObservacao: null },
+      estado: { desde: null, ultimoAviso: e.ultimoAviso, okSeguidos: 0, ultimaObservacao: null, suspeitas: 0, suspeitaDesde: null },
     };
   }
 
-  const desde = e.desde ?? agoraMs;
+  if (cegueira) {
+    const suspeitas = e.suspeitas + 1;
+    const suspeitaDesde = e.suspeitaDesde ?? agoraMs;
+    if (e.desde === null && suspeitas < SUSPEITAS_PARA_ABRIR) {
+      return { avisos: [], estado: { ...e, suspeitas, suspeitaDesde, okSeguidos: 0 } };
+    }
+    e.suspeitas = suspeitas;
+    e.suspeitaDesde = suspeitaDesde;
+  }
+
+  const desde = e.desde ?? e.suspeitaDesde ?? agoraMs;
   const chave = chaveDe(obs);
   const minutos = minutosEntre(desde, agoraMs);
   const intervaloMs = (minutos >= LIMITE_LONGO_MIN ? INTERVALO_LONGO_MIN : INTERVALO_MIN) * 60_000;
@@ -255,6 +286,8 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
     ultimoAviso: devido ? { ...e.ultimoAviso, [chave]: agoraMs } : e.ultimoAviso,
     okSeguidos: 0,
     ultimaObservacao: obs,
+    suspeitas: e.suspeitas,
+    suspeitaDesde: e.suspeitaDesde,
   };
   if (!devido) return { avisos: [], estado };
   const lembrete = ultimo !== undefined;
