@@ -9,7 +9,12 @@ import { conferirCartaoDestaUnidade } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
-import { decidirCadastro, pacienteQueJaExiste } from './paciente-existente.js';
+import { decidirCadastro, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE } from './paciente-existente.js';
+import { nomeProvisorioDoLead } from '../lib/nome-provisorio.js';
+import { verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
+import { conferirOrigemIaSofia, type ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
+import { chaveDaFranquia, espacarCriacao } from '../lib/franquia-espacamento.js';
+import { chaveDoTelefone } from '../lib/franquia-indice-telefones.js';
 
 /**
  * Campos do Kommo que o espelho lê — POR NOME, porque cada conta tem ids
@@ -201,6 +206,8 @@ export interface ResultadoSync {
   motivo?: string;
   spineIdLead?: number;
   jaExistia?: boolean;
+  /** Não criou por falta de prova (busca falhou, índice não pronto, origem não conferida): o cadastro tenta de novo na PRÓXIMA mensagem, sem a espera de 10 min. */
+  retentar?: boolean;
 }
 
 async function registrar(
@@ -250,13 +257,22 @@ export interface Preparo {
 }
 
 /** "Atendimento pela Sofia (IA Doutor Digital) via WhatsApp. Queixa: dor lombar há 2 anos" */
-export function descricaoDoLead(queixa: string | null): string {
+export function descricaoDoLead(queixa: string | null, origemDeMarketing?: string | null): string {
   const base = 'Atendimento pela Sofia (IA Doutor Digital) via WhatsApp.';
   const q = queixa?.trim();
-  return q ? `${base} Queixa: ${q}`.slice(0, 1000) : base;
+  // No cadastro no 1º contato a origem do lead é "IA SOFIA"; a de marketing (Instagram, Google…) não se perde: vai aqui.
+  const m = origemDeMarketing?.trim();
+  const comOrigem = m ? `${base} Origem de marketing: ${m}.` : base;
+  return q ? `${comOrigem} Queixa: ${q}`.slice(0, 1000) : comOrigem;
 }
 
-export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Preparo> {
+/** Como o cadastro de lead no 1º contato (chave `cadastro-lead-primeiro-contato`) muda a montagem do payload. */
+export interface OpcoesDoPrimeiroContato {
+  /** Telefone da conversa: vale quando o contato do Kommo não o traz. */
+  telefone?: string | null;
+}
+
+export async function montarPayload(unit: Unit, kommoLeadId: number, primeiroContato?: OpcoesDoPrimeiroContato): Promise<Preparo> {
   const kommo = createKommoClient(unit);
   let lead;
   try {
@@ -274,10 +290,18 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
   if (contatoId) contato = await kommo.getContactBasico(contatoId).catch(() => contato);
 
   const escolha = escolherNome(titulo, contato.nome);
-  if (!escolha.ok) {
+  let nomeEscolhido: string;
+  if (escolha.ok) {
+    nomeEscolhido = escolha.nome;
+  } else if (primeiroContato) {
+    // Nem o paciente disse o nome, nem o cartão tem, nem o perfil do WhatsApp passou no filtro de nome-lixo: nome provisório e
+    // padronizado ("Paciente WhatsApp (final 1234)"). Sem telefone para montá-lo, não há lead — nunca sem nome, nunca com nome lixo.
+    const provisorio = nomeProvisorioDoLead(contato.telefone ?? primeiroContato.telefone);
+    if (!provisorio) return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: `${escolha.motivo}; e não há telefone para o nome provisório` };
+    nomeEscolhido = provisorio;
+  } else {
     return { ok: false, etapa: 'nome', tituloKommo: titulo, motivo: escolha.motivo };
   }
-  const nomeEscolhido = escolha.nome;
 
   // Ids desta conta, resolvidos pelo nome do campo. Sem esquema (Kommo fora do
   // ar), cai nos ids de reserva — que só existem na Imperatriz.
@@ -292,7 +316,7 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
     return typeof v === 'string' && v.trim() ? v.trim() : null;
   };
 
-  const whatsapp = contato.telefone;
+  const whatsapp = contato.telefone ?? primeiroContato?.telefone ?? null;
   const idDoCampo = esquema?.campoPorNome(CAMPO_ID_CLIENT) ?? null;
   const idClientNoCartao = (() => {
     if (!idDoCampo) return null;
@@ -312,12 +336,15 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
       // Quem criou este lead na franquia foi a Sofia — isso vai na DESCRIÇÃO, para a
       // Origem continuar sendo o canal de marketing (decisão do João, 05/09/2026:
       // "o lead continua com origem de marketing; a Sofia entra no paciente").
-      description: descricaoDoLead(valor(CAMPOS.queixa)),
+      description: descricaoDoLead(valor(CAMPOS.queixa), primeiroContato ? valor(CAMPOS.origem) ?? canalNoTitulo(titulo) : null),
       // Origem do LEAD espelhado: a de marketing traduzida do Kommo (Instagram, Google,
       // WhatsApp…). "IA SOFIA" aqui só se a unidade pediu: o lead nasce antes de sabermos
       // se vai agendar, e quem a recepção marcar depois também apareceria como IA.
       idSource:
-        unit.spineIaSourceLeads && unit.spineIaSourceId
+        // No 1º contato a origem é SEMPRE "IA SOFIA" (`syncLeadToSpine` já conferiu que existe; sem ela nem chega aqui).
+        primeiroContato && unit.spineIaSourceId
+          ? unit.spineIaSourceId
+          : unit.spineIaSourceLeads && unit.spineIaSourceId
           ? unit.spineIaSourceId
           : SpineService.resolverIdSource(
               valor(CAMPOS.origem) ?? canalNoTitulo(titulo),
@@ -329,7 +356,7 @@ export async function montarPayload(unit: Unit, kommoLeadId: number): Promise<Pr
   };
 }
 
-export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Preparo> {
+export async function prepararLead(unit: Unit, kommoLeadId: number, primeiroContato?: OpcoesDoPrimeiroContato): Promise<Preparo> {
   if (!Number.isFinite(kommoLeadId) || kommoLeadId <= 0) {
     return { ok: false, etapa: 'kommo', motivo: 'leadId inválido' };
   }
@@ -341,7 +368,7 @@ export async function prepararLead(unit: Unit, kommoLeadId: number): Promise<Pre
     return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
   }
 
-  return montarPayload(unit, kommoLeadId);
+  return montarPayload(unit, kommoLeadId, primeiroContato);
 }
 
 export interface PayloadDoPaciente {
@@ -471,11 +498,94 @@ export async function syncPatientToSpine(
   return { ok: true, spineIdClient: r.data.idClient };
 }
 
+/** Só teste: troca as pontas de fora do cadastro no 1º contato (a franquia e o relógio). */
+export interface DepsDoPrimeiroContato {
+  jaCadastrado?: DepsJaCadastrado;
+  origem?: (unit: Unit) => Promise<ConferenciaDaOrigem>;
+  espacar?: typeof espacarCriacao;
+}
+
+/** Telefones (por franquia) com um cadastro em andamento: dois cartões do mesmo número não criam em paralelo. */
+const telefonesEmCriacao = new Set<string>();
+
+/** Grava no vínculo que o telefone já estava na franquia — e o porquê. Só o id de LEAD vai para a coluna do vínculo (ver o motivo abaixo). */
+async function vincularAoQueJaExiste(unit: Unit, kommoLeadId: number, achado: Extract<JaCadastrado, { tipo: 'achou' }>): Promise<string> {
+  const ehPaciente = achado.origem === 'paciente';
+  const motivo = `${ehPaciente ? PREFIXO_PACIENTE_EXISTENTE : 'lead já existe na franquia'} (${ehPaciente ? 'idClient' : 'idLead'} ${achado.id}, achado pelo telefone ${achado.por === 'indice' ? 'no índice' : 'entre os cadastros recentes'}): não criei lead`;
+  // Paciente: só o motivo. Telefone sozinho não prova que é a mesma pessoa (a mãe e a filha dividem o WhatsApp), e o id de paciente
+  // gravado no vínculo é o que a agenda usa para marcar a consulta — gravar o da mãe no cartão da filha seria para sempre.
+  // Lead: o id vai (é o que a conversão em paciente usa, e o paciente nasce com o nome que a Sofia levar na conversão).
+  const idDoLead = ehPaciente ? {} : { spineIdLead: achado.id };
+  try {
+    const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdLead: true } });
+    await prisma.spineLeadLink.upsert({
+      where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+      create: { unitId: unit.id, kommoLeadId, motivo, ...idDoLead },
+      update: { motivo, ...(atual?.spineIdLead ? {} : idDoLead) },
+    });
+  } catch (err) {
+    logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui gravar o vínculo com o que já existe na franquia');
+  }
+  return motivo;
+}
+
+/**
+ * O que o cadastro no 1º contato confere ANTES de criar: a origem "IA SOFIA" existe na franquia? o telefone já está lá (lead ou paciente)?
+ * `resultado` preenchido = para aqui (não cria); senão `soltar` libera a trava do telefone depois da criação.
+ */
+async function antesDeCriarNoPrimeiroContato(
+  unit: Unit,
+  kommoLeadId: number,
+  payload: PayloadDoLead,
+  deps: DepsDoPrimeiroContato = {},
+): Promise<{ resultado: ResultadoSync | null; soltar: (() => void) | null }> {
+  const origem = await (deps.origem ?? ((u: Unit) => conferirOrigemIaSofia(u)))(unit).catch((err): ConferenciaDaOrigem => ({
+    situacao: 'nao-deu-para-conferir', idSource: unit.spineIaSourceId ?? 0, motivo: String(err),
+  }));
+  if (origem.situacao === 'faltando') {
+    logger.warn({ kommoLeadId, unit: unit.slug, motivo: origem.motivo }, 'spine-sync: AVISO — lead NÃO cadastrado: falta a origem "IA SOFIA" nesta franquia');
+    return { resultado: { ok: false, motivo: `origem IA SOFIA: ${origem.motivo}` }, soltar: null };
+  }
+
+  const fone = payload.whatsapp;
+  if (!fone) return { resultado: { ok: false, motivo: 'sem telefone para conferir se já está na franquia', retentar: true }, soltar: null };
+  const chave = `${chaveDaFranquia(unit)}|${chaveDoTelefone(fone) ?? fone}`;
+  if (telefonesEmCriacao.has(chave)) {
+    return { resultado: { ok: false, motivo: 'outro cadastro deste mesmo telefone está em andamento', retentar: true }, soltar: null };
+  }
+  telefonesEmCriacao.add(chave);
+  const soltar = () => { telefonesEmCriacao.delete(chave); };
+  try {
+    const achado = await verificarJaCadastrado(unit, fone, deps.jaCadastrado);
+    if (achado.tipo === 'indeterminado') {
+      soltar();
+      logger.info({ kommoLeadId, unit: unit.slug, motivo: achado.motivo }, 'spine-sync: não criei — não deu para conferir se o telefone já está na franquia (tento na próxima mensagem)');
+      return { resultado: { ok: false, motivo: `não conferi se já existe na franquia: ${achado.motivo}`, retentar: true }, soltar: null };
+    }
+    if (achado.tipo === 'achou') {
+      soltar();
+      const motivo = await vincularAoQueJaExiste(unit, kommoLeadId, achado);
+      logger.info({ kommoLeadId, unit: unit.slug, origem: achado.origem, id: achado.id, por: achado.por }, 'spine-sync: o telefone já estava na franquia — não criei lead');
+      return { resultado: { ok: true, motivo, jaExistia: true, ...(achado.origem === 'lead' ? { spineIdLead: achado.id } : {}) }, soltar: null };
+    }
+    return { resultado: null, soltar };
+  } catch (err) {
+    soltar();
+    logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: falha ao conferir o telefone na franquia — não criei');
+    return { resultado: { ok: false, motivo: 'falha ao conferir se já existe na franquia', retentar: true }, soltar: null };
+  }
+}
+
 export async function syncLeadToSpine(
   unit: Unit,
   kommoLeadId: number,
-  /** `soLead`: cria o LEAD e nunca o paciente, mesmo com `spine_sync_patients` ligado (cadastro de todo lead, 27/10). */
-  opcoes: { soLead?: boolean } = {},
+  /**
+   * `soLead`: cria o LEAD e nunca o paciente, mesmo com `spine_sync_patients` ligado (cadastro de todo lead, 27/10).
+   * `primeiroContato` (chave `cadastro-lead-primeiro-contato`, 27/11): nome provisório se faltar, origem SEMPRE "IA SOFIA" (conferida
+   * na franquia), busca do telefone entre leads e pacientes ANTES de criar e criação espaçada. Só vale junto com `soLead`.
+   * `telefone`: o da conversa, para quando o contato do Kommo não o traz. `deps`: só teste.
+   */
+  opcoes: { soLead?: boolean; primeiroContato?: boolean; telefone?: string | null; deps?: DepsDoPrimeiroContato } = {},
 ): Promise<ResultadoSync> {
   if (!unit.spineToken) {
     return { ok: false, motivo: 'franquia não conectada nesta unidade' };
@@ -485,7 +595,9 @@ export async function syncLeadToSpine(
   }
   // "Só lead" (cadastro de quem apenas entrou em contato) sem o casamento cartão × paciente criaria lead em cima de quem
   // já é paciente da franquia: a busca por idClient → telefone → nome mora no casamento. Sem ele, não cria.
-  if (opcoes.soLead && estadoCasamentoJornada(unit.slug) !== 'ligado') {
+  // O 1º contato dispensa isto: a busca do telefone entre leads e pacientes (abaixo) é o que impede o duplicado.
+  const pc = opcoes.primeiroContato && opcoes.soLead ? { telefone: opcoes.telefone ?? null } : undefined;
+  if (opcoes.soLead && !pc && estadoCasamentoJornada(unit.slug) !== 'ligado') {
     return { ok: false, motivo: MOTIVO_SEM_CASAMENTO };
   }
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
@@ -497,7 +609,7 @@ export async function syncLeadToSpine(
   if (!cartao.ok) return { ok: false, motivo: cartao.motivo };
   unit = cartao.unit;
 
-  const preparo = await prepararLead(unit, kommoLeadId);
+  const preparo = await prepararLead(unit, kommoLeadId, pc);
   if (preparo.etapa === 'ja-enviado') {
     return { ok: true, spineIdLead: preparo.spineIdLead, jaExistia: true };
   }
@@ -511,105 +623,120 @@ export async function syncLeadToSpine(
     return { ok: false, motivo };
   }
 
-  // Regra de 16/10 (chave casamento-jornada): antes de criar, procura o paciente que já existe — idClient → telefone →
-  // nome. Achou = casa (vínculo) e não cria lead nem paciente. Dois pacientes no telefone = não cria (a SDR decide).
-  const estado = estadoCasamentoJornada(unit.slug);
-  if (estado !== 'desligado') {
-    const existente = await pacienteQueJaExiste(unit, kommoLeadId, {
-      nome: preparo.payload.name,
-      telefone: preparo.payload.whatsapp,
-      idDoCartao: preparo.idClientNoCartao ?? null,
-      kommo: createKommoClient(unit),
-      contatoId: preparo.contatoId ?? null,
-      avisarDuplicado: { seco: estado === 'seco' },
-    }).catch((err) => {
-      logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui procurar o paciente existente');
-      return 'erro' as const;
-    });
-    const decisao = decidirCadastro(estado, existente);
-    if (decisao.criar && decisao.simular) {
-      registrarSimulacao(unit, AUTOMACAO_1610, { leadId: kommoLeadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao.simular.valor, motivo: decisao.simular.motivo });
-    }
-    if (!decisao.criar) {
-      if (!decisao.jaExistia) return { ok: false, motivo: decisao.motivo };
-      // vínculo que já sabe o paciente (a Sofia achou/marcou) não é trocado: a consulta guardada nele é desse paciente
-      const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdClient: true } }).catch(() => null);
-      const novoId = decisao.vincular && !atual?.spineIdClient ? { spineIdClient: decisao.vincular } : {};
-      await prisma.spineLeadLink
-        .upsert({
-          where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
-          // o status fica como está (o vínculo da Sofia já nasce "ok"): "ignorado" contaria como "sem nome" na tela da franquia
-          create: { unitId: unit.id, kommoLeadId, motivo: decisao.motivo, nome: preparo.payload.name, ...(decisao.vincular ? { spineIdClient: decisao.vincular } : {}) },
-          update: { motivo: decisao.motivo, ...novoId },
-        })
-        .catch((err) => logger.warn({ err: String(err), kommoLeadId }, 'spine-sync: não consegui gravar o vínculo com o paciente existente'));
-      logger.info({ kommoLeadId, unit: unit.slug, idClient: decisao.vincular }, 'spine-sync: paciente já existia na franquia — não criei lead');
-      return { ok: true, motivo: decisao.motivo, jaExistia: true };
-    }
+  // Cadastro no 1º contato: a origem "IA SOFIA" tem de existir na franquia, e o telefone não pode já estar lá (lead OU paciente).
+  // Tudo daqui até a criação roda sob a trava do telefone: dois cartões do mesmo número não criam em paralelo.
+  let soltarTelefone: (() => void) | null = null;
+  if (pc) {
+    const antes = await antesDeCriarNoPrimeiroContato(unit, kommoLeadId, preparo.payload, opcoes.deps);
+    if (antes.resultado) return antes.resultado;
+    soltarTelefone = antes.soltar;
   }
-
-  const r = await SpineService.createLead(unit, preparo.payload);
-
-  if (!r.ok || !r.data?.idLead) {
-    const motivo = r.error ?? 'a franquia não devolveu idLead';
-    await registrar(unit.id, kommoLeadId, 'falhou', motivo, null, preparo.payload.name);
-    logger.warn(
-      { kommoLeadId, nome: preparo.payload.name, erro: motivo, unit: unit.slug },
-      'spine-sync: falha ao criar lead na franquia',
-    );
-    return { ok: false, motivo };
-  }
-
-  await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
-
-  if (criaPacienteJuntoComOLead(unit.spineSyncPatients, opcoes.soLead)) {
-    const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);
-    if (partes.length < 2) {
-      logger.info(
-        { kommoLeadId, nome: preparo.payload.name, unit: unit.slug },
-        'spine-sync: paciente aguardando nome completo',
-      );
-      return { ok: true, spineIdLead: r.data.idLead };
+  try {
+    // Regra de 16/10 (chave casamento-jornada): antes de criar, procura o paciente que já existe — idClient → telefone →
+    // nome. Achou = casa (vínculo) e não cria lead nem paciente. Dois pacientes no telefone = não cria (a SDR decide).
+    const estado = estadoCasamentoJornada(unit.slug);
+    if (estado !== 'desligado') {
+      const existente = await pacienteQueJaExiste(unit, kommoLeadId, {
+        nome: preparo.payload.name,
+        telefone: preparo.payload.whatsapp,
+        idDoCartao: preparo.idClientNoCartao ?? null,
+        kommo: createKommoClient(unit),
+        contatoId: preparo.contatoId ?? null,
+        avisarDuplicado: { seco: estado === 'seco' },
+      }).catch((err) => {
+        logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui procurar o paciente existente');
+        return 'erro' as const;
+      });
+      const decisao = decidirCadastro(estado, existente);
+      if (decisao.criar && decisao.simular) {
+        registrarSimulacao(unit, AUTOMACAO_1610, { leadId: kommoLeadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao.simular.valor, motivo: decisao.simular.motivo });
+      }
+      if (!decisao.criar) {
+        if (!decisao.jaExistia) return { ok: false, motivo: decisao.motivo };
+        // vínculo que já sabe o paciente (a Sofia achou/marcou) não é trocado: a consulta guardada nele é desse paciente
+        const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdClient: true } }).catch(() => null);
+        const novoId = decisao.vincular && !atual?.spineIdClient ? { spineIdClient: decisao.vincular } : {};
+        await prisma.spineLeadLink
+          .upsert({
+            where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+            // o status fica como está (o vínculo da Sofia já nasce "ok"): "ignorado" contaria como "sem nome" na tela da franquia
+            create: { unitId: unit.id, kommoLeadId, motivo: decisao.motivo, nome: preparo.payload.name, ...(decisao.vincular ? { spineIdClient: decisao.vincular } : {}) },
+            update: { motivo: decisao.motivo, ...novoId },
+          })
+          .catch((err) => logger.warn({ err: String(err), kommoLeadId }, 'spine-sync: não consegui gravar o vínculo com o paciente existente'));
+        logger.info({ kommoLeadId, unit: unit.slug, idClient: decisao.vincular }, 'spine-sync: paciente já existia na franquia — não criei lead');
+        return { ok: true, motivo: decisao.motivo, jaExistia: true };
+      }
     }
 
-    const p = await SpineService.createClient(unit, {
-      name: preparo.payload.name,
-      whatsapp: preparo.payload.whatsapp,
-      idSource: preparo.payload.idSource,
-      idLead: r.data.idLead,
-      addressCity: preparo.payload.addressCity,
-      addressUf: preparo.payload.addressUf,
-    });
-    if (p.ok && p.data?.idClient) {
-      await prisma.spineLeadLink
-        .update({
-          where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
-          data: { spineIdClient: p.data.idClient },
-        })
-        .catch(() => undefined);
-      logger.info(
-        { kommoLeadId, spineIdClient: p.data.idClient, unit: unit.slug },
-        'spine-sync: paciente cadastrado na franquia',
-      );
-    } else {
+    const payloadFinal = preparo.payload;
+    const r = pc
+      ? await (opcoes.deps?.espacar ?? espacarCriacao)(chaveDaFranquia(unit), () => SpineService.createLead(unit, payloadFinal))
+      : await SpineService.createLead(unit, payloadFinal);
+
+    if (!r.ok || !r.data?.idLead) {
+      const motivo = r.error ?? 'a franquia não devolveu idLead';
+      await registrar(unit.id, kommoLeadId, 'falhou', motivo, null, preparo.payload.name);
       logger.warn(
-        { kommoLeadId, erro: p.error, unit: unit.slug },
-        'spine-sync: lead entrou mas o paciente falhou',
+        { kommoLeadId, nome: preparo.payload.name, erro: motivo, unit: unit.slug },
+        'spine-sync: falha ao criar lead na franquia',
       );
+      return { ok: false, motivo };
     }
-  }
 
-  logger.info(
-    {
-      kommoLeadId,
-      spineIdLead: r.data.idLead,
-      nome: preparo.payload.name,
-      idSource: preparo.payload.idSource,
-      unit: unit.slug,
-    },
-    'spine-sync: lead enviado para a franquia',
-  );
-  return { ok: true, spineIdLead: r.data.idLead };
+    await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
+
+    if (criaPacienteJuntoComOLead(unit.spineSyncPatients, opcoes.soLead)) {
+      const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);
+      if (partes.length < 2) {
+        logger.info(
+          { kommoLeadId, nome: preparo.payload.name, unit: unit.slug },
+          'spine-sync: paciente aguardando nome completo',
+        );
+        return { ok: true, spineIdLead: r.data.idLead };
+      }
+
+      const p = await SpineService.createClient(unit, {
+        name: preparo.payload.name,
+        whatsapp: preparo.payload.whatsapp,
+        idSource: preparo.payload.idSource,
+        idLead: r.data.idLead,
+        addressCity: preparo.payload.addressCity,
+        addressUf: preparo.payload.addressUf,
+      });
+      if (p.ok && p.data?.idClient) {
+        await prisma.spineLeadLink
+          .update({
+            where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
+            data: { spineIdClient: p.data.idClient },
+          })
+          .catch(() => undefined);
+        logger.info(
+          { kommoLeadId, spineIdClient: p.data.idClient, unit: unit.slug },
+          'spine-sync: paciente cadastrado na franquia',
+        );
+      } else {
+        logger.warn(
+          { kommoLeadId, erro: p.error, unit: unit.slug },
+          'spine-sync: lead entrou mas o paciente falhou',
+        );
+      }
+    }
+
+    logger.info(
+      {
+        kommoLeadId,
+        spineIdLead: r.data.idLead,
+        nome: preparo.payload.name,
+        idSource: preparo.payload.idSource,
+        unit: unit.slug,
+      },
+      'spine-sync: lead enviado para a franquia',
+    );
+    return { ok: true, spineIdLead: r.data.idLead };
+  } finally {
+    soltarTelefone?.();
+  }
 }
 
 export const SpineSyncService = {

@@ -725,6 +725,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/cadastro-todo-lead.ts',
   },
   {
+    id: 'cadastro-lead-primeiro-contato',
+    chave: 'CADASTRO_LEAD_PRIMEIRO_CONTATO_SLUGS',
+    nome: 'Cadastrar TODO lead na franquia no 1º contato (origem IA SOFIA)',
+    oQueFaz:
+      'Pedido da franquia (27/11/2026): a Sofia cadastra na franquia, como LEAD e já no primeiro contato real do paciente, todo mundo que escreve — tenha agendado ou não — com a origem "IA SOFIA". Sem triagem pela IA (a leitura "isto é lead?" deixa de barrar) e sem esperar o nome: nome que o paciente disse ou está no cartão; senão o nome do perfil do WhatsApp (se passar no filtro de nome-lixo); senão "Paciente WhatsApp (final 1234)". Paciente continua sendo criado só ao agendar.',
+    pegadinha:
+      'A franquia NÃO tem como editar o lead depois (o guia da API só cria/busca/converte): o nome provisório fica lá — quando o paciente agendar, o paciente nasce com o nome certo (a conversão leva o nome). Antes de criar, procura o telefone (com/sem 55, com/sem 9) entre os LEADS e os PACIENTES da franquia: achou, não cria e registra o motivo (lead achado: o vínculo fica com o id dele; paciente achado: só o motivo, porque telefone sozinho não prova que é a mesma pessoa); a busca falhou ou o índice de telefones ainda não está pronto: não cria e tenta na próxima mensagem. A 1ª ligação de uma unidade pede a carga do índice (leva minutos). Cria no máximo 1 lead a cada 1,5 s por franquia. A origem "IA SOFIA" é conferida na lista de origens da franquia: se faltar, o lead NÃO sai (aviso na prontidão da unidade). Continuam valendo: número interno, telefone em 3+ unidades, "espelhar leads" ligado e franquia conectada; NÃO exige o casamento cartão × paciente (a busca por telefone acima faz esse papel). Lead que o paciente já tem na franquia por este caminho nunca é recriado. Ligada, vale em lugar da triagem da chave "Cadastrar TODO lead" e também com a IA pulada. Só no papel: decide e registra "cadastraria", sem criar nada. Nasce DESLIGADA.',
+    risco: 'escreve-campo',
+    temSeco: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/cadastro-todo-lead.ts',
+  },
+  {
     id: 'cadastro-ia-pulada',
     chave: 'CADASTRO_IA_PULADA_SLUGS',
     nome: 'Cadastro na franquia também quando a IA não fala',
