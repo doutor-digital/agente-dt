@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { protegerContainer } from './pg-descartavel.js';
 
 const BACKEND = fileURLToPath(new URL('../../', import.meta.url));
 const temDocker = process.env.SEM_DOCKER !== '1' && spawnSync('docker', ['version'], { stdio: 'ignore' }).status === 0;
@@ -22,6 +23,7 @@ before(async () => {
   if (PULAR) return;
   try {
     execFileSync('docker', ['run', '-d', '--rm', '--name', nome, '-e', 'POSTGRES_PASSWORD=x', '-p', '127.0.0.1::5432', 'postgres:16-alpine', '-c', 'timezone=America/Sao_Paulo'], { stdio: 'ignore' });
+    protegerContainer(nome);
     const porta = execFileSync('docker', ['port', nome, '5432/tcp']).toString().trim().split('\n')[0].split(':').pop();
     for (let i = 0; ; i++) {
       if (spawnSync('docker', ['exec', nome, 'psql', '-U', 'postgres', '-tAc', 'select 1'], { stdio: 'ignore' }).status === 0) break;

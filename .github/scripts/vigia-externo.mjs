@@ -15,7 +15,6 @@ const log = (o) => console.log(JSON.stringify(o));
 
 async function consultar() {
   const url = env('HEALTH_URL');
-  if (!url) return { status: 404, corpo: null, semConfig: true };
   let ultimo = { status: null, corpo: null };
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
@@ -110,6 +109,12 @@ async function main() {
     return chegou ? 0 : 1;
   }
 
+  if (!env('HEALTH_URL')) {
+    // Segredo ainda não cadastrado: sair VERDE com aviso. Vermelho aqui seria ~144 e-mails de «falhou» por dia até alguém cadastrar.
+    console.log('::warning::HEALTH_URL não está cadastrado nos segredos do GitHub: o vigia externo está DESLIGADO (docs/vigia-externo.md)');
+    log({ vigia: 'desligado', motivo: 'HEALTH_URL ausente' });
+    return 0;
+  }
   const resposta = await consultar();
   const obs = observar(resposta);
   const anterior = lerEstado();

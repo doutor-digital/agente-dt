@@ -58,6 +58,8 @@ function causaDe(l: LinhaDoProvedor): Causa {
     ['autenticacao', l.errosChave],
     ['limite', l.errosLimite],
     ['indisponivel', l.errosIndisponivel],
+    // o que nenhuma regra reconhece também é causa: 19 «outra» + 1 de crédito não são «saldo esgotado»
+    ['outra', Math.max(0, l.erros - l.errosCredito - l.errosChave - l.errosLimite - l.errosIndisponivel)],
   ];
   let melhor: Causa = 'outra';
   let n = 0;
@@ -75,9 +77,9 @@ const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /**
  * ok / degradado / fora. FORA = a rede (ou um provedor) falhando em 90% ou mais, mesmo com amostra pequena, desde que o erro
- * apareça em 2 unidades ou mais. Exceção: a REDE INTEIRA com causa de conta (crédito, chave) vale com uma unidade só (de madrugada
- * pode ser a única que falou, e 90% de tudo recusado por crédito não é uma conversa esquisita). Um provedor isolado sempre exige
- * 2 unidades: uma unidade com a chave dela quebrada não é «a Sofia fora do ar». DEGRADADO = um quarto da rede falhando com amostra decente, ou metade de um provedor.
+ * apareça em 2 unidades ou mais, sem exceção (nem crédito, nem chave): cada unidade pode ter a PRÓPRIA chave (`Unit.anthropicApiKey`),
+ * e a de uma acabando não é «a Sofia fora do ar». DEGRADADO = um quarto da rede falhando com amostra decente, ou metade de um
+ * provedor, também com erro em 2 unidades ou mais.
  * Silêncio (nenhuma chamada) NÃO é queda: madrugada sem paciente é normal.
  */
 export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_PADRAO): Saude {
@@ -87,7 +89,7 @@ export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_
   for (const l of [...(rede ? [rede] : []), ...provedores]) {
     if (l.total < regras.foraMinimo || taxa(l) < regras.foraTaxa) continue;
     const causa = causaDe(l);
-    if (l.unidadesComErro < 2 && !(l.escopo === 'rede' && (causa === 'credito' || causa === 'autenticacao'))) continue;
+    if (l.unidadesComErro < 2) continue;
     fora.push({ l, causa });
   }
   if (fora.length) {
@@ -102,7 +104,7 @@ export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_
     };
   }
   const degradados: LinhaDoProvedor[] = [];
-  if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa) degradados.push(rede);
+  if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa && rede.unidadesComErro >= 2) degradados.push(rede);
   for (const p of provedores) {
     if (p.total >= regras.provedorDegradadoMinimo && taxa(p) >= regras.provedorDegradadoTaxa && p.unidadesComErro >= 2) degradados.push(p);
   }
@@ -175,9 +177,11 @@ export interface Estado {
   /** Rodadas seguidas em que o vigia não conseguiu LER a saúde (servidor mudo ou cego), ainda sem aviso. */
   suspeitas: number;
   suspeitaDesde: number | null;
+  /** A leitura que ABRIU o incidente (a que o «voltou ao normal» cita; a última pode já ser outra coisa, como degradado → fora). */
+  abertura: Observacao | null;
 }
 
-export const ESTADO_VAZIO: Estado = { desde: null, ultimoAviso: {}, okSeguidos: 0, ultimaObservacao: null, suspeitas: 0, suspeitaDesde: null };
+export const ESTADO_VAZIO: Estado = { desde: null, ultimoAviso: {}, okSeguidos: 0, ultimaObservacao: null, suspeitas: 0, suspeitaDesde: null, abertura: null };
 
 /**
  * `inacessivel` e `cego` só abrem incidente na 2ª rodada seguida: um deploy ou reinício de ~1 min (a retentativa de 8 s do
@@ -246,6 +250,7 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
   // poda: aviso de mais de 24 h não segura throttle nenhum
   for (const [k, t] of Object.entries(e.ultimoAviso)) if (agoraMs - t > 24 * 3_600_000) delete e.ultimoAviso[k];
 
+  const jaAberto = e.desde !== null;
   const cegueira = obs.tipo === 'inacessivel' || obs.tipo === 'cego';
   if (!cegueira) {
     e.suspeitas = 0;
@@ -257,18 +262,21 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
     const okSeguidos = e.okSeguidos + 1;
     if (okSeguidos < OK_PARA_RESOLVER) return { avisos: [], estado: { ...e, okSeguidos } };
     const minutos = minutosEntre(e.desde, agoraMs);
-    const antes = e.ultimaObservacao ? TITULO[e.ultimaObservacao.tipo] : 'o problema';
+    const abriu = e.abertura ?? e.ultimaObservacao;
+    const antes = abriu ? `${TITULO[abriu.tipo]}${abriu.resumo ? ` (${abriu.resumo})` : ''}` : 'o problema';
     return {
       avisos: [{ tipo: 'voltou', chave: 'voltou', texto: umaLinha(`VOLTOU AO NORMAL, Doutor Digital: ${antes} por cerca de ${minutos} min e a IA está respondendo de novo.`) }],
-      // `ultimoAviso` fica: se a queda voltar em 10 min, o throttle de 30 min por tipo ainda vale (sem isso, oscilar = spam).
-      estado: { desde: null, ultimoAviso: e.ultimoAviso, okSeguidos: 0, ultimaObservacao: null, suspeitas: 0, suspeitaDesde: null },
+      // Incidente encerrado: o throttle zera. Queda nova depois do «voltou» é OUTRO incidente e avisa como queda (o debounce de 2 rodadas
+      // ok para encerrar e de 2 rodadas ruins para abrir já impede o vai-e-vem de virar spam).
+      estado: { ...ESTADO_VAZIO },
     };
   }
 
   if (cegueira) {
     const suspeitas = e.suspeitas + 1;
     const suspeitaDesde = e.suspeitaDesde ?? agoraMs;
-    if (e.desde === null && suspeitas < SUSPEITAS_PARA_ABRIR) {
+    // também com incidente aberto: um solavanco de rede no meio de uma queda não pode virar um 2º alerta («NÃO RESPONDE»)
+    if (suspeitas < SUSPEITAS_PARA_ABRIR) {
       return { avisos: [], estado: { ...e, suspeitas, suspeitaDesde, okSeguidos: 0 } };
     }
     e.suspeitas = suspeitas;
@@ -288,9 +296,11 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
     ultimaObservacao: obs,
     suspeitas: e.suspeitas,
     suspeitaDesde: e.suspeitaDesde,
+    abertura: jaAberto ? (e.abertura ?? obs) : obs,
   };
   if (!devido) return { avisos: [], estado };
-  const lembrete = ultimo !== undefined;
+  // LEMBRETE é repetição do MESMO incidente que segue aberto; queda nova (nada aberto antes) é «ALERTA», com o tipo 'novo'
+  const lembrete = jaAberto && ultimo !== undefined;
   return { avisos: [{ tipo: lembrete ? 'lembrete' : 'novo', chave, texto: textoDoAlerta(obs, minutos, lembrete) }], estado };
 }
 

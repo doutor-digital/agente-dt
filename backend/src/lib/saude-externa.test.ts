@@ -90,3 +90,13 @@ test('FECHADO por padrão: sem HEALTH_IA_TOKEN no servidor é 404; token errado 
   assert.equal((await chamar(undefined, 'segredo')).status, 401);
   assert.equal((await chamar('errado', 'segredo')).status, 401);
 });
+
+test('banco fora: 503 SEM `estado` (o vigia não pode ler «fora» num soluço do banco), pelo caminho real do controller', async () => {
+  // DATABASE_URL de teste aponta para uma porta fechada: a consulta lança de verdade
+  const { esquecerSaudeGuardada } = await import('./saude-externa.js');
+  esquecerSaudeGuardada();
+  const r = await chamar('segredo', 'segredo');
+  assert.equal(r.status, 503);
+  assert.deepEqual(r.corpo, { error: 'db_unavailable' });
+  assert.ok(!('estado' in (r.corpo as object)));
+});

@@ -38,8 +38,20 @@ test('a noite de 26/11: 1.000 erros de crédito em 1.000 chamadas é FORA, com a
   assert.match(s.motivo, /100% das chamadas à IA falhando \(1000 de 1000\)/);
 });
 
-test('madrugada: 6 chamadas, todas com erro de crédito, já é FORA (sem mínimo por unidade)', () => {
-  assert.equal(decidirSaude([linha({ total: 6, erros: 6, unidadesComErro: 1, errosCredito: 6 })]).estado, 'fora');
+test('uma unidade só NÃO é FORA, nem com crédito ou chave (cada unidade pode ter a própria chave)', () => {
+  assert.equal(decidirSaude([linha({ total: 6, erros: 6, unidadesComErro: 1, errosCredito: 6 })]).estado, 'ok');
+  assert.equal(decidirSaude([linha({ total: 30, erros: 30, unidadesComErro: 1, errosChave: 30 })]).estado, 'ok');
+});
+
+test('a causa «outra» conta: 19 erros sem causa + 1 de crédito é FORA por causa «outra», não por crédito', () => {
+  const s = decidirSaude([linha({ total: 20, erros: 20, unidadesComErro: 4, errosCredito: 1 })]);
+  assert.equal(s.estado, 'fora');
+  assert.equal(s.causa, 'outra');
+});
+
+test('degradado na rede também exige erro em 2 unidades ou mais', () => {
+  assert.equal(decidirSaude([linha({ total: 100, erros: 30, unidadesComErro: 1, errosIndisponivel: 30 })]).estado, 'ok');
+  assert.equal(decidirSaude([linha({ total: 100, erros: 30, unidadesComErro: 2, errosIndisponivel: 30 })]).estado, 'degradado');
 });
 
 test('um provedor caído é FORA mesmo com o outro bem e a rede diluída', () => {
@@ -92,7 +104,9 @@ test('observar: servidor mudo ou 5xx sem corpo é INACESSÍVEL; 401/403/404 é v
 
 test('observar: lê o estado do endpoint, inclusive o 503 com estado fora (banco caído)', () => {
   assert.deepEqual(observar({ status: 200, corpo: { estado: 'ok', causa: null, motivo: 'IA respondendo' } }), { tipo: 'ok', causa: null, resumo: 'IA respondendo' });
-  const o = observar({ status: 503, corpo: { estado: 'fora', causa: 'indisponivel', motivo: 'banco de dados não respondeu' } });
+  // banco fora: 503 SEM `estado` é inacessível (e só avisa na 2ª rodada), nunca «Sofia fora do ar» na 1ª
+  assert.equal(observar({ status: 503, corpo: { error: 'db_unavailable' } }).tipo, 'inacessivel');
+  const o = observar({ status: 200, corpo: { estado: 'fora', causa: 'indisponivel', motivo: 'x' } });
   assert.equal(o.tipo, 'fora');
   assert.equal(o.causa, 'indisponivel');
   // causa desconhecida não passa (o corpo vem da rede)
@@ -158,9 +172,26 @@ test('um respiro no meio da queda (1 OK) não encerra nem manda «voltou»', () 
   assert.deepEqual(avisos.map((a) => a.tipo), ['novo']);
 });
 
-test('oscilar não vira spam: queda que volta e cai dentro de 30 min não reavisa o mesmo tipo', () => {
+test('queda nova logo depois do «voltou» avisa como QUEDA (ALERTA, tipo novo), não como LEMBRETE', () => {
   const { avisos } = simular([[0, FORA], [10, OK], [20, OK], [25, FORA]]);
-  assert.deepEqual(avisos.map((a) => [a.min, a.tipo]), [[0, 'novo'], [20, 'voltou']]);
+  assert.deepEqual(avisos.map((a) => [a.min, a.tipo]), [[0, 'novo'], [20, 'voltou'], [25, 'novo']]);
+  assert.match(avisos[2].texto, /^ALERTA/);
+  assert.doesNotMatch(avisos[2].texto, /LEMBRETE/);
+  // e a repetição do MESMO incidente aberto continua sendo LEMBRETE
+  assert.match(simular([[0, FORA], [30, FORA]]).avisos[1].texto, /^LEMBRETE/);
+});
+
+test('«voltou» cita a leitura que ABRIU o incidente, mesmo que a última seja outra (degradado → fora)', () => {
+  const DEGRADADO: Observacao = { tipo: 'degradado', causa: 'indisponivel', resumo: '30% falhando' };
+  const { avisos } = simular([[0, DEGRADADO], [10, FORA], [20, OK], [30, OK]]);
+  const volta = avisos.find((a) => a.tipo === 'voltou')!;
+  assert.match(volta.texto, /a IA está DEGRADADA \(30% falhando\)/);
+});
+
+test('solavanco de rede no meio de uma queda aberta NÃO dispara um 2º alerta («NÃO RESPONDE») nem encerra a queda', () => {
+  const MUDO: Observacao = { tipo: 'inacessivel', causa: null, resumo: 'x' };
+  const { avisos } = simular([[0, FORA], [5, MUDO], [10, FORA], [15, MUDO], [20, MUDO]]);
+  assert.deepEqual(avisos.map((a) => [a.min, a.tipo]), [[0, 'novo'], [20, 'novo']], 'só a 2ª rodada seguida de servidor mudo vira alerta');
 });
 
 test('tudo ok o tempo todo nunca avisa nada', () => {
@@ -191,6 +222,7 @@ test('o estado antigo (cache sem campos novos) não quebra a rodada', () => {
   const r = avancar({ desde: null } as unknown as Estado, FORA, T0);
   assert.equal(r.avisos.length, 1);
   assert.equal(r.estado.okSeguidos, 0);
+  assert.equal(r.estado.abertura?.tipo, 'fora');
 });
 
 test('o texto vai para um modelo de WhatsApp: uma linha só, sem 4 espaços, com teto', () => {

@@ -197,6 +197,15 @@ test('servidor mudo avisa «NÃO RESPONDE» só na 2ª rodada seguida; 404 do en
   assert.equal(JSON.parse(readFileSync(join(dir, 'estado/vigia.json'), 'utf8')).desde, null);
 });
 
+test('HEALTH_URL ainda não cadastrada: sai VERDE (exit 0) com aviso, sem mandar nada e sem gastar e-mail de falha', { skip: PULAR }, async () => {
+  reset();
+  const dir = mkdtempSync(join(tmpdir(), 'vigia-'));
+  const r = await rodar(dir, { HEALTH_URL: '' });
+  assert.equal(r.codigo, 0, r.saida);
+  assert.match(r.saida, /::warning::HEALTH_URL não está cadastrado/);
+  assert.equal(recebidos.length, 0);
+});
+
 test('MODO_TESTE manda o aviso de teste pelos canais, sem consultar a saúde nem mexer no estado', { skip: PULAR }, async () => {
   reset();
   saude = FORA;

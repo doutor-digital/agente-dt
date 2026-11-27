@@ -22,22 +22,23 @@ GitHub Actions (cron, a cada ~10 min)
 - **`cancelled` fica fora da conta**: chamada em que quem chamou desistiu (prazo estourado) não é do provedor e diluiria a taxa justo quando o provedor trava.
 - **Sem dado sensível**: só números e o nome do provedor. Nada de unidade, telefone, lead ou texto de erro.
 - **Fechado por padrão**: sem `HEALTH_IA_TOKEN` no servidor responde 404; com ele exige o mesmo valor em `X-Health-Token` (401 se errar, comparação em tempo constante). O repositório é público; o endpoint não precisa ser.
-- Banco fora vira `503 {estado: "fora"}`, nunca 200.
+- Banco fora vira `503 {error: "db_unavailable"}` (nunca 200 e SEM `estado`): o vigia trata como servidor inacessível e só avisa na 2ª rodada seguida; um soluço do banco não vira «Sofia fora do ar».
+- Sem `HEALTH_URL` cadastrado o script sai **verde** com um aviso (`::warning::`) no log, para não mandar ~144 e-mails de falha por dia até os segredos serem cadastrados.
 
 **Regras** (`watchdog-decisao.ts`):
 
 | Estado | Quando |
 |---|---|
-| `fora` | 90% ou mais das chamadas falhando na rede inteira, ou em um provedor, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais. Exceção: a rede inteira com causa de conta (crédito, chave) vale com 1 unidade só (de madrugada pode ser a única que falou) |
-| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 chamadas e erro em 2 unidades ou mais |
+| `fora` | 90% ou mais das chamadas falhando na rede inteira, ou em um provedor, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
+| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 chamadas; os dois com erro em 2 unidades ou mais |
 | `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
-| `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida** (um deploy ou reinício de ~1 min não pode acordar ninguém) |
+| `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida**, inclusive com outro incidente já aberto (um deploy ou reinício de ~1 min não pode acordar ninguém) |
 | `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo. Também só na 2ª rodada seguida |
 
 **Throttle e «voltou ao normal»**:
 
 - No máximo **1 aviso por tipo de incidente a cada 30 min** (`tipo:causa`, por exemplo `fora:credito`). Incidente aberto há mais de 2 h lembra só de 2 em 2 h. Trocar de tipo (degradado para fora) avisa na hora.
-- «VOLTOU AO NORMAL» sai uma vez, depois de 2 rodadas ok seguidas (um respiro no meio da queda não encerra o incidente). O throttle sobrevive à oscilação: cair, voltar e cair dentro de 30 min não reavisa o mesmo tipo.
+- «VOLTOU AO NORMAL» sai uma vez, depois de 2 rodadas ok seguidas (um respiro no meio da queda não encerra o incidente), e cita a leitura que abriu o incidente. Encerrado o incidente o throttle zera: uma queda nova, mesmo 10 min depois, avisa como queda (ALERTA), não como LEMBRETE; LEMBRETE é só a repetição de um incidente que segue aberto.
 - Se **nenhum** canal entrega, a rodada fica **vermelha** (exit 1, e o GitHub avisa por e-mail quem editou o cron) e o throttle **não** é gasto: a rodada seguinte tenta de novo.
 - Teste do alarme: o workflow tem `workflow_dispatch` com a opção «teste» e um cron mensal (dia 1, 09h de Brasília) que manda um aviso de TESTE. Se o aviso mensal não chegar, o canal morreu e a rodada fica vermelha.
 

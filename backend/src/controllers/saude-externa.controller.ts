@@ -20,7 +20,7 @@ export function tokenConfere(recebido: string, esperado: string): boolean {
  *
  * FECHADO POR PADRÃO (OWASP A01/A02): sem `HEALTH_IA_TOKEN` no servidor a rota responde 404, e com ele exige o mesmo valor
  * no cabeçalho `X-Health-Token`. Os dados são só contagens, mas dizer de graça a qualquer um que a IA caiu, e quando, não
- * tem motivo para ser público. Falha de banco não vira 200: responde 503 com `estado: fora`.
+ * tem motivo para ser público. Falha de banco não vira 200: responde 503 SEM `estado` (o vigia trata como servidor inacessível, com a espera de 2 rodadas).
  */
 export async function saudeIaExternaHandler(req: Request, res: Response): Promise<void> {
   const esperado = (process.env.HEALTH_IA_TOKEN ?? '').trim();
@@ -38,6 +38,8 @@ export async function saudeIaExternaHandler(req: Request, res: Response): Promis
     res.json(await consultarSaude());
   } catch (err) {
     logger.warn({ err: String(err) }, 'saude-ia externa: o banco não respondeu');
-    res.status(503).json({ estado: 'fora', causa: 'indisponivel', motivo: 'banco de dados não respondeu' });
+    // SEM `estado`: o vigia lê `estado` e um soluço do banco virava «Sofia FORA DO AR» na 1ª rodada. 503 sem corpo de saúde é
+    // `inacessivel` para o vigia, que só avisa na 2ª rodada seguida.
+    res.status(503).json({ error: 'db_unavailable' });
   }
 }
