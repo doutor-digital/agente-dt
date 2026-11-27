@@ -13,7 +13,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel } from '../services/openai.service.js';
 import type { Caso } from './banco.js';
 import { conferir, type Falha, type FerramentaChamada, type OutraUnidade } from './checks.js';
-import { MAX_VOLTAS, precisaDeOutraVolta, respostasSimuladas } from './volta-bastidor.js';
+import { invocarComVoltas, vaziaDepoisDaVolta, type ChamadaDeFerramenta } from './volta-bastidor.js';
 
 /**
  * Roda um caso do banco dourado contra a IA de verdade.
@@ -193,12 +193,13 @@ export async function rodarCaso(
     const descricoes: Record<string, string> = {};
     for (const [nome, cfg] of configPorNome) if (cfg.description) descricoes[nome] = cfg.description;
 
+    const regrasDeCampo = await listEnabledLeadFieldRules(unit.id, unit.slug);
     const todas = buildTools({
       recorder: recorderSilencioso,
       kommo: kommoDeMentira,
       descriptionOverrides: descricoes,
       pausedFieldId: unit.kommoPausedFieldId,
-      leadFieldRules: await listEnabledLeadFieldRules(unit.id, unit.slug),
+      leadFieldRules: regrasDeCampo,
       unit,
     });
     const tools = todas.filter((t) => configPorNome.get(t.name)?.enabled ?? true);
@@ -220,21 +221,24 @@ export async function rodarCaso(
         ? (modelo as unknown as { bindTools: (t: unknown[]) => { invoke: (m: BaseMessage[]) => Promise<AIMessage> } }).bindTools(tools)
         : (modelo as unknown as { invoke: (m: BaseMessage[]) => Promise<AIMessage> });
 
-    // Como o grafo da produção (agent → tools → agent): turno que abre só com ferramenta de bastidor
-    // (etiqueta, campo, título) ganha o resultado simulado e outra chamada — é nela que sai a fala.
-    // Ver `volta-bastidor.ts`. As chamadas de todas as voltas contam como "ferramentas chamadas".
-    let resposta = await comTools.invoke(mensagens);
-    const chamadasAnteriores: NonNullable<AIMessage['tool_calls']> = [];
-    for (let volta = 0; volta < MAX_VOLTAS; volta++) {
-      const chamadas = resposta.tool_calls ?? [];
-      if (!precisaDeOutraVolta(textoDaResposta(resposta.content), chamadas)) break;
-      chamadasAnteriores.push(...chamadas);
-      mensagens.push(resposta, ...respostasSimuladas(chamadas));
-      resposta = await comTools.invoke(mensagens);
-    }
+    const falasDoPaciente = caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto);
+
+    // Como o grafo da produção (agent → tools → agent): turno que abre só com ferramenta de bastidor que a
+    // produção aceitaria (etiqueta, campo, título com nome dito, etapa comum) ganha o resultado simulado e outra
+    // chamada — é nela que sai a fala. Ver `volta-bastidor.ts`. As chamadas de todas as voltas contam como
+    // "ferramentas chamadas".
+    const contextoDaVolta = {
+      nomesDeCampo: new Set(regrasDeCampo.map((r) => r.toolName)),
+      falasDoPaciente,
+    };
+    const { resposta, anteriores: chamadasAnteriores, voltas } = await invocarComVoltas(
+      (m) => comTools.invoke(m),
+      mensagens,
+      contextoDaVolta,
+      textoDaResposta,
+    );
 
     const bruto = textoDaResposta(resposta.content);
-    const falasDoPaciente = caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto);
     const g = aplicarGuardrail(bruto, unit, { mensagensDoPaciente: falasDoPaciente.slice(-3) });
     // O eval não executa ferramentas, então a trava do grafo (confirmacao-so-com-crm.ts: comprovante só a equipe confirma;
     // unidade com taxa de reserva só marca com comprovante do valor exato) é aplicada aqui à chamada planejada: o que o
@@ -254,6 +258,9 @@ export async function rodarCaso(
       caso.espera,
       { unit, outrasUnidades: ctx.outrasUnidades, falasDoPaciente: falasDoPaciente.slice(-3) },
     );
+    // As chamadas somadas das voltas escondiam a `resposta_vazia` de checks.ts: a Sofia que termina muda depois do bastidor reprova.
+    const vazia = vaziaDepoisDaVolta(voltas, g.text, (resposta.tool_calls ?? []) as ChamadaDeFerramenta[], contextoDaVolta.nomesDeCampo);
+    if (vazia && !falhas.some((f) => f.regra === 'resposta_vazia')) falhas.unshift(vazia);
 
     return {
       ...base,
