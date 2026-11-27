@@ -172,6 +172,7 @@ import { lidaEvolutionHandler } from '../lib/chatwoot-lida.js';
 import { eventoChatwootHandler } from '../lib/chatwoot-ia.js';
 import { kapsoProxyHandler } from '../controllers/kapso-proxy.controller.js';
 import { saudeIaHandler } from '../controllers/saude-ia.controller.js';
+import { saudeIaExternaHandler } from '../controllers/saude-externa.controller.js';
 import { listChangeLogHandler } from '../controllers/change-log.controller.js';
 import {
   listLessonsHandler,
@@ -376,6 +377,9 @@ apiRouter.get('/health/ready', async (_req, res) => {
     res.status(503).json({ ok: false, banco: 'fora', ms: Date.now() - t0 });
   }
 });
+
+/** Saúde da IA para o vigia externo (GitHub Actions): ok/degradado/fora. Fechada sem HEALTH_IA_TOKEN; ver o controller. */
+apiRouter.get('/health/ia', saudeIaExternaHandler);
 
 apiRouter.post('/auth/login', loginHandler);
 

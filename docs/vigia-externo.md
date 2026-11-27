@@ -1,0 +1,94 @@
+# Vigia externo: o alerta que chega mesmo com a VPS fora
+
+## Por que
+
+Na noite de 26 para 27/11 a Sofia ficou 15 h sem responder por falta de crédito. Todo o erro estava em `llm_calls` e o alerta não chegou a ninguém. Os avisos que existiam viviam **dentro** do servidor (relay de e-mail, Evolution; o WhatsApp dos alertas foi banido em 06/10), então morrem junto com ele ou dependem de uma cadeia que ninguém vigia. Este vigia roda no GitHub, consulta o agente de fora e avisa por canais que não passam pela VPS.
+
+## Como funciona
+
+```
+GitHub Actions (cron, a cada ~10 min)
+  └─ .github/scripts/vigia-externo.mjs
+       1. GET https://<agente>/api/health/ia   (cabeçalho X-Health-Token)
+       2. decide com backend/src/lib/watchdog-decisao.ts (as mesmas regras testadas na suíte)
+       3. avisa: WhatsApp (Kapso, modelo aprovado) + Telegram (reserva)
+       4. guarda o estado no cache do Actions (último aviso por tipo, início do incidente)
+```
+
+**O endpoint `GET /api/health/ia`** (`backend/src/controllers/saude-externa.controller.ts`, `lib/saude-externa.ts`):
+
+- Responde `ok`, `degradado` ou `fora`, a causa (`credito`, `autenticacao`, `limite`, `indisponivel`, `outra`) e contagens da janela de 10 min por provedor, mais há quantos minutos foi o último sucesso.
+- **Barato**: UMA consulta em `llm_calls` pelo índice de `created_at`, sobre a última hora (o teste com 30 mil linhas confere que o plano usa índice), mais cache de 15 s em memória.
+- **Sem dado sensível**: só números e o nome do provedor. Nada de unidade, telefone, lead ou texto de erro.
+- **Fechado por padrão**: sem `HEALTH_IA_TOKEN` no servidor responde 404; com ele exige o mesmo valor em `X-Health-Token` (401 se errar, comparação em tempo constante). O repositório é público; o endpoint não precisa ser.
+- Banco fora vira `503 {estado: "fora"}`, nunca 200.
+
+**Regras** (`watchdog-decisao.ts`):
+
+| Estado | Quando |
+|---|---|
+| `fora` | 90% ou mais das chamadas falhando na rede inteira, ou em um provedor, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais. Exceção: a rede inteira com causa de conta (crédito, chave) vale com 1 unidade só (de madrugada pode ser a única que falou) |
+| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 |
+| `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
+| `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora |
+| `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo |
+
+**Throttle e «voltou ao normal»**:
+
+- No máximo **1 aviso por tipo de incidente a cada 30 min** (`tipo:causa`, por exemplo `fora:credito`). Incidente aberto há mais de 2 h lembra só de 2 em 2 h. Trocar de tipo (degradado para fora) avisa na hora.
+- «VOLTOU AO NORMAL» sai uma vez, depois de 2 rodadas ok seguidas (um respiro no meio da queda não encerra o incidente). O throttle sobrevive à oscilação: cair, voltar e cair dentro de 30 min não reavisa o mesmo tipo.
+- Se **nenhum** canal entrega, a rodada fica **vermelha** (exit 1, e o GitHub avisa por e-mail quem editou o cron) e o throttle **não** é gasto: a rodada seguinte tenta de novo.
+- Teste do alarme: o workflow tem `workflow_dispatch` com a opção «teste» e um cron mensal (dia 1, 09h de Brasília) que manda um aviso de TESTE. Se o aviso mensal não chegar, o canal morreu e a rodada fica vermelha.
+
+## Segredos que o João cadastra
+
+No GitHub: Settings > Secrets and variables > Actions > New repository secret.
+
+| Segredo | Valor | Obrigatório |
+|---|---|---|
+| `HEALTH_URL` | `https://automacao.doutordigitalconsultoria.com/api/health/ia` (ou o domínio do agente em produção; o roteador do Traefik aceita `AGENT_DOMAIN`, `automacao.` e `franquia.`) | sim |
+| `HEALTH_IA_TOKEN` | um texto aleatório longo, por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (`/opt/doutordigital/agente-dt/.env`) | sim |
+| `TELEGRAM_BOT_TOKEN` | token do bot DD-Avisos (o mesmo `TELEGRAM_BOT_TOKEN` do servidor) | recomendado (é o canal que já funciona hoje) |
+| `TELEGRAM_CHAT_ID` | `7822226023` (o chat do João, o mesmo do `telegram.ts`) | junto com o token |
+| `KAPSO_API_KEY` | a chave do Kapso (a que o servidor usa como `KAPSO_API_KEY`) | para o WhatsApp |
+| `KAPSO_PHONE_NUMBER_ID` | o `phone_number_id` do número do Kapso que ENVIA o alerta | para o WhatsApp |
+| `ALERTA_WHATSAPP_NUMERO` | o WhatsApp do João com DDI e DDD, só números (ex. `5511999999999`) | para o WhatsApp |
+| `KAPSO_TEMPLATE` | nome do modelo aprovado (padrão `alerta_sistema`) | opcional |
+
+Basta **um** canal configurado para o aviso sair; os dois juntos dão redundância.
+
+### O modelo do WhatsApp
+
+Mensagem livre só entra na janela de 24 h depois de o João ter escrito para o número. Para alerta às 3h da manhã é preciso um **modelo aprovado**: categoria Utilidade, idioma `pt_BR`, nome `alerta_sistema`, corpo:
+
+```
+{{1}}
+```
+
+(uma única variável com o texto inteiro; o script manda em uma linha só, sem quebra de linha, como a Meta exige). Se a Meta recusar um corpo que seja só a variável, use `Alerta do sistema Doutor Digital: {{1}}` e ajuste o prefixo. Enquanto o modelo não é aprovado o script tenta texto livre (funciona só dentro da janela de 24 h), e o Telegram cobre.
+
+**O que NÃO está provado**: o envio real pelo Kapso. O formato (`POST /meta/whatsapp/v24.0/<phone_number_id>/messages`, `X-API-Key`, corpo de modelo da Meta) segue o que o repositório já usa para o Kapso e foi testado contra um servidor falso, mas não foi chamado de verdade (não toquei em produção). A primeira prova é rodar o workflow à mão com «teste» marcado.
+
+## Alternativas avaliadas
+
+| Opção | Custo | Confiabilidade | Veredito |
+|---|---|---|---|
+| **GitHub Actions + script próprio** (escolhida) | R$ 0: o repositório é público, e minutos de Actions em repositório público são gratuitos | Roda fora da VPS e do provedor dela. Limites: o cron do GitHub não é pontual (atrasos de alguns minutos, às vezes mais de 10, em horário de pico) e o piso é 5 min; a rodada pode ser pulada; agendamento é desligado após 60 dias sem atividade no repositório (aqui há commits toda semana) | Escolhida: dá para ter regra própria (causa pelo erro do provedor, throttle, «voltou»), WhatsApp pelo Kapso e Telegram, sem mais um serviço |
+| Healthchecks.io (dead-man's switch: a VPS faz ping e o serviço avisa se o ping some) | plano gratuito com 20 verificações; avisos por e-mail, Telegram, webhook. WhatsApp/SMS em plano pago (não verificado) | Muito bom para «o servidor sumiu», mas só enxerga o que o servidor se dispõe a anunciar: com a Sofia 100% em erro e o processo vivo, o ping continua saindo e nada avisa, a não ser que o ping só saia quando a saúde está ok (aí vira o mesmo endpoint de saúde). Não identifica a causa | Boa **segunda camada** para «VPS inteira fora», grátis, com um ping do próprio agente a cada 5 min (sugestão, fora deste PR) |
+| UptimeRobot | plano gratuito: 50 monitores a cada 5 min, e a licença do gratuito é só para uso não comercial (conferir os termos atuais); avisos por e-mail/Telegram/webhook, WhatsApp não | Bom para «a URL deixou de responder» e para procurar uma palavra no corpo (`"estado":"ok"`). Não tem lógica de causa nem de throttle por tipo | Alternativa simples para a segunda camada. Para uso comercial exigiria plano pago |
+
+Recomendação: **GitHub Actions como vigia principal** (este PR) e, se o João quiser dois fornecedores independentes, um monitor gratuito de URL (UptimeRobot ou Healthchecks) só para «a VPS caiu inteira», que não precisa de código. O que o vigia próprio faz e os outros não: lê o erro do provedor e diz **por que** a Sofia caiu (crédito, chave, limite).
+
+## Verificação de saldo dos provedores
+
+**Não existe endpoint público de saldo.** Para a OpenAI e a Anthropic:
+
+- OpenAI: as chaves de API (`sk-...`) não leem o saldo pré-pago. O que a API oferece com chave de administrador (`/v1/organization/costs` e `/usage`, que o repositório já usa em `openai-platform.service.ts`) é o **gasto**, não o que sobra. O endpoint antigo de saldo do painel (`/dashboard/billing/...`) exige sessão de navegador e não é suportado.
+- Anthropic: a Admin API (`/v1/organizations/usage_report/...` e `cost_report`) também devolve uso e custo, não o saldo de créditos. O saldo só existe no console (e o aviso por e-mail de recarga automática).
+- Não consegui chamar nenhum dos dois para confirmar ao vivo (sem chave de administrador nesta sessão e sem tocar em produção). Isso reflete a documentação que conheço, não um teste. Conferir no console de cada provedor se o quadro mudou.
+
+O que cobre a lacuna: o saldo esgotado aparece **dentro de 10 min** como `fora:credito`, que é a causa que o vigia lê da mensagem do provedor (`credit balance is too low`, `no credits remaining`). Aviso **antes** de zerar só com recarga automática ligada nos dois consoles, ou com uma estimativa própria (saldo comprado informado à mão menos o custo do `cost_report`), que seria outro PR.
+
+## Relação com o PR do fuso (`fix/fuso-janelas-taxa-erro`)
+
+Os dois PRs saem do `main` e não dependem um do outro. `backend/src/lib/causa-erro-ia.ts` (a leitura da causa do erro, em JS e em SQL) é **idêntico nos dois**: se os dois forem mesclados o git junta sem conflito. A consulta de saúde usa `(now() at time zone 'utc')` escrito por extenso, sem importar o `sql-tempo.ts` do outro PR, pelo mesmo motivo.
