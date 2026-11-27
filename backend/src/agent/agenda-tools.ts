@@ -1904,7 +1904,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           // "¤ Pagamento antecipado" sai do sinal real (forma escolhida / pagamento comprovado),
           // não mais "Sim" fixo — 06/10/2026, lead 28088906 pagava no dia e ficou Sim.
           const idPagamento = idDe(NOME_PAGAMENTO_ANTECIPADO);
-          const escolhaSalva = args.formaPagamento
+          // Chave `pix-depois-de-marcar` com sinal e a forma NÃO dita: a escolha guardada na conversa é de uma marcação ANTERIOR e não vale
+          // para esta (carimbaria "¤ Pagamento antecipado" com a decisão velha); ela é limpa mais abaixo.
+          const escolhaSalva = args.formaPagamento || formaNaoDita
             ? null
             : await prisma.conversation
                 .findFirst({ where: { unitId: fresca.id, leadId: String(args.leadId) }, select: { pagamentoEscolhido: true } })
@@ -2035,6 +2037,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           .updateMany({
             where: { unitId: fresca.id, leadId: String(args.leadId) },
             data: { pagamentoEscolhido: args.formaPagamento },
+          })
+          .catch(() => undefined);
+      } else if (formaNaoDita && args.leadId) {
+        // Chave `pix-depois-de-marcar` com sinal: a escolha de uma marcação anterior não vale para esta; nulo = "ainda não escolheu".
+        await prisma.conversation
+          .updateMany({
+            where: { unitId: fresca.id, leadId: String(args.leadId), pagamentoEscolhido: { not: null } },
+            data: { pagamentoEscolhido: null },
           })
           .catch(() => undefined);
       }

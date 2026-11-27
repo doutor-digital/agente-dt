@@ -12,7 +12,7 @@ import { buildTools } from './tools.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
-import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
+import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
@@ -123,7 +123,7 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
-import { pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
+import { gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -1208,6 +1208,10 @@ export async function buildAgentGraph(
       // Quem JÁ TEM consulta de pé segue cortado (não se propõe segundo horário a quem já marcou).
       const adiamentoPropoeDia = automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) && !promptTemConsulta(promptDoTurno);
       const encerrou = encerramentoParaCorte(falas, adiamentoPropoeDia);
+      // Chave `pix-depois-de-marcar` COM sinal: "Pago no dia" depois da oferta do sinal vira `na_clinica` (a lista «agendados sem Pix» deixa de listá-lo).
+      if (state.leadId && recusouOSinal(falas) && sinalDaUnidade(unit) && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })) {
+        void gravarRecusaDoSinal(unit.id, state.leadId);
+      }
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
         const travaHorario = travaDoHorario({

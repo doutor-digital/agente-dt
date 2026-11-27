@@ -10,7 +10,7 @@ import type { Unit } from '@prisma/client';
 import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { composeSystemPrompt, renderEsperaRules } from './prompt-composer.js';
 import type { Fala } from './repeticao.js';
-import { adiouComMotivo, encerramentoParaCorte, pacienteEncerrou, renderPacienteAdiou, renderPacienteEncerrou } from './paciente-encerrou.js';
+import { adiamentoDoTurno, adiouComMotivo, encerramentoParaCorte, pacienteEncerrou, renderPacienteAdiou, renderPacienteEncerrou } from './paciente-encerrou.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
@@ -32,6 +32,10 @@ test('adiou com motivo ou data: as frases reais dos pacientes', () => {
     'a partir do dia 10 eu consigo',
     'esse mês não dá, só no outro',
     'vou falar com meu marido, pode ser?',
+    'vou falar com o meu marido e te aviso',
+    'preciso ver com a minha mãe primeiro',
+    'depois que eu receber eu te falo',
+    'não tenho condições agora, só mês que vem',
     'vou conversar com o marido e te falo, tá bom?',
     'só depois do meu salário',
   ]) {
@@ -114,7 +118,7 @@ test('EM ESPERA, regra 3: com a chave propõe dia + dois horários reais; sem a 
   assert.match(com, /chame consultar_horarios/);
   assert.match(com, /nunca invente vaga/);
   assert.match(com, /Só chame\s+agendar_consulta se ele ESCOLHER/);
-  assert.match(com, /só agradeceu, se despediu ou recusou, NÃO empurre horário/);
+  assert.match(com, /só agradeceu, se despediu[^\n]*[\s\S]*NÃO proponha/);
   assert.match(com, /Nunca prometa HORA/);
   // as outras regras ficam
   for (const trecho of [/1\. Só quando o paciente QUER e adia/, /2\. ANTES de mover, salve os dois campos/, /4\. Depois disso, não mande mais nada/]) {
@@ -127,4 +131,81 @@ test('quem JÁ TEM consulta de pé segue cortado: a chave só vale sem consulta 
   const { promptTemConsulta } = await import('./reserva-sem-marcar.js');
   assert.equal(promptTemConsulta('<consulta_do_paciente>\nEste paciente TEM consulta marcada: 20/10/2026 às 11:30\n</consulta_do_paciente>'), true);
   assert.equal(promptTemConsulta('<regras_gerais>nada de consulta marcada</regras_gerais>'), false);
+});
+
+// ── devolução do sênior (27/11): os defeitos só aparecem com a chave LIGADA ────────────────────────────────────────────────────
+
+const DESPEDIDAS_COM_MOTIVO = [
+  'Obrigada! Vou conversar com meu esposo e te retorno. Boa noite',
+  'Muito obrigada pela atenção, vou ver com minha filha e qualquer coisa te chamo. Tchau',
+  'Obrigado, só mês que vem. Tchau tchau',
+  'ok, obrigada. Quando eu receber eu te chamo, até mais',
+  'Vou falar com meu marido, obrigada, fica com Deus',
+];
+
+test('1) despedida COM motivo: o corte de 21/10 vale (5 de 5) — nada de horário, bloco de quem encerrou', () => {
+  for (const frase of DESPEDIDAS_COM_MOTIVO) {
+    const h = [OFERTA, p(frase)];
+    assert.equal(adiouComMotivo(h), false, frase);
+    // com a chave ligada o corte do grafo é IGUAL ao do main (chave desligada)
+    assert.equal(encerramentoParaCorte(h, true), pacienteEncerrou(h), frase);
+    assert.doesNotMatch(renderPacienteEncerrou(h, { propoeDia: true }), /paciente_adiou/, frase);
+  }
+  // "boa noite" só ABRINDO a fala é cumprimento, não despedida: o motivo vale
+  assert.equal(adiouComMotivo([OFERTA, p('Boa noite, só recebo dia 8')]), true);
+});
+
+test('2) UMA proposta só, no código: adiar de novo depois da proposta volta ao corte do main', () => {
+  const proposta = ia('Combinado! Já deixo pra quarta 09/12, depois que você receber? Tenho 7h ou 13h.');
+  const segundo = [OFERTA, p('Só recebo dia 8'), proposta, p('vou falar com meu marido primeiro e depois te falo')];
+  assert.equal(adiamentoDoTurno([OFERTA, p('Só recebo dia 8')]), 'propor');
+  assert.equal(adiamentoDoTurno(segundo), 'ja_propos');
+  assert.equal(adiouComMotivo(segundo), false);
+  // o main corta ("depois te falo" = vai_se_organizar): com a chave ligada continua cortando
+  assert.equal(pacienteEncerrou(segundo), 'vai_se_organizar');
+  assert.equal(encerramentoParaCorte(segundo, true), 'vai_se_organizar');
+  const bloco = renderPacienteEncerrou(segundo, { propoeDia: true });
+  assert.match(bloco, /adiou de novo[\s\S]*NÃO proponha horário outra vez/);
+  // o adiamento de ANTES de qualquer proposta continua propondo
+  assert.equal(adiamentoDoTurno([ia('Qual horário fica melhor?'), p('só recebo dia 5')]), 'propor');
+});
+
+test('5) quem já ESCOLHEU horário não vira "adiou": a escolha vence', () => {
+  for (const frase of [
+    'Pode ser segunda às 8h, só recebo dia 5 mas pago no dia',
+    'quero terça às 14h, mas só recebo dia 10',
+    'pode ser quarta de manhã, vou falar com meu marido hoje à noite',
+  ]) {
+    assert.equal(adiouComMotivo([OFERTA, p(frase)]), false, frase);
+    assert.doesNotMatch(renderPacienteEncerrou([OFERTA, p(frase)], { propoeDia: true }), /paciente_adiou/, frase);
+  }
+});
+
+test('6) frases comuns reconhecidas e alinhadas com o corte: onde a regra 3 manda propor, o código não corta', () => {
+  for (const frase of ['vou falar com o meu marido', 'vou conversar com a minha mãe', 'depois que eu receber eu te falo', 'não tenho condições agora, só mês que vem']) {
+    const h = [OFERTA, p(frase)];
+    assert.equal(adiouComMotivo(h), true, frase);
+    assert.equal(encerramentoParaCorte(h, true), null, `${frase}: sem corte`);
+  }
+  // e onde o código corta, a regra 3 manda NÃO propor e diz quem decide
+  const com = renderEsperaRules({ waiting_deferred: 111 }, { propoeDia: true });
+  assert.match(com, /disse só "vou pensar"\/"te aviso" sem motivo nem\s+data/);
+  assert.match(com, /<paciente_adiou> = proponha uma vez; <paciente_encerrou> = nada\s+de horário/);
+  assert.match(com, /UMA proposta só/);
+});
+
+test('nit: a regra 4 do EM ESPERA deixa responder à proposta em aberto', () => {
+  const com = renderEsperaRules({ waiting_deferred: 111 }, { propoeDia: true });
+  assert.match(com, /4\. Depois disso[^\n]*EXCETO responder se ele responder à proposta/);
+  assert.match(renderEsperaRules({ waiting_deferred: 111 }), /4\. Depois disso, não mande mais nada nesta conversa até a data\. A retomada é automática\./);
+});
+
+test('nit: o prompt confere consulta marcada como o grafo — com consulta de pé, bloco de quem encerrou (sem proposta)', () => {
+  const un = { id: 'u-x', slug: 'doutor-hernia-araguaina', name: 'x', personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
+  _semearParaTeste([{ slug: 'doutor-hernia-araguaina', automacao: 'adiamento-propoe-dia', estado: 'ligado' }]);
+  const historico = [OFERTA, p('só recebo dia 8')];
+  const consulta = { estado: 'confirmada', quando: '2099-12-01T09:00', idSchedule: 1 } as never;
+  const com = composeSystemPrompt({ unit: un, historico, consulta });
+  assert.doesNotMatch(com, /<paciente_adiou>/);
+  assert.match(composeSystemPrompt({ unit: un, historico }), /<paciente_adiou>/);
 });

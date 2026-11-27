@@ -7,6 +7,9 @@ import { renderRulesGlobal } from './prompt-composer.js';
 import { instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
 import { porQueNaoReservar } from './agenda-tools.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
+import { composeSystemPrompt } from './prompt-composer.js';
+import { gravarRecusaDoSinal, recusouOSinal } from './pix-depois-de-marcar.js';
+import type { Fala } from './repeticao.js';
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
@@ -233,7 +236,7 @@ test('LIGADA + sinal: marca com o dia confirmado e SEM a forma de pagamento; ofe
   assert.match(r, /gerar_sinal_pix com o leadId desta conversa/);
   assert.ok(!r.includes(CHAVE_FIXA), 'nunca a chave fixa');
   // a oferta do Pix NÃO é desligada: nada gravado como "na_clinica" (a lista «agendados sem Pix» continua vendo a pessoa)
-  assert.equal(conversaGravou.length, 0, 'sem escolha dita, nada é gravado em pagamento_escolhido');
+  assert.ok(conversaGravou.every((g) => (g.data as { pagamentoEscolhido?: string | null }).pagamentoEscolhido === null), 'sem escolha dita, NUNCA se grava "na_clinica" (só se limpa a escolha velha)');
 });
 
 test('LIGADA: a confirmação do dia CONTINUA obrigatória ("consegue vir mesmo?") e a recusa não pergunta forma de pagamento', async () => {
@@ -357,4 +360,45 @@ test('a régua do Pix (follow-up): com sinal, quem não escolheu NADA não é co
   const fixa = unidade({ sinalPixCentavos: null });
   assert.equal(degrauDoPixNaoSeAplica(degrau, null, fixa), false);
   assert.equal(degrauDoPixNaoSeAplica(degrau, 'na_clinica', fixa), true);
+});
+
+// ── devolução do sênior (27/11) ────────────────────────────────────────────────────────────────────────────────────────────────
+
+test('3) unidade com chave Pix fixa + chave ligada: o modelo de confirmação NÃO diz "a vaga é garantida com o PIX: <chave>" e segue "na clínica"', () => {
+  const u = unidade({ sinalPixCentavos: null, clinicAddress: 'Rua A, 1' });
+  const antes = composeSystemPrompt({ unit: u });
+  assert.match(antes, /A vaga é garantida com o pagamento antecipado no PIX: 12\.345\.678\/0001-90/);
+  ligar(u.slug);
+  const depois = composeSystemPrompt({ unit: u });
+  assert.doesNotMatch(depois, /A vaga é garantida com o pagamento antecipado no PIX/);
+  assert.ok(!depois.includes('PIX: 12.345.678/0001-90'));
+  assert.match(depois, /vale pagar na clínica, no dia\. NÃO escreva "a vaga é garantida com o PIX"/);
+  assert.match(depois, /✨ Valor: R\$ 350 no dia, na clínica/);
+  assert.match(depois, /O pagamento é feito no dia, na clínica/);
+  // Boa Vista e Timbó: o modelo de sempre
+  const bv = unidade({ slug: 'doutor-hernia-boa-vista', sinalPixCentavos: null, spineBookingRequiresPayment: true, clinicAddress: 'Rua A, 1' });
+  ligar(bv.slug);
+  assert.match(composeSystemPrompt({ unit: bv }), /Pagamento antecipado recebido — o horário está garantido/);
+});
+
+test('4) com sinal e a forma NÃO dita: a escolha VELHA da conversa é limpa (não carimba "¤ Pagamento antecipado" com a decisão antiga)', async () => {
+  ligar();
+  const hora = await primeiroHorario(atual);
+  await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
+  assert.equal(conversaGravou.length, 1);
+  const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string | null }; where: Record<string, unknown> };
+  assert.equal(g.data.pagamentoEscolhido, null, 'a escolha antiga é zerada');
+  assert.deepEqual(g.where.pagamentoEscolhido, { not: null }, 'só mexe em quem tem escolha antiga');
+});
+
+test('nit) "Pago no dia" depois da oferta do sinal é gravado como na_clinica (só com a oferta antes, e nunca por cima de sinal_pix)', async () => {
+  const oferta: Fala = { papel: 'ia', texto: '✅ Marcado: segunda 08h. Quer sair por R$ 250? É só o sinal de R$ 50 no Pix.' };
+  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'Pago no dia' }]), true);
+  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'pago na clínica mesmo' }]), false, 'só a frase curta de resposta');
+  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'Quero o Pix' }]), false);
+  assert.equal(recusouOSinal([{ papel: 'ia', texto: 'Qual horário fica melhor?' }, { papel: 'paciente', texto: 'Pago no dia' }]), false, 'sem oferta de sinal antes, não é resposta a nada');
+  await gravarRecusaDoSinal('u-arag', 1);
+  const g = conversaGravou[conversaGravou.length - 1] as unknown as { data: { pagamentoEscolhido: string }; where: Record<string, unknown> };
+  assert.equal(g.data.pagamentoEscolhido, 'na_clinica');
+  assert.equal(g.where.pagamentoEscolhido, null, 'só quando ainda não há escolha');
 });

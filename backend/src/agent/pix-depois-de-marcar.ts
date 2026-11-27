@@ -18,7 +18,10 @@
  * Fora do alcance, de propósito: Boa Vista (taxa de reserva obrigatória), unidade sem antecipado (Timbó) e remarcação.
  */
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { prisma } from '../lib/prisma.js';
+import { logger } from '../lib/logger.js';
 import type { SinalDaUnidade } from './prompt-composer.js';
+import type { Fala } from './repeticao.js';
 
 export const ID_PIX_DEPOIS = 'pix-depois-de-marcar';
 
@@ -60,3 +63,36 @@ export function orientacaoPixDepoisSemSinal(): string {
 /** A frase que a ferramenta acrescenta à recusa quando só falta confirmar o dia. */
 export const FECHO_RECUSA_SEM_PAGAMENTO =
   ' NÃO pergunte forma de pagamento: ela vem DEPOIS de marcar. Chame agendar_consulta assim que ele confirmar o dia.';
+
+/** "Pago no dia" (o botão da oferta) ou o mesmo em palavras: a resposta que recusa o sinal. */
+const PAGO_NO_DIA = /^\W*(?:(?:eu\s+)?pago|(?:eu\s+)?pagarei|(?:eu\s+)?vou\s+pagar|prefiro\s+pagar|pode\s+ser|quero\s+pagar)\s+(?:tudo\s+)?(?:no\s+dia|na\s+cl[ií]nica|l[áa]|na\s+hora)\W*$/i;
+
+/**
+ * O paciente respondeu "Pago no dia" à OFERTA do sinal (a fala da IA logo antes cita o sinal ou o Pix)? Só então vale: um "pago na clínica"
+ * solto, sem oferta antes, não é resposta a nada.
+ */
+export function recusouOSinal(falas: Fala[] | undefined): boolean {
+  if (!falas?.length) return false;
+  let fim = falas.length - 1;
+  while (fim >= 0 && falas[fim].papel !== 'paciente') fim--;
+  if (fim < 0 || !PAGO_NO_DIA.test(falas[fim].texto.trim())) return false;
+  let i = fim - 1;
+  while (i >= 0 && falas[i].papel === 'paciente') i--;
+  return i >= 0 && /\b(?:sinal|pix)\b/i.test(falas[i].texto);
+}
+
+/**
+ * Grava `na_clinica` para quem recusou o sinal depois de marcar — só se a conversa ainda não tem escolha (nunca troca `sinal_pix`). É o que
+ * tira a pessoa da lista «agendados sem Pix» da recepção. Nunca lança.
+ */
+export async function gravarRecusaDoSinal(unitId: string, leadId: string | number | null | undefined): Promise<void> {
+  if (!leadId) return;
+  try {
+    await prisma.conversation.updateMany({
+      where: { unitId, leadId: String(leadId), pagamentoEscolhido: null },
+      data: { pagamentoEscolhido: 'na_clinica' },
+    });
+  } catch (err) {
+    logger.warn({ err: String(err), unitId, leadId }, 'pix-depois-de-marcar: não gravei a recusa do sinal');
+  }
+}
