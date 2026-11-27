@@ -17,6 +17,12 @@ test('falta de crédito na OpenAI (o 429 de Canaã, 18/10) é estrutural e é sa
   assert.match(c.resumo, /429 insufficient_quota/);
 });
 
+test('OpenAI sem crédito (frase real de 27/11/2026) também é estrutural e é saldo na transcrição de áudio', () => {
+  const c = classificarErroDaOpenAI(429, { error: { type: 'insufficient_funds', message: 'You have no credits remaining. Add credits to continue using the API.' } });
+  assert.equal(c.estrutural, true);
+  assert.equal(c.saldo, true);
+});
+
 test('429 de limite por minuto é passageiro: não é saldo nem estrutural', () => {
   const c = classificarErroDaOpenAI(429, { error: { type: 'requests', code: 'rate_limit_exceeded', message: 'Rate limit reached' } });
   assert.equal(c.estrutural, false);
