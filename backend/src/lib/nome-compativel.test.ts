@@ -36,9 +36,14 @@ test('tratamento, parentesco e partícula não são nome: "Mãe da Ana" × "Tia 
   assert.deepEqual(palavrasDoNome('A. Silva'), ['silva']);
 });
 
-test('mãe e filha com o MESMO nome e sobrenome mas nome do meio diferente NÃO casam; sem nome do meio de um lado, casa', () => {
+test('nomes do meio: só casa com o MESMO conjunto (um em comum não basta — "Lima" pode ser da família)', () => {
   assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Eduarda Souza'), false);
-  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Aparecida Lima Souza'), true);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Aparecida Lima Souza'), false);
+  // mãe "Maria Aparecida Lima Souza"; filha agendando com o sobrenome da família no meio (sonda do sênior, 27/11)
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Lima Souza', 'Maria Lima Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Lima Souza', 'Maria Eduarda Lima Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Lima Souza', 'MARIA APARECIDA LIMA SOUZA'), true);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Lima Souza', 'Maria Lima Aparecida Souza'), true);
 });
 
 test('nome do meio de UM lado só NÃO casa (o lead que criamos quase sempre tem 2 palavras; filho com nome composto é o caso comum)', () => {

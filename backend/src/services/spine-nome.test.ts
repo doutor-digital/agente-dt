@@ -105,7 +105,7 @@ for (const titulo of [
   });
 }
 
-for (const titulo of ['João de Deus', 'Maria de Jesus Silva', 'Carlos Souza Filho', 'Pedro Silva Neto', 'Ana Neto', 'Maria e José', 'Maria das Graças', 'Nora Lima', 'Joana Natureza', 'Neto Silva', 'Filho Souza', 'Liga Silva', 'Maria Fiel Souza']) {
+for (const titulo of ['João de Deus', 'Maria de Jesus Silva', 'Carlos Souza Filho', 'Pedro Silva Neto', 'Ana Neto', 'Maria e José', 'Maria das Graças', 'Nora Lima', 'Joana Natureza', 'Neto Silva', 'Filho Souza', 'Liga Silva', 'Maria Fiel Souza', 'Ana Souza Filha', 'Maria das Dores Silva Filha']) {
   test(`nome de gente com palavra "perigosa" segue valendo: "${titulo}"`, () => {
     assert.equal(avaliarNome(titulo).ok, true);
   });

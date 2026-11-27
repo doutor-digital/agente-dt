@@ -74,7 +74,7 @@ const PALAVRAS_DE_CONVERSA = new Set([
   'ocupado', 'ocupada', 'trabalhando', 'indisponivel', 'ausente',
   'loja', 'empresa', 'comercial', 'vendas', 'suporte', 'teste', 'fly', 'link', 'status',
   // papel, não nome: "Paciente", "Pai", "Filha" — o perfil do WhatsApp de quem escreve pelo aparelho de outra pessoa (visto em Rio Verde, 27/11/2026)
-  'paciente', 'pacientes', 'pai', 'mae', 'mamae', 'papai', 'filha', 'esposa', 'esposo', 'marido', 'avo', 'vovo', 'amigo', 'amiga',
+  'paciente', 'pacientes', 'pai', 'mae', 'mamae', 'papai', 'esposa', 'esposo', 'marido', 'avo', 'vovo', 'amigo', 'amiga',
   'vizinho', 'vizinha', 'patroa', 'patrao', 'namorado', 'namorada', 'genro', 'cunhada', 'cunhado', 'sogra', 'sogro',
   'tia', 'tio', 'madrinha', 'padrinho',
   // frase, não nome: "AMANHÃ FALAMOS", "PACIENTE BRASILEIRO FALANDO", "Vendo Avon"
@@ -86,7 +86,8 @@ const PALAVRAS_DE_CONVERSA = new Set([
 ]);
 
 /** Parentesco que também é sobrenome ou apelido ("Carlos Souza Filho", "Neto Silva"): só barra quando é a ÚNICA palavra de nome. */
-const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'neto', 'sobrinho', 'primo', 'irmao', 'irma']);
+// 'filha' aqui (e não na lista de conversa): "Ana Souza Filha" e "Maria das Dores Silva Filha" são nomes; "Filha" sozinha não (sênior, 27/11).
+const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'filha', 'neto', 'sobrinho', 'primo', 'irmao', 'irma']);
 const PARTICULAS_ANTES_DE_DEUS = new Set(['de', 'do', 'dos']);
 const PEDACO_DE_EMAIL = /@|gmail|hotmail|outlook|yahoo|icloud|\.com\b|\.net\b/;
 

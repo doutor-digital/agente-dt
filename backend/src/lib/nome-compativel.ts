@@ -56,7 +56,8 @@ function marcasDoNome(nome: string | null | undefined): string[] {
  * Mesmo nome, mesmo sobrenome (primeira e última palavra), mesmas marcas de parentesco/geração e o MESMO conjunto de nomes do meio — os dois
  * lados com pelo menos duas palavras. Na dúvida, NÃO:
  *  - "Maria Souza" × "Maria Souza Filha": não casa (a filha); "Maria Souza" × "Maria Eduarda Souza": não casa (nome do meio de um lado só);
- *  - "Maria Aparecida Souza" × "Maria Eduarda Souza": não casa; "Maria Aparecida Souza" × "Maria Aparecida Lima Souza": casa (um do meio em comum).
+ *  - "Maria Aparecida Souza" × "Maria Eduarda Souza": não casa; "Maria Aparecida Souza" × "Maria Aparecida Lima Souza": não casa (conjunto
+ *    do meio diferente); "Maria Aparecida Lima Souza" × "MARIA APARECIDA LIMA SOUZA": casa.
  */
 export function nomesCompletosCompativeis(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = palavrasDoNome(a);
@@ -67,6 +68,9 @@ export function nomesCompletosCompativeis(a: string | null | undefined, b: strin
   const meioX = x.slice(1, -1);
   const meioY = y.slice(1, -1);
   if ((meioX.length === 0) !== (meioY.length === 0)) return false;
-  if (meioX.length > 0 && !meioX.some((m) => meioY.includes(m))) return false;
+  // O MESMO conjunto de nomes do meio — um só em comum não basta: "Lima" costuma ser sobrenome da família, e mãe
+  // "Maria Aparecida Lima Souza" × filha "Maria Lima Souza" / "Maria Eduarda Lima Souza" não podem casar (sênior, 27/11).
+  const conjunto = (m: string[]) => [...new Set(m)].sort().join('|');
+  if (conjunto(meioX) !== conjunto(meioY)) return false;
   return true;
 }
