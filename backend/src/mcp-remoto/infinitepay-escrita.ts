@@ -20,11 +20,21 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
-import { ErroInfinitepay, tirarChave, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
+import { ErroInfinitepay, tirarChave, type ClienteDoLink, type PedidoDeLink } from '../lib/integracoes/infinitepay.js';
 import { temDigitosSeguidos } from '../lib/pii.js';
 import { FUSO_PADRAO, arredondar, diaLocal, dinheiro, positivo } from './asaas-limites.js';
 import { executar } from './ferramenta.js';
 import { resolverContaInfinitepay, reais, type ArmazemDeLinks, type ContaInfinitepay, type ContextoInfinitepay, type LinkGuardado } from './infinitepay.js';
+
+/**
+ * A criação NÃO teve resposta clara (timeout, 5xx, resposta sem URL): o link PODE existir na InfinitePay. É um ErroDeEntrada como os outros (o conector mostra a mesma mensagem), mas leva a
+ * referência, para quem cobra em nome de um paciente (a Sofia) NÃO cair em outra forma de cobrança sem antes saber se o paciente já tem um link pagável.
+ */
+export class LinkIncertoInfinitepay extends ErroDeEntrada {
+  constructor(msg: string, readonly orderNsu: string) {
+    super(msg);
+  }
+}
 
 export const LIMITES_INFINITEPAY = {
   duplicataMs: 10 * 60_000,
@@ -344,6 +354,9 @@ export interface ArgsCriarLink {
   pix?: boolean;
   /** até quantas parcelas a CLÍNICA absorve a taxa (0 a 12; padrão 0: quem parcela paga a taxa do parcelamento) */
   parcelasSemTaxa?: number;
+  /** SÓ para quem chama pelo servidor (a Sofia): a ferramenta do conector não tem estes campos. Nome e telefone vão para a página de pagamento, nunca para o livro nem para o log. */
+  cliente?: ClienteDoLink;
+  semEndereco?: boolean;
 }
 
 export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfinitepay, quem: QuemInfinitepay, a: ArgsCriarLink) {
@@ -385,6 +398,8 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       pagamentoUnico: true,
       pix: a.pix !== false,
       parcelasSemTaxa: parcelas,
+      ...(a.cliente ? { cliente: a.cliente } : {}),
+      ...(a.semEndereco ? { semEndereco: true } : {}),
     };
     let url: string;
     let invoiceSlug: string | undefined;
@@ -400,7 +415,7 @@ export async function criarLink(ctx: ContextoInfinitepay, esc: EstadoEscritaInfi
       await esc.armazem.resolver(conta.slug, orderNsu, recusa ? { status: 'falhou', erro: msg.slice(0, 300) } : { status: 'intencao', erro: msg.slice(0, 300) }).catch(() => undefined);
       if (!recusa) {
         void esc.alertar(`⚠️ InfinitePay (${conta.nome}): criei o link ${orderNsu} de ${dinheiro(valor)} e a resposta não veio clara (${msg.slice(0, 120)}). Ele PODE existir. Confira no app antes de repetir.`).catch(() => false);
-        throw new ErroDeEntrada(`${msg} Referência ${orderNsu} (${dinheiro(valor)}): o link pode ter sido criado; confira no app da InfinitePay antes de repetir.`);
+        throw new LinkIncertoInfinitepay(`${msg} Referência ${orderNsu} (${dinheiro(valor)}): o link pode ter sido criado; confira no app da InfinitePay antes de repetir.`, orderNsu);
       }
       throw new ErroDeEntrada(`${msg} Nada foi criado.`);
     }

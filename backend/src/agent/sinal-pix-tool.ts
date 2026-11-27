@@ -15,7 +15,8 @@ import { prisma } from '../lib/prisma.js';
 import { logger } from '../lib/logger.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import type { KommoClient } from '../services/kommo.service.js';
-import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { diaCurto, fusoDoSinal, gerarSinalPix, ID_SINAL_PIX, instanteLocal, type MotivoDaFalha, type ResultadoDoSinal } from '../lib/sinal-pix.js';
+import { depsDoSinalPorVia } from '../lib/sinal-infinitepay.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fmtBRL, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
@@ -59,6 +60,11 @@ export function registrarLeadDoSinal(traceId: string, leadId: number): void {
   leadDoTurno.set(traceId, leadId);
 }
 
+/** A tarefa da equipe para cada falha. NUNCA «enviar o Pix» quando já há um sinal em andamento ou um link que talvez exista: seria cobrar o paciente duas vezes. */
+export function motivoDaTarefaDoSinal(motivo: MotivoDaFalha): 'sinal_incerto' | 'sinal_em_andamento' | 'sinal_pix_falhou' {
+  return motivo === 'incerto' ? 'sinal_incerto' : motivo === 'em-andamento' ? 'sinal_em_andamento' : 'sinal_pix_falhou';
+}
+
 /** O que a ferramenta devolve à Sofia para cada desfecho. Puro: o teste confere as frases. */
 export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAberta: boolean): string {
   const sinal = `R$ ${fmtBRL(s.sinal)}`;
@@ -67,6 +73,14 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     return (
       `O sinal de ${sinal} deste paciente JÁ foi pago. NÃO gere nem peça outro Pix. Diga que o sinal está confirmado e que no dia ficam ${resto}. ` +
       'NUNCA envie chave Pix.'
+    );
+  }
+  if (r.tipo === 'link' && r.via === 'infinitepay') {
+    return (
+      `Link de pagamento do sinal de ${sinal} gerado (o paciente paga por Pix ou cartão, na página do link). Envie ao paciente ESTE link, copiado exatamente, sem encurtar nem mudar: ${r.url} ` +
+      `Na confirmação, no lugar de «por este Pix», escreva: «Para garantir a vaga, o sinal de ${sinal} é pago por este link: <o link acima>». Diga também, em UMA frase curta, que o link vale até ${diaCurto(r.venceEm)} e que, com o sinal, a consulta fica R$ ${fmtBRL(s.comSinal)} (${sinal} agora + ${resto} no dia). ` +
+      (r.novo ? '' : 'Este é o MESMO link já gerado antes: NÃO gere outro. ') +
+      'NUNCA envie chave Pix nem diga que a equipe envia a chave. NÃO diga que o pagamento foi confirmado: a confirmação chega sozinha depois que ele pagar.'
     );
   }
   if (r.tipo === 'link' && r.copiaECola) {
@@ -88,6 +102,18 @@ export function textoDoSinal(r: ResultadoDoSinal, s: SinalDaUnidade, tarefaAbert
     );
   }
   // falhou: a Sofia nunca fala do erro nem inventa um Pix
+  if (r.motivo === 'em-andamento') {
+    return (
+      'Já existe um sinal em andamento para este paciente (outra geração está entregando o link). NÃO gere outro, NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ' +
+      'Diga em UMA frase que o link do sinal já está sendo enviado e chega por aqui em instantes (sem prometer prazo exato).'
+    );
+  }
+  if (r.motivo === 'incerto') {
+    return (
+      'NÃO consegui gerar o pagamento do sinal agora. NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ' +
+      (tarefaAberta ? 'Diga em UMA frase que a equipe confirma o pagamento do sinal por aqui em instantes (sem prometer prazo exato).' : 'O aviso à equipe NÃO saiu: NÃO prometa que a equipe envia. Diga em UMA frase que vai verificar e já retorna.')
+    );
+  }
   return (
     `NÃO consegui gerar o Pix do sinal agora. NÃO invente link nem chave Pix e NÃO conte ao paciente o motivo. ` +
     (tarefaAberta
@@ -136,18 +162,19 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       // Gerar o link sem a baixa LIGADA deixaria o paciente pagar de verdade e ninguém saber (sem webhook, quem enxerga o Pix é o worker, e em "só no
       // papel" ele não grava nada): só com a baixa ligada; senão a equipe manda o Pix.
+      // `sinalVia = infinitepay` (só no Kommo: a conversa do Chatwoot segue no Asaas): o link da InfinitePay primeiro, o Pix do Asaas se ela falhar (lib/sinal-pix.ts)
       const r: ResultadoDoSinal =
         estadoDaAutomacao(fresca.slug, ID_SINAL_PIX, process.env.SINAL_PIX_SLUGS) !== 'ligado'
           ? { tipo: 'falhou', motivo: 'baixa-desligada', detalhe: 'a automação sinal-pix (baixa do Pix) não está ligada nesta unidade' }
-          : await gerarSinalPix(fresca, leadId, quando).catch((err: unknown): ResultadoDoSinal => {
+          : await gerarSinalPix(fresca, leadId, quando, depsDoSinalPorVia(fresca.slug, { kommo, conversaGarantida })).catch((err: unknown): ResultadoDoSinal => {
               // nunca derruba a resposta: a trava do banco, o fuso ou qualquer imprevisto viram o caminho "a equipe envia o Pix"
               logger.error({ err: String(err), unit: fresca.slug, leadId }, 'sinal-pix: a geração lançou — segue como falha');
               return { tipo: 'falhou', motivo: 'asaas', detalhe: String(err).slice(0, 300) };
             });
       await recorder.step({
         kind: r.tipo === 'falhou' ? 'ERROR' : 'TOOL_RESULT',
-        title: r.tipo === 'link' ? `Sinal Pix ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
-        payload: r.tipo === 'falhou' ? { leadId, motivo: r.motivo, detalhe: r.detalhe } : { leadId, tipo: r.tipo },
+        title: r.tipo === 'link' ? `Sinal ${r.via === 'infinitepay' ? 'link InfinitePay' : 'Pix'} ${r.novo ? 'gerado' : 'reaproveitado'} (lead ${leadId})${r.fallback ? ' — InfinitePay falhou, saiu pelo Asaas' : ''}` : r.tipo === 'ja-pago' ? `Sinal Pix já pago (lead ${leadId})` : `Sinal Pix NÃO gerado (lead ${leadId}): ${r.motivo}`,
+        payload: r.tipo === 'falhou' ? { leadId, motivo: r.motivo, detalhe: r.detalhe } : { leadId, tipo: r.tipo, ...(r.tipo === 'link' && r.via ? { via: r.via } : {}), ...(r.tipo === 'link' && r.fallback ? { fallbackDaInfinitepay: r.fallback } : {}) },
       });
 
       // o código exato vai numa mensagem à parte, depois da resposta (controller → lib/pix-do-sinal-envio.ts)
@@ -155,7 +182,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {
-        const detalhe = `Motivo: ${r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? 'outra geração do mesmo sinal não terminou' : 'o Asaas recusou ou não respondeu'}`;
+        const detalhe = `Motivo: ${r.motivo === 'incerto' ? `NÃO envie o Pix antes de conferir: ${r.detalhe}` : r.motivo === 'sem-chave' ? 'a unidade não tem a chave do Asaas no cofre' : r.motivo === 'teto' ? 'teto de links por dia atingido' : r.motivo === 'baixa-desligada' ? 'a baixa automática do sinal não está ligada nesta unidade' : r.motivo === 'em-andamento' ? r.detalhe : 'o Asaas recusou ou não respondeu'}${r.fallback ? `. Antes disso o link da InfinitePay também falhou: ${r.fallback}` : ''}`;
         if (kommo) {
           const t = await abrirTarefaParaEquipe({
             slug: fresca.slug,
@@ -163,7 +190,7 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
             leadId,
             kommo,
             recorder,
-            motivo: 'sinal_pix_falhou',
+            motivo: motivoDaTarefaDoSinal(r.motivo),
             detalhe,
           }).catch((err) => {
             logger.warn({ err: String(err), leadId }, 'sinal-pix: falha ao abrir a tarefa da equipe');

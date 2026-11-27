@@ -432,6 +432,23 @@ test('POST /links: corpo no formato da InfinitePay, chave só no cabeçalho, URL
   assert.equal(JSON.stringify(corpo).includes('inchk_'), false);
 });
 
+test('POST /links com cliente e sem endereço: customer (nome e telefone) e options.require_delivery_address=false; sem eles o corpo é o de sempre', async () => {
+  const { f, vistas } = falso(200, { url: 'https://checkout.infinitepay.io/clinica/abc' });
+  await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o1', itens: [{ quantidade: 1, precoCentavos: 5000, descricao: 'Sinal' }], cliente: { nome: 'Maria da Silva', telefone: '+5599981234567' }, semEndereco: true }, { fetcher: f });
+  const corpo = JSON.parse(String(vistas[0]!.init.body));
+  assert.deepEqual(corpo.customer, { name: 'Maria da Silva', phone_number: '+5599981234567' });
+  assert.equal(corpo.options.require_delivery_address, false);
+  // só o telefone, só o nome, e cliente vazio: nunca um customer com campo vazio
+  const so = falso(200, { url: 'https://checkout.infinitepay.io/clinica/abc' });
+  await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o2', itens: [{ quantidade: 1, precoCentavos: 5000, descricao: 'Sinal' }], cliente: { telefone: '+5599981234567' } }, { fetcher: so.f });
+  assert.deepEqual(JSON.parse(String(so.vistas[0]!.init.body)).customer, { phone_number: '+5599981234567' });
+  const vazio = falso(200, { url: 'https://checkout.infinitepay.io/clinica/abc' });
+  await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o3', itens: [{ quantidade: 1, precoCentavos: 5000, descricao: 'Sinal' }], cliente: {} }, { fetcher: vazio.f });
+  const c3 = JSON.parse(String(vazio.vistas[0]!.init.body));
+  assert.equal('customer' in c3, false);
+  assert.equal('require_delivery_address' in c3.options, false);
+});
+
 test('POST /links: aceita a URL dentro de data; resposta sem URL é erro que avisa "PODE ter sido criado"; 403 não repete a chave', async () => {
   const dentro = await criarLinkNaInfinitepay(CHAVE, { orderNsu: 'o', itens: [{ quantidade: 1, precoCentavos: 100, descricao: 'x' }] }, { fetcher: falso(201, { data: { checkout_url: 'https://pay.infinitepay.io/z' } }).f });
   assert.equal(dentro.url, 'https://pay.infinitepay.io/z');

@@ -343,3 +343,42 @@ test('textoDoSinal: link novo, link repetido, já pago e falha — nunca chave P
   assert.match(textoDoSinal({ tipo: 'falhou', motivo: 'asaas', detalhe: 'x' }, s, false), /O aviso à equipe NÃO saiu: NÃO prometa/);
   for (const t of [novo, falha]) assert.doesNotMatch(t, /12\.345/);
 });
+
+// ── o texto que a Sofia recebe quando o sinal sai por link da InfinitePay ─────────────────────────────────────────────────────────
+
+test('textoDoSinal: link da InfinitePay manda o link, na frase «por este link», sem chave Pix e sem dar o pagamento como confirmado; o do Asaas segue igual', () => {
+  const s = sinalDaUnidade(comSinal())!;
+  const url = 'https://checkout.infinitepay.io/dhacailandia?lenc=abc';
+  const ip = textoDoSinal({ tipo: 'link', url, novo: true, valor: 50, venceEm: '2026-11-29', via: 'infinitepay' }, s, false);
+  assert.ok(ip.includes(url));
+  assert.match(ip, /Para garantir a vaga, o sinal de R\$ 50 é pago por este link: <o link acima>/);
+  assert.match(ip, /vale até 29\/11/);
+  assert.match(ip, /R\$ 250 \(R\$ 50 agora \+ R\$ 200 no dia\)/);
+  assert.match(ip, /NUNCA envie chave Pix/);
+  assert.match(ip, /NÃO diga que o pagamento foi confirmado/);
+  assert.doesNotMatch(ip, /copia e cola|SEPARADA/i, 'não é o Pix copia-e-cola: nada de «código na próxima mensagem»');
+  assert.match(textoDoSinal({ tipo: 'link', url, novo: false, valor: 50, venceEm: '2026-11-29', via: 'infinitepay' }, s, false), /MESMO link já gerado/);
+  // o do Asaas (sem `via`) é o de sempre
+  const asaas = textoDoSinal({ tipo: 'link', url: 'https://www.asaas.com/c/1', novo: true, valor: 50, venceEm: '2026-11-13' }, s, false);
+  assert.match(asaas, /Pix do sinal de R\$ 50 gerado\. Envie ao paciente ESTE link/);
+  assert.doesNotMatch(asaas, /InfinitePay/);
+});
+
+test('textoDoSinal: link INCERTO (a InfinitePay não respondeu com clareza): a Sofia não inventa link nem Pix e diz que a equipe confirma; sem a tarefa, só «vou verificar»', () => {
+  const s = sinalDaUnidade(comSinal())!;
+  const incerto = { tipo: 'falhou', motivo: 'incerto', detalhe: 'link x pode existir' } as const;
+  const com = textoDoSinal(incerto, s, true);
+  assert.match(com, /NÃO invente link nem chave Pix/);
+  assert.match(com, /a equipe confirma o pagamento do sinal por aqui em instantes/);
+  assert.doesNotMatch(com, /enviar o Pix|envia o Pix/);
+  const sem = textoDoSinal(incerto, s, false);
+  assert.match(sem, /NÃO prometa que a equipe envia/);
+});
+
+test('textoDoSinal: já existe um sinal em andamento — a Sofia não gera outro nem inventa link, e diz que ele chega em instantes', () => {
+  const s = sinalDaUnidade(comSinal())!;
+  const t = textoDoSinal({ tipo: 'falhou', motivo: 'em-andamento', detalhe: 'já existe um sinal em andamento' }, s, true);
+  assert.match(t, /Já existe um sinal em andamento/);
+  assert.match(t, /NÃO gere outro, NÃO invente link nem chave Pix/);
+  assert.doesNotMatch(t, /equipe envia/);
+});

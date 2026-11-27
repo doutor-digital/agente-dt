@@ -532,3 +532,17 @@ test('"Combinado" só é barrado pela ação/oferta da PRÓPRIA oração: "Combi
   assert.equal(respostaDoComprovante('Combinado, terça às 10h; vou confirmar com a equipe.', espera, false), RECADO_COMPROVANTE);
   assert.equal(respostaDoComprovante('Combinado, vou ver os horários de amanhã; a equipe te avisa.', espera, false), null);
 });
+
+test('sinal_incerto: a tarefa manda CONFIRMAR O LINK no app da InfinitePay antes de cobrar de novo (nunca dois meios de pagar), com o motivo do aviso', async () => {
+  const tarefas: Array<Record<string, unknown>> = [];
+  const kommo = { getLead: async () => ({ responsible_user_id: 77 }), createTask: async (a: Record<string, unknown>) => (tarefas.push(a), { id: 6 }) };
+  const dedupe = { avisoRecente: async () => false, marcarAviso: async () => undefined };
+  const r = await abrirTarefaParaEquipe({
+    slug: 'doutor-hernia-acailandia', unitId: 'u1', leadId: 5829035, kommo: kommo as never, recorder: { step: async () => undefined } as never,
+    motivo: 'sinal_incerto', detalhe: 'link sinal-3ha6n-ab12cd34 pode existir', dedupe: dedupe as never,
+  });
+  assert.equal(r, 'criada');
+  assert.match(String(tarefas[0]!.text), /^CONFIRMAR O LINK DO SINAL · doutor-hernia-acailandia/);
+  assert.match(String(tarefas[0]!.text), /ANTES de cobrar de novo/);
+  assert.match(String(tarefas[0]!.text), /sinal-3ha6n-ab12cd34/);
+});

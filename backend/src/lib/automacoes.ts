@@ -650,13 +650,26 @@ export const AUTOMACOES: readonly Automacao[] = [
     chave: 'SINAL_PIX_SLUGS',
     nome: 'Baixa do sinal Pix da Sofia (Asaas)',
     oQueFaz:
-      'A cada 5 min lê os Pix pagos no Asaas da unidade (só leitura, sem webhook) e, quando o link de sinal que a Sofia mandou é pago, marca "✓ Consulta pg antecipado" no cartão e deixa uma nota "Sinal de R$ 50 pago no Asaas". Link vencido sem pagamento vira nota para a SDR. Só vale na unidade com sinal ligado (units.sinal_pix_centavos).',
+      'A cada 5 min lê os Pix pagos no Asaas da unidade (só leitura, sem webhook) e, quando o link de sinal que a Sofia mandou é pago, marca "✓ Consulta pg antecipado" no cartão e deixa uma nota "Sinal de R$ 50 pago no Asaas". Link vencido sem pagamento vira nota para a SDR. Só vale na unidade com sinal ligado (units.sinal_pix_centavos). Na unidade com SOFIA_SINAL_VIA_<UNIDADE>=infinitepay o sinal sai por link da InfinitePay e a baixa vem do aviso assinado dela (o Pix do Asaas fica de reserva se a InfinitePay falhar).',
     pegadinha:
       'Ligue JUNTO com o sinal da unidade: sem esta chave a Sofia não gera o link (a equipe manda o Pix, com tarefa). Não escreve "¤ Pagamento antecipado" nem mexe em etapa. Casa o pagamento pelo link, então cobrança de outra origem na mesma conta do Asaas nunca conta. O link vale até a véspera da consulta; passados 2 dias do fim sem pagamento vira "expirado".',
     risco: 'escreve-campo',
     temSeco: true,
     quandoVazio: 'desligado',
     arquivo: 'src/lib/sinal-pix-worker.ts',
+  },
+  {
+    id: 'sinal-confirmacao-paciente',
+    chave: 'SINAL_CONFIRMACAO_PACIENTE_SLUGS',
+    nome: 'Confirmação do sinal ao paciente (Sofia)',
+    oQueFaz:
+      'Quando o sinal de R$ 50 é pago (pelo Pix do Asaas ou pelo link da InfinitePay), a Sofia manda UMA mensagem curta pelo Kommo: «Recebemos seu sinal de R$ 50 ✅ Sua consulta está confirmada para <dia, data> às <hora> na Doutor Hérnia <cidade>. Até lá!». Sem a data da consulta, a frase sai sem essa parte.',
+    pegadinha:
+      'Texto livre só dentro das 24 h da última mensagem do paciente: fora delas NÃO envia nada (nem modelo) e deixa a nota «confirmação não enviada: fora da janela de 24 h» no cartão. Com a IA pausada (unidade, «Pausar IA» ou pausa com data) também não envia e deixa a nota. Uma por sinal pago, mesmo com o aviso da InfinitePay e a varredura chegando juntos. Só no Kommo (conversa do Chatwoot não recebe). Pagamento de mais de 12 h atrás não gera mensagem. Em «Só no papel» a tela mostra o texto que mandaria (ou o motivo de não mandar) e nada sai. Sem a variável, toda unidade fica em «só no papel»: a variável lista quem está LIGADO.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    quandoVazio: 'seco',
+    arquivo: 'src/lib/sinal-confirmacao-paciente.ts',
   },
   {
     id: 'sugestao-motivo',

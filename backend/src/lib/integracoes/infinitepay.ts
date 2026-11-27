@@ -232,6 +232,16 @@ export interface PedidoDeLink {
   /** até quantas parcelas o vendedor absorve as taxas (0 a 12; padrão 0: o comprador paga as taxas do parcelamento) */
   parcelasSemTaxa?: number;
   handle?: string;
+  /** quem paga, para a página de pagamento já vir preenchida (a InfinitePay só aceita nome, e-mail e telefone: NÃO existe CPF aqui). Vazio = a página pede. */
+  cliente?: ClienteDoLink;
+  /** true = a página NÃO pede endereço de entrega (cobrança de serviço, não de mercadoria) */
+  semEndereco?: boolean;
+}
+
+/** `telefone` no formato internacional da InfinitePay ("+5511999887766"). */
+export interface ClienteDoLink {
+  nome?: string;
+  telefone?: string;
 }
 
 export const EVENTOS_DO_WEBHOOK = ['paid', 'settled', 'refunded', 'canceled', 'payment_failed'] as const;
@@ -276,7 +286,11 @@ export async function criarLinkNaInfinitepay(chave: string, p: PedidoDeLink, o: 
     order_nsu: p.orderNsu,
     items: p.itens.map((i) => ({ quantity: i.quantidade, price: i.precoCentavos, description: i.descricao })),
     ...(p.webhookUrl ? { webhook: { url: p.webhookUrl, events: p.eventos ?? [...EVENTOS_DO_WEBHOOK] } } : {}),
+    ...(p.cliente && (p.cliente.nome || p.cliente.telefone)
+      ? { customer: { ...(p.cliente.nome ? { name: p.cliente.nome } : {}), ...(p.cliente.telefone ? { phone_number: p.cliente.telefone } : {}) } }
+      : {}),
     options: {
+      ...(p.semEndereco ? { require_delivery_address: false } : {}),
       ...(p.validoAte ? { valid_until: p.validoAte } : {}),
       single_payment: p.pagamentoUnico ?? true,
       payment_methods_enabled: p.pix === false ? ['credit_card'] : ['credit_card', 'pix'],
