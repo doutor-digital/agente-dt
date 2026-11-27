@@ -19,7 +19,9 @@ import https from 'node:https';
 import type { IncomingMessage } from 'node:http';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 
-export const DOMINIOS_PADRAO = ['recibo.infinitepay.io', 'asaas.com', '*.asaas.com'] as const;
+// clicksign-content-production.s3.amazonaws.com: o balde EXATO dos PDFs assinados da ClickSign (links "signed" de list_envelope_documents, assinados, vencem em 5 min).
+// Nunca "*.s3.amazonaws.com" nem "*.amazonaws.com": isso liberaria o balde de qualquer pessoa.
+export const DOMINIOS_PADRAO = ['recibo.infinitepay.io', 'asaas.com', '*.asaas.com', 'clicksign-content-production.s3.amazonaws.com'] as const;
 export const LIMITES_DOWNLOAD = { maxBytes: 15 * 1024 * 1024, tempoTotalMs: 25_000, redirecionamentos: 3 };
 
 /** Os domínios aceitos: o padrão mais o que o João liberar na variável (separados por vírgula). Entradas fora do formato são ignoradas. */
