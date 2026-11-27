@@ -1115,19 +1115,6 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/pix-depois-de-marcar.ts',
   },
   {
-    id: 'adiamento-propoe-dia',
-    chave: 'ADIAMENTO_PROPOE_DIA_SLUGS',
-    nome: 'Quem adia recebe um dia e dois horários, não um "te procuro"',
-    oQueFaz:
-      'Quando o paciente adia dizendo o motivo ou o quando ("vou falar com meu marido", "só recebo dia 5", "estou viajando", "mês que vem"), a Sofia consulta a agenda para depois do impedimento e propõe UM dia com dois horários reais ("já deixo pra depois que você receber? tenho 8h ou 14h"). Só marca se ele escolher. Antes, ela respondia "te procuro no dia X" e parava.',
-    pegadinha:
-      'NASCE DESLIGADA. Não vale para quem só se despede, agradece, recusa ("não quero", "já resolvi") ou diz um "vou ver e te aviso" sem motivo nem data: esses seguem sem horário empurrado (corte de 21/10, Araguaína). Quem já tem consulta marcada não recebe proposta. Os horários vêm de consultar_horarios (a trava do horário inventado continua valendo neste turno). Não muda o preço, a regra de segurar o preço até saber da dor nem a régua de follow-up. Não tem "só no papel": é texto do prompt e o corte do empurrão.',
-    risco: 'comportamento',
-    temSeco: false,
-    quandoVazio: 'desligado',
-    arquivo: 'src/agent/paciente-encerrou.ts',
-  },
-  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',

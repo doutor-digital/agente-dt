@@ -20,7 +20,7 @@ import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
-import { FECHO_RECUSA_SEM_PAGAMENTO, orientacaoPixDepoisComSinal, orientacaoPixDepoisSemSinal, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
+import { FECHO_RECUSA_SEM_PAGAMENTO, OFERTA_DO_SINAL_FEITA, orientacaoPixDepoisComSinal, orientacaoPixDepoisSemSinal, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 import { buildGerarSinalPix, registrarLeadDoSinal } from './sinal-pix-tool.js';
 import { acompanharRemarcacao } from '../lib/sinal-pix.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
@@ -1542,6 +1542,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
       if (sinal && !args.remarcando && args.formaPagamento === 'pix_antecipado') args = { ...args, formaPagamento: 'sinal_pix' };
       // Chave `pix-depois-de-marcar`, forma não dita pelo paciente: SEM sinal, vale pagar na clínica e isso fica gravado (senão a régua AGENDADO
       // cobraria Pix de quem nunca escolheu). COM sinal, nada é gravado: a oferta vem depois de marcar e o Pix do sinal segue disponível.
+      // Se a conversa JÁ diz "na clínica" (ele disse, ou a oferta do sinal foi recusada), isso vale como forma dita: nunca se apaga nem se re-oferece.
+      if (pixDepois && !args.remarcando && !args.formaPagamento && args.leadId) {
+        const viva = await prisma.conversation
+          .findFirst({ where: { unitId: unit.id, leadId: String(args.leadId) }, select: { pagamentoEscolhido: true } })
+          .then((c) => c?.pagamentoEscolhido ?? null)
+          .catch(() => null);
+        if (viva === 'na_clinica') args = { ...args, formaPagamento: 'na_clinica' };
+      }
       const formaNaoDita = pixDepois && !args.remarcando && !args.formaPagamento;
       if (formaNaoDita && !sinal) args = { ...args, formaPagamento: 'na_clinica' };
 
@@ -1915,6 +1923,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           const pagamento = decidirPagamentoAntecipado({
             // Unidade sem antecipado: uma escolha `pix_antecipado` gravada na conversa ANTES da correção (#166) não vale mais.
             semAntecipado,
+            preservarSim: pixDepois,
             ehRetorno,
             // Chegou até aqui numa unidade com taxa de reserva = o grafo liberou pelo comprovante da taxa lido na conversa
             // (a conferência do dinheiro continua sendo da equipe, que ganha a tarefa no mesmo turno).
@@ -2040,11 +2049,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           })
           .catch(() => undefined);
       } else if (formaNaoDita && args.leadId) {
-        // Chave `pix-depois-de-marcar` com sinal: a escolha de uma marcação anterior não vale para esta; nulo = "ainda não escolheu".
+        // Chave `pix-depois-de-marcar` com sinal: marca a OFERTA (prova de que ela saiu) e troca a escolha de uma marcação anterior (`sinal_pix`,
+        // `pix_antecipado`), que não vale para esta. "na_clinica" nunca chega aqui: acima ele já virou forma dita e não é apagado.
         await prisma.conversation
           .updateMany({
-            where: { unitId: fresca.id, leadId: String(args.leadId), pagamentoEscolhido: { not: null } },
-            data: { pagamentoEscolhido: null },
+            where: { unitId: fresca.id, leadId: String(args.leadId), OR: [{ pagamentoEscolhido: null }, { pagamentoEscolhido: { not: 'na_clinica' } }] },
+            data: { pagamentoEscolhido: OFERTA_DO_SINAL_FEITA },
           })
           .catch(() => undefined);
       }

@@ -8,8 +8,8 @@ import { instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
 import { porQueNaoReservar } from './agenda-tools.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
 import { composeSystemPrompt } from './prompt-composer.js';
-import { gravarRecusaDoSinal, recusouOSinal } from './pix-depois-de-marcar.js';
-import type { Fala } from './repeticao.js';
+import { gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
+import { decidirPagamentoAntecipado } from './carimbos-do-agendamento.js';
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
@@ -76,6 +76,7 @@ const sinais: Array<Record<string, any>> = [];
 const conversaGravou: Array<{ data: { pagamentoEscolhido?: string } }> = [];
 let agendadoPara: string | null = null;
 let conversaExiste = true;
+let escolhaNaConversa: string | null = null;
 let atual: Unit = unidade();
 
 Object.defineProperty(prisma, 'unit', {
@@ -94,7 +95,8 @@ Object.defineProperty(prisma, 'conversation', {
   value: {
     updateMany: async (a: { data: { pagamentoEscolhido?: string } }) => (conversaGravou.push(a), { count: 1 }),
     // `agendar_consulta` lê a escolha guardada (pagamentoEscolhido); a ferramenta do sinal só confere que a conversa existe
-    findFirst: async (a: { select?: { id?: boolean } }) => (a.select?.id ? (conversaExiste ? { id: 'c1' } : null) : null),
+    findFirst: async (a: { select?: { id?: boolean; pagamentoEscolhido?: boolean } }) =>
+      a.select?.id ? (conversaExiste ? { id: 'c1' } : null) : a.select?.pagamentoEscolhido && escolhaNaConversa ? { pagamentoEscolhido: escolhaNaConversa } : null,
   },
   configurable: true,
 });
@@ -186,6 +188,7 @@ beforeEach(() => {
   tarefas.length = 0;
   agendadoPara = `${DIA}T09:00`;
   conversaExiste = true;
+  escolhaNaConversa = null;
   respostaDoAsaas = { status: 200, corpo: QR_OK };
   process.env.SINAL_PIX_SLUGS = '*';
   limparCacheEsquema();
@@ -236,7 +239,7 @@ test('LIGADA + sinal: marca com o dia confirmado e SEM a forma de pagamento; ofe
   assert.match(r, /gerar_sinal_pix com o leadId desta conversa/);
   assert.ok(!r.includes(CHAVE_FIXA), 'nunca a chave fixa');
   // a oferta do Pix NÃO é desligada: nada gravado como "na_clinica" (a lista «agendados sem Pix» continua vendo a pessoa)
-  assert.ok(conversaGravou.every((g) => (g.data as { pagamentoEscolhido?: string | null }).pagamentoEscolhido === null), 'sem escolha dita, NUNCA se grava "na_clinica" (só se limpa a escolha velha)');
+  assert.ok(conversaGravou.every((g) => (g.data as { pagamentoEscolhido?: string | null }).pagamentoEscolhido === 'sinal_oferecido'), 'sem escolha dita, NUNCA se grava "na_clinica": só o marcador da oferta');
 });
 
 test('LIGADA: a confirmação do dia CONTINUA obrigatória ("consegue vir mesmo?") e a recusa não pergunta forma de pagamento', async () => {
@@ -381,24 +384,84 @@ test('3) unidade com chave Pix fixa + chave ligada: o modelo de confirmação N�
   assert.match(composeSystemPrompt({ unit: bv }), /Pagamento antecipado recebido — o horário está garantido/);
 });
 
-test('4) com sinal e a forma NÃO dita: a escolha VELHA da conversa é limpa (não carimba "¤ Pagamento antecipado" com a decisão antiga)', async () => {
+test('A.2) com sinal e a forma NÃO dita: marca a OFERTA (sinal_oferecido), nunca "na_clinica"; a escolha velha de outra marcação é trocada', async () => {
+  ligar();
+  escolhaNaConversa = 'pix_antecipado';
+  const hora = await primeiroHorario(atual);
+  const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
+  assert.match(r, /ofereça UMA vez o sinal/);
+  assert.equal(conversaGravou.length, 1);
+  const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string }; where: { OR: unknown[] } };
+  assert.equal(g.data.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
+  assert.ok(JSON.stringify(g.where.OR).includes('"not":"na_clinica"'), 'o filtro nunca atinge um na_clinica dito');
+});
+
+test('A.2) "na_clinica" JÁ dito nesta conversa NÃO é apagado nem re-oferecido: vale como forma dita', async () => {
+  ligar();
+  escolhaNaConversa = 'na_clinica';
+  const hora = await primeiroHorario(atual);
+  const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
+  assert.match(r, /PAGAR TUDO NO DIA: R\$ 350 na clínica/);
+  assert.doesNotMatch(r, /ofereça UMA vez o sinal|\[\[botoes: Quero o Pix/);
+  assert.equal((conversaGravou[0]!.data as { pagamentoEscolhido: string }).pagamentoEscolhido, 'na_clinica');
+});
+
+test('A.2) recusa do sinal: só o botão "Pago no dia" (frase inteira); os 6 falsos positivos do sênior NÃO gravam', () => {
+  for (const t of ['Pago no dia', 'pago no dia.', 'Pago na clínica', 'prefiro pagar no dia']) assert.equal(recusouOSinal(t), true, t);
+  for (const t of [
+    'quanto custa a consulta? pago no dia?',
+    'as sessões eu pago lá',
+    'pode ser no dia',
+    'pode ser lá',
+    'pago lá mesmo, as sessões',
+    'Quero o Pix',
+    'no dia 10 eu pago',
+    '',
+    undefined,
+  ]) assert.equal(recusouOSinal(t as string), false, String(t));
+});
+
+test('A.2) gravarRecusaDoSinal: só com a consulta marcada no futuro E o marcador da oferta (where exige sinal_oferecido); sem consulta, nada', async () => {
+  const u = { id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ };
+  agendadoPara = null;
+  assert.equal(await gravarRecusaDoSinal(u, 1), false, 'sem consulta marcada');
+  assert.equal(conversaGravou.length, 0);
+  agendadoPara = `${DIA}T09:00`;
+  assert.equal(await gravarRecusaDoSinal(u, 1), true);
+  const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string }; where: { pagamentoEscolhido: string } };
+  assert.equal(g.data.pagamentoEscolhido, 'na_clinica');
+  assert.equal(g.where.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA, 'a oferta de fato (marcador), nunca "sem escolha"');
+  agendadoPara = '2020-01-01T09:00';
+  conversaGravou.length = 0;
+  assert.equal(await gravarRecusaDoSinal(u, 1), false, 'consulta no passado');
+});
+
+test('A.2) remarcação: o na_clinica PADRÃO da chave não derruba o "Sim" que a equipe pôs; a escolha dita continua valendo como sempre', () => {
+  const base = { ehRetorno: false, pagamentoComprovado: false, escolhaSalva: 'na_clinica', valorAtual: 'Sim' };
+  assert.equal(decidirPagamentoAntecipado({ ...base, preservarSim: true }).valor, null, 'mantém o Sim da equipe');
+  assert.equal(decidirPagamentoAntecipado({ ...base }).valor, 'Não', 'chave desligada: como sempre');
+  assert.equal(decidirPagamentoAntecipado({ ...base, preservarSim: true, formaPagamento: 'na_clinica' }).valor, 'Não', 'ele disse na clínica agora: vale');
+  assert.equal(decidirPagamentoAntecipado({ ...base, preservarSim: true, valorAtual: 'Não' }).valor, 'Não');
+});
+
+test('A.1) a descrição de gerar_sinal_pix só muda com a chave ligada (desligada = a do main, palavra por palavra)', () => {
+  const desc = () => (gerarSinal(atual) as unknown as { description: string }).description;
+  const desligada = desc();
+  assert.doesNotMatch(desligada, /DEPOIS de marcar/);
+  assert.match(desligada, /ele ter escolhido o sinal \(formaPagamento=sinal_pix\)\. O sistema manda o código/);
+  ligar();
+  assert.match(desc(), /Também chame quando ele aceitar a oferta do sinal que você fez DEPOIS de marcar/);
+  _semearParaTeste([]);
+  assert.equal(desc(), desligada);
+});
+
+test('A.2) ao gerar o link, o marcador da oferta vira sinal_pix (o "Pago no dia" depois disso não vale mais)', async () => {
   ligar();
   const hora = await primeiroHorario(atual);
   await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
-  assert.equal(conversaGravou.length, 1);
-  const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string | null }; where: Record<string, unknown> };
-  assert.equal(g.data.pagamentoEscolhido, null, 'a escolha antiga é zerada');
-  assert.deepEqual(g.where.pagamentoEscolhido, { not: null }, 'só mexe em quem tem escolha antiga');
-});
-
-test('nit) "Pago no dia" depois da oferta do sinal é gravado como na_clinica (só com a oferta antes, e nunca por cima de sinal_pix)', async () => {
-  const oferta: Fala = { papel: 'ia', texto: '✅ Marcado: segunda 08h. Quer sair por R$ 250? É só o sinal de R$ 50 no Pix.' };
-  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'Pago no dia' }]), true);
-  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'pago na clínica mesmo' }]), false, 'só a frase curta de resposta');
-  assert.equal(recusouOSinal([oferta, { papel: 'paciente', texto: 'Quero o Pix' }]), false);
-  assert.equal(recusouOSinal([{ papel: 'ia', texto: 'Qual horário fica melhor?' }, { papel: 'paciente', texto: 'Pago no dia' }]), false, 'sem oferta de sinal antes, não é resposta a nada');
-  await gravarRecusaDoSinal('u-arag', 1);
-  const g = conversaGravou[conversaGravou.length - 1] as unknown as { data: { pagamentoEscolhido: string }; where: Record<string, unknown> };
-  assert.equal(g.data.pagamentoEscolhido, 'na_clinica');
-  assert.equal(g.where.pagamentoEscolhido, null, 'só quando ainda não há escolha');
+  conversaGravou.length = 0;
+  await gerarSinal(atual).func({ leadId: 1 });
+  const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string }; where: { pagamentoEscolhido: string } };
+  assert.equal(g.where.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
+  assert.equal(g.data.pagamentoEscolhido, 'sinal_pix');
 });

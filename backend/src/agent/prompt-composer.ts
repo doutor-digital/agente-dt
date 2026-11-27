@@ -29,7 +29,6 @@ import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.j
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
 import { pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
-import { promptTemConsulta } from './reserva-sem-marcar.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -698,7 +697,7 @@ function renderPipelineIntents(unit: Unit): string {
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents, { propoeDia: automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) })}`);
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents)}`);
 }
 
 /**
@@ -713,26 +712,9 @@ function renderPipelineIntents(unit: Unit): string {
  * volta a conversar quando o paciente responde, porque EM ESPERA está nas etapas
  * permitidas.
  */
-export function renderEsperaRules(intents: Record<string, number>, opcoes: { propoeDia?: boolean } = {}): string {
+function renderEsperaRules(intents: Record<string, number>): string {
   const statusId = intents.waiting_deferred;
   if (!statusId) return '';
-  // Chave `adiamento-propoe-dia`: a regra 3 propõe um dia e dois horários reais (decisão do João, 27/11/2026). Corte de 21/10 preservado.
-  const regra3 = opcoes.propoeDia
-    ? `3. Responda ao adiamento COM UM DIA E DOIS HORÁRIOS, não só com "te procuro": se ele disse o QUANDO ou o POR QUÊ, chame consultar_horarios
-     para o primeiro dia útil EM ou DEPOIS do impedimento e proponha numa mensagem só — "combinado! já deixo pra {dia}, depois que você
-     {receber / falar com ele / voltar}? tenho {h1} ou {h2}". Os dois horários vêm SÓ de consultar_horarios: nunca invente vaga. Só chame
-     agendar_consulta se ele ESCOLHER um horário (a confirmação do dia segue valendo) e nunca diga "reservado" antes de marcar. Se ele recusar
-     marcar agora, ou se só agradeceu, se despediu (obrigada, tchau, boa noite, até mais), recusou, disse só "vou pensar"/"te aviso" sem motivo nem
-     data, ou já escolheu um horário, NÃO proponha: "combinado, te procuro no dia DD/MM para marcarmos sua consulta com o nosso especialista"
-     (quem escolheu horário vai para a marcação). Quem decide é o bloco do turno: <paciente_adiou> = proponha uma vez; <paciente_encerrou> = nada
-     de horário. UMA proposta só: se ele adiar de novo depois dela, só combine a volta. Nunca prometa HORA de retorno. Sem pressão e sem
-     insistir. Só então chame mover_etapa.`
-    : `3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
-     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.`;
-  const regra4 = opcoes.propoeDia
-    ? `4. Depois disso, não mande mais nada nesta conversa até a data — EXCETO responder se ele responder à proposta de horário (se escolher, marque;
-     se recusar, só combine a volta). Sem resposta dele, a retomada é automática na data.`
-    : '4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.';
   return `
 - EM ESPERA (statusId ${statusId}) — regras:
   1. Só quando o paciente QUER e adia. "Não tenho interesse", "não quero", "já resolvi"
@@ -750,8 +732,9 @@ export function renderEsperaRules(intents: Record<string, number>, opcoes: { pro
      ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
      Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
-  ${regra3}
-  ${regra4}`;
+  3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
+     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.
+  4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
 /**
@@ -2145,7 +2128,7 @@ function renderSoCumprimento(userMessage?: string): string {
  * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts) e paciente insistindo no preço
  * (preco-insistido.ts). Sem histórico (playground, régua), nada.
  */
-function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined, temConsulta = false): { semPedirNome: boolean; blocos: string[] } {
+function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedirNome: boolean; blocos: string[] } {
   if (!historico || historico.length === 0) return { semPedirNome: false, blocos: [] };
   const repeticao = analisarRepeticao(historico);
   const blocos: string[] = [];
@@ -2154,9 +2137,6 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined, temConsult
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
   const encerrou = renderPacienteEncerrou(historico, {
     perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
-    // Adiou com motivo ("vou falar com meu marido", "só recebo dia 5"): propõe um dia e dois horários reais em vez de calar (a chave tem o porquê).
-    // (como no grafo: quem já tem consulta de pé segue pelo bloco de quem encerrou, sem proposta de segundo horário)
-    propoeDia: !temConsulta && automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS),
   });
   if (encerrou) blocos.push(encerrou);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas
@@ -2636,7 +2616,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico, promptTemConsulta(renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(unit), input.agora), input.pacienteFranquia)));
+  const doHistorico = blocosDoHistorico(unit, input.historico);
 
   if (unit.singlePromptMode) {
     const single: string[] = [];
@@ -2817,7 +2797,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico, promptTemConsulta(renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(unit), input.agora), input.pacienteFranquia)));
+  const doHistorico = blocosDoHistorico(unit, input.historico);
 
   // Estes três mudam POR UNIDADE, não por paciente: o calendário vira uma vez
   // por dia (renderCalendario recebe a data sem hora, de propósito), o endereço

@@ -57,7 +57,7 @@ import {
   semPerguntaDeTurno,
   travaDoHorario,
 } from './horario-oferecido.js';
-import { empurraHorario, encerramentoParaCorte, semEmpurrarHorario } from './paciente-encerrou.js';
+import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 import { adiouConfirmacao, confirmacaoAdiadaEstado, travarAgendamentoAdiado, type TurnoDaConfirmacao } from './confirmacao-adiada.js';
 
@@ -1203,14 +1203,10 @@ export async function buildAgentGraph(
       // modelo escreve de novo com a agenda de agora. Gemini (exige assinatura na chamada de ferramenta) não recebe
       // chamada montada pelo código: refaz com a instrução. Com o plano B respondendo, só os cortes, sem modelo.
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
-      // Chave `adiamento-propoe-dia`: quem adiou COM motivo ("vou falar com meu marido", "só recebo dia 5") não é "encerrou" — a resposta propõe
-      // o dia e dois horários, e a trava do horário inventado roda. Quem só agradece, se despede ou recusa segue cortado, como em 21/10.
-      // Quem JÁ TEM consulta de pé segue cortado (não se propõe segundo horário a quem já marcou).
-      const adiamentoPropoeDia = automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) && !promptTemConsulta(promptDoTurno);
-      const encerrou = encerramentoParaCorte(falas, adiamentoPropoeDia);
-      // Chave `pix-depois-de-marcar` COM sinal: "Pago no dia" depois da oferta do sinal vira `na_clinica` (a lista «agendados sem Pix» deixa de listá-lo).
-      if (state.leadId && recusouOSinal(falas) && sinalDaUnidade(unit) && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })) {
-        void gravarRecusaDoSinal(unit.id, state.leadId);
+      const encerrou = pacienteEncerrou(falas);
+      // Chave `pix-depois-de-marcar` COM sinal: "Pago no dia" respondendo à oferta (marcador gravado ao marcar) vira `na_clinica`, com a consulta ainda de pé.
+      if (state.leadId && sinalDaUnidade(unit) && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment }) && recusouOSinal(falaDoPacienteNoTurno(falas))) {
+        void gravarRecusaDoSinal(unit, state.leadId);
       }
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);

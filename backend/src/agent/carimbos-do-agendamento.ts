@@ -222,6 +222,11 @@ export function decidirPagamentoAntecipado(s: {
    * correção (29/10) não pode mais carimbar "Sim" na remarcação; vira "na clínica". Sem escolha nenhuma, nada muda.
    */
   semAntecipado?: boolean;
+  /**
+   * Chave `pix-depois-de-marcar`: o `na_clinica` guardado pode ser o PADRÃO da chave (ninguém perguntou), não uma escolha dele. Então, na
+   * remarcação (sem forma na chamada), ele não derruba um "Sim" que a equipe já pôs no cartão.
+   */
+  preservarSim?: boolean;
 }): DecisaoPagamento {
   if (s.ehRetorno) return { valor: 'Não', porque: 'retorno pós-tratamento' };
   if (s.pagamentoComprovado) return { valor: 'Sim', porque: 'pagamento comprovado antes da reserva' };
@@ -239,7 +244,12 @@ export function decidirPagamentoAntecipado(s: {
       ? { valor: null, porque: 'sinal por Pix: a equipe já pôs Sim; mantém' }
       : { valor: 'Não', porque: 'sinal por Pix escolhido, ainda não pago: a prova é o ✓ Consulta pg antecipado, marcado quando o Asaas confirma' };
   }
-  if (forma === 'na_clinica') return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
+  if (forma === 'na_clinica') {
+    if (s.preservarSim && !s.formaPagamento && String(s.valorAtual ?? '').trim().toLowerCase() === 'sim') {
+      return { valor: null, porque: 'na clínica por padrão da chave pix-depois-de-marcar: a equipe já pôs Sim; mantém' };
+    }
+    return { valor: 'Não', porque: 'paciente escolheu pagar na clínica' };
+  }
 
   if (s.valorAtual === undefined) return { valor: null, porque: 'sem escolha registrada e cartão não lido; não mexe' };
   const temValor = s.valorAtual !== null && String(s.valorAtual).trim() !== '';
