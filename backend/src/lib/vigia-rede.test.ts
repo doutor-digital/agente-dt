@@ -553,3 +553,16 @@ test('Gemini (chave reserva do Google) não conta como "openai": nem totais, nem
   assert.deepEqual(erros.map((e) => e.familia), ['openai']);
   assert.match(erros[0].mensagem, /no credits remaining/);
 });
+
+test('chamada pela chave RESERVA global (provider "anthropic-reserva") não fecha nem abre o alerta da conta da Anthropic', async () => {
+  const agora = d(T0);
+  const chamadas: ChamadaLlm[] = [
+    { t: T0 - 5 * MIN, status: 'success', model: 'claude-sonnet-5', provider: 'anthropic-reserva' },
+    { t: T0 - 4 * MIN, status: 'error', model: 'claude-sonnet-5', provider: 'anthropic-reserva', mensagem: ANTHROPIC_SEM_SALDO },
+    { t: T0 - 3 * MIN, status: 'error', model: 'claude-sonnet-5', provider: 'anthropic', mensagem: ANTHROPIC_SEM_SALDO },
+  ];
+  const leitura = leituraEmMemoria(chamadas);
+  assert.deepEqual((await leitura.totaisPorFamilia(agora, 30)).anthropic, { ok: 0, erro: 1 });
+  assert.equal((await leitura.ultimoSucesso(agora)).anthropic, null, 'um sucesso da reserva não pode fechar "Anthropic sem crédito"');
+  assert.equal((await leitura.errosAgrupados(agora, 30)).reduce((n, g) => n + g.chamadas, 0), 1);
+});

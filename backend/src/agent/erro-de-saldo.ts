@@ -36,13 +36,26 @@ const LIMITE_PASSAGEIRO = /per[ _-]?minute|requests? per min|tokens? per min|\bT
 /** Cota por DIA: não passa em segundos. Ganha do sinal acima (a mensagem do Gemini cita as duas). */
 const COTA_DO_DIA = /per[ _-]?day|\bdaily\b|requests? per day/i;
 
+/**
+ * O LangChain acrescenta "Troubleshooting URL: …/MODEL_RATE_LIMIT/" a todo 429 — inclusive ao de saldo. Esse texto não é do
+ * provedor e tem "rate limit" no nome: se ficar, o 429 de saldo da OpenAI parece limite por minuto.
+ */
+export function semSufixoDoLangchain(msg: string): string {
+  return msg.replace(/\s*Troubleshooting URL:\s*\S+\s*$/i, '');
+}
+
 export function ehErroDeSaldoOuCota(err: unknown): boolean {
   if (err == null) return false;
   if (err instanceof Error && err.name === 'LlmTimeoutError') return false;
 
   if (statusDe(err) === 402) return true;
 
-  const msg = mensagemDe(err);
+  // O @langchain/openai entrega o erro já classificado: `InsufficientQuotaError`, code/type `insufficient_quota`.
+  // insufficient_quota é SEMPRE saldo, seja qual for o texto.
+  const e = err as { name?: unknown; code?: unknown; type?: unknown };
+  if (e.name === 'InsufficientQuotaError' || e.code === 'insufficient_quota' || e.type === 'insufficient_quota') return true;
+
+  const msg = semSufixoDoLangchain(mensagemDe(err));
   if (SALDO_DURO.test(msg)) return true;
   // O que sobra é texto de cota ambíguo (ehErroDeSaldo cobre "exceeded ... quota"): só vale se NÃO for limite passageiro.
   if (LIMITE_PASSAGEIRO.test(msg) && !COTA_DO_DIA.test(msg)) return false;

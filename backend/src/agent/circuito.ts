@@ -57,8 +57,9 @@ function estadoDe(p: string): Estado {
  * Quando o descanso termina, deixa passar UMA tentativa para sondar.
  */
 export function circuitoAberto(p: string, agora = Date.now()): boolean {
-  const e = estadoDe(p);
-  if (e.abertoAte === 0) return false;
+  // Consultar não cria entrada (há uma chave de saldo por unidade): só quem já falhou ou abriu tem estado.
+  const e = estados.get(p);
+  if (!e || e.abertoAte === 0) return false;
   if (agora >= e.abertoAte) {
     // Descanso acabou: solta uma tentativa. Se falhar de novo, reabre.
     e.abertoAte = 0;

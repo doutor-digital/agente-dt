@@ -94,8 +94,9 @@ test('principal Google: Anthropic, depois OpenAI', () => {
 test('a chave da unidade vem antes da global do mesmo provedor', () => {
   const unit = { ...base, googleApiKey: 'g-da-unidade' };
   const cadeia = montarCadeia({ unit, principal: 'anthropic', temChaveOpenAiNoAmbiente: true, reservas: COM_GOOGLE });
-  assert.deepEqual(ordem(cadeia), ['openai:ambiente', 'google:unidade']);
+  assert.deepEqual(ordem(cadeia), ['openai:ambiente', 'google:unidade', 'google:reserva-global']);
   assert.deepEqual(cadeia[1].credenciais, {});
+  assert.deepEqual(cadeia[2].credenciais, { googleApiKey: 'g-reserva' });
 });
 
 test('chave de OpenAI da unidade é "unidade"; só a do ambiente é "ambiente"', () => {
@@ -108,8 +109,9 @@ test('nunca repete provedor nem inclui o principal na parte nova; teto de cada p
   for (const principal of ['anthropic', 'openai', 'google'] as const) {
     const unit = { ...base, llmProvider: principal, googleApiKey: 'g', openaiApiKey: 'o' };
     const cadeia = montarCadeia({ unit, principal, temChaveOpenAiNoAmbiente: true, reservas: COM_AS_DUAS, timeoutMs: 1234 });
-    const provedores = cadeia.map((p) => p.provider);
-    assert.equal(new Set(provedores).size, provedores.length, `repetiu em ${principal}: ${provedores}`);
+    const passos = cadeia.map((p) => `${p.provider}:${p.origemChave}`);
+    assert.equal(new Set(passos).size, passos.length, `repetiu em ${principal}: ${passos}`);
+    assert.ok(cadeia.every((p) => p.provider !== principal || p.origemChave !== 'reserva-global'), 'o principal não entra de novo pela reserva global');
     assert.ok(cadeia.every((p) => p.timeoutMs === 1234));
   }
 });
@@ -472,4 +474,61 @@ test('o rótulo da reserva global vai para a reescrita do bastidor (llm_calls "g
     maxTokens: 400,
   });
   assert.equal(alvo.provider, 'google-reserva');
+});
+
+// ---- revisão da 2ª rodada ------------------------------------------------------------------------
+
+test('teto ENCURTADO pelo prazo da cadeia que estoura é "sem-tempo": não conta como falha do provedor (3 vezes não cortam a rede)', async () => {
+  // prazo de 60 ms (piso de 10 ms) com relógio injetado: o teto de 60 s do passo é encurtado para 60 ms e a chamada nunca volta
+  const agora = 0;
+  const falhasAntes = estadoDoCircuito().find((e) => e.provedor === 'google')?.falhasSeguidas ?? 0;
+  for (let i = 0; i < 4; i++) {
+    await assert.rejects(
+      percorrerCadeia({
+        passos: [passo('google', { timeoutMs: 60_000 })],
+        comCircuito: true,
+        unitId: 'u',
+        prazoAte: 60,
+        pisoDeTempoMs: 10,
+        agora: () => agora,
+        chamar: () => new Promise<string>(() => undefined),
+      }),
+      (e) => e instanceof CadeiaEsgotadaError && e.tentativas[0].resultado === 'sem-tempo',
+    );
+  }
+  assert.equal(circuitoAberto('google'), false, 'o prazo da cadeia não pode cortar o Google da rede');
+  assert.equal(estadoDoCircuito().find((e) => e.provedor === 'google')?.falhasSeguidas, falhasAntes);
+});
+
+test('timeout no teto INTEIRO do passo (sem encurtar) continua contando como falha de infra', async () => {
+  for (let i = 0; i < 3; i++) {
+    await assert.rejects(
+      percorrerCadeia({ passos: [passo('google', { timeoutMs: 15 })], comCircuito: true, unitId: 'u', chamar: () => new Promise<string>(() => undefined) }),
+      CadeiaEsgotadaError,
+    );
+  }
+  assert.equal(circuitoAberto('google'), true);
+});
+
+test('chave da unidade sem saldo cai na reserva global do MESMO provedor (logo depois dela)', () => {
+  const unit = { ...base, llmProvider: 'openai', anthropicApiKey: 'a-unidade', googleApiKey: 'g-unidade' };
+  const cadeia = montarCadeia({ unit, principal: 'openai', temChaveOpenAiNoAmbiente: true, reservas: COM_AS_DUAS });
+  assert.deepEqual(ordem(cadeia), ['anthropic:unidade', 'anthropic:reserva-global', 'google:unidade', 'google:reserva-global']);
+  assert.deepEqual(cadeia[1].credenciais, { anthropicApiKey: 'a-reserva' });
+  assert.deepEqual(cadeia[3].credenciais, { googleApiKey: 'g-reserva' });
+});
+
+test('reserva global igual à chave da unidade não vira passo repetido; sem reserva global nada muda', () => {
+  const unit = { ...base, llmProvider: 'openai', anthropicApiKey: 'mesma' };
+  const cadeia = montarCadeia({ unit, principal: 'openai', temChaveOpenAiNoAmbiente: false, reservas: { anthropic: 'mesma', google: null } });
+  assert.deepEqual(ordem(cadeia), ['anthropic:unidade']);
+  const sem = montarCadeia({ unit, principal: 'openai', temChaveOpenAiNoAmbiente: false, reservas: SEM_RESERVA });
+  assert.deepEqual(ordem(sem), ['anthropic:unidade']);
+});
+
+test('consultar o circuito não cria entrada (há uma chave de saldo por unidade)', () => {
+  resetarCircuitos();
+  const antes = estadoDoCircuito().length;
+  for (let i = 0; i < 50; i++) circuitoAberto(chaveDeSaldo('anthropic', 'unidade', `u${i}`));
+  assert.equal(estadoDoCircuito().length, antes);
 });

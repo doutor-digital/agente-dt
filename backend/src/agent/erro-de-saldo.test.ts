@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { ehErroDeSaldoOuCota } from './erro-de-saldo.js';
+import { ChatOpenAI } from '@langchain/openai';
+import { ehErroDeSaldoOuCota, semSufixoDoLangchain } from './erro-de-saldo.js';
 import { ehErroDeSaldo } from '../lib/ops-alert.js';
 
 function erroHttp(status: number, msg: string): Error {
@@ -88,4 +89,51 @@ test('o ehErroDeSaldo do alerta continua respondendo igual para o que já cobria
   assert.equal(ehErroDeSaldo('Your credit balance is too low'), true);
   assert.equal(ehErroDeSaldo('insufficient_quota'), true);
   assert.equal(ehErroDeSaldo('429 Rate limit reached'), false);
+});
+
+// O erro COMO O LANGCHAIN ENTREGA (ChatOpenAI de verdade, só o fetch é falso): classe própria, code/type e o sufixo
+// "Troubleshooting URL: …/MODEL_RATE_LIMIT/" colado a todo 429 — inclusive ao de saldo.
+async function erroDoChatOpenAI(body: unknown, status = 429): Promise<Error> {
+  const modelo = new ChatOpenAI({
+    apiKey: 'sk-teste',
+    model: 'gpt-4o-mini',
+    maxRetries: 0,
+    configuration: {
+      fetch: (async () => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })) as never,
+    },
+  });
+  try {
+    await modelo.invoke('oi');
+  } catch (e) {
+    return e as Error;
+  }
+  throw new Error('o ChatOpenAI não falhou');
+}
+
+test('OpenAI sem saldo, embrulhado pelo LangChain (InsufficientQuotaError + sufixo MODEL_RATE_LIMIT), É saldo', async () => {
+  for (const message of [
+    'You exceeded your current quota, please check your plan and billing details. For more information on this error, read the docs: https://platform.openai.com/docs/guides/error-codes/api-errors.',
+    'You have no credits remaining. Add credits to continue using the API',
+  ]) {
+    const err = await erroDoChatOpenAI({ error: { message, type: 'insufficient_quota', param: null, code: 'insufficient_quota' } });
+    assert.match(err.message, /MODEL_RATE_LIMIT/, 'pré-condição: o sufixo do LangChain está na mensagem');
+    assert.equal(err.name, 'InsufficientQuotaError');
+    assert.equal(ehErroDeSaldoOuCota(err), true, message);
+  }
+});
+
+test('OpenAI sem saldo é saldo pelo code/name mesmo com a mensagem irreconhecível', () => {
+  assert.equal(ehErroDeSaldoOuCota(Object.assign(new Error('429 algo estranho\n\nTroubleshooting URL: https://x/MODEL_RATE_LIMIT/'), { code: 'insufficient_quota' })), true);
+  assert.equal(ehErroDeSaldoOuCota(Object.assign(new Error('x'), { name: 'InsufficientQuotaError' })), true);
+});
+
+test('OpenAI rate limit por minuto, embrulhado pelo LangChain, NÃO é saldo', async () => {
+  const err = await erroDoChatOpenAI({ error: { message: 'Rate limit reached for gpt-4o-mini on tokens per min (TPM): Limit 200000', type: 'tokens', code: 'rate_limit_exceeded' } });
+  assert.equal(err.name, 'RateLimitCapacityError');
+  assert.equal(ehErroDeSaldoOuCota(err), false);
+});
+
+test('semSufixoDoLangchain tira só o sufixo do fim', () => {
+  assert.equal(semSufixoDoLangchain('429 x\n\nTroubleshooting URL: https://docs.langchain.com/a/MODEL_RATE_LIMIT/\n'), '429 x');
+  assert.equal(semSufixoDoLangchain('429 sem sufixo'), '429 sem sufixo');
 });

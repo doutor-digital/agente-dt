@@ -923,7 +923,7 @@ export async function buildAgentGraph(
         throw new LlmTimeoutError(0);
       }
       // Circuito de SALDO da chave: erro à parte, que nunca conta como falha de infra do provedor.
-      if (circuitoAberto(saldoDoPrincipal)) {
+      if (cadeiaViva && circuitoAberto(saldoDoPrincipal)) {
         throw new CircuitoDeSaldoAbertoError(saldoDoPrincipal);
       }
       let modeloReserva: typeof model | null = null;

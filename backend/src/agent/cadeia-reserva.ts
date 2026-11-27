@@ -135,7 +135,19 @@ export function montarCadeia(args: MontarCadeiaArgs): PassoDaCadeia[] {
       }
     }
   }
-  return passos;
+
+  // 3) Chave da UNIDADE sem saldo não é o fim daquele provedor: a reserva global do mesmo provedor vem logo depois dela.
+  const comReserva: PassoDaCadeia[] = [];
+  for (const passo of passos) {
+    comReserva.push(passo);
+    if (passo.origemChave !== 'unidade') continue;
+    if (passo.provider === 'anthropic' && reservas.anthropic && reservas.anthropic !== unit.anthropicApiKey) {
+      comReserva.push({ ...passo, origemChave: 'reserva-global', credenciais: { anthropicApiKey: reservas.anthropic } });
+    } else if (passo.provider === 'google' && reservas.google && reservas.google !== unit.googleApiKey) {
+      comReserva.push({ ...passo, origemChave: 'reserva-global', credenciais: { googleApiKey: reservas.google } });
+    }
+  }
+  return comReserva;
 }
 
 export type ResultadoDaTentativa = 'respondeu' | 'circuito-aberto' | 'saldo' | 'timeout' | 'erro' | 'sem-tempo';
@@ -178,6 +190,8 @@ export interface PercorrerCadeiaArgs<T> {
    * suficiente o passo nem começa. O deploy espera 60 s (`stop_grace_period`): sem prazo o pior caso passava disso.
    */
   prazoAte?: number;
+  /** Menos que isto de prazo restante e o passo nem começa. Padrão 2 s; injetável para teste. */
+  pisoDeTempoMs?: number;
   /** Relógio injetável. */
   agora?: () => number;
 }
@@ -215,12 +229,15 @@ export async function percorrerCadeia<T>(
 
     const t0 = agora();
     const restante = args.prazoAte === undefined ? Infinity : args.prazoAte - t0;
-    if (restante < PISO_DE_TEMPO_MS) {
+    if (restante < (args.pisoDeTempoMs ?? PISO_DE_TEMPO_MS)) {
       tentativas.push({ ...base, resultado: 'sem-tempo', ms: 0 });
       continue;
     }
+    // O prazo da cadeia pode encurtar o teto deste passo: estourar um teto encurtado é culpa do nosso prazo, não do provedor.
+    const teto = Math.min(passo.timeoutMs, restante);
+    const tetoEncurtado = teto < passo.timeoutMs;
     try {
-      const resposta = await withTimeout(args.chamar(passo), Math.min(passo.timeoutMs, restante));
+      const resposta = await withTimeout(args.chamar(passo), teto);
       if (args.comCircuito) {
         registrarSucesso(passo.provider);
         registrarSucesso(saldoKey);
@@ -234,6 +251,9 @@ export async function percorrerCadeia<T>(
       if (ehErroDeSaldoOuCota(err)) {
         resultado = 'saldo';
         if (args.comCircuito) abrirCircuito(saldoKey);
+      } else if (tetoEncurtado && err instanceof Error && err.name === 'LlmTimeoutError') {
+        // Estourou o teto que o PRÓPRIO prazo da cadeia encurtou: não prova nada sobre o provedor — não conta para o circuito.
+        resultado = 'sem-tempo';
       } else if (ehFalhaDeInfra(err)) {
         resultado = err instanceof Error && err.name === 'LlmTimeoutError' ? 'timeout' : 'erro';
         if (args.comCircuito) registrarFalha(passo.provider);
