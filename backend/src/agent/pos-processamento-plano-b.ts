@@ -17,6 +17,13 @@
 export interface PlanoBEmUso {
   provider: string;
   modelName: string;
+  /**
+   * Chave reserva GLOBAL que fez o turno (cadeia-reserva.ts): a unidade não tem a própria daquele provedor,
+   * então a reescrita precisa levar a mesma chave — sem ela o `createChatModel` cairia no OpenAI.
+   */
+  credenciais?: object;
+  /** Como a chamada aparece em llm_calls.provider ('google-reserva' quando a chave é a reserva global). Padrão: o provedor. */
+  rotulo?: string;
 }
 
 export interface AlvoDoReescritor<M> {
@@ -40,9 +47,9 @@ export function alvoDoReescritor<U extends object, M>(args: {
   const { unit, modelName, provedorAtivo, planoBEmUso, criarModelo, maxTokens } = args;
   if (planoBEmUso) {
     return {
-      model: criarModelo({ ...unit, llmProvider: planoBEmUso.provider }, { model: planoBEmUso.modelName, temperature: 0, maxTokens }),
+      model: criarModelo({ ...unit, ...planoBEmUso.credenciais, llmProvider: planoBEmUso.provider }, { model: planoBEmUso.modelName, temperature: 0, maxTokens }),
       modelName: planoBEmUso.modelName,
-      provider: planoBEmUso.provider,
+      provider: planoBEmUso.rotulo ?? planoBEmUso.provider,
     };
   }
   return {

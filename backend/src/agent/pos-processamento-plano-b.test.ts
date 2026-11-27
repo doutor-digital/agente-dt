@@ -102,6 +102,7 @@ test('graph.ts: o reescritor de bastidor não nasce mais direto do principal e o
   const src = readFileSync(new URL('./graph.ts', import.meta.url), 'utf8').replace(/\s+/g, '');
   assert.ok(src.includes('alvoDoReescritor({unit,modelName,provedorAtivo,planoBEmUso,criarModelo:createChatModel,maxTokens:400})'));
   assert.ok(!src.includes('createChatModel(unit,{model:modelName,temperature:0,maxTokens:400})'), 'o reescritor voltou a criar o principal direto');
-  assert.ok(src.includes('planoBEmUso={provider:planoB.provider,modelName:planoB.modelName};'), 'o plano B em uso não é registrado');
+  // o plano B em uso leva também a chave reserva global (cadeia-reserva.ts), senão a reescrita cairia no OpenAI
+  assert.ok(src.includes('planoBEmUso={...planoB,credenciais:vencedora.passo.credenciais,rotulo:rotuloDoProvedor(vencedora.passo)};'), 'o plano B em uso não é registrado');
   assert.ok(src.includes('if(cta.precisaRefazer&&!passouPorSinal&&!respostaFixa&&podeRefazerNoPrincipal(respondeuPlanoB)&&'));
 });

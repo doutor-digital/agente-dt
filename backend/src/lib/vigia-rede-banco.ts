@@ -59,6 +59,8 @@ export function criarLeituraDoBanco(): Leitura {
            AND coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
            AND c.created_at >= t.agora - (${janelaMin}::int * interval '1 minute')
            AND c.created_at <= t.agora
+           AND c.model !~* '^(models/)?(gemini|gemma)'
+           AND c.provider NOT LIKE '%-reserva'
          GROUP BY 1, 2`;
       return rows.map((r) => ({
         familia: r.claude ? 'anthropic' : 'openai',
@@ -81,6 +83,8 @@ export function criarLeituraDoBanco(): Leitura {
          WHERE coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
            AND c.created_at >= t.agora - (${janelaMin}::int * interval '1 minute')
            AND c.created_at <= t.agora
+           AND c.model !~* '^(models/)?(gemini|gemma)'
+           AND c.provider NOT LIKE '%-reserva'
          GROUP BY 1`;
       const out: Record<Familia, TotaisDaFamilia> = { anthropic: { ok: 0, erro: 0 }, openai: { ok: 0, erro: 0 } };
       for (const r of rows) out[r.claude ? 'anthropic' : 'openai'] = { ok: r.ok, erro: r.erro };
@@ -97,6 +101,8 @@ export function criarLeituraDoBanco(): Leitura {
            AND coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
            AND c.created_at >= t.agora - interval '24 hours'
            AND c.created_at <= t.agora
+           AND c.model !~* '^(models/)?(gemini|gemma)'
+           AND c.provider NOT LIKE '%-reserva'
          GROUP BY 1`;
       const out: Record<Familia, Date | null> = { anthropic: null, openai: null };
       for (const r of rows) out[r.claude ? 'anthropic' : 'openai'] = r.ultimo;

@@ -351,7 +351,10 @@ Falhas do **agente** (erro do Claude, erro de rede com Kommo) não viram `500` �
 | `KOMMO_ACCESS_TOKEN` | sim | — | Long-Lived Access Token. |
 | `ANTHROPIC_API_KEY` | sim | — | Chave Anthropic. |
 | `ANTHROPIC_MODEL` | não | `claude-opus-4-7` | Modelo Claude. |
-| `ANTHROPIC_RESERVE_API_KEY` | não | — | Chave reserva. Se a chave Anthropic da unidade for recusada (401/402/403, sem crédito), o turno é refeito UMA vez com esta chave — mesmo modelo e parâmetros. Sem ela, nada muda. Use chave SEM validade. Ver `backend/src/agent/chave-reserva.ts`. |
+| `ANTHROPIC_RESERVE_API_KEY` | não | — | Chave reserva. Se a chave Anthropic da unidade for recusada (401/402/403, sem crédito), o turno é refeito UMA vez com esta chave — mesmo modelo e parâmetros. Sem ela, nada muda. Use chave SEM validade. Ver `backend/src/agent/chave-reserva.ts`. Também liga a cadeia de reserva (abaixo): para a unidade SEM chave Anthropic própria, vale como reserva de provedor. |
+| `AGENT_RESERVE_GOOGLE_KEY` | não | — | Chave Google (Gemini) reserva GLOBAL. Usada quando o principal cai (inclusive sem saldo/cota) e a unidade não tem chave Google própria. Liga a cadeia de reserva completa (principal → todos os outros provedores, Anthropic, OpenAI, Google, cada um com teto de tempo; saldo/cota esgotados pulam na hora e abrem o disjuntor). Sem ela e sem `ANTHROPIC_RESERVE_API_KEY`, o plano B é o de hoje (um só). Modelo: o `googleModel` da unidade (padrão `gemini-2.5-flash`). Ver `backend/src/agent/cadeia-reserva.ts`. |
+| `AGENT_CADEIA_PRAZO_MS` | não | `55000` | Prazo da cadeia de reserva INTEIRA (principal + reservas) a partir do início do turno; cada reserva ganha só o que sobra e nem começa com menos de 2 s. Fica abaixo dos 60 s do `stop_grace_period`. Só vale com a cadeia de reserva ligada. |
+| `CIRCUITO_SALDO_DESCANSO_MS` | não | `120000` | Quanto tempo um provedor sem saldo/cota fica cortado antes de uma tentativa sondar. Só vale com a cadeia de reserva ligada. |
 | `PORT` | não | `3001` | Porta HTTP. |
 | `LOG_LEVEL` | não | `info` | `fatal`…`trace`. |
 | `FRONTEND_ORIGIN` | não | `http://localhost:5173` | Origem permitida no CORS. |
