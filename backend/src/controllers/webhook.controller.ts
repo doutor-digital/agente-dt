@@ -914,7 +914,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'lembrete_kommo' });
       return;
     }
-    if (respostaD1) {
+    // `remarcar_sofia` (chave remarcar-oferta ligada): o pedido de remarcar segue para a Sofia, que oferece 2 horários reais.
+    if (respostaD1 && respostaD1 !== 'remarcar_sofia') {
       await recorder.step({
         kind: 'COMPLETED',
         title:

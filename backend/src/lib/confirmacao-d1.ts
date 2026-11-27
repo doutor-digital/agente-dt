@@ -9,6 +9,8 @@ import { avisoRecente } from './aviso-dedupe.js';
 import { nomeApresentavel, saudacao, vocativo } from './nome-apresentavel.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { ID_CONFIRMACAO_DIA_UTIL } from './confirmacao-unidade.js';
+import { ID_REMARCAR_OFERTA, oferecerNovoHorario, textoTarefaRemarcarComOferta } from './remarcar-oferta.js';
+import { registrarSimulacao } from './so-no-papel.js';
 
 export type RespostaD1 = 'confirmou' | 'remarcar';
 
@@ -51,7 +53,8 @@ export function classificarRespostaD1(texto: string): RespostaD1 | null {
   return null;
 }
 
-export type Toque = 'd1' | 'd2';
+/** d0 = a manhã da própria consulta (chave `confirmacao-manha`); d1 = véspera; d2 = reforço de dois dias. */
+export type Toque = 'd0' | 'd1' | 'd2';
 
 /**
  * A marca de "já perguntei" carrega a CONSULTA, não só o lead.
@@ -68,7 +71,7 @@ export type Toque = 'd1' | 'd2';
  * chave nova — a pergunta volta a sair, que é o certo.
  */
 export function prefixoDoToque(toque: Toque): string {
-  return toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
+  return toque === 'd0' ? 'confirmacao_d0' : toque === 'd1' ? 'confirmacao_d1' : 'reforco_d2';
 }
 
 export function chaveDaConfirmacao(toque: Toque, quando: string): string {
@@ -264,10 +267,10 @@ export interface DepsConfirmarNaFranquia {
   esquecerConsulta: (unitId: string, leadId: number) => void;
 }
 
-/** A pergunta saiu para este horário, na véspera OU no reforço de dois dias? */
+/** A pergunta saiu para este horário, na manhã da consulta, na véspera OU no reforço de dois dias? */
 async function perguntouSobre(unitId: string, leadId: number, quando: string): Promise<boolean> {
   const marcas = await Promise.all(
-    (['d1', 'd2'] as const).map((t) =>
+    (['d0', 'd1', 'd2'] as const).map((t) =>
       // a chave carrega o horário da consulta: janela longa não confunde consultas, e cobre a pergunta do dia útil anterior
       avisoRecente(unitId, leadId, chaveDaConfirmacao(t, quando), JANELA_RESPOSTA_DIA_UTIL_MS + 48 * 3600_000),
     ),
@@ -437,7 +440,13 @@ export function podeSerRespostaD1(
   return conv.confirmacaoD1Resposta === resposta;
 }
 
-export type ResultadoRespostaD1 = RespostaD1 | 'repetida';
+/**
+ * `remarcar_sofia`: o paciente pediu para remarcar e a chave `remarcar-oferta` está LIGADA — a conversa segue com a Sofia, que oferece 2
+ * horários reais (o webhook NÃO pula a IA). Fica gravado `oferta_sofia` na conversa, e não `remarcar`: "2" ou "1" digitado depois é a
+ * ESCOLHA de um horário, não uma nova resposta à véspera (com `remarcar` o "2" viraria "repetição" e a Sofia nunca o leria).
+ */
+export type ResultadoRespostaD1 = RespostaD1 | 'repetida' | 'remarcar_sofia';
+export const RESPOSTA_OFERTA_SOFIA = 'oferta_sofia';
 
 export async function tratarRespostaD1(args: {
   unit: Unit;
@@ -507,6 +516,32 @@ export async function tratarRespostaD1(args: {
     // pode atrasá-la. confirmarNaFranquia nunca lança e avisa a equipe quando não conseguir.
     void confirmarNaFranquia({ unit, leadId, consulta, contactName: conv.contactName, kommo });
   } else {
+    const oferta = oferecerNovoHorario(unit.slug);
+    if (oferta === 'ligado') {
+      // Sem resposta pronta: a Sofia responde esta mesma mensagem com 2 horários de `consultar_horarios`. A consulta atual SEGUE de pé
+      // até ele escolher. A tarefa fica como rede de segurança (Sofia calada, paciente que não escolhe), com prazo de 1 h.
+      await kommo
+        .createTask({
+          leadId,
+          text: textoTarefaRemarcarComOferta({ slug: unit.slug, nome: conv.contactName, quando: consulta?.quando ?? null, texto }),
+          completeAt: Math.floor(Date.now() / 1000) + 3600,
+        })
+        .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: falha ao abrir tarefa de remarcação'));
+      await prisma.conversation
+        .update({ where: { id: conv.id }, data: { confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } })
+        .catch(() => undefined);
+      logger.info({ unit: unit.slug, leadId }, 'confirmação D-1: paciente pediu para remarcar — a Sofia oferece 2 horários');
+      return 'remarcar_sofia';
+    }
+    if (oferta === 'seco') {
+      registrarSimulacao(unit, ID_REMARCAR_OFERTA, {
+        leadId,
+        acao: 'mandaria',
+        alvo: 'oferta de 2 horários',
+        valor: `A Sofia responderia com 2 horários reais em vez de «vou pedir para a equipe» (paciente: "${texto.slice(0, 80)}")`,
+        deEtapa: null,
+      });
+    }
     await kommo
       .createTask({
         leadId,

@@ -274,6 +274,34 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/lib/resposta-ao-lembrete.ts',
   },
   {
+    id: 'confirmacao-manha',
+    chave: 'CONFIRMACAO_MANHA_SLUGS',
+    nome: 'Confirmação na manhã da consulta',
+    oQueFaz:
+      'No próprio dia da consulta, de 5 h a 1 h 30 antes do horário (e só com a clínica atendendo, 8h–20h), manda UMA mensagem curta ("sua consulta é hoje, às 14:30. Você consegue vir?") com os botões Confirmo / Preciso remarcar. Confirmou: o mesmo tratador da véspera marca CONFIRMADO na franquia e no cartão. Pediu para remarcar: segue a chave «Oferecer 2 horários a quem não vai conseguir ir».',
+    pegadinha:
+      'NASCE DESLIGADA e exige «Só no papel» antes: a tela mostra a mensagem que mandaria e para quem. NUNCA liga em Caxias e Petrópolis (recusado em código, mesmo com `*`). Não pergunta a quem já confirmou (CONFIRMADO na franquia, «confirmo» à véspera ou ao reforço desta consulta, «Agendamento confirmado» da Sofia há menos de 12 h), a quem pediu para remarcar, a quem escreveu que não vem, nem a cartão em etapa de cancelado/perdido/em espera. Não sai onde a véspera é do robô do Kommo (chave «Véspera pelo robô do Kommo» fora de «Desligado»): lá o lembrete do dia já é do robô. Consulta antes das 9h30 não tem margem e fica só com a véspera. Canal: com a janela de 24 h aberta vai texto pelo chat; FECHADA, só sai se a unidade tiver o modelo aprovado da manhã (`pipeline_intents.manha_salesbot_id` — o da véspera diz "amanhã" e NÃO serve); sem modelo, não manda nada e não abre tarefa (tenta de novo na varredura seguinte, enquanto a janela existir). Conversa que não deu para ler conta como janela fechada. No WhatsApp Lite: no máximo 10 mensagens novas por unidade por varredura de hora em hora. Marca própria (`confirmacao_d0:<horário>`): uma pergunta por consulta, horário novo é pergunta nova.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/confirmacao-manha.ts',
+  },
+  {
+    id: 'remarcar-oferta',
+    chave: 'REMARCAR_OFERTA_SLUGS',
+    nome: 'Oferecer 2 horários a quem não vai conseguir ir',
+    oQueFaz:
+      'Quando o paciente que JÁ tem consulta diz que não vai conseguir, pede para desmarcar ou toca em «Preciso remarcar» (ou responde "2") na pergunta de confirmação, a Sofia responde na hora com 2 horários reais de consultar_horarios, os mais próximos que cabem, em vez de cancelar ou só abrir tarefa. Só remarca se ele escolher; a consulta atual segue de pé até lá. "Não quero mais", "desisti" e afins são respeitados: sem oferta e sem insistência.',
+    pegadinha:
+      'NASCE DESLIGADA e exige «Só no papel» antes. NUNCA liga em Caxias e Petrópolis (recusado em código, mesmo com `*`). São dois efeitos: (1) o prompt da Sofia ganha a regra de oferecer 2 horários antes de qualquer cancelamento — só com a chave LIGADA; (2) o toque em «Preciso remarcar» da pergunta que o SERVIDOR mandou (véspera, reforço, manhã) deixa de ter a resposta pronta e a conversa segue com a Sofia; a tarefa para a equipe continua, com prazo de 1 h, como rede de segurança (se a Sofia estiver calada naquela etapa ou o paciente não escolher, é a tarefa que segura). Em «Só no papel» só o efeito (2) aparece na tela ("responderia com 2 horários") e NADA muda para o paciente; o prompt só muda ligado. NÃO cobre o toque no botão do lembrete do ROBÔ DO KOMMO (Salto, Tatuí, Açailândia: chave «Véspera pelo robô do Kommo»): lá segue a resposta pronta e a tarefa. A oferta depende de consultar_horarios, que confere cada horário com a franquia; agenda indisponível = a Sofia não oferece e diz que a equipe confirma.',
+    risco: 'manda-mensagem',
+    temSeco: true,
+    exigeSecoAntes: true,
+    quandoVazio: 'desligado',
+    arquivo: 'src/lib/remarcar-oferta.ts',
+  },
+  {
     id: 'confirmar-sessao',
     chave: 'CONFIRMAR_SESSAO_SLUGS',
     nome: 'Confirmar presença das sessões',
