@@ -28,6 +28,14 @@ export interface PerfilFiscal {
   opcaoSimplesNacional: 1 | 2 | 3;
   /** alíquota do ISS em % (ou "parametrizada"): só existe quando a unidade a decidiu e registrou aqui; a pessoa pode trocar a cada nota */
   aliquotaIss?: number | 'parametrizada';
+  /** false = a inscrição municipal fica no perfil mas NÃO vai no DPS (Açailândia: o ambiente nacional recusa com E0120, o município não tem IM no CNC da NFS-e). Padrão: envia */
+  enviarIM?: boolean;
+  /** false = o município NÃO está ativo no Sistema Nacional: para ME/EPP do Simples (regime 1) com ISS não retido o ambiente nacional recusa alíquota informada (E0631), então ela é omitida */
+  municipioAtivoNoSistemaNacional?: boolean;
+  /** total aproximado de tributos do Simples (Lei 12.741), em %: o valor REAL vem da contabilidade; sem ele a nota não sai («a completar») */
+  percentualTotalTributosSimples?: number;
+  /** IBS/CBS: CST, cClassTrib e cIndOp vêm da contabilidade; sem os três a nota não sai («a completar») */
+  ibsCbs?: { situacaoTributaria: string; classificacaoTributaria: string; codigoIndicadorOperacao: string };
   /** de onde vieram os dados do perfil (quem informou, quando, e se a contabilidade confirmou): o resumo da nota repete isto */
   origem: string;
   /** de onde veio a alíquota, em texto, para o resumo da nota dizer a verdade */
@@ -42,6 +50,10 @@ export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
     municipioIbge: '2100055',
     municipioNome: 'Açailândia-MA',
     inscricaoMunicipal: '1000000007142',
+    // E0120 (homologação): Açailândia não tem IM no CNC da NFS-e; a IM fica registrada aqui mas não vai no DPS
+    enviarIM: false,
+    // E0631 (homologação): município não ativo no Sistema Nacional + ME/EPP regime 1 + ISS não retido = alíquota NÃO informada
+    municipioAtivoNoSistemaNacional: false,
     codigoTributacaoNacional: '040802',
     codigoNbs: '123019200',
     descricaoDoServico: 'Serviços de fisioterapia',

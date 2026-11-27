@@ -27,7 +27,7 @@ function pedido(sobre: Partial<PedidoDePreparo> = {}): PedidoDePreparo {
     origem: 'venda-0001',
     fiscal: {
       tributacaoIss: 1, tipoRetencaoIss: 1, aliquotaIss: 2, regimeApuracaoSimples: 1, regimeEspecialTributacao: 0,
-      ibsCbs: { situacaoTributaria: '000', classificacaoTributaria: '000001' }, consumidorFinal: true, indicadorDestinatario: 0, naoInformarTotalTributos: true,
+      ibsCbs: { situacaoTributaria: '000', classificacaoTributaria: '000001', codigoIndicadorOperacao: '123456' }, consumidorFinal: true, indicadorDestinatario: 0, percentualTotalTributosSimples: 6,
     },
     ...sobre,
   };
@@ -90,7 +90,7 @@ test('o preparar lista TUDO o que falta de uma vez e não grava nada (alíquota,
     () => prepararNota(m.ctx, m.esc, QUEM, { acao: 'emitir', tomador: { cpf: CPF, nome: NOME }, valor: 100, dataCompetencia: '2026-11-25' }),
     (e: unknown) => {
       assert.ok(e instanceof ErroDeEntrada);
-      for (const campo of ['tributacaoIss', 'tipoRetencaoIss', 'regimeApuracaoSimples', 'regimeEspecialTributacao', 'ibsCbs.situacaoTributaria', 'ibsCbs.classificacaoTributaria', 'consumidorFinal', 'indicadorDestinatario', 'naoInformarTotalTributos']) {
+      for (const campo of ['tributacaoIss', 'tipoRetencaoIss', 'regimeApuracaoSimples', 'regimeEspecialTributacao', 'ibsCbs.situacaoTributaria', 'ibsCbs.classificacaoTributaria', 'consumidorFinal', 'indicadorDestinatario', 'percentualTotalTributosSimples', 'codigoIndicadorOperacao']) {
         assert.ok(e.message.includes(campo), `deveria pedir ${campo}: ${e.message}`);
       }
       assert.match(e.message, /Nada foi preparado/);
@@ -118,11 +118,12 @@ test('alíquota do ISS: unidade SEM alíquota no perfil nunca emite sem ela; "pa
   await assert.rejects(() => prepararNota(sem.ctx, sem.esc, QUEM, semAliquota), /aliquotaIss/);
   assert.equal(sem.focus.emitidas.length, 0);
   const m = montar();
-  const par = await prepararEConfirmar(m, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: 'parametrizada' } }));
+  const par = await prepararEConfirmar(m, pedido({ fiscal: { ...pedido().fiscal, regimeApuracaoSimples: 2, aliquotaIss: 'parametrizada' } }));
   assert.match(JSON.stringify(par.prep.resumo), /PARAMETRIZADA/);
   assert.equal('percentual_aliquota_relativa_municipio' in m.focus.emitidas[0]!.corpo, false);
+  // regime de apuração 2 (ISSQN por fora do Simples): a alíquota é enviada
   const m2 = montar();
-  await prepararEConfirmar(m2, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: 3.5 } }));
+  await prepararEConfirmar(m2, pedido({ fiscal: { ...pedido().fiscal, regimeApuracaoSimples: 2, aliquotaIss: 3.5 } }));
   assert.equal(m2.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 3.5);
   for (const ruim of [-1, 101, 2.00001] as number[]) await assert.rejects(() => prepararNota(montar().ctx, montar().esc, QUEM, pedido({ fiscal: { ...pedido().fiscal, aliquotaIss: ruim } })), /aliquotaIss|0 a 100|casas/);
 });
@@ -132,14 +133,23 @@ test('Açailândia: a alíquota do ISS é 0 por decisão do João (Simples Nacio
   const f = pedido().fiscal!;
   delete f.aliquotaIss;
   const { prep } = await prepararEConfirmar(m, pedido({ fiscal: f }));
-  assert.equal(m.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 0);
+  // ME/EPP no Simples regime 1, ISS não retido, município fora do Sistema Nacional: a alíquota NÃO vai no DPS (E0631)
+  assert.equal('percentual_aliquota_relativa_municipio' in m.focus.emitidas[0]!.corpo, false);
   const iss = (prep.resumo as { iss: { aliquota: string; origem: string } }).iss;
-  assert.equal(iss.aliquota, '0%');
+  assert.match(iss.aliquota, /^NÃO ENVIADA no DPS.*E0631.*valor de referência 0%/);
+  // com regime 2 a alíquota 0 do perfil VAI
+  const reg2 = montar();
+  await prepararEConfirmar(reg2, pedido({ fiscal: { ...f, regimeApuracaoSimples: 2 } }));
+  assert.equal(reg2.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 0);
   assert.equal(iss.origem, 'decisão do João em 26/11 (Simples, ISS no DAS); sem confirmação escrita da contabilidade');
   assert.ok(!JSON.stringify(prep.resumo).includes('informado pela contabilidade'), 'nenhum dado do perfil se diz informado pela contabilidade');
   const outra = montar();
-  await prepararEConfirmar(outra, pedido({ fiscal: { ...f, aliquotaIss: 2 } }));
+  await prepararEConfirmar(outra, pedido({ fiscal: { ...f, regimeApuracaoSimples: 2, aliquotaIss: 2 } }));
   assert.equal(outra.focus.emitidas[0]!.corpo.percentual_aliquota_relativa_municipio, 2, 'quem pede pode trocar');
+  // pedindo uma alíquota onde ela é omitida: não vai, e a pessoa é avisada
+  const omitida = montar();
+  const r = await prepararNota(omitida.ctx, omitida.esc, QUEM, pedido({ fiscal: { ...f, aliquotaIss: 2 } }));
+  assert.ok(r.avisos.some((x) => /alíquota informada NÃO foi enviada.*E0631/.test(x)));
 });
 
 test('retenção e tributação: só os valores documentados; o que esta versão não integra é recusado em português', async () => {
@@ -161,7 +171,8 @@ test('perfil fiscal: cTribNac, NBS, descrição, inscrição municipal e opção
   assert.equal(corpo.codigo_tributacao_nacional_iss, '040802');
   assert.equal(corpo.codigo_nbs, '123019200');
   assert.equal(corpo.descricao_servico, 'Serviços de fisioterapia');
-  assert.equal(corpo.inscricao_municipal_prestador, '1000000007142');
+  // E0120: a IM fica no perfil mas NÃO vai no DPS (enviarIM=false)
+  assert.equal('inscricao_municipal_prestador' in corpo, false);
   assert.equal(corpo.codigo_opcao_simples_nacional, 3);
   const r = prep.resumo as { servico: { codigoDeTributacaoNacional: { origem: string }; descricao: { origem: string } }; simplesNacional: { origem: string } };
   assert.match(r.servico.codigoDeTributacaoNacional.origem, /perfil fiscal/);
@@ -237,6 +248,98 @@ test('o portão do perfil vale também para quem chama emitirNotaConfirmada dire
   const v = validarEmissao(m.conta, pedido(), '2026-11-26').nota;
   await assert.rejects(() => emitirNotaConfirmada(m.ctx, m.esc, { ...m.conta, conflitoDePerfil: 'perfil em conflito' }, QUEM, v, 'ddnfabc'), /perfil em conflito.*Nada foi emitido/);
   assert.equal(m.focus.emitidas.length, 0);
+});
+
+test('E0120: a IM de Açailândia fica no perfil mas NÃO vai no DPS; uma IM informada à mão sempre vai; perfil sem enviarIM=false envia', async () => {
+  assert.equal(PERFIS_FISCAIS[UNI]!.inscricaoMunicipal, '1000000007142');
+  assert.equal(PERFIS_FISCAIS[UNI]!.enviarIM, false);
+  const m = montar();
+  const { prep } = await prepararEConfirmar(m);
+  assert.equal('inscricao_municipal_prestador' in m.focus.emitidas[0]!.corpo, false);
+  assert.ok(!JSON.stringify((prep.resumo as { prestador: unknown }).prestador).includes('1000000007142'));
+  const mao = montar();
+  await prepararEConfirmar(mao, pedido({ fiscal: { ...pedido().fiscal, inscricaoMunicipalPrestador: '777' } }));
+  assert.equal(mao.focus.emitidas[0]!.corpo.inscricao_municipal_prestador, '777');
+  const outro = montar();
+  outro.ctx.contas.set(UNI, { ...outro.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, enviarIM: undefined } });
+  await prepararEConfirmar(outro);
+  assert.equal(outro.focus.emitidas[0]!.corpo.inscricao_municipal_prestador, '1000000007142');
+});
+
+test('E0631: ME/EPP no Simples (opção 3) regime 1 com ISS não retido em município fora do Sistema Nacional NÃO manda alíquota; retido, regime 2, 3, município ativo ou unidade sem perfil mandam', async () => {
+  const f = pedido().fiscal!;
+  const manda = async (m: ReturnType<typeof montar>, fiscal: Record<string, unknown>, p: Partial<PedidoDePreparo> = {}) => {
+    await prepararEConfirmar(m, pedido({ ...p, fiscal: { ...f, aliquotaIss: 2, ...fiscal } }));
+    return 'percentual_aliquota_relativa_municipio' in m.focus.emitidas[0]!.corpo;
+  };
+  assert.equal(await manda(montar(), {}), false, 'regime 1 + não retido + fora do nacional: omitida');
+  assert.equal(await manda(montar(), { tipoRetencaoIss: 2 }), true, 'ISS retido: vai');
+  assert.equal(await manda(montar(), { regimeApuracaoSimples: 2 }), true);
+  assert.equal(await manda(montar(), { regimeApuracaoSimples: 3 }), true);
+  const ativo = montar();
+  ativo.ctx.contas.set(UNI, { ...ativo.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, municipioAtivoNoSistemaNacional: true } });
+  assert.equal(await manda(ativo, {}), true, 'município ativo no nacional: vai');
+  const sem = montar({ semPerfil: true });
+  assert.equal(await manda(sem, { codigoTributacaoNacional: '040802', opcaoSimplesNacional: 3 }, { descricao: 'Serviços de fisioterapia' }), true, 'sem perfil não se sabe: vai o que a pessoa informou');
+  // omitida, a alíquota deixa de ser exigida
+  const f2 = pedido().fiscal!;
+  delete f2.aliquotaIss;
+  const m = montar();
+  m.ctx.contas.set(UNI, { ...m.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, aliquotaIss: undefined } });
+  assert.ok((await prepararNota(m.ctx, m.esc, QUEM, pedido({ fiscal: f2 }))).confirmacao, 'não pede alíquota quando ela é omitida');
+});
+
+test('E0712: ME/EPP não usa indicador_total_tributacao; manda SÓ percentual_total_tributos_simples_nacional, e sem o percentual a nota fica «a completar»', async () => {
+  const m = montar();
+  await prepararEConfirmar(m);
+  const corpo = m.focus.emitidas[0]!.corpo;
+  assert.equal('indicador_total_tributacao' in corpo, false);
+  assert.equal(corpo.percentual_total_tributos_simples_nacional, 6);
+  const f = pedido().fiscal!;
+  delete f.percentualTotalTributosSimples;
+  const semPct = montar();
+  await assert.rejects(() => prepararNota(semPct.ctx, semPct.esc, QUEM, pedido({ fiscal: f })), /percentualTotalTributosSimples.*contabilidade.*a completar/);
+  await assert.rejects(() => prepararNota(semPct.ctx, semPct.esc, QUEM, pedido({ fiscal: { ...f, naoInformarTotalTributos: true } })), /E0712/);
+  await assert.rejects(() => prepararNota(semPct.ctx, semPct.esc, QUEM, pedido({ fiscal: { ...pedido().fiscal, naoInformarTotalTributos: true } })), /E0712/);
+  assert.equal(semPct.focus.emitidas.length, 0);
+  assert.equal(semPct.armazem.linhas.length, 0);
+  // o valor real pode vir do perfil quando a contabilidade passar
+  const comPerfil = montar();
+  comPerfil.ctx.contas.set(UNI, { ...comPerfil.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, percentualTotalTributosSimples: 4.5 } });
+  await prepararEConfirmar(comPerfil, pedido({ fiscal: f }));
+  assert.equal(comPerfil.focus.emitidas[0]!.corpo.percentual_total_tributos_simples_nacional, 4.5);
+  // quem NÃO é ME/EPP ainda pode optar por não informar (indicador)
+  const nao = montar({ semPerfil: true });
+  nao.focus.cadastro = { situacao: 'ativa', optanteSimples: false, optanteMei: false };
+  await prepararEConfirmar(nao, pedido({ descricao: 'Serviços de fisioterapia', fiscal: { ...f, codigoTributacaoNacional: '040802', opcaoSimplesNacional: 1, naoInformarTotalTributos: true } }));
+  assert.equal(nao.focus.emitidas[0]!.corpo.indicador_total_tributacao, 0);
+  assert.equal('percentual_total_tributos_simples_nacional' in nao.focus.emitidas[0]!.corpo, false);
+});
+
+test('E0860: cIndOp (codigo_indicador_operacao) é OBRIGATÓRIO com IBS/CBS, junto com CST e cClassTrib: sem ele a nota fica «a completar»', async () => {
+  const f = pedido().fiscal!;
+  const m = montar();
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ fiscal: { ...f, ibsCbs: { situacaoTributaria: '000', classificacaoTributaria: '000001' } } })), /codigoIndicadorOperacao.*E0860.*contabilidade/);
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ fiscal: { ...f, ibsCbs: { ...f.ibsCbs, codigoIndicadorOperacao: '12' } } })), /cIndOp tem 6 dígitos/);
+  assert.equal(m.focus.emitidas.length, 0);
+  await prepararEConfirmar(m);
+  assert.equal(m.focus.emitidas[0]!.corpo.codigo_indicador_operacao, '123456');
+  // o trio pode vir do perfil quando a contabilidade passar; a pessoa ainda pode trocar
+  const comPerfil = montar();
+  comPerfil.ctx.contas.set(UNI, { ...comPerfil.conta, perfil: { ...PERFIS_FISCAIS[UNI]!, ibsCbs: { situacaoTributaria: '200', classificacaoTributaria: '200003', codigoIndicadorOperacao: '654321' } } });
+  const sem = pedido();
+  delete sem.fiscal!.ibsCbs;
+  await prepararEConfirmar(comPerfil, sem);
+  assert.deepEqual([comPerfil.focus.emitidas[0]!.corpo.ibs_cbs_situacao_tributaria, comPerfil.focus.emitidas[0]!.corpo.ibs_cbs_classificacao_tributaria, comPerfil.focus.emitidas[0]!.corpo.codigo_indicador_operacao], ['200', '200003', '654321']);
+  assert.equal(PERFIS_FISCAIS[UNI]!.ibsCbs, undefined, 'Açailândia ainda NÃO tem CST/cClassTrib/cIndOp: dependem da contabilidade');
+  assert.equal(PERFIS_FISCAIS[UNI]!.percentualTotalTributosSimples, undefined, 'o total de tributos real depende da contabilidade (Vera)');
+});
+
+test('E0207: CPF com dígitos certos passa na checagem local, mas o aviso lembra que a Receita confere o cadastro (CPF fictício é recusado, até em homologação)', async () => {
+  const m = montar();
+  const r = await prepararNota(m.ctx, m.esc, QUEM, pedido());
+  assert.ok(r.avisos.some((x) => /Receita confere o CPF.*até em homologação.*E0207/.test(x)));
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ tomador: { cpf: '111.111.111-11', nome: NOME } })), /CPF inválido/);
 });
 
 test('o perfil de Açailândia tem os dados que o João e a contabilidade informaram (e nenhuma alíquota)', () => {

@@ -2,7 +2,10 @@
 # Reenvia o DPS MÍNIMO de Açailândia à HOMOLOGAÇÃO da Focus NFe (nunca produção) e confere se o erro E1235 do ambiente nacional ainda existe (26/11/2026).
 #
 #   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh              # envia 1 nota de teste (dados fictícios), acompanha até 90 s e diz o resultado
-#   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh --sem-aliquota   # igual, mas SEM o campo da alíquota do ISS (para ver se o ADN prefere a omissão com Simples)
+#   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh --com-aliquota   # TAMBÉM manda a alíquota 0 (padrão: omitida, E0631: ME/EPP Simples regime 1, ISS não retido, município fora do Sistema Nacional)
+#   --cindop=NNNNNN --cst=NNN --cclass=NNNNNN   o trio do IBS/CBS que a contabilidade passar (sem o cIndOp o ADN recusa com E0860; CST/cClassTrib padrão 000/000001 são só de teste)
+#   --total-tributos=6.0   total aproximado de tributos do Simples (padrão 6.0 = valor de TESTE; o real vem da contabilidade)
+#   --cpf=NNNNNNNNNNN --nome="NOME"   tomador com CPF REAL (a Receita recusa CPF que não existe, E0207, até em homologação); sem eles a nota vai SEM tomador
 #   bash ~/Kommo-Integracao/_replicacao/focus-testar-homologacao.sh --cancelar       # se a nota for AUTORIZADA, cancela em seguida (teste do cancelamento)
 #   --serie=N   série da DPS do teste (padrão 9999, para não mexer na numeração da série 1 que o conector usa; se a Focus/ADN recusar a série, use --serie=1)
 #
@@ -19,13 +22,16 @@ ARQ="${FOCUS_TOKENS_ARQUIVO:-$HOME/Kommo-Integracao/_replicacao/focus_nfe_tokens
 python3 -I - "$ARQ" "$@" <<'PY'
 import base64, json, re, sys, time, urllib.request, urllib.error, datetime, random
 arq, args = sys.argv[1], sys.argv[2:]
-SEM_ALIQ = "--sem-aliquota" in args
+COM_ALIQ = "--com-aliquota" in args
+OPT = {}
 CANCELAR = "--cancelar" in args
 SERIE = 9999
 for a in args:
     if a.startswith("--serie=") and a[8:].isdigit() and 1 <= int(a[8:]) <= 49999:
         SERIE = int(a[8:]); continue
-    if a not in ("--sem-aliquota", "--cancelar"):
+    m = re.fullmatch(r"--(cindop|cst|cclass|total-tributos|cpf|nome)=(.+)", a)
+    if m: OPT[m.group(1)] = m.group(2); continue
+    if a not in ("--com-aliquota", "--cancelar"):
         print("argumento desconhecido:", a); sys.exit(1)
 tok = ""
 try:
@@ -56,16 +62,19 @@ corpo = {
     "data_emissao": (agora - datetime.timedelta(seconds=60)).strftime("%Y-%m-%dT%H:%M:%S-03:00"),
     "serie_dps": SERIE, "numero_dps": random.randint(1, 899999),
     "data_competencia": agora.strftime("%Y-%m-%d"), "emitente_dps": 1, "codigo_municipio_emissora": 2100055,
-    "cnpj_prestador": "63130582000140", "inscricao_municipal_prestador": "1000000007142",
+    "cnpj_prestador": "63130582000140",   # a IM NÃO vai (E0120: Açailândia não tem IM no CNC da NFS-e)
     "codigo_opcao_simples_nacional": 3, "regime_tributario_simples_nacional": 1, "regime_especial_tributacao": 0,
-    "cpf_tomador": "52998224725", "razao_social_tomador": "PACIENTE FICTICIO DE TESTE",
     "codigo_municipio_prestacao": "2100055", "codigo_tributacao_nacional_iss": "040802", "codigo_nbs": "123019200",
     "descricao_servico": "Serviços de fisioterapia", "valor_servico": 1, "tributacao_iss": 1, "tipo_retencao_iss": 1,
     "finalidade_emissao": 0, "consumidor_final": 1, "indicador_destinatario": 0,
-    "ibs_cbs_situacao_tributaria": "000", "ibs_cbs_classificacao_tributaria": "000001", "indicador_total_tributacao": 0,
+    "ibs_cbs_situacao_tributaria": OPT.get("cst", "000"), "ibs_cbs_classificacao_tributaria": OPT.get("cclass", "000001"),
+    "percentual_total_tributos_simples_nacional": float(OPT.get("total-tributos", "6.0")),   # E0712: ME/EPP NÃO usa indicador_total_tributacao
 }
-if not SEM_ALIQ: corpo["percentual_aliquota_relativa_municipio"] = 0
-print("Homologação · referência", ref, "· série", SERIE, "· alíquota:", "omitida" if SEM_ALIQ else "0")
+if "cindop" in OPT: corpo["codigo_indicador_operacao"] = OPT["cindop"]
+if "cpf" in OPT:
+    corpo["cpf_tomador"] = re.sub(r"\D", "", OPT["cpf"]); corpo["razao_social_tomador"] = OPT.get("nome", "TOMADOR DE TESTE")
+if COM_ALIQ: corpo["percentual_aliquota_relativa_municipio"] = 0
+print("Homologação · referência", ref, "· série", SERIE, "· alíquota:", "0" if COM_ALIQ else "omitida (E0631)", "· tomador:", "CPF informado" if "cpf" in OPT else "nenhum", "· cIndOp:", OPT.get("cindop", "NÃO enviado"))
 st, txt = chamar("POST", "/v2/nfsen?ref=" + ref, corpo)
 print("POST /v2/nfsen ->", st, limpa(txt)[:300].replace("\n", " "))
 if st not in (200, 201, 202): print("A Focus recusou já no envio (pré-validação síncrona)."); sys.exit(4)

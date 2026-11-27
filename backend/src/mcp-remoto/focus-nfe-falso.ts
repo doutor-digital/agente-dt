@@ -78,7 +78,7 @@ export function armazemDeNotasEmMemoria(agora: () => number = Date.now): Armazem
 const OBRIGATORIOS_DO_DPS = [
   'data_emissao', 'serie_dps', 'numero_dps', 'data_competencia', 'emitente_dps', 'codigo_municipio_emissora', 'cnpj_prestador', 'codigo_opcao_simples_nacional', 'regime_especial_tributacao',
   'codigo_municipio_prestacao', 'codigo_tributacao_nacional_iss', 'descricao_servico', 'valor_servico', 'tributacao_iss', 'finalidade_emissao', 'consumidor_final', 'indicador_destinatario',
-  'ibs_cbs_situacao_tributaria', 'ibs_cbs_classificacao_tributaria',
+  'ibs_cbs_situacao_tributaria', 'ibs_cbs_classificacao_tributaria', 'codigo_indicador_operacao',
 ];
 
 export interface FocusEmMemoria {
