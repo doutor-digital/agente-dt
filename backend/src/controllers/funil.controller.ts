@@ -309,7 +309,7 @@ function invalidarConta(conta: number): void {
 
 /** Chama o Chatwoot com o login da pessoa (menu/aba) ou, só no link avulso do João, com o token da conta. Escrever invalida a leitura guardada da conta. */
 function cw(a: Acesso, metodo: 'GET' | 'POST' | 'PATCH' | 'DELETE', caminho: string, o: { corpo?: unknown; query?: Record<string, string> } = {}) {
-  const p = chamar(a.c, metodo, caminho, { ...o, sessao: a.sessao });
+  const p = chamar(a.c, metodo, caminho, { ...o, sessao: a.sessao, origem: 'funil' });
   if (metodo === 'GET') return p;
   // invalida antes (quem já estava lendo não guarda o que veio) e depois (o Chatwoot já aplicou a escrita: a próxima leitura vê o novo)
   const conta = a.c.conta?.conta;
@@ -360,7 +360,7 @@ export { semArquivo, type Arquivo };
 
 /**
  * A leitura crua guardada por conta e conjunto de caixas (a mesma serve ao quadro, ao Hoje, às Oportunidades e a todas as atendentes que
- * enxergam as mesmas caixas). Fresca por 20 s; até 2 min serve na hora e relê em segundo plano. Escrita do servidor invalida (ver `cw`).
+ * enxergam as mesmas caixas). Fresca por 90 s; até 5 min serve na hora e relê em segundo plano (um pedido de cada vez por caixa: `lote`). Escrita do servidor invalida (ver `cw`).
  * As páginas guardadas NÃO podem ser alteradas por quem as recebe (`semArquivo` devolve cópia quando muda algo).
  */
 const leituraDoFunil = new MemoriaDeLeitura<LeituraCrua>(FUNIL_FRESCO_MS, FUNIL_VELHO_MS, Date.now, (e) => logger.warn({ err: String(e) }, 'funil: não consegui renovar a leitura das caixas em segundo plano (segue a antiga)'));

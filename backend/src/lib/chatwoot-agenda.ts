@@ -17,6 +17,8 @@
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { isDeepStrictEqual } from 'node:util';
+import { paginasDaCaixa } from './chatwoot-caixa-lista.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { ATRIBUTO_OUTROS_HORARIOS, CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
@@ -32,6 +34,11 @@ const PRIMEIRA_MS = 200_000;
 const DIAS_A_FRENTE = 14;
 const VALIDADE_NOME_MS = 6 * 3600_000;
 const MAX_PAGINAS = 40;
+/**
+ * A agenda aceita a listagem da caixa que a régua leu há até 7 min (a régua roda a cada 10 min; sem esta folga a agenda lia a caixa inteira sozinha). Como ela
+ * ESCREVE os atributos, antes de gravar numa conversa tirada de uma leitura reaproveitada ela confere a conversa viva (`atributosAindaOsMesmos`).
+ */
+export const VALIDADE_DA_LISTA_DA_AGENDA_MS = 7 * 60_000;
 const CATEGORIAS = ['Avaliação', 'Sessão', 'Retorno', 'Retorno com exames', 'Retorno após tratamento'];
 
 export interface Desejado {
@@ -209,15 +216,11 @@ const cacheNome = new Map<string, { fones: string[]; ate: number }>();
 const notasFeitas = new Set<string>();
 const seguradasLogadas = new Set<string>();
 
-async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<ConversaDaCaixa[]> {
+async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<{ conversas: ConversaDaCaixa[]; reaproveitada: boolean }> {
   const saida: ConversaDaCaixa[] = [];
   const mapa = etapasDoContexto(ctx);
-  for (let p = 1; p <= MAX_PAGINAS; p++) {
-    const r = (await chamar(ctx, 'GET', 'conversations', { query: { inbox_id: String(caixa), status: 'all', assignee_type: 'all', page: String(p) } })) as {
-      data?: { payload?: any[] };
-    } | null;
-    const lista = r?.data?.payload ?? [];
-    if (!lista.length) break;
+  const lida = await paginasDaCaixa(ctx, caixa, { maxPaginas: MAX_PAGINAS, validadeMs: VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
+  for (const lista of lida.paginas as any[][]) {
     for (const c of lista) {
       const tel = String(c?.meta?.sender?.phone_number ?? '');
       // arquivo do histórico (unificado, parado): a agenda não grava nele — a consulta vai para a conversa viva
@@ -227,7 +230,16 @@ async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<C
       saida.push({ id: Number(c.id), telefone: tel, attrs: papeis, ...(papeis !== crus ? { attrsDaConta: crus } : {}), atividade: Number(c?.last_activity_at) || 0 });
     }
   }
-  return saida;
+  return { conversas: saida, reaproveitada: lida.reaproveitada };
+}
+
+/**
+ * Os atributos da conversa AGORA (uma leitura só dela) ainda são os da listagem em que a decisão foi tomada? O Chatwoot troca o objeto inteiro ao gravar:
+ * gravar em cima de uma listagem mais velha apagaria o que a equipe mudou depois dela. Não são: pula esta conversa neste ciclo (o próximo decide de novo).
+ */
+export async function atributosAindaOsMesmos(ctx: ContextoChatwoot, conversa: ConversaDaCaixa): Promise<boolean> {
+  const viva = (await chamar(ctx, 'GET', `conversations/${conversa.id}`, { baixa: true, origem: 'agenda' })) as { custom_attributes?: unknown } | null;
+  return isDeepStrictEqual(viva?.custom_attributes ?? {}, conversa.attrsDaConta ?? conversa.attrs);
 }
 
 const hojeEm = (tz: string) => new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
@@ -266,7 +278,7 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     fonesDe.set(n, fones);
     await new Promise((ok) => setTimeout(ok, 250));
   }
-  const conversas = await conversasDaCaixa(ctx, caixa);
+  const { conversas, reaproveitada } = await conversasDaCaixa(ctx, caixa);
   const plano = casar(agenda, conversas, (n) => fonesDe.get(n) ?? null, hoje);
   let gravadas = 0;
   for (const { conversa, muda, nome, segurada, porCategoria } of plano) {
@@ -290,8 +302,13 @@ export async function cicloDaAgenda(ctx: ContextoChatwoot, caixa: number, slug: 
     if (!Object.keys(muda).length) continue;
     const chave = chaveDaNota(caixa, conversa.id, muda); // a caixa na chave: a conversa 5 de uma conta não é a conversa 5 de outra
     try {
+      if (modo === 'seco' && notasFeitas.has(chave)) continue;
+      // leitura que não é minha: confere a conversa viva antes de qualquer escrita (inclusive a nota do seco, que mostra o que gravaria)
+      if (reaproveitada && !(await atributosAindaOsMesmos(ctx, conversa))) {
+        logger.info({ slug, conversa: conversa.id }, `${ID_AGENDA}: os atributos mudaram depois da listagem — deixo esta conversa para o próximo ciclo`);
+        continue;
+      }
       if (modo === 'seco') {
-        if (notasFeitas.has(chave)) continue;
         await chamar(ctx, 'POST', `conversations/${conversa.id}/messages`, {
           corpo: { content: `🧪 [SECO] Agenda da franquia (${nome}): gravaria ${descricao(atributosParaGravar(etapasDoContexto(ctx), muda))}`, message_type: 'outgoing', private: true },
         });
