@@ -289,11 +289,15 @@ export function paramsDoTemplate(t: EnvioTemplate): Record<string, unknown> {
   return { name: t.nome, language: t.idioma, content_mode: 'rendered', ...(t.variaveis.length ? { processed_params: { body } } : {}) };
 }
 
+/**
+ * `baixa` = quem pede é a varredura da régua (ela passa o `last_activity_at` da listagem). Sem ele quem pede é a TELA (o painel de tarefas, o worker de tarefas): não pode
+ * esperar na fila do freio atrás da varredura.
+ */
 /** O PACIENTE escreveu por último quando? (as 20 mais novas; `before=<id>` traz as 20 anteriores, até `PAGINAS_PARA_ACHAR_O_PACIENTE`). */
-async function lerUltimaDoPaciente(ctx: ContextoChatwoot, conversationId: number): Promise<Date | null> {
+async function lerUltimaDoPaciente(ctx: ContextoChatwoot, conversationId: number, baixa: boolean): Promise<Date | null> {
   let antes: number | undefined;
   for (let i = 0; i < PAGINAS_PARA_ACHAR_O_PACIENTE; i++) {
-    const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {}, baixa: true, origem: 'regua-mensagens' })) as { payload?: unknown[] } | null;
+    const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {}, baixa, origem: baixa ? 'regua-mensagens' : 'tarefas-mensagens' })) as { payload?: unknown[] } | null;
     const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ id?: number; message_type?: number; created_at?: number }>) : [];
     if (lista.length === 0) return null;
     for (let j = lista.length - 1; j >= 0; j--) {
@@ -307,8 +311,8 @@ async function lerUltimaDoPaciente(ctx: ContextoChatwoot, conversationId: number
   return null;
 }
 
-async function lerUltimaPublica(ctx: ContextoChatwoot, conversationId: number): Promise<MensagemResumo | null> {
-  const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { baixa: true, origem: 'regua-mensagens' })) as { payload?: unknown[] } | null;
+async function lerUltimaPublica(ctx: ContextoChatwoot, conversationId: number, baixa: boolean): Promise<MensagemResumo | null> {
+  const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { baixa, origem: baixa ? 'regua-mensagens' : 'tarefas-mensagens' })) as { payload?: unknown[] } | null;
   const lista = Array.isArray(r?.payload) ? r.payload : [];
   for (let i = lista.length - 1; i >= 0; i--) {
     const m = resumoDaMensagem(lista[i]);
@@ -328,7 +332,14 @@ async function porAtividade<T>(ctx: ContextoChatwoot, tipo: string, id: number, 
   const g = respostasPorAtividade.get(k);
   if (g && g.atividade === atividade) return g.valor as T;
   const valor = await ler();
-  if (respostasPorAtividade.size >= LIMITE_DAS_RESPOSTAS) respostasPorAtividade.clear();
+  if (respostasPorAtividade.size >= LIMITE_DAS_RESPOSTAS) {
+    // despeja só as mais antigas (a ordem do Map é a de inserção): zerar tudo refaria milhares de pedidos de uma vez no ciclo seguinte
+    let sobra = Math.ceil(LIMITE_DAS_RESPOSTAS / 10);
+    for (const chave of respostasPorAtividade.keys()) {
+      if (sobra-- <= 0) break;
+      respostasPorAtividade.delete(chave);
+    }
+  }
   respostasPorAtividade.set(k, { atividade: Number(atividade), valor });
   return valor;
 }
@@ -361,8 +372,8 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
         corpo: { content: texto, message_type: 'outgoing', private: privada, ...(template ? { template_params: paramsDoTemplate(template) } : {}) },
       });
     },
-    ultimaDoPaciente: (conversationId, atividade) => porAtividade(ctx, 'paciente', conversationId, atividade, () => lerUltimaDoPaciente(ctx, conversationId)),
-    ultimaPublica: (conversationId, atividade) => porAtividade(ctx, 'publica', conversationId, atividade, () => lerUltimaPublica(ctx, conversationId)),
+    ultimaDoPaciente: (conversationId, atividade) => porAtividade(ctx, 'paciente', conversationId, atividade, () => lerUltimaDoPaciente(ctx, conversationId, atividade !== undefined)),
+    ultimaPublica: (conversationId, atividade) => porAtividade(ctx, 'publica', conversationId, atividade, () => lerUltimaPublica(ctx, conversationId, atividade !== undefined)),
     async templatesAprovados(caixa) {
       const r = (await chamar(ctx, 'GET', `inboxes/${caixa}/message_templates`)) as { payload?: unknown[] } | null;
       const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ name?: string; language?: string; status?: string; components?: Array<{ type?: string; text?: string }> }>) : [];

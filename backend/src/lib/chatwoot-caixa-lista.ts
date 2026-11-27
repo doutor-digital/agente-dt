@@ -46,14 +46,8 @@ export interface PaginasLidas {
 /** Uma loja por `fetch`: o servidor tem um só (as três varreduras usam o mesmo); o teste, com o `fetch` de mentira dele, fica isolado. */
 const lojas = new WeakMap<object, Map<string, Entrada>>();
 
-/** Até onde uma leitura vai quando quem a faz aceita menos (a agenda fatia nas 40 primeiras, mas lê como a régua para a leitura servir aos três). */
-export const TETO_DA_LEITURA = 200;
-
 export interface OpcoesDaLista {
-  /** quantas páginas ESTE pedido recebe (a leitura pode ter ido além: o excedente fica guardado para os outros) */
   maxPaginas: number;
-  /** até onde ler quando este pedido é quem lê (padrão `maxPaginas`); a agenda usa `TETO_DA_LEITURA` */
-  lerAte?: number;
   /** a leitura guardada só serve se for mais nova que isto */
   validadeMs: number;
   /** quem está pedindo (vai para a conta do log) */
@@ -109,7 +103,7 @@ export async function paginasDaCaixa(ctx: ContextoChatwoot, caixa: number, o: Op
   const e: Entrada = entrada ?? {};
   loja.set(chave, e);
   const iniciouEm = t;
-  const teto = Math.max(o.maxPaginas, o.lerAte ?? 0);
+  const teto = o.maxPaginas;
   const andando = (async (): Promise<Leitura> => {
     const paginas: unknown[][] = [];
     let fim = false;

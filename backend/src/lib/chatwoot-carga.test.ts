@@ -17,6 +17,7 @@ const { paginasDaCaixa, esquecerListasDaCaixa } = await import('./chatwoot-caixa
 const W = await import('./chatwoot-regua-worker.js');
 const CAPI = await import('./chatwoot-capi.js');
 const AG = await import('./chatwoot-agenda.js');
+const { limitadorDoChatwoot } = await import('./chatwoot-limite.js');
 const { lerPaginasCruas, MemoriaDeLeitura, FUNIL_FRESCO_MS, FUNIL_VELHO_MS } = await import('./funil-leitura.js');
 
 const AGORA = Math.floor(Date.now() / 1000);
@@ -100,17 +101,6 @@ test('a régua (validade 0) NÃO aceita leitura de ninguém: lê de novo; o CAPI
   t += 20 * 60_000;
   assert.equal((await pedir(AG.VALIDADE_DA_LISTA_DA_AGENDA_MS)).reaproveitada, false, 'passou da validade e da vida máxima: relê');
   assert.equal(listagens() - base, 3 * 5, '3 leituras novas (a da régua, a do CAPI aos 5,5 min e a final) de 5 pedidos cada (4 páginas cheias + a vazia)');
-});
-
-test('a agenda, quando é a primeira a ler, lê como a régua (até o teto de 200) e entrega só as 40 primeiras: a mesma leitura serve ao CAPI, sem 2ª varredura', async () => {
-  const { ctx, listagens } = chatwoot(1000);
-  const g = await paginasDaCaixa(ctx, 3, { maxPaginas: 40, lerAte: 200, validadeMs: AG.VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
-  assert.equal(g.paginas.length, 40);
-  assert.equal(g.truncada, true, 'para a agenda a caixa passa do teto de 40, como antes');
-  const lidas = listagens();
-  const k = await CAPI.chatDoCapi(ctx).paginas!(3, 200);
-  assert.equal(listagens(), lidas, 'o CAPI aproveita');
-  assert.equal(k.paginas.length, 40, '1000 conversas = 40 páginas cheias (a 41ª é a vazia)');
 });
 
 test('leituras ao mesmo tempo viram UMA; conta e caixa diferentes não se misturam; falha não fica guardada e chega a todos que esperavam', async () => {
@@ -205,6 +195,9 @@ test('régua: o histórico da conversa só é pedido de novo quando `last_activi
   const d2 = await chat.ultimaDoPaciente(9, 2000);
   assert.equal(pedidos.length - antes, 1, 'a segunda não foi ao Chatwoot');
   assert.deepEqual(d1, d2);
+  // quem pede pela TELA (painel de tarefas: sem `atividade`) NÃO vira trabalho de fundo; a varredura da régua (com `atividade`) vira
+  const c0 = limitadorDoChatwoot.contagem();
+  assert.ok((c0['regua-mensagens'] ?? 0) >= 1 && (c0['tarefas-mensagens'] ?? 0) >= 1, JSON.stringify(c0));
   // atividade de agora: outra mensagem pode chegar no mesmo segundo depois da leitura — não guarda
   const n0 = pedidos.length;
   await chat.ultimaPublica(9, Math.floor(Date.now() / 1000));
