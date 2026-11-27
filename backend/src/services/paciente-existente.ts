@@ -18,6 +18,27 @@ import type { Estado } from '../lib/automacoes-estado.js';
 
 /** Começo do `motivo` que o espelhamento grava no vínculo quando CASOU com paciente que já existia (quem lê o vínculo compara com isto). */
 export const PREFIXO_PACIENTE_EXISTENTE = 'paciente já existe na franquia';
+/** Idem, para o telefone que já era LEAD na franquia (o 1º contato não cria o segundo cadastro). */
+export const PREFIXO_LEAD_EXISTENTE = 'lead já existe na franquia';
+
+/**
+ * De onde veio um vínculo "ok": criado por NÓS, o telefone já era lead lá, ou já era paciente lá. Quem conta "enviados por nós" (tela da
+ * franquia, conferência dos 7 dias) não pode somar os que já existiam: eles nunca foram enviados, e a conferência os daria como "faltando".
+ */
+export type TipoDoVinculo = 'criado' | 'lead-ja-existia' | 'paciente-ja-existia';
+export function tipoDoVinculo(motivo: string | null | undefined): TipoDoVinculo {
+  const m = motivo ?? '';
+  if (m.startsWith(PREFIXO_PACIENTE_EXISTENTE)) return 'paciente-ja-existia';
+  if (m.startsWith(PREFIXO_LEAD_EXISTENTE)) return 'lead-ja-existia';
+  return 'criado';
+}
+
+/** Quantos vínculos de cada tipo (ver `TipoDoVinculo`). */
+export function contarPorTipoDoVinculo(motivos: ReadonlyArray<string | null | undefined>): Record<TipoDoVinculo, number> {
+  const out: Record<TipoDoVinculo, number> = { criado: 0, 'lead-ja-existia': 0, 'paciente-ja-existia': 0 };
+  for (const m of motivos) out[tipoDoVinculo(m)]++;
+  return out;
+}
 
 export type PacienteExistente =
   | { tipo: 'achou'; idClient: number; por: 'idClient' | 'telefone' | 'nome' }

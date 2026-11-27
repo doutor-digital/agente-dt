@@ -371,3 +371,62 @@ export function agendarIndice(unit: Unit, deps: DepsDaCarga = depsPadrao(unit)):
     .catch((err) => logger.warn({ err: String(err), unit: unit.slug }, 'franquia-indice: falha ao carregar'))
     .finally(() => emCurso.delete(unit.id));
 }
+
+// ── o índice que não vai chegar ────────────────────────────────────────────────────────────
+
+/**
+ * Por que o índice desta unidade NÃO vai autorizar o cadastro tão cedo (texto para o log e para a tela da franquia), ou `null` se
+ * está tudo bem ou é só questão de tempo (a primeira carga ainda vai rodar). Puro.
+ *
+ * Dois estados em que "tentar na próxima mensagem" nunca resolve, e que sem este aviso são silenciosos (zero lead, zero erro):
+ *  - `spine_enabled` desligado com o espelhamento de leads ligado (as unidades "-resgate"): `agendarIndice` não carrega para quem não tem
+ *    a agenda ligada, então o índice nunca existe;
+ *  - a última carga foi CORTADA pelo teto (base grande demais) e não há índice inteiro fresco: ela só é refeita a cada 24 h e corta de novo.
+ */
+export function impedimentoDoIndice(
+  unit: Pick<Unit, 'spineEnabled' | 'spineToken'>,
+  status: Pick<StatusDoIndice, 'completoEm' | 'resultado'> | null,
+  agora: number,
+): string | null {
+  if (!unit.spineToken) return 'a unidade não tem o token da franquia';
+  if (!unit.spineEnabled) {
+    return 'a agenda da franquia está desligada (spine_enabled) e a carga do índice de telefones só roda com ela ligada — sem índice o cadastro no 1º contato nunca confere duplicado, então não cria';
+  }
+  if (status?.resultado === 'cortado' && !indiceFresco(status, agora)) {
+    return `a última carga do índice de telefones foi CORTADA pelo teto (a base da franquia é maior que ${MAX_PAGINAS_PACIENTES} páginas de pacientes ou uma janela de leads passou de ${MAX_PAGINAS_POR_JANELA}) e não há índice inteiro — o cadastro no 1º contato não cria até alguém ajustar os tetos`;
+  }
+  return null;
+}
+
+/** Lê o status e responde `impedimentoDoIndice`. Banco fora = sem veredito (`null`): quem decide é o resto do caminho, que já falha fechado. */
+export async function lerImpedimentoDoIndice(
+  unit: Pick<Unit, 'id' | 'spineEnabled' | 'spineToken'>,
+  armazem: Armazem = armazemPadrao,
+  agora: number = Date.now(),
+): Promise<string | null> {
+  const status = await armazem.lerStatus(unit.id).catch(() => null);
+  return impedimentoDoIndice(unit, status, agora);
+}
+
+export const REPETIR_AVISO_DO_INDICE_MS = 6 * 3600_000;
+const avisosDoIndice = new Map<string, number>();
+
+/** Como `lerImpedimentoDoIndice`, e quando há impedimento grita (WARN) uma vez por unidade a cada 6 h — não uma linha por mensagem do paciente. */
+export async function conferirImpedimentoDoIndice(
+  unit: Pick<Unit, 'id' | 'slug' | 'spineEnabled' | 'spineToken'>,
+  armazem: Armazem = armazemPadrao,
+  agora: number = Date.now(),
+): Promise<string | null> {
+  const motivo = await lerImpedimentoDoIndice(unit, armazem, agora);
+  if (motivo && agora - (avisosDoIndice.get(unit.id) ?? 0) >= REPETIR_AVISO_DO_INDICE_MS) {
+    if (avisosDoIndice.size > 500) avisosDoIndice.clear();
+    avisosDoIndice.set(unit.id, agora);
+    logger.warn({ unit: unit.slug, motivo }, 'franquia-indice: AVISO — lead NÃO cadastrado no 1º contato: o índice de telefones desta unidade não vai chegar');
+  }
+  return motivo;
+}
+
+/** Só para teste. */
+export function _limparAvisosDoIndiceParaTeste(): void {
+  avisosDoIndice.clear();
+}

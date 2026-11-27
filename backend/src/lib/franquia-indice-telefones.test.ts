@@ -8,9 +8,10 @@
  *  - índice com mais de 36 h não é fresco; o incremental só vale com a ordem "do mais antigo ao mais novo" confirmada;
  *  - pausa entre as chamadas (a franquia não pode sentir) e espaçamento das novas tentativas.
  */
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
+import { logger } from './logger.js';
 
 import type { SpineItemTelefone, SpinePaginaTelefones } from '../services/spine.service.js';
 import {
@@ -21,8 +22,13 @@ import {
   MAX_PAGINAS_PACIENTES,
   MAX_PAGINAS_POR_JANELA,
   REFAZER_APOS_MS,
+  REPETIR_AVISO_DO_INDICE_MS,
   VALIDADE_MS,
+  _limparAvisosDoIndiceParaTeste,
   carregarIndice,
+  conferirImpedimentoDoIndice,
+  impedimentoDoIndice,
+  lerImpedimentoDoIndice,
   chaveDoTelefone,
   consultarIndice,
   entradasDosItens,
@@ -333,4 +339,55 @@ test('regravar: a data mais antiga vence e uma linha sem data ganha a que chegar
   const [e] = await a.armazem.procurar('u1', '99991111');
   assert.equal(e!.id, 4);
   assert.equal(e!.criado?.toISOString(), '2024-01-01T00:00:00.000Z');
+});
+
+
+// ── o índice que não vai chegar ────────────────────────────────────────────────────────────
+
+const COM_AGENDA = { spineEnabled: true, spineToken: 'tok' };
+const SEM_AGENDA = { spineEnabled: false, spineToken: 'tok' };
+const statusCom = (o: Partial<StatusDoIndice>): StatusDoIndice => ({ completoEm: null, cargaCompletaEm: null, tentativaEm: null, clientesTotal: null, leadsAte: null, resultado: null, ...o });
+
+test('impedimentoDoIndice: unidade sem a agenda ligada (as "-resgate") nunca carrega o índice — é impedimento, com o motivo', () => {
+  assert.match(impedimentoDoIndice(SEM_AGENDA, null, T0) ?? '', /spine_enabled/);
+  assert.match(impedimentoDoIndice({ spineEnabled: true, spineToken: null }, null, T0) ?? '', /token/);
+});
+
+test('impedimentoDoIndice: nunca carregou mas a carga vai rodar (agenda ligada) = só questão de tempo, NÃO é impedimento', () => {
+  assert.equal(impedimentoDoIndice(COM_AGENDA, null, T0), null);
+  assert.equal(impedimentoDoIndice(COM_AGENDA, statusCom({ resultado: 'erro', tentativaEm: new Date(T0) }), T0), null, 'erro passa na próxima tentativa');
+});
+
+test('impedimentoDoIndice: carga CORTADA sem índice inteiro fresco é impedimento; com um índice inteiro de menos de 36 h, não', () => {
+  assert.match(impedimentoDoIndice(COM_AGENDA, statusCom({ resultado: 'cortado', completoEm: null }), T0) ?? '', /CORTADA/);
+  assert.match(impedimentoDoIndice(COM_AGENDA, statusCom({ resultado: 'cortado', completoEm: new Date(T0 - 40 * H) }), T0) ?? '', /CORTADA/, 'velho (> 36 h) não autoriza');
+  assert.equal(impedimentoDoIndice(COM_AGENDA, statusCom({ resultado: 'cortado', completoEm: new Date(T0 - 5 * H) }), T0), null);
+});
+
+test('lerImpedimentoDoIndice: banco fora = sem veredito (null) — o resto do caminho já falha fechado', async () => {
+  const quebrado = { lerStatus: async () => { throw new Error('db fora'); } } as unknown as Armazem;
+  assert.equal(await lerImpedimentoDoIndice({ id: 'u1', ...COM_AGENDA }, quebrado, T0), null);
+  const cortado = { lerStatus: async () => statusCom({ resultado: 'cortado' }) } as unknown as Armazem;
+  assert.match((await lerImpedimentoDoIndice({ id: 'u1', ...COM_AGENDA }, cortado, T0)) ?? '', /CORTADA/);
+});
+
+test('conferirImpedimentoDoIndice: o WARN sai UMA vez por unidade a cada 6 h, não uma linha por mensagem', async () => {
+  _limparAvisosDoIndiceParaTeste();
+  const avisos: unknown[][] = [];
+  mock.method(logger, 'warn', ((...a: unknown[]) => { avisos.push(a); }) as never);
+  try {
+    const armazem = { lerStatus: async () => null } as unknown as Armazem;
+    const u = { id: 'u-resgate', slug: 'balsas-resgate', ...SEM_AGENDA };
+    for (let i = 0; i < 20; i++) assert.match((await conferirImpedimentoDoIndice(u, armazem, T0 + i * 60_000)) ?? '', /spine_enabled/);
+    assert.equal(avisos.length, 1, '20 mensagens, um aviso');
+    assert.match(String(avisos[0]![1]), /AVISO/);
+    await conferirImpedimentoDoIndice(u, armazem, T0 + REPETIR_AVISO_DO_INDICE_MS + 1);
+    assert.equal(avisos.length, 2, 'passado o período, avisa de novo');
+    await conferirImpedimentoDoIndice({ id: 'u-outra', slug: 'porto-resgate', ...SEM_AGENDA }, armazem, T0);
+    assert.equal(avisos.length, 3, 'cada unidade tem o seu');
+    await conferirImpedimentoDoIndice({ id: 'u-ok', slug: 'x', ...COM_AGENDA }, armazem, T0);
+    assert.equal(avisos.length, 3, 'sem impedimento, sem aviso');
+  } finally {
+    mock.restoreAll();
+  }
 });

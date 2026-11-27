@@ -8,6 +8,9 @@ import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { apagarDoCache } from '../lib/cache-agenda.js';
 import { conferirOrigemIaSofia } from '../lib/franquia-origem-ia.js';
+import { contarPorTipoDoVinculo, tipoDoVinculo } from '../services/paciente-existente.js';
+import { lerImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
+import { modoPrimeiroContato } from '../lib/cadastro-todo-lead.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -680,6 +683,18 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
     });
   }
 
+  // O índice de telefones (a busca de duplicado do cadastro no 1º contato): sem ele o lead não é criado, e nada falha — só não sai.
+  if (unit.spineToken && modoPrimeiroContato(unit.slug).vale) {
+    const impedimento = await lerImpedimentoDoIndice(unit);
+    pecas.push({
+      id: 'indice-telefones',
+      titulo: 'Índice de telefones da franquia (cadastro no 1º contato)',
+      ok: impedimento === null,
+      detalhe: impedimento === null ? 'Sem impedimento: a carga do índice roda e autoriza a busca de duplicado.' : `ATENÇÃO: ${impedimento}.`,
+      comoResolver: 'Ligue a agenda da franquia (spine_enabled) nesta unidade, ou peça ao João para subir os tetos da carga do índice — sem o índice nenhum lead é cadastrado.',
+    });
+  }
+
   const semNome = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'ignorado' } });
   const falhas = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'falhou' } });
   pecas.push({
@@ -707,11 +722,13 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   const inicioHoje = new Date();
   inicioHoje.setUTCHours(0, 0, 0, 0);
 
-  const [links, porStatus, hojeOk] = await Promise.all([
+  const [links, porStatus, hojeMotivos] = await Promise.all([
     prisma.spineLeadLink.findMany({ where: { unitId }, orderBy: { updatedAt: 'desc' }, take: 40 }),
     prisma.spineLeadLink.groupBy({ by: ['status'], where: { unitId }, _count: { _all: true } }),
-    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } } }),
+    prisma.spineLeadLink.findMany({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } }, select: { motivo: true } }),
   ]);
+  // "ok" hoje separado em: criado por NÓS × o telefone já era lead lá × já era paciente lá. Só o primeiro foi ENVIADO à franquia.
+  const hojePorTipo = contarPorTipoDoVinculo(hojeMotivos.map((v) => v.motivo));
 
   const contagem = Object.fromEntries(porStatus.map((r) => [r.status, r._count._all]));
 
@@ -724,7 +741,9 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
     erro?: string;
   } = { checado: false };
 
-  const enviadosRecentes = links.filter((l) => l.status === 'ok' && l.spineIdLead);
+  // A conferência dos 7 dias procura NO CRM da franquia o que enviamos: o lead que já existia lá (achado pelo telefone) nunca foi enviado
+  // por nós e, se a janela não o alcança, aparecia como "faltando". Só entra o que nós criamos.
+  const enviadosRecentes = links.filter((l) => l.status === 'ok' && l.spineIdLead && tipoDoVinculo(l.motivo) === 'criado');
   if (unit.spineToken && enviadosRecentes.length > 0) {
     const tz = unit.spineTimezone || 'America/Sao_Paulo';
     const hoje = SpineService.instanteNoFuso(new Date(), tz).slice(0, 10);
@@ -750,9 +769,11 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   }
 
   res.json({
-    links,
+    links: links.map((l) => ({ ...l, tipo: tipoDoVinculo(l.motivo) })),
     total: links.length,
-    hoje: hojeOk,
+    // `hoje` = criados por nós hoje (como sempre foi o sentido); os que já existiam vão à parte
+    hoje: hojePorTipo.criado,
+    hojeJaExistiam: { lead: hojePorTipo['lead-ja-existia'], paciente: hojePorTipo['paciente-ja-existia'] },
     contagem: {
       ok: contagem.ok ?? 0,
       falhou: contagem.falhou ?? 0,

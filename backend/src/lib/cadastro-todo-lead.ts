@@ -50,7 +50,7 @@ import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { avaliarPelaIa, type DecisaoDaIa, type UnidadeDaIa } from './cadastro-triagem-ia.js';
 import { anuncioPelaFrase, esperarOrigem } from './origem-texto-pronto.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
-import { PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
+import { PREFIXO_LEAD_EXISTENTE, PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
 import type { Unit } from '@prisma/client';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
@@ -85,13 +85,14 @@ export function estadoCadastroTodoLead(slug: string, raw: string | undefined = p
 }
 
 /**
- * A regra do 1º contato manda neste lead? Ligada: sempre. Em "só no papel": só se a chave da triagem NÃO está ligada (senão a decisão
- * que grava é a da triagem, e simular a outra regra pareceria que ela decide). `escreve` = pode criar de verdade.
+ * A regra do 1º contato manda neste lead? Ligada: sempre. Em "só no papel": só se a chave da triagem está DESLIGADA — com a triagem ligada a
+ * decisão que grava é a dela, e com a triagem também em "só no papel" ela segue lendo e registrando o seu seco (a IA lê a conversa, "cadastraria
+ * pela IA"...) como antes da chave nova: o seco do 1º contato não toma o lugar dele. `escreve` = pode criar de verdade.
  */
 export function modoPrimeiroContato(slug: string): { vale: boolean; escreve: boolean } {
   const novo = estadoPrimeiroContato(slug);
   if (novo === 'ligado') return { vale: true, escreve: true };
-  if (novo === 'seco' && estadoDaTriagem(slug) !== 'ligado') return { vale: true, escreve: false };
+  if (novo === 'seco' && estadoDaTriagem(slug) === 'desligado') return { vale: true, escreve: false };
   return { vale: false, escreve: false };
 }
 
@@ -218,9 +219,9 @@ export const depsPadrao: DepsDoCadastro = {
     // Vínculo só com `spineIdClient` (carga de implantação, widget "só cadastrar", Sofia ao cadastrar paciente) é gente que
     // JÁ está na franquia como paciente: criar um lead por cima duplica.
     if (l?.spineIdLead || l?.spineIdClient) return 'na-franquia';
-    // O 1º contato achou o telefone como PACIENTE e só anotou o motivo (telefone não prova que é a mesma pessoa, então não grava o idClient):
-    // está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
-    if (l?.status === 'ok' && (l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE)) return 'na-franquia';
+    // O 1º contato achou o telefone como PACIENTE (ou como lead de OUTRO primeiro nome) e só anotou o motivo (telefone não prova que é a mesma
+    // pessoa, então não grava o id): está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
+    if (l?.status === 'ok' && ((l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE) || (l.motivo ?? '').startsWith(PREFIXO_LEAD_EXISTENTE))) return 'na-franquia';
     if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
       return 'tentou-ha-pouco';
     }

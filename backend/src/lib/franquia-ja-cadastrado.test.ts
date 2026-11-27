@@ -5,7 +5,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
-import { DIAS_DE_LEADS_RECENTES, _limparRecentesParaTeste, depsPadrao, lembrarLeadCriado, lerRecentes, verificarJaCadastrado, type DepsJaCadastrado, type Recentes } from './franquia-ja-cadastrado.js';
+import { DIAS_DE_LEADS_RECENTES, _limparRecentesParaTeste, depsPadrao, franquiaDe, lembrarLeadCriado, lerRecentes, ordemDaPagina, verificarJaCadastrado, type DepsJaCadastrado, type Recentes } from './franquia-ja-cadastrado.js';
 import type { Entrada, RespostaDoIndice } from './franquia-indice-telefones.js';
 import type { SpinePaginaTelefones, SpineResult } from '../services/spine.service.js';
 
@@ -111,15 +111,45 @@ function franquiaFalsa(o: { leads?: SpinePaginaTelefones[]; pacientes?: SpinePag
 }
 const pag = (itens: Array<[number | null, string | null]>, totalPages: number): SpinePaginaTelefones => ({ itens: itens.map(([id, whatsapp]) => ({ id, whatsapp, created: null })), totalPages, total: null });
 
-test('recentes: lê a janela curta de leads e as DUAS últimas páginas de pacientes — poucas chamadas', async () => {
-  const f = franquiaFalsa({ leads: [pag([[11, '+5511977776666']], 1)], pacientes: [pag([[1, '+5511900000001']], 40), pag([], 40), pag([[39, '+5511911112222']], 40)] });
+const pagDatada = (itens: Array<[number | null, string | null, string | null]>, totalPages: number): SpinePaginaTelefones => ({ itens: itens.map(([id, whatsapp, created]) => ({ id, whatsapp, created })), totalPages, total: null });
+
+test('recentes: ordem do mais antigo ao mais novo CONFIRMADA pelas datas — lê a janela curta de leads e as DUAS últimas páginas de pacientes', async () => {
+  const f = franquiaFalsa({
+    leads: [pag([[11, '+5511977776666']], 1)],
+    pacientes: [pagDatada([[1, '+5511900000001', '2020-01-01T10:00:00Z'], [2, '+5511900000002', '2020-01-02T10:00:00Z']], 40), pag([], 40), pag([[39, '+5511911112222']], 40)],
+  });
   const agora = Date.parse('2026-11-27T15:00:00Z');
   const r = await lerRecentes(U as Unit, agora, f.buscar);
   assert.equal(r.get('77776666')?.id, 11);
-  assert.equal(r.size, 1, 'só leads recentes + as 2 últimas páginas de pacientes (a 39 e a 40 vieram vazias/outro)');
+  assert.equal(r.size, 1, 'só os leads recentes: a página 1 só serviu para confirmar a ordem, e as 2 últimas vieram vazias/outro');
   assert.deepEqual(f.chamadas.map((c) => `${c.tipo}:${c.page}`), ['lead:1', 'paciente:1', 'paciente:39', 'paciente:40']);
   assert.equal(f.chamadas[0].initialDate, '2026-11-24');
   assert.equal(DIAS_DE_LEADS_RECENTES, 3);
+});
+
+test('recentes: a franquia MUDOU a ordem (do mais novo ao mais antigo): os recentes estão no COMEÇO e são lidos de lá, não do fim', async () => {
+  const f = franquiaFalsa({
+    leads: [pag([], 1)],
+    pacientes: [pagDatada([[250, '+5511988887777', '2026-11-27T10:00:00Z'], [249, '+5511900000009', '2020-01-02T10:00:00Z']], 40), pag([[248, '+5511911112222']], 40)],
+  });
+  const r = await lerRecentes(U as Unit, Date.now(), f.buscar);
+  assert.equal(r.get('88887777')?.id, 250);
+  assert.deepEqual(f.chamadas.filter((c) => c.tipo === 'paciente').map((c) => c.page), [1, 2], 'começo, e nada do fim');
+});
+
+test('recentes: sem datas para confirmar a ordem, lê o começo E o fim (não presume)', async () => {
+  const f = franquiaFalsa({ leads: [pag([], 1)], pacientes: [pag([[1, '+5511900000001']], 40)] });
+  await lerRecentes(U as Unit, Date.now(), f.buscar);
+  assert.deepEqual(f.chamadas.filter((c) => c.tipo === 'paciente').map((c) => c.page), [1, 2, 39, 40]);
+});
+
+test('ordemDaPagina: crescente, decrescente, ou null quando não há duas datas diferentes', () => {
+  const it = (d: string | null) => ({ id: 1, whatsapp: null, created: d });
+  assert.equal(ordemDaPagina([it('2020-01-01T00:00:00Z'), it('2020-01-03T00:00:00Z')]), 'crescente');
+  assert.equal(ordemDaPagina([it('2020-01-03T00:00:00Z'), it(null), it('2020-01-01T00:00:00Z')]), 'decrescente');
+  assert.equal(ordemDaPagina([it('2020-01-01T00:00:00Z')]), null);
+  assert.equal(ordemDaPagina([it('2020-01-01T00:00:00Z'), it('2020-01-01T00:00:00Z')]), null);
+  assert.equal(ordemDaPagina([it(null), it('lixo')]), null);
 });
 
 test('recentes: paciente cadastrado ontem à noite (última página) é visto', async () => {
@@ -150,11 +180,36 @@ test('recentes: janela de leads maior que o teto não vira "não está lá"', as
 beforeEach(() => _limparRecentesParaTeste());
 
 test('o lead que NÓS acabamos de criar é achado por um 2º cartão do mesmo número, antes de o índice e o cache dos recentes o conhecerem', async () => {
-  lembrarLeadCriado(U.id, '+5511988887777', 777);
+  lembrarLeadCriado(U, '+5511988887777', 777, 'Maria Souza');
   const d = deps({ indice: resposta([]), recentes: new Map() });
   const r = await verificarJaCadastrado(U, '5511988887777', d);
-  assert.deepEqual(r, { tipo: 'achou', origem: 'lead', id: 777, por: 'recentes' });
-  assert.equal((await verificarJaCadastrado({ id: 'outra-unidade', slug: 'x' }, '5511988887777', d)).tipo, 'nao', 'vale só para a unidade que criou');
+  assert.deepEqual(r, { tipo: 'achou', origem: 'lead', id: 777, por: 'recentes', nome: 'Maria Souza' });
+  assert.equal((await verificarJaCadastrado({ id: 'outra-unidade', slug: 'x' }, '5511988887777', d)).tipo, 'nao', 'vale só para a franquia que criou');
+});
+
+test('a unidade e o "-resgate" dela (MESMO token) são uma franquia só: o lead que uma criou, a outra acha', async () => {
+  const token = { spineBaseUrl: 'https://franquia.teste', spineToken: 'tok-balsas' };
+  const principal = { id: 'u-balsas', slug: 'doutor-hernia-balsas', ...token };
+  const resgate = { id: 'u-balsas-resgate', slug: 'balsas-resgate', ...token };
+  const outraFranquia = { id: 'u-serra', slug: 'doutor-hernia-serra', spineBaseUrl: 'https://franquia.teste', spineToken: 'tok-serra' };
+  assert.equal(franquiaDe(principal), franquiaDe(resgate));
+  assert.notEqual(franquiaDe(principal), franquiaDe(outraFranquia));
+  lembrarLeadCriado(principal, '+5511988887777', 555, 'Ana');
+  const d = deps({ indice: resposta([]), recentes: new Map() });
+  assert.equal((await verificarJaCadastrado(resgate, '5511988887777', d)).tipo, 'achou');
+  assert.equal((await verificarJaCadastrado(outraFranquia, '5511988887777', d)).tipo, 'nao');
+});
+
+test('o cache dos recentes também é por franquia: a unidade e o "-resgate" dividem UMA leitura', () => {
+  const token = { spineBaseUrl: 'http://127.0.0.1:1', spineToken: null };
+  const principal = { id: 'u-p', slug: 'doutor-hernia-serra', ...token } as unknown as Unit;
+  const resgate = { id: 'u-r', slug: 'serra-resgate', ...token } as unknown as Unit;
+  // sem token a leitura falha na hora, sem rede; com token igual a chave é a franquia
+  const comToken = (u: Unit) => ({ ...u, spineToken: 'tok-compartilhado' }) as Unit;
+  const a = depsPadrao.recentes(comToken(principal));
+  const b = depsPadrao.recentes(comToken(resgate));
+  assert.equal(a, b);
+  a.catch(() => undefined);
 });
 
 test('franquia fora do ar: a leitura que falhou fica guardada por 2 min — nova mensagem NÃO refaz as chamadas', async () => {
