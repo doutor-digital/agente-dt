@@ -111,3 +111,18 @@ export async function gravarRecusaDoSinal(
     return false;
   }
 }
+
+/**
+ * O que `decidirPagamentoAntecipado` recebe como forma e como escolha guardada. Com a chave ligada, só a forma DITA agora entra como
+ * `formaPagamento`; o `na_clinica` PADRÃO da chave (unidade sem sinal) entra como `escolhaSalva`, o que ativa `preservarSim`: o "Sim" que a
+ * equipe pôs no cartão não vira "Não". Com a chave desligada, devolve exatamente o que recebeu.
+ */
+export function formaParaOCarimbo(a: {
+  pixDepois: boolean;
+  formaDitaAgora: string | undefined;
+  formaFinal: string | undefined;
+  escolhaSalva: string | null;
+}): { formaPagamento: string | undefined; escolhaSalva: string | null } {
+  if (!a.pixDepois || a.formaDitaAgora) return { formaPagamento: a.formaFinal, escolhaSalva: a.escolhaSalva };
+  return { formaPagamento: undefined, escolhaSalva: a.formaFinal === 'na_clinica' ? 'na_clinica' : a.escolhaSalva };
+}

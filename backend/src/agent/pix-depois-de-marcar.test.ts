@@ -8,7 +8,7 @@ import { instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
 import { porQueNaoReservar } from './agenda-tools.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
 import { composeSystemPrompt } from './prompt-composer.js';
-import { gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
+import { formaParaOCarimbo, gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
 import { decidirPagamentoAntecipado } from './carimbos-do-agendamento.js';
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -396,14 +396,31 @@ test('A.2) com sinal e a forma NÃO dita: marca a OFERTA (sinal_oferecido), nunc
   assert.ok(JSON.stringify(g.where.OR).includes('"not":"na_clinica"'), 'o filtro nunca atinge um na_clinica dito');
 });
 
-test('A.2) "na_clinica" JÁ dito nesta conversa NÃO é apagado nem re-oferecido: vale como forma dita', async () => {
+test('A.2) um "na_clinica" VELHO na conversa (marcação anterior) NÃO bloqueia a oferta do sinal: oferece de novo e troca pelo marcador', async () => {
   ligar();
   escolhaNaConversa = 'na_clinica';
   const hora = await primeiroHorario(atual);
   const r = await agendar(atual).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
-  assert.match(r, /PAGAR TUDO NO DIA: R\$ 350 na clínica/);
-  assert.doesNotMatch(r, /ofereça UMA vez o sinal|\[\[botoes: Quero o Pix/);
-  assert.equal((conversaGravou[0]!.data as { pagamentoEscolhido: string }).pagamentoEscolhido, 'na_clinica');
+  assert.match(r, /ofereça UMA vez o sinal/);
+  assert.doesNotMatch(r, /PAGAR TUDO NO DIA/);
+  assert.equal((conversaGravou[0]!.data as { pagamentoEscolhido: string }).pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
+});
+
+test('A.2) carimbo da 1ª marcação: o na_clinica PADRÃO da chave (e o velho) NÃO derrubam o "Sim" da equipe; a forma DITA agora vale como sempre', () => {
+  const cartaoSim = { ehRetorno: false, pagamentoComprovado: false, valorAtual: 'Sim', preservarSim: true };
+  // unidade sem sinal: a ferramenta põe na_clinica por padrão (forma NÃO dita)
+  const padrao = formaParaOCarimbo({ pixDepois: true, formaDitaAgora: undefined, formaFinal: 'na_clinica', escolhaSalva: null });
+  assert.deepEqual(padrao, { formaPagamento: undefined, escolhaSalva: 'na_clinica' });
+  assert.equal(decidirPagamentoAntecipado({ ...cartaoSim, ...padrao }).valor, null, 'mantém o Sim (sonda do sênior: era "Não")');
+  // ele DISSE na clínica agora: vale, carimba Não
+  const dita = formaParaOCarimbo({ pixDepois: true, formaDitaAgora: 'na_clinica', formaFinal: 'na_clinica', escolhaSalva: null });
+  assert.equal(decidirPagamentoAntecipado({ ...cartaoSim, ...dita }).valor, 'Não');
+  // com sinal e forma não dita: nada de forma; cartão sem valor → Não como sempre
+  const sinal = formaParaOCarimbo({ pixDepois: true, formaDitaAgora: undefined, formaFinal: undefined, escolhaSalva: null });
+  assert.equal(decidirPagamentoAntecipado({ ...cartaoSim, ...sinal }).valor, null);
+  assert.equal(decidirPagamentoAntecipado({ ...cartaoSim, ...sinal, valorAtual: null }).valor, 'Não');
+  // chave desligada: devolve o que recebeu, byte a byte
+  assert.deepEqual(formaParaOCarimbo({ pixDepois: false, formaDitaAgora: undefined, formaFinal: 'na_clinica', escolhaSalva: 'x' }), { formaPagamento: 'na_clinica', escolhaSalva: 'x' });
 });
 
 test('A.2) recusa do sinal: só o botão "Pago no dia" (frase inteira); os 6 falsos positivos do sênior NÃO gravam', () => {
