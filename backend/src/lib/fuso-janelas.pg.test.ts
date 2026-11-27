@@ -141,11 +141,13 @@ test('dedup pelo caminho REAL (INSERT cru): a mesma mensagem reivindicada 2x gan
     `select extract(epoch from (expires_at - (now() at time zone 'utc')))::int / 60 as min from message_claims where key = $1`,
     `real:${msg}`,
   );
-  assert.ok(m.min > 0, `vencimento ${m.min} min à frente`);
+  assert.ok(m.min >= 8 && m.min <= 11, `vencimento ${m.min} min à frente (esperado ~10, o TTL padrão)`);
   // reentrega de 2 h (TTL_REENTREGA_KOMMO_MS): a limpeza do JS não pode apagá-la
   const { TTL_REENTREGA_KOMMO_MS } = await import('./dedup-cache.js');
   const longa = randomUUID();
   assert.equal(await claimMessageId('real', longa, TTL_REENTREGA_KOMMO_MS), true);
+  const [l] = await prisma.$queryRawUnsafe<Array<{ min: number }>>(`select extract(epoch from (expires_at - (now() at time zone 'utc')))::int / 60 as min from message_claims where key = $1`, `real:${longa}`);
+  assert.ok(l.min >= 118 && l.min <= 121, `vencimento ${l.min} min à frente (esperado ~120)`);
   await limparClaimsVencidos();
   clearDedupCache();
   assert.equal(await claimMessageId('real', longa, TTL_REENTREGA_KOMMO_MS), false, 'a marca de 2 h tem de sobreviver à limpeza');

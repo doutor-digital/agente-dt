@@ -2,7 +2,7 @@
  * Lê a CAUSA de uma falha de chamada à IA pela mensagem de erro do provedor (`llm_calls.error_message`).
  *
  * Fonte única das regras: os mesmos padrões servem ao JavaScript (`classificarCausa`) e ao SQL (`filtrosSql`), para que um
- * vigia que conta em SQL e outro que lê linha a linha nunca discordem. O teste `causa-erro-ia.pg.test.ts` confere os dois
+ * vigia que conta em SQL e outro que lê linha a linha nunca discordem. O teste de paridade em `taxa-erro-worker.pg.test.ts` confere os dois
  * contra um Postgres de verdade. Os padrões são escritos com `\y` (borda de palavra do Postgres); o JS troca por `\b`.
  *
  * A ORDEM importa: «429 … no credits remaining» é crédito, não limite de taxa; «400 invalid_request_error … credit balance»

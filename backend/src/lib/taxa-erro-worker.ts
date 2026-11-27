@@ -202,7 +202,7 @@ export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
       causa,
       motivo:
         `${Math.round(taxa * 100)}% das chamadas falhando nos últimos ${REDE_JANELA_MIN} min ` +
-        `(${a.erros} de ${a.total}${a.escopo === 'rede' ? ', na rede toda' : `, provedor ${a.escopo}`}). ` +
+        `(${a.erros} de ${a.total}, em ${a.unidadesComErro} unidades${a.escopo === 'rede' ? ', na rede toda' : `, provedor ${a.escopo}`}). ` +
         `Causa provável: ${FRASE_DA_CAUSA[causa]}.`,
     });
   }
@@ -290,7 +290,7 @@ function varrerRede(): Promise<boolean> {
         chave: `queda-geral:${v.escopo}`,
         title: toda ? 'IA FORA DO AR: queda geral' : `IA FORA DO AR no provedor ${v.escopo}`,
         message: toda
-          ? `${v.motivo} Todas as unidades estão afetadas; a Sofia não está respondendo.`
+          ? `${v.motivo} A IA não está respondendo nas unidades afetadas.`
           : `${v.motivo} Quem usa esse provedor está afetado; as unidades em outro provedor seguem normais.`,
       });
       // Só a queda da REDE INTEIRA cala os avisos por unidade: com um provedor só caído, o problema de uma unidade em outro continua valendo.
