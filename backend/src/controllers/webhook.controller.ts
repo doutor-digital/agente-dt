@@ -1088,7 +1088,7 @@ export interface DepsRetomada {
   processar: typeof processAgent;
 }
 
-const DEPS_RETOMADA_PADRAO: DepsRetomada = {
+export const DEPS_RETOMADA_PADRAO: DepsRetomada = {
   conversa: (unitId, leadId) => prisma.conversation.findUnique({ where: { unitId_leadId: { unitId, leadId } } }),
   anteriores: (conversationId, t) =>
     prisma.message.findMany({
@@ -1117,28 +1117,48 @@ const DEPS_RETOMADA_PADRAO: DepsRetomada = {
  * e a devolve ao coalescer, marcada como retomada (não mexe na etapa). NÃO repete o que o webhook faz antes da IA.
  */
 export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: DepsRetomada = DEPS_RETOMADA_PADRAO): Promise<ResultadoRetomada> {
-  if (!unit.isActive) return 'descartado:unidade_inativa';
+  const a = await avaliarRetomada(t, unit, deps);
+  if ('naoRetomar' in a) return a.naoRetomar;
+  return agendarRetomada(t, unit, a.ctx, deps);
+}
+
+/**
+ * O que decide se o pedido gravado PODE voltar para a IA — só leitura (nada é gravado, nada é agendado). `naoRetomar` traz o
+ * resultado que a recuperação devolve (`descartado:` ou `tarefa:`); sem ele, `ctx` é o contexto do webhook gravado. Separado de
+ * `agendarRetomada` para quem retoma VÁRIOS pedidos do mesmo paciente (lib/retomar-apos-queda.ts) julgar todos antes de agendar o primeiro.
+ */
+export async function avaliarRetomada(
+  t: TurnoPerdido,
+  unit: Unit,
+  deps: Pick<DepsRetomada, 'conversa' | 'anteriores'> = DEPS_RETOMADA_PADRAO,
+): Promise<{ naoRetomar: ResultadoRetomada } | { ctx: ExtractedContext }> {
+  if (!unit.isActive) return { naoRetomar: 'descartado:unidade_inativa' };
   const leadId = Number(t.leadId);
-  if (!Number.isFinite(leadId) || leadId <= 0) return 'descartado:lead_invalido';
+  if (!Number.isFinite(leadId) || leadId <= 0) return { naoRetomar: 'descartado:lead_invalido' };
 
   // Só pedido que veio do webhook do Kommo com mensagem de paciente volta para a IA. O do widget entrega por outro
   // caminho (a resposta volta pelo `return_url` da sessão do bot, que morreu junto com o processo) e qualquer outro
   // formato é desconhecido: nos dois o paciente pode estar esperando, então a recepção fica sabendo. NUNCA descartar sem
   // tarefa — o trace fecharia FAILED e não sobraria rastro nenhum de um paciente sem resposta.
   const ctx = contextoDoPedidoGravado(t);
-  if (!ctx) return pedidoDoWidget(t.input) ? 'tarefa:pedido_via_widget' : 'tarefa:pedido_nao_reconhecido';
+  if (!ctx) return { naoRetomar: pedidoDoWidget(t.input) ? 'tarefa:pedido_via_widget' : 'tarefa:pedido_nao_reconhecido' };
 
   const conv = await deps.conversa(unit.id, String(leadId));
   // Resposta à confirmação de véspera e toque no botão do lembrete têm tratador em código no webhook (idempotente). Aqui
   // não os rodo de novo: "sim"/"1" pode ser resposta a um lembrete OU conversa solta, e quem decide é a recepção.
   if (conv && (podeSerRespostaD1(conv, ctx.humanMessage, t.criadoEm, janelaDaResposta(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage))) {
-    return 'tarefa:pode_ser_resposta_a_lembrete';
+    return { naoRetomar: 'tarefa:pode_ser_resposta_a_lembrete' };
   }
   if (conv) {
     const anteriores = await deps.anteriores(conv.id, t);
-    if (ehEncerramentoRepetido(ctx.humanMessage, anteriores, t.criadoEm)) return 'descartado:encerramento_repetido';
+    if (ehEncerramentoRepetido(ctx.humanMessage, anteriores, t.criadoEm)) return { naoRetomar: 'descartado:encerramento_repetido' };
   }
+  return { ctx };
+}
 
+/** Grava o passo "retomado" e devolve o pedido ao coalescer (só depois de `avaliarRetomada` dizer que pode). */
+export async function agendarRetomada(t: TurnoPerdido, unit: Unit, ctx: ExtractedContext, deps: DepsRetomada = DEPS_RETOMADA_PADRAO): Promise<ResultadoRetomada> {
+  const leadId = Number(t.leadId);
   await deps.registrar(t, unit, leadId);
   logger.info({ traceId: t.traceId, leadId, unit: unit.slug }, 'recuperar-turnos: pedido perdido volta para a IA');
 

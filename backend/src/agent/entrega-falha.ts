@@ -17,8 +17,10 @@
  *  - `atropelada`: a resposta estava pronta, mas o paciente mandou outra mensagem
  *    enquanto ela nascia — foi segurada de propósito pra o próximo turno responder
  *    as duas juntas, em vez de ele ler a resposta velha embaixo da pergunta nova.
+ *  - `queda`: o modelo estava fora do ar e o que ele leu foi o aviso de instabilidade ("pode mandar de
+ *    novo"), sem resposta nenhuma (lib/retomar-apos-queda.ts). Ele LEU o aviso, mas nada do que perguntou foi respondido.
  */
-export type MotivoNaoEntrega = 'falha' | 'atropelada';
+export type MotivoNaoEntrega = 'falha' | 'atropelada' | 'queda';
 
 interface Presa {
   texto: string;
@@ -146,6 +148,18 @@ export function renderEntregaFalha(
 ): string {
   if (!texto) return '';
   const trecho = texto.length > 220 ? `${texto.slice(0, 220)}…` : texto;
+  if (motivo === 'queda') {
+    return (
+      '<entrega_falhou>\n' +
+      '(a única coisa que ele recebeu de você foi o aviso de instabilidade abaixo: nenhuma pergunta dele foi respondida e ele esperou)\n' +
+      '- Responda AGORA, de uma vez, a TODAS as mensagens dele desde a última resposta de verdade, na ordem em que vieram. ' +
+      'Dor, limitação ou sinal clínico vem antes de cumprimento.\n' +
+      '- Pode abrir com um "desculpa a demora" curto, sem explicar o problema técnico.\n' +
+      '- NÃO peça para ele mandar de novo, NÃO diga que teve instabilidade e NÃO repita o aviso: o que ele perguntou está nas mensagens dele, é só responder.\n' +
+      `- O aviso que ele recebeu: "${trecho}"\n` +
+      '</entrega_falhou>'
+    );
+  }
   if (motivo === 'atropelada') {
     // "As duas mensagens" era pouco: numa rajada de 3 minutos (Araguaína 28681456, 15/10) foram 4 turnos
     // segurados seguidos, e a resposta que saiu respondeu só ao "tudo bem" do fim.

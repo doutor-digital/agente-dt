@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Conversation, Unit } from '@prisma/client';
 
-import { retomarTurnoPerdido, unidadeDonaDoTurno, resumoDoPedido, type DepsRetomada } from './webhook.controller.js';
+import { retomarTurnoPerdido, avaliarRetomada, agendarRetomada, unidadeDonaDoTurno, resumoDoPedido, type DepsRetomada } from './webhook.controller.js';
 import type { TurnoPerdido } from '../lib/recuperar-turnos.js';
 
 /**
@@ -172,4 +172,27 @@ test('encerramento repetido ("obrigada" de novo, a IA já se despediu): descarta
 test('burst cheio: sem turno paralelo sobre o mesmo paciente, e a recepção fica sabendo (TAREFA)', async () => {
   const { deps } = mundo({ conv: null, status: 'rejected' });
   assert.equal(await retomarTurnoPerdido(turno(webhook('oi')), UNIT, deps), 'tarefa:burst_cheio');
+});
+
+test('avaliarRetomada só LÊ: devolve o contexto do pedido e não registra nem agenda nada (a retomada pós-queda julga todos antes de agendar o primeiro)', async () => {
+  const { w, deps } = mundo({ conv: null });
+  const a = await avaliarRetomada(turno(webhook('Bom dia, queria marcar')), UNIT, deps);
+  assert.ok('ctx' in a);
+  assert.equal(a.ctx.humanMessage, 'Bom dia, queria marcar');
+  assert.equal(w.agendados.length + w.registrados.length, 0);
+  const b = await avaliarRetomada(turno({ message: 'x', via: 'widget_request' }), UNIT, deps);
+  assert.deepEqual(b, { naoRetomar: 'tarefa:pedido_via_widget' });
+});
+
+test('avaliarRetomada + agendarRetomada fazem o mesmo que retomarTurnoPerdido', async () => {
+  const { w, deps } = mundo({ conv: null });
+  const a = await avaliarRetomada(turno(webhook('oi')), UNIT, deps);
+  assert.ok('ctx' in a);
+  assert.equal(await agendarRetomada(turno(webhook('oi')), UNIT, a.ctx, deps), 'retomado');
+  assert.equal(w.agendados.length, 1);
+  assert.deepEqual(w.registrados, ['trace-1']);
+  assert.deepEqual(w.agendados[0]!.retomada, { chegouEm: CRIADO.getTime() });
+  // burst cheio: a recepção fica sabendo
+  const cheio = mundo({ conv: null, status: 'rejected' });
+  assert.equal(await agendarRetomada(turno(webhook('oi')), UNIT, a.ctx, cheio.deps), 'tarefa:burst_cheio');
 });
