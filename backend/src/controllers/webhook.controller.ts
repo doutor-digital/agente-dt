@@ -67,6 +67,7 @@ import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { liteSemLeitura, MARCA_MIDIA_NAO_ABERTA, midiaNaoLidaLigada } from '../agent/midia-nao-lida.js';
 import { avisarComprovanteComIaPausada, avisarComprovanteDoLiteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno, type ComprovanteComIaPausada } from '../lib/anexos-do-turno.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
@@ -2026,7 +2027,18 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     const anexosDaRotaOficial = isChatMessage
       ? await lerAnexosDoTurno(unit, leadId, conversaLida.msgs, recorder, temMidiaSemArquivo(humanMessage) ? {} : { soEntregar: true })
       : { texto: '', paraEntregar: [] as string[], msgs: conversaLida.msgs };
-    const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa].filter(Boolean).join('\n\n');
+    // WhatsApp Lite: o aviso de mídia chegou, o arquivo não carregou a tempo e nada o leu. Sem esta marca o modelo só vê «Você recebeu uma
+    // mensagem de mídia (ID…)» e responde como se nada tivesse chegado; com ela, e com a frase fixa do grafo (agent/midia-nao-lida.ts),
+    // o paciente recebe o pedido para escrever. O arquivo que carregar depois entra no turno seguinte, já transcrito (conversa-oficial.ts).
+    const marcaDeMidiaLite = midiaNaoLidaLigada(unit.slug) && liteSemLeitura({
+      humanMessage,
+      blocoOficial,
+      textoDosAnexos: anexosDaRotaOficial.texto,
+      leituraNoWebhook: anexosLidosPeloWebhook > 0 || (audios.length > 0 && !algumAudioFalhou),
+    })
+      ? MARCA_MIDIA_NAO_ABERTA
+      : '';
+    const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa, marcaDeMidiaLite].filter(Boolean).join('\n\n');
 
     const result = await comTurnoEmAndamento(() => graph.invoke(
       {

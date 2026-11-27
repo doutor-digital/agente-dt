@@ -41,6 +41,14 @@ import {
   pedeNome,
   travaDaResposta,
 } from './repeticao.js';
+import { midiaNaoLidaLigada, respostaDeMidiaNaoLida } from './midia-nao-lida.js';
+import {
+  instrucaoRefazerSemPerguntaRepetida,
+  jaRespondidas,
+  perguntaJaRespondidaLigada,
+  temasRepetidosNaResposta,
+  type JaRespondida,
+} from './pergunta-respondida.js';
 import { cortarAberturaMetanarrativa, detectarVazamento, explicarVazamento, pedidoAoReescritor, SISTEMA_REESCRITOR_BASTIDOR } from '../services/vazamento.js';
 import { agoraLocalISO } from './consulta-que-passou.js';
 import {
@@ -740,6 +748,8 @@ export async function buildAgentGraph(
     // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
     // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
     const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+    // Os fatos do cartão, deixados pelo prompt pela mesma razão: a trava de pergunta repetida (pergunta-respondida.ts) lê o mesmo cartão.
+    const fatosDoTurno: { valor?: Record<string, unknown> | null } = {};
 
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
@@ -754,6 +764,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        fatosSaida: fatosDoTurno,
         agora: agoraDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
@@ -772,12 +783,15 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        fatosSaida: fatosDoTurno,
         agora: agoraDoTurno,
       });
       promptDoTurno = dynamicPrompt;
       systemMessage = new SystemMessage(dynamicPrompt);
     }
     promptDoTurnoParaNome = promptDoTurno;
+    // O que o paciente JÁ respondeu (tempo da dor, cidade, rotina): a resposta que pergunta de novo é refeita uma vez, mais abaixo.
+    const respondidas: JaRespondida[] = perguntaJaRespondidaLigada(unit.slug) ? jaRespondidas(falas, fatosDoTurno.valor) : [];
     const extrasDoGuardrail = { ofertaDaCampanha: ofertaDoTurno.valor?.oferta ?? null };
     // Comprovante (foto/PDF) neste turno, ou nas últimas falas do paciente: a ferramenta de agendar recusa e a resposta que
     // afirma confirmação vira o recado (confirmacao-so-com-crm.ts). Com a consulta já no CRM (a equipe criou) a espera acabou.
@@ -1551,6 +1565,8 @@ export async function buildAgentGraph(
       // fica a original — um 3º pedido é ruim, mas mensagem quebrada é pior).
       // Já passou por sinal de alerta neste turno: a trava da repetição não pausa de novo nem troca a frase do passe.
       const trava = passouPorSinal || candidatoNoTurno ? null : travaDaResposta(repeticao, textoFinal, ferramentasDoTurno(nonSystemMessages));
+      // Pergunta de novo o que ele já respondeu (pergunta-respondida.ts): só quando nenhuma outra trava acima agiu e a resposta é do modelo.
+      const repetidas = trava || passouPorSinal || candidatoNoTurno || respostaFixa ? [] : temasRepetidosNaResposta(textoFinal, respondidas);
       if (trava?.acao === 'passar_para_equipe') {
         const pausar = tools.find((t) => t.name === 'pausar_ia');
         let resultadoPausa: string | null = null;
@@ -1575,14 +1591,15 @@ export async function buildAgentGraph(
           textoFinal = trava.frase;
           response.content = textoFinal;
         }
-      } else if (trava?.acao === 'refazer_sem_nome' && !respondeuPlanoB) {
+      } else if ((trava?.acao === 'refazer_sem_nome' || repetidas.length > 0) && !respondeuPlanoB) {
+        const porNome = trava?.acao === 'refazer_sem_nome';
         const t1 = performance.now();
         let textoRefeito = '';
         try {
           const refeita = (await withTimeout(
             invokeChatModel({
               model: modeloAtivo,
-              messages: [...finalMessages, response, new HumanMessage(INSTRUCAO_REFAZER_SEM_NOME)],
+              messages: [...finalMessages, response, new HumanMessage(porNome ? INSTRUCAO_REFAZER_SEM_NOME : instrucaoRefazerSemPerguntaRepetida(repetidas, respondidas))],
               unitId: unit.id,
               traceId: recorder.traceId,
               modelName,
@@ -1596,19 +1613,47 @@ export async function buildAgentGraph(
         } catch (err) {
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: refeita sem o nome falhou — fica a original');
         }
-        const serve = !!textoRefeito && !pedeNome(textoRefeito) && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
+        const semOPedido = porNome ? !pedeNome(textoRefeito) : temasRepetidosNaResposta(textoRefeito, respondidas).length === 0;
+        const serve = !!textoRefeito && semOPedido && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;
         }
         await recorder.step({
           kind: 'THINKING',
-          title: serve
-            ? `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez — refeita sem o pedido`
-            : `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez; a refeita não serviu — saiu a original`,
-          payload: { refeita: textoRefeito || null, final: textoFinal },
+          title: porNome
+            ? serve
+              ? `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez — refeita sem o pedido`
+              : `🔁 Pediu o nome pela ${repeticao.pedidosDeNome + 1}ª vez; a refeita não serviu — saiu a original`
+            : serve
+              ? `🔁 Perguntou de novo o que ele já respondeu (${repetidas.join(', ')}) — refeita sem a pergunta`
+              : `🔁 Perguntou de novo o que ele já respondeu (${repetidas.join(', ')}); a refeita não serviu — saiu a original`,
+          payload: { refeita: textoRefeito || null, final: textoFinal, ...(porNome ? {} : { repetidas, respondidas }) },
           latencyMs: Math.round(performance.now() - t1),
         });
+      }
+
+      // Mandou só um áudio, foto ou arquivo que ninguém leu e a resposta não diz isso (silêncio, despedida, "ótimo!" como se tivesse
+      // ouvido): sai a frase fixa que pede para escrever, com os horários da mesa (midia-nao-lida.ts). Nunca depois de uma passagem
+      // para a equipe, e nunca duas vezes seguidas.
+      if (!trava && !passouPorSinal && !candidatoNoTurno && !respostaFixa && midiaNaoLidaLigada(unit.slug)) {
+        const fixa = respostaDeMidiaNaoLida({
+          entrada: userMessage ?? '',
+          resposta: textoFinal,
+          ferramentas: ferramentasDoTurno(nonSystemMessages),
+          falas,
+          agoraLocal: agoraDaUnidade,
+        });
+        if (fixa) {
+          respostaFixa = true;
+          await recorder.step({
+            kind: 'THINKING',
+            title: `📎 Mídia que ninguém leu (${fixa.tipo}) e a resposta não dizia isso — saiu o pedido para escrever`,
+            payload: { original: textoFinal, final: fixa.texto, tipo: fixa.tipo },
+          });
+          textoFinal = fixa.texto;
+          response.content = fixa.texto;
+        }
       }
 
       // Ele agradeceu, se despediu ou disse que vai se organizar (paciente-encerrou.ts): a resposta não empurra horário.

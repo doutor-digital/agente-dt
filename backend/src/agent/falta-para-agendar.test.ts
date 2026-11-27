@@ -82,3 +82,44 @@ test('10/11: a triagem continua pedindo a força E depois o xixi e o intestino',
   assert.match(b, /primeiro a força, depois o xixi e o intestino/);
   assert.match(b, /pausar_ia com sinalDeAlerta: true/);
 });
+
+// ── 27/11/2026: «localizacao» é onde dói, não a cidade ───────────────────────────────────────────────────
+
+test('27/11: «localizacao» (onde dói) NÃO conta como cidade — a lista ainda manda perguntar a cidade antes do horário', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', localizacao: 'lombar, lado direito' });
+  assert.match(b, /Ainda falta, nesta ordem: cidade → horário escolhido/);
+  assert.match(b, /Próximo passo: pergunte em qual cidade ele mora, antes de oferecer qualquer horário/);
+});
+
+test('27/11: «localizacao» continua contando como queixa (onde dói), só não como cidade', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Ana', localizacao: 'lombar' });
+  assert.ok(!/falta.*queixa/i.test(b));
+  assert.match(b, /cidade/);
+});
+
+test('27/11: cidade que veio de apelido mas é parte do corpo (fatos-canonicos grava localizacao como cidade) também não vale', () => {
+  for (const lixo of ['lombar', 'coluna cervical', 'costas', 'lado direito', 'região do quadril', 'ciático']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: lixo });
+    assert.match(b, /cidade → horário escolhido/, lixo);
+  }
+});
+
+test('27/11: cidade de verdade conta, de qualquer nome de fato', () => {
+  for (const [k, v] of [['cidade', 'Imperatriz'], ['municipio', 'Canaã dos Carajás'], ['cidade_paciente', 'São Paulo'], ['mora_em', 'Marabá']] as const) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', [k]: v });
+    assert.ok(!/cidade/.test(b), `${k}=${v} deveria contar`);
+    assert.match(b, /horário escolhido/);
+  }
+});
+
+test('27/11: confirmar que consegue vir à unidade também basta; «não» não basta', () => {
+  const base = { nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos' };
+  assert.ok(!/cidade/.test(renderFaltaParaAgendar({ ...base, consegue_vir: 'sim' })));
+  assert.match(renderFaltaParaAgendar({ ...base, consegue_vir: 'não' }), /cidade → horário escolhido/);
+});
+
+test('27/11: sem cidade a lista NÃO diz «você já tem tudo para marcar»', () => {
+  const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', preferencia_horario: 'terça 10h', localizacao: 'lombar' });
+  assert.ok(!/já tem tudo/.test(b));
+  assert.match(b, /Ainda falta, nesta ordem: cidade/);
+});

@@ -38,6 +38,35 @@ interface Item {
   rotulo: string;
   chaves: string[];
   comoPedir: string;
+  /** Quando o item não se resolve só com "tem valor numa das chaves" (a cidade, que precisa ser cidade de verdade). */
+  confere?: (fatos: Fatos) => boolean;
+}
+
+/**
+ * A cidade conta quando o fato é uma cidade, ou quando o paciente confirmou que consegue vir à unidade.
+ *
+ * `localizacao` NÃO é chave de cidade: em produção a IA a usa para ONDE DÓI ("lombar", "lado direito"), e a lista
+ * dava a cidade por sabida — a Sofia oferecia horário a quem mora em outro estado sem nunca ter perguntado onde a
+ * pessoa mora (relatório de 27/11/2026, §2 causa 2). Por isso, mesmo o `cidade` que veio de apelido (fatos-canonicos.ts
+ * grava `localizacao` como `cidade`) só vale se o texto não for uma parte do corpo.
+ */
+const CHAVES_CIDADE = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'];
+const CHAVES_VEM_A_UNIDADE = ['consegue_vir', 'pode_vir', 'consegue_ir', 'vem_a_unidade'];
+const PARTE_DO_CORPO =
+  /\b(?:lombar|lombares|coluna|cervical|tor[aá]cic[ao]|costas|pesco[cç]o|nuca|ci[aá]tic[ao]|perna|pernas|bra[cç]o|bra[cç]os|quadril|joelho|ombro|gl[uú]teo|virilha|lado|direit[oa]|esquerd[oa]|regi[aã]o|dor|dores)\b/i;
+const NEGATIVO = /^\s*(?:n[aã]o|nao|false|0|n)\b/i;
+
+function pareceCidade(valor: unknown): boolean {
+  const v = String(valor ?? '').trim();
+  return v.length > 1 && v.length <= 60 && /\p{L}/u.test(v) && !PARTE_DO_CORPO.test(v);
+}
+
+export function cidadeConhecida(fatos: Fatos): boolean {
+  if (CHAVES_CIDADE.some((k) => pareceCidade(fatos[k]))) return true;
+  return CHAVES_VEM_A_UNIDADE.some((k) => {
+    const v = String(fatos[k] ?? '').trim();
+    return v !== '' && !NEGATIVO.test(v);
+  });
 }
 
 const CHECKLIST: Item[] = [
@@ -48,7 +77,12 @@ const CHECKLIST: Item[] = [
     comoPedir: 'pergunte onde dói',
   },
   { rotulo: 'tempo de dor', chaves: ['tempo_dor', 'tempo_de_dor'], comoPedir: 'pergunte há quanto tempo' },
-  { rotulo: 'cidade', chaves: ['cidade', 'localizacao'], comoPedir: 'confirme a cidade dele' },
+  {
+    rotulo: 'cidade',
+    chaves: [...CHAVES_CIDADE, ...CHAVES_VEM_A_UNIDADE],
+    comoPedir: 'pergunte em qual cidade ele mora, antes de oferecer qualquer horário',
+    confere: cidadeConhecida,
+  },
   {
     rotulo: 'horário escolhido',
     chaves: ['preferencia_horario', 'horario_preferido', 'horario_escolhido'],
@@ -83,6 +117,8 @@ export function renderFaltaParaAgendar(
     nomeNaHoraDeMarcar?: boolean;
     /** Chave `conduzir-direto`: a queixa basta — "há quanto tempo" sai da lista. */
     conduzirDireto?: boolean;
+    /** Rótulos que o paciente já respondeu NA CONVERSA mesmo sem o fato gravado (pergunta-respondida.ts): saem da lista. */
+    jaRespondidos?: readonly string[];
   } = {},
 ): string {
   const f = fatos ?? {};
@@ -94,7 +130,8 @@ export function renderFaltaParaAgendar(
   // Nome na hora de marcar, a não ser que ele já tenha sido pedido 2 vezes sem resposta (semPedirNome, repeticao.ts): aí não
   // se pede mais, nem junto do horário.
   const pedirNomeNoHorario = Boolean(opcoes.nomeNaHoraDeMarcar && !opcoes.semPedirNome && !temAlgum(f, ['nome']));
-  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves))
+  const faltando = CHECKLIST.filter((i) => !(i.confere ? i.confere(f) : temAlgum(f, i.chaves)))
+    .filter((i) => !opcoes.jaRespondidos?.includes(i.rotulo))
     .filter((i) => !((opcoes.semPedirNome || opcoes.nomeNaHoraDeMarcar) && i.rotulo === 'nome'))
     .filter((i) => !(opcoes.conduzirDireto && i.rotulo === 'tempo de dor'))
     .map((i) =>
