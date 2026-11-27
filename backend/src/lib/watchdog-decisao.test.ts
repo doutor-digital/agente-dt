@@ -54,15 +54,25 @@ test('degradado na rede também exige erro em 2 unidades ou mais', () => {
   assert.equal(decidirSaude([linha({ total: 100, erros: 30, unidadesComErro: 2, errosIndisponivel: 30 })]).estado, 'degradado');
 });
 
-test('um provedor caído é FORA mesmo com o outro bem e a rede diluída', () => {
+test('um provedor caído, com a rede só diluída, é DEGRADADO (com provedor e causa), nunca «Sofia fora do ar»', () => {
   const s = decidirSaude([
     linha({ total: 200, erros: 42, unidadesComErro: 12, errosChave: 40 }),
     linha({ escopo: 'anthropic', total: 40, erros: 40, unidadesComErro: 12, errosChave: 40 }),
     linha({ escopo: 'openai', total: 160, erros: 2, unidadesComErro: 2 }),
   ]);
-  assert.equal(s.estado, 'fora');
+  assert.equal(s.estado, 'degradado');
   assert.equal(s.escopo, 'anthropic');
   assert.equal(s.causa, 'autenticacao');
+  assert.match(s.motivo, /provedor anthropic/);
+});
+
+test('chave de reserva atendendo: provedor a 100% de erro mas a rede ~50% NÃO é FORA', () => {
+  const s = decidirSaude([
+    linha({ total: 40, erros: 20, unidadesComErro: 2, errosChave: 20 }),
+    linha({ escopo: 'anthropic', total: 20, erros: 20, unidadesComErro: 2, errosChave: 20 }),
+    linha({ escopo: 'anthropic-reserva', total: 20, erros: 0 }),
+  ]);
+  assert.notEqual(s.estado, 'fora');
 });
 
 test('uma unidade só com a chave quebrada num provedor NÃO é FORA (5 de 5, 401, 1 unidade)', () => {
@@ -131,6 +141,12 @@ function simular(passos: Array<[number, Observacao]>, inicio: Estado | null = nu
   }
   return { avisos, estado: e! };
 }
+
+test('throttle por TIPO: a causa dominante mudando de rodada para rodada não vira alerta novo a cada troca', () => {
+  const com = (causa: Observacao['causa']): Observacao => ({ tipo: 'fora', causa, resumo: 'x' });
+  const { avisos } = simular([[0, com('credito')], [10, com('limite')], [20, com('outra')], [30, com('credito')]]);
+  assert.deepEqual(avisos.map((a) => [a.min, a.tipo]), [[0, 'novo'], [30, 'lembrete']]);
+});
 
 test('throttle: 15 h de queda a cada 10 min NÃO vira 90 mensagens: 1 aviso, depois lembretes a cada 30 min e, após 2 h, a cada 2 h', () => {
   const passos: Array<[number, Observacao]> = [];

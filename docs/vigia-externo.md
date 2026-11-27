@@ -29,15 +29,15 @@ GitHub Actions (cron, a cada ~10 min)
 
 | Estado | Quando |
 |---|---|
-| `fora` | 90% ou mais das chamadas falhando na rede inteira, ou em um provedor, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
-| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor com pelo menos 5 chamadas; os dois com erro em 2 unidades ou mais |
+| `fora` | 90% ou mais das chamadas falhando na REDE inteira, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
+| `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor (inclusive um provedor a 100%: a chave de reserva ou o outro provedor pode estar atendendo; o aviso diz o provedor e a causa) com pelo menos 5 chamadas; os dois com erro em 2 unidades ou mais |
 | `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
 | `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida**, inclusive com outro incidente já aberto (um deploy ou reinício de ~1 min não pode acordar ninguém) |
 | `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo. Também só na 2ª rodada seguida |
 
 **Throttle e «voltou ao normal»**:
 
-- No máximo **1 aviso por tipo de incidente a cada 30 min** (`tipo:causa`, por exemplo `fora:credito`). Incidente aberto há mais de 2 h lembra só de 2 em 2 h. Trocar de tipo (degradado para fora) avisa na hora.
+- No máximo **1 aviso por tipo de incidente a cada 30 min** (só o **tipo**: a causa dominante pode mudar de rodada para rodada e vai no texto, não na chave). Incidente aberto há mais de 2 h lembra só de 2 em 2 h. Trocar de tipo (degradado para fora) avisa na hora.
 - «VOLTOU AO NORMAL» sai uma vez, depois de 2 rodadas ok seguidas (um respiro no meio da queda não encerra o incidente), e cita a leitura que abriu o incidente. Encerrado o incidente o throttle zera: uma queda nova, mesmo 10 min depois, avisa como queda (ALERTA), não como LEMBRETE; LEMBRETE é só a repetição de um incidente que segue aberto.
 - Se **nenhum** canal entrega, a rodada fica **vermelha** (exit 1, e o GitHub avisa por e-mail quem editou o cron) e o throttle **não** é gasto: a rodada seguinte tenta de novo.
 - Teste do alarme: o workflow tem `workflow_dispatch` com a opção «teste» e um cron mensal (dia 1, 09h de Brasília) que manda um aviso de TESTE. Se o aviso mensal não chegar, o canal morreu e a rodada fica vermelha.
@@ -89,8 +89,15 @@ Recomendação: **GitHub Actions como vigia principal** (este PR) e, se o João 
 - Anthropic: a Admin API (`/v1/organizations/usage_report/...` e `cost_report`) também devolve uso e custo, não o saldo de créditos. O saldo só existe no console (e o aviso por e-mail de recarga automática).
 - Não consegui chamar nenhum dos dois para confirmar ao vivo (sem chave de administrador nesta sessão e sem tocar em produção). Isso reflete a documentação que conheço, não um teste. Conferir no console de cada provedor se o quadro mudou.
 
-O que cobre a lacuna: o saldo esgotado aparece **dentro de 10 min** como `fora:credito`, que é a causa que o vigia lê da mensagem do provedor (`credit balance is too low`, `no credits remaining`). Aviso **antes** de zerar só com recarga automática ligada nos dois consoles, ou com uma estimativa própria (saldo comprado informado à mão menos o custo do `cost_report`), que seria outro PR.
+O que cobre a lacuna: o saldo esgotado aparece **dentro de 10 min** como `fora` (rede inteira) ou `degradado` (um provedor), com causa crédito, que é a causa que o vigia lê da mensagem do provedor (`credit balance is too low`, `no credits remaining`). Aviso **antes** de zerar só com recarga automática ligada nos dois consoles, ou com uma estimativa própria (saldo comprado informado à mão menos o custo do `cost_report`), que seria outro PR.
 
 ## Relação com o PR do fuso (`fix/fuso-janelas-taxa-erro`)
 
 Os dois PRs saem do `main` e não dependem um do outro. `backend/src/lib/causa-erro-ia.ts` (a leitura da causa do erro, em JS e em SQL) é **idêntico nos dois**: se os dois forem mesclados o git junta sem conflito. A consulta de saúde usa `(now() at time zone 'utc')` escrito por extenso, sem importar o `sql-tempo.ts` do outro PR, pelo mesmo motivo.
+
+## Limites conhecidos
+
+- Chamada `cancelled` (prazo estourado pelo chamador) não conta, como no monitor interno: um provedor que TRAVA e cujas chamadas morrem no prazo fica invisível. Cobrir isso pede um alarme de proporção de `cancelled`, outro PR.
+- Um incidente em que só UMA unidade tem tráfego (madrugada) fica abaixo da regra de 2 unidades até uma segunda falar. É o preço de a chave poder ser por unidade; decisão do sênior.
+- Erros de chamada sem `unit_id` não entram na contagem de unidades.
+- `ops-alert.ts` (aviso de dentro da VPS) grava o horário do envio antes de saber se o relay aceitou; é anterior a este PR e não foi tocado.

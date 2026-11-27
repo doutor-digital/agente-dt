@@ -24,7 +24,8 @@ on:
         default: false
 
 concurrency:
-  group: vigia-externo
+  # o aviso de TESTE tem fila própria: uma rodada de vigia pendente nunca o substitui (e ele a ela)
+  group: vigia-externo-${{ ((github.event_name == 'workflow_dispatch' && inputs.teste) || github.event.schedule == '0 12 1 * *') && 'teste' || 'ronda' }}
   cancel-in-progress: false
 
 permissions:

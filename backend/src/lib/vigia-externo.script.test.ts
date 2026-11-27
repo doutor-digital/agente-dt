@@ -43,6 +43,10 @@ function subir(nome: string, tratar: (req: IncomingMessage, corpo: any) => { sta
         }
         if (nome !== 'saude') recebidos.push({ rota: `${nome}${req.url}`, cabecalhos: req.headers, corpo });
         const r = tratar(req, corpo);
+        if (r.status === 0) {
+          req.socket.destroy(); // o servidor corta a conexão no meio: o `fetch` do script LANÇA
+          return;
+        }
         res.writeHead(r.status, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(r.corpo));
       });
@@ -195,6 +199,25 @@ test('servidor mudo avisa «NÃO RESPONDE» só na 2ª rodada seguida; 404 do en
   assert.equal(recebidos.length, 0);
   assert.ok(existsSync(join(dir, 'estado/vigia.json')));
   assert.equal(JSON.parse(readFileSync(join(dir, 'estado/vigia.json'), 'utf8')).desde, null);
+});
+
+test('HEALTH_URL mal colada (sem https://) é vigia CEGO, não «servidor não responde»', { skip: PULAR }, async () => {
+  reset();
+  const dir = mkdtempSync(join(tmpdir(), 'vigia-'));
+  await rodar(dir, { HEALTH_URL: 'automacao.exemplo.com/api/health/ia' });
+  await rodar(dir, { HEALTH_URL: 'automacao.exemplo.com/api/health/ia' });
+  const txt = recebidos.find((x) => x.rota.startsWith('telegram'))!.corpo.text;
+  assert.match(txt, /CEGO/);
+  assert.match(txt, /HEALTH_URL/);
+});
+
+test('modelo do WhatsApp que LANÇA (conexão cortada) ainda tenta o texto livre', { skip: PULAR }, async () => {
+  reset();
+  saude = FORA;
+  kapso = { modelo: 0, texto: 200 };
+  const r = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')), { TELEGRAM_BOT_TOKEN: '' });
+  assert.equal(r.codigo, 0, r.saida);
+  assert.deepEqual(recebidos.filter((x) => x.rota.startsWith('kapso')).map((x) => x.corpo.type), ['template', 'text']);
 });
 
 test('HEALTH_URL ainda não cadastrada: sai VERDE (exit 0) com aviso, sem mandar nada e sem gastar e-mail de falha', { skip: PULAR }, async () => {

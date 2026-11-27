@@ -15,6 +15,11 @@ const log = (o) => console.log(JSON.stringify(o));
 
 async function consultar() {
   const url = env('HEALTH_URL');
+  try {
+    new URL(url);
+  } catch {
+    return { status: 404, corpo: null }; // segredo mal colado (sem https://): é o vigia que está cego, não o servidor que caiu
+  }
   let ultimo = { status: null, corpo: null };
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
     try {
@@ -53,13 +58,18 @@ async function enviarKapso(texto) {
   if (!/^\d{10,15}$/.test(para)) return { canal: 'whatsapp', configurado: true, ok: false, motivo: 'número inválido' };
   const url = `${env('KAPSO_BASE', 'https://api.kapso.ai/meta/whatsapp/v24.0').replace(/\/+$/, '')}/${encodeURIComponent(numeroId)}/messages`;
   const cab = { 'X-API-Key': chave };
+  let modelo = { ok: false, status: 0, codigo: null };
   try {
-    const modelo = await postar(url, cab, {
+    modelo = await postar(url, cab, {
       messaging_product: 'whatsapp',
       to: para,
       type: 'template',
       template: { name: env('KAPSO_TEMPLATE', 'alerta_sistema'), language: { code: env('KAPSO_TEMPLATE_IDIOMA', 'pt_BR') }, components: [{ type: 'body', parameters: [{ type: 'text', text: umaLinha(texto, 900) }] }] },
     });
+  } catch {
+    // o modelo estourou o prazo ou a rede falhou: ainda vale tentar o texto livre abaixo
+  }
+  try {
     if (modelo.ok) return { canal: 'whatsapp', configurado: true, ok: true, via: 'modelo' };
     const livre = await postar(url, cab, { messaging_product: 'whatsapp', to: para, type: 'text', text: { body: texto } });
     return { canal: 'whatsapp', configurado: true, ok: livre.ok, via: livre.ok ? 'texto livre' : undefined, statusModelo: modelo.status, codigoModelo: modelo.codigo, statusTexto: livre.status };
@@ -92,6 +102,7 @@ function lerEstado() {
   try {
     return existsSync(ARQUIVO) ? JSON.parse(readFileSync(ARQUIVO, 'utf8')) : null;
   } catch {
+    console.log('::warning::o estado do vigia existe mas não pôde ser lido: recomeçando do zero (um incidente aberto pode ser reanunciado)');
     return null;
   }
 }

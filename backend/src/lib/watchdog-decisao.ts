@@ -76,36 +76,25 @@ const taxa = (l: LinhaDoProvedor) => (l.total > 0 ? l.erros / l.total : 0);
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 /**
- * ok / degradado / fora. FORA = a rede (ou um provedor) falhando em 90% ou mais, mesmo com amostra pequena, desde que o erro
- * apareça em 2 unidades ou mais, sem exceção (nem crédito, nem chave): cada unidade pode ter a PRÓPRIA chave (`Unit.anthropicApiKey`),
- * e a de uma acabando não é «a Sofia fora do ar». DEGRADADO = um quarto da rede falhando com amostra decente, ou metade de um
- * provedor, também com erro em 2 unidades ou mais.
+ * ok / degradado / fora. FORA = a REDE inteira falhando em 90% ou mais, mesmo com amostra pequena, com erro em 2 unidades ou mais, sem
+ * exceção (nem crédito, nem chave): cada unidade pode ter a PRÓPRIA chave (`Unit.anthropicApiKey`), e a de uma acabando não é «a Sofia
+ * fora do ar». Um PROVEDOR isolado a 100% é «degradado» (a chave de reserva ou o outro provedor pode estar atendendo), com o provedor
+ * e a causa no texto. DEGRADADO = um quarto da rede falhando com amostra decente, ou metade de um provedor, também com erro em 2
+ * unidades ou mais. Limite conhecido: um incidente em que só UMA unidade tem tráfego fica abaixo de «2 unidades» até uma segunda falar.
  * Silêncio (nenhuma chamada) NÃO é queda: madrugada sem paciente é normal.
  */
 export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_PADRAO): Saude {
   const rede = linhas.find((l) => l.escopo === 'rede');
   const provedores = linhas.filter((l) => l.escopo !== 'rede');
-  const fora: Array<{ l: LinhaDoProvedor; causa: Causa }> = [];
-  for (const l of [...(rede ? [rede] : []), ...provedores]) {
-    if (l.total < regras.foraMinimo || taxa(l) < regras.foraTaxa) continue;
-    const causa = causaDe(l);
-    if (l.unidadesComErro < 2) continue;
-    fora.push({ l, causa });
-  }
-  if (fora.length) {
-    // a rede inteira vale mais que um provedor; entre iguais, o de maior taxa
-    fora.sort((a, b) => (a.l.escopo === 'rede' ? -1 : 0) - (b.l.escopo === 'rede' ? -1 : 0) || taxa(b.l) - taxa(a.l));
-    const { l, causa } = fora[0];
-    return {
-      estado: 'fora',
-      causa,
-      escopo: l.escopo,
-      motivo: `${pct(taxa(l))} das chamadas à IA falhando (${l.erros} de ${l.total})${l.escopo === 'rede' ? '' : ` no provedor ${l.escopo}`}`,
-    };
+  // FORA é a REDE inteira: um provedor sozinho a 100% pode ter a chave de reserva ou o outro provedor atendendo (o primeiro erro é
+  // gravado como `anthropic` e o sucesso que o salvou como outro provedor); a Sofia segue respondendo. Esse caso é «degradado».
+  if (rede && rede.total >= regras.foraMinimo && taxa(rede) >= regras.foraTaxa && rede.unidadesComErro >= 2) {
+    return { estado: 'fora', causa: causaDe(rede), escopo: 'rede', motivo: `${pct(taxa(rede))} das chamadas à IA falhando (${rede.erros} de ${rede.total})` };
   }
   const degradados: LinhaDoProvedor[] = [];
   if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa && rede.unidadesComErro >= 2) degradados.push(rede);
   for (const p of provedores) {
+    // um provedor a 90% ou mais também cai aqui (taxa >= 50%): o aviso diz o provedor e a causa; «fora» fica para a rede inteira
     if (p.total >= regras.provedorDegradadoMinimo && taxa(p) >= regras.provedorDegradadoTaxa && p.unidadesComErro >= 2) degradados.push(p);
   }
   if (degradados.length) {
@@ -148,7 +137,7 @@ export function observar(r: RespostaHttp): Observacao {
   if (r.status === null) return { tipo: 'inacessivel', causa: null, resumo: 'o servidor não respondeu (sem resposta ou tempo esgotado)' };
   const c = r.corpo as { estado?: unknown; causa?: unknown; motivo?: unknown } | null;
   if (r.status === 401 || r.status === 403 || r.status === 404) {
-    return { tipo: 'cego', causa: null, resumo: `o endpoint de saúde respondeu ${r.status}: conferir o segredo HEALTH_IA_TOKEN no GitHub e no servidor` };
+    return { tipo: 'cego', causa: null, resumo: `o endpoint de saúde respondeu ${r.status}: conferir os segredos HEALTH_URL e HEALTH_IA_TOKEN no GitHub e HEALTH_IA_TOKEN no servidor` };
   }
   const estado = c && typeof c === 'object' ? c.estado : undefined;
   if (estado === 'ok' || estado === 'degradado' || estado === 'fora') {
@@ -156,6 +145,9 @@ export function observar(r: RespostaHttp): Observacao {
     // o motivo vem do NOSSO servidor, mas é texto livre: corta e tira quebra de linha antes de ir para um modelo de WhatsApp.
     const motivo = typeof c?.motivo === 'string' ? umaLinha(c.motivo, 200) : '';
     return { tipo: estado, causa, resumo: motivo };
+  }
+  if (c && typeof c === 'object' && (c as { error?: unknown }).error === 'db_unavailable') {
+    return { tipo: 'inacessivel', causa: null, resumo: 'o servidor está de pé, mas o banco de dados não respondeu' };
   }
   if (r.status >= 500 || r.status === 429 || r.status === 408) {
     return { tipo: 'inacessivel', causa: null, resumo: `o servidor respondeu ${r.status} sem dados de saúde` };
@@ -205,7 +197,8 @@ export interface Aviso {
   texto: string;
 }
 
-export const chaveDe = (o: Observacao) => `${o.tipo}:${o.causa ?? '-'}`;
+/** O throttle é por TIPO de incidente: a causa dominante pode mudar de uma rodada para a outra (429 × crédito) e não pode virar alerta novo a cada troca. A causa vai no texto. */
+export const chaveDe = (o: Observacao) => o.tipo;
 
 /** Uma linha só, sem tabulação nem 4 espaços seguidos: o modelo de WhatsApp da Meta recusa variável com quebra de linha. */
 export function umaLinha(t: string, max = 600): string {
