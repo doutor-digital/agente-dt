@@ -13,6 +13,7 @@ import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.
 import { createChatModel } from '../services/openai.service.js';
 import type { Caso } from './banco.js';
 import { conferir, type Falha, type FerramentaChamada, type OutraUnidade } from './checks.js';
+import { MAX_VOLTAS, precisaDeOutraVolta, respostasSimuladas } from './volta-bastidor.js';
 
 /**
  * Roda um caso do banco dourado contra a IA de verdade.
@@ -219,7 +220,18 @@ export async function rodarCaso(
         ? (modelo as unknown as { bindTools: (t: unknown[]) => { invoke: (m: BaseMessage[]) => Promise<AIMessage> } }).bindTools(tools)
         : (modelo as unknown as { invoke: (m: BaseMessage[]) => Promise<AIMessage> });
 
-    const resposta = await comTools.invoke(mensagens);
+    // Como o grafo da produção (agent → tools → agent): turno que abre só com ferramenta de bastidor
+    // (etiqueta, campo, título) ganha o resultado simulado e outra chamada — é nela que sai a fala.
+    // Ver `volta-bastidor.ts`. As chamadas de todas as voltas contam como "ferramentas chamadas".
+    let resposta = await comTools.invoke(mensagens);
+    const chamadasAnteriores: NonNullable<AIMessage['tool_calls']> = [];
+    for (let volta = 0; volta < MAX_VOLTAS; volta++) {
+      const chamadas = resposta.tool_calls ?? [];
+      if (!precisaDeOutraVolta(textoDaResposta(resposta.content), chamadas)) break;
+      chamadasAnteriores.push(...chamadas);
+      mensagens.push(resposta, ...respostasSimuladas(chamadas));
+      resposta = await comTools.invoke(mensagens);
+    }
 
     const bruto = textoDaResposta(resposta.content);
     const falasDoPaciente = caso.historico.filter((t) => t.de === 'paciente').map((t) => t.texto);
@@ -232,7 +244,7 @@ export async function rodarCaso(
       exigePagamento: Boolean(unit.spineBookingRequiresPayment),
       taxaEsperada: precosDaConsulta(unit)?.antecipado ?? null,
     });
-    const ferramentas: FerramentaChamada[] = (resposta.tool_calls ?? []).map((c) => ({
+    const ferramentas: FerramentaChamada[] = [...chamadasAnteriores, ...(resposta.tool_calls ?? [])].map((c) => ({
       nome: c.name === 'agendar_consulta' && !decisaoDaTrava.libera ? 'agendar_consulta (recusada pela trava)' : c.name,
       args: (c.args ?? {}) as Record<string, unknown>,
     }));
