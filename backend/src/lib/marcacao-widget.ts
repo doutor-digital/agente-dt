@@ -17,6 +17,7 @@
  * clicar e espera ver AGENDADO), mas é o sincronizador quem manda nos 15 minutos seguintes.
  */
 import type { Unit } from '@prisma/client';
+import { leadParaConverter } from '../services/paciente-existente.js';
 import { randomUUID } from 'node:crypto';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -300,13 +301,14 @@ async function marcarInterno(unitBase: Unit, entrada: EntradaMarcacao, opcoes: {
     idClient = achado.idClient;
     await passo('TOOL_RESULT', `Paciente já existia na franquia: ${achado.nome ?? '?'} (idClient ${idClient})`);
   } else {
-    if (vinculo?.spineIdLead) {
-      const c = await SpineService.convertLead(unit, { idLead: vinculo.spineIdLead, name: nome, idSource: unit.spineDefaultSourceId, whatsapp: fone });
+    const idLeadParaConverter = leadParaConverter(vinculo, nome).id;
+    if (idLeadParaConverter) {
+      const c = await SpineService.convertLead(unit, { idLead: idLeadParaConverter, name: nome, idSource: unit.spineDefaultSourceId, whatsapp: fone });
       if (c.ok && c.data?.idClient) { idClient = c.data.idClient; novoCadastro = true; }
     }
     if (idClient === null) {
       const r = await SpineService.createClient(unit, {
-        name: nome, whatsapp: fone, idSource: unit.spineDefaultSourceId, idLead: vinculo?.spineIdLead ?? null,
+        name: nome, whatsapp: fone, idSource: unit.spineDefaultSourceId, idLead: idLeadParaConverter,
         addressCity: entrada.cidade?.trim().toUpperCase() || null, addressUf: SpineService.resolverUf(entrada.uf ?? null),
       });
       if (!r.ok || !r.data?.idClient) {

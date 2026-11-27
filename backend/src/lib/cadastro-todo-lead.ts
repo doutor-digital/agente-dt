@@ -97,6 +97,15 @@ export function modoPrimeiroContato(slug: string): { vale: boolean; escreve: boo
 }
 
 /**
+ * O cadastro no 1º contato roda neste lead mesmo quando a IA foi pulada e a unidade não tem o grupo? É o `modoPrimeiroContato(...).vale`, mais o caso das
+ * DUAS chaves em "só no papel": aí o seco da triagem é quem registra (ver `modoPrimeiroContato`), mas precisa rodar para registrar.
+ * Chave nova em "só no papel" com a triagem LIGADA continua de fora (a triagem ligada não roda sem o grupo).
+ */
+export function primeiroContatoRodaSemGrupo(slug: string): boolean {
+  return modoPrimeiroContato(slug).vale || (estadoPrimeiroContato(slug) === 'seco' && estadoDaTriagem(slug) === 'seco');
+}
+
+/**
  * As clínicas distintas da lista: `acailandia-resgate` e `doutor-hernia-acailandia` são a MESMA (a dona da conta,
  * ver `unidadeDona`), e as empresas do grupo não contam.
  */

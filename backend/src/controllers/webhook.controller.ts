@@ -5,7 +5,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import type { Conversation, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ferramentasChamadas } from '../lib/cadastro-na-franquia.js';
-import { cadastrarLeadDoTurno, estadoCadastroTodoLead, estadoPrimeiroContato, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
+import { cadastrarLeadDoTurno, estadoCadastroTodoLead, primeiroContatoRodaSemGrupo, type DecisaoDoLead, type DepsDoCadastro, type SincronizarLead } from '../lib/cadastro-todo-lead.js';
 import { agendarCapturaSilenciosa } from '../lib/captura-silenciosa.js';
 import { aplicarOrigemPorTexto } from '../lib/origem-texto-pronto.js';
 import { deixaMarcaDeCalada, marcarCartaoCalado, type PedidoDeTurno } from '../lib/atendimento-adiado.js';
@@ -1353,7 +1353,7 @@ export async function cadastrarQuandoIaPulada(
   if (estadoCadastroTodoLead(unit.slug) === 'desligado') return null;
   try {
     // Chave de 27/11 (cadastrar TODO lead no 1º contato): o primeiro contato é lead com a IA falando ou não — vale sem a chave do "IA pulada".
-    const ligadaSemGrupo = automacaoLigada(unit.slug, 'cadastro-ia-pulada', process.env.CADASTRO_IA_PULADA_SLUGS) || estadoPrimeiroContato(unit.slug) !== 'desligado';
+    const ligadaSemGrupo = automacaoLigada(unit.slug, 'cadastro-ia-pulada', process.env.CADASTRO_IA_PULADA_SLUGS) || primeiroContatoRodaSemGrupo(unit.slug);
     if (!ligadaSemGrupo && !(await grupoDaUnidade(unit.id))) return null;
     // `ferramentas: []`: a IA não rodou, então não há "agendou" — é só o caminho do lead que entrou em contato (decidirCadastroDoLead).
     const r = await cadastrarLeadDoTurno({ unit, leadId, ferramentas: [] }, sincronizar, deps);

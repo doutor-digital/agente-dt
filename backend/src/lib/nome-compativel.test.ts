@@ -35,3 +35,9 @@ test('tratamento, parentesco e partícula não são nome: "Mãe da Ana" × "Tia 
   assert.deepEqual(palavrasDoNome('Mãe da Ana'), ['ana']);
   assert.deepEqual(palavrasDoNome('A. Silva'), ['silva']);
 });
+
+test('mãe e filha com o MESMO nome e sobrenome mas nome do meio diferente NÃO casam; sem nome do meio de um lado, casa', () => {
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Eduarda Souza'), false);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Aparecida Lima Souza'), true);
+  assert.equal(nomesCompletosCompativeis('Maria Aparecida Souza', 'Maria Souza'), true);
+});

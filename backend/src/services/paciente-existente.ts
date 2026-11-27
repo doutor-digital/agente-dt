@@ -46,7 +46,7 @@ export function leadAchadoNoMotivo(motivo: string | null | undefined): { id: num
 
 /**
  * Que lead da franquia a consulta pode converter em paciente? (decidido na HORA DE AGENDAR, com o nome que o paciente DEU)
- *  - o lead que o vínculo guarda como SEU (`spineIdLead`: criado por nós para este cartão);
+ *  - o lead que o vínculo guarda como SEU (`spineIdLead` sem o motivo de "lead já existe": criado por nós para este cartão);
  *  - o lead que o 1º contato apenas ACHOU pelo telefone (só no motivo): só se o nome da consulta bate com o dele, nome e sobrenome. O nome
  *    do cartão nunca serve de prova (vem do perfil do WhatsApp, que é o da mãe quando a filha escreve do aparelho dela).
  * Nenhum dos dois: `id` nulo — cria-se o paciente novo, como sempre. `achadoDescartado` diz o lead que ficou de fora, para o log.
@@ -55,12 +55,13 @@ export function leadParaConverter(
   vinculo: { spineIdLead?: number | null; motivo?: string | null } | null | undefined,
   nomeDaConsulta: string | null | undefined,
 ): { id: number | null; achadoDescartado: number | null } {
-  if (vinculo?.spineIdLead) return { id: vinculo.spineIdLead, achadoDescartado: null };
   const achado = leadAchadoNoMotivo(vinculo?.motivo);
-  if (!achado) return { id: null, achadoDescartado: null };
+  // `spineIdLead` com o motivo de "lead já existe" é lead ACHADO que a versão anterior do 1º contato adotou pelo primeiro nome: vale a mesma regra
+  if (!achado) return { id: vinculo?.spineIdLead ?? null, achadoDescartado: null };
+  const id = vinculo?.spineIdLead ?? achado.id;
   return nomesCompletosCompativeis(nomeDaConsulta, achado.nome)
-    ? { id: achado.id, achadoDescartado: null }
-    : { id: null, achadoDescartado: achado.id };
+    ? { id, achadoDescartado: null }
+    : { id: null, achadoDescartado: id };
 }
 
 /**

@@ -33,12 +33,17 @@ export function palavrasDoNome(nome: string | null | undefined): string[] {
 }
 
 /**
- * Mesmo nome E mesmo sobrenome (primeira e última palavra), os dois lados com pelo menos duas palavras.
+ * Mesmo nome E mesmo sobrenome (primeira e última palavra), os dois lados com pelo menos duas palavras; e, se os dois têm nome do meio, um em comum.
  * "Maria Souza" casa com "Maria José Souza"; "Maria José Souza" NÃO casa com "Maria Aparecida"; "Maria" sozinha nunca casa.
  */
 export function nomesCompletosCompativeis(a: string | null | undefined, b: string | null | undefined): boolean {
   const x = palavrasDoNome(a);
   const y = palavrasDoNome(b);
   if (x.length < 2 || y.length < 2) return false;
-  return x[0] === y[0] && x[x.length - 1] === y[y.length - 1];
+  if (x[0] !== y[0] || x[x.length - 1] !== y[y.length - 1]) return false;
+  // nomes do meio: "Maria Aparecida Souza" × "Maria Eduarda Souza" são pessoas diferentes (mãe e filha). Quando os DOIS lados têm nome do meio, ao menos um tem de coincidir.
+  const meioX = x.slice(1, -1);
+  const meioY = y.slice(1, -1);
+  if (meioX.length > 0 && meioY.length > 0 && !meioX.some((m) => meioY.includes(m))) return false;
+  return true;
 }

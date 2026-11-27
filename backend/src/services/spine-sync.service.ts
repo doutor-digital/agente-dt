@@ -78,14 +78,14 @@ const PALAVRAS_DE_CONVERSA = new Set([
   'vizinho', 'vizinha', 'patroa', 'patrao', 'namorado', 'namorada', 'genro', 'cunhada', 'cunhado', 'sogra', 'sogro',
   'tia', 'madrinha', 'padrinho',
   // frase, não nome: "AMANHÃ FALAMOS", "PACIENTE BRASILEIRO FALANDO", "Vendo Avon"
-  'amanha', 'hoje', 'ontem', 'falamos', 'falando', 'falar', 'fala', 'falei', 'vendo', 'compro', 'vendemos', 'vende', 'ligar', 'ligo', 'liga',
-  'aguardo', 'aguardando', 'retorno', 'retornando', 'avon', 'natura', 'revenda', 'revendedor', 'revendedora',
+  'amanha', 'hoje', 'ontem', 'falamos', 'falando', 'falar', 'falei', 'vendo', 'compro', 'vendemos', 'vende', 'ligar', 'ligo',
+  'aguardo', 'aguardando', 'retorno', 'retornando', 'avon', 'revenda', 'revendedor', 'revendedora',
   // recado de status e frase religiosa: "Deus é fiel" (a palavra "deus" tem regra própria — "João de Deus" é nome)
   'fiel', 'amem', 'aleluia', 'abencoado', 'abencoada', 'bencao', 'louvado', 'oracao', 'gratidao', 'disponivel', 'online', 'offline',
-  'mensagem', 'mensagens', 'recado', 'viajando', 'trabalho', 'servico', 'ferias',
+  'mensagem', 'mensagens', 'recado', 'viajando',
 ]);
 
-/** Parentesco que também é sobrenome ("Carlos Souza Filho", "Pedro Silva Neto"): só barra quando é a PRIMEIRA palavra ou não há outro nome ao lado. */
+/** Parentesco que também é sobrenome ou apelido ("Carlos Souza Filho", "Neto Silva"): só barra quando é a ÚNICA palavra de nome. */
 const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'neto', 'sobrinho', 'primo', 'irmao', 'irma', 'tio']);
 const PARTICULAS_ANTES_DE_DEUS = new Set(['de', 'do', 'dos']);
 const PEDACO_DE_EMAIL = /@|gmail|hotmail|outlook|yahoo|icloud|\.com\b|\.net\b/;
@@ -151,7 +151,7 @@ export function avaliarNome(
     }
     if (PARENTESCO_QUE_E_SOBRENOME.has(chave)) {
       const outras = chaves.filter((c, j) => j !== i && c.length >= 2 && !PARTICULAS.has(c));
-      if (i === 0 || outras.length < 1) {
+      if (outras.length < 1) {
         return { ok: false, motivo: `"${nome}" é parentesco, não nome (achei "${p}")` };
       }
     }
@@ -590,6 +590,9 @@ async function vincularAoQueJaExiste(
       logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui ler o nome do lead que já existe na franquia');
       return null;
     });
+    if (!nome) {
+      logger.warn({ kommoLeadId, unit: unit.slug, idLeadAchado: achado.id }, 'spine-sync: AVISO — não li o nome do lead que já existe na franquia: ele nunca será convertido em paciente na hora de agendar (cria-se paciente novo)');
+    }
     motivo = motivoDeLeadJaExistente({ id: achado.id, nome, onde });
   }
   try {

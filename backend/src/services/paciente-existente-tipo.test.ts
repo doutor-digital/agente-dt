@@ -58,3 +58,15 @@ test('o lead que o vínculo guarda como SEU (criado por nós) converte sempre; s
   assert.deepEqual(leadParaConverter(null, 'Maria Souza'), { id: null, achadoDescartado: null });
   assert.deepEqual(leadParaConverter({ spineIdLead: null, motivo: 'paciente já existe na franquia (idClient 9, achado pelo telefone no índice): não criei lead' }, 'Maria Souza'), { id: null, achadoDescartado: null });
 });
+
+test('vínculo JÁ gravado pela versão anterior (spine_id_lead + motivo "lead já existe", nome em falta): o lead achado NÃO é convertido', () => {
+  const antigo = { spineIdLead: 6071221, motivo: 'lead já existe na franquia (idLead 6071221, achado pelo telefone no índice): não criei lead' };
+  assert.deepEqual(leadParaConverter(antigo, 'Alline Souza'), { id: null, achadoDescartado: 6071221 });
+  // com o nome no motivo e o mesmo nome e sobrenome na consulta, converte
+  const comNome = { spineIdLead: 6071221, motivo: motivoDeLeadJaExistente({ id: 6071221, nome: 'Alline Souza', onde: 'no índice' }) };
+  assert.deepEqual(leadParaConverter(comNome, 'Alline Souza'), { id: 6071221, achadoDescartado: null });
+});
+
+test('mãe e filha com mesmo nome e sobrenome e nome do meio diferente: o lead da mãe NÃO é convertido', () => {
+  assert.equal(leadParaConverter(achado('Maria Aparecida Souza'), 'Maria Eduarda Souza').id, null);
+});

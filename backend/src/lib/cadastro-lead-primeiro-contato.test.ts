@@ -17,6 +17,7 @@ import {
   depsPadrao,
   estadoCadastroTodoLead,
   modoPrimeiroContato,
+  primeiroContatoRodaSemGrupo,
   type DepsDoCadastro,
 } from './cadastro-todo-lead.js';
 
@@ -206,4 +207,19 @@ test('as DUAS chaves em "só no papel": o seco da TRIAGEM segue lendo e registra
 test('só a chave nova em "só no papel" (triagem desligada): ela registra o seco do 1º contato', async () => {
   ligar('seco', null);
   assert.deepEqual(modoPrimeiroContato(BEBEDOURO.slug), { vale: true, escreve: false });
+});
+
+test('IA pulada e sem grupo (webhook): roda com a chave nova ligada ou com as DUAS em seco; NÃO roda com a nova em seco por cima da triagem ligada nem desligada', () => {
+  ligar('ligado');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true);
+  ligar('seco', 'seco');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true, 'o seco não some com as duas chaves em seco');
+  ligar('seco', null);
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true);
+  ligar('seco', 'ligado');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false, 'triagem ligada sem grupo não roda: não alarga');
+  ligar(null, 'seco');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false);
+  ligar(null, null);
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false);
 });
