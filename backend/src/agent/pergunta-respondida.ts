@@ -40,7 +40,8 @@ const PERGUNTA_CIDADE =
   /\bmora\s+(?:aqui\s+)?(?:em|no|na|perto)\b|\bmoram\s+(?:em|no|na)\b|qual\s+(?:[eé]\s+)?(?:a\s+)?(?:sua\s+)?cidade|(?:de\s+)?(?:qual|que)\s+cidade|em\s+que\s+cidade|de\s+onde\s+(?:voc[eê]|vc)\s+[eé]|(?:voc[eê]|vc)\s+[eé]\s+de\s+onde|onde\s+(?:voc[eê]|vc)\s+mora/i;
 const PERGUNTA_IMPACTO = new RegExp(
   [
-    String.raw`(?:atrapalh|impact|afet|limit|interfer|prejudic)\w*[^?.!]{0,70}(?:rotina|dia\s+a\s+dia|trabalho|sono|dormir|atividades?|vida|no\s+seu\s+dia)`,
+    // sem "não quero atrapalhar seu trabalho" (cortesia): negação antes, ou o infinitivo "atrapalhar"
+    String.raw`(?<!\bn[ãa]o\s+(?:\w+\s+){0,2})(?:atrapalha(?!r\b)|impact|afet|limit|interfer|prejudic)\w*[^?.!]{0,70}(?:rotina|dia\s+a\s+dia|trabalho|sono|dormir|atividades?|vida|no\s+seu\s+dia)`,
     String.raw`(?:rotina|dia\s+a\s+dia|trabalho|sono)[^?.!]{0,50}(?:atrapalh|impact|afet|limit|interfer|prejudic)\w*`,
     String.raw`o\s+que\s+(?:mais\s+)?(?:a\s+)?(?:dor\s+)?(?:te\s+)?(?:impede|atrapalha|limita)`,
     String.raw`como\s+(?:isso|a\s+dor|essa\s+dor)\s+(?:tem\s+)?(?:te\s+)?(?:afet|impact|atrapalh)\w*`,
@@ -138,7 +139,7 @@ function respostaDeTempo(texto: string, comContexto = true): string | null {
 }
 
 /** Resposta DIRETA a "há quanto tempo?": além das contas acima, "ontem", "semana passada", "faz tempo". */
-const TEMPO_CURTO = /\b(?:ontem|anteontem|hoje|semana\s+passada|mes\s+passado|ano\s+passado|faz\s+tempo|muito\s+tempo|bastante\s+tempo|recentemente)\b/;
+const TEMPO_CURTO = /\b(?:ontem|anteontem|semana\s+passada|mes\s+passado|ano\s+passado|faz\s+tempo|muito\s+tempo|bastante\s+tempo|recentemente)\b/;
 function respostaDiretaDeTempo(texto: string): string | null {
   const t = semAcento(falaLimpa(texto));
   return respostaDeTempo(texto, false) ?? TEMPO_CURTO.exec(t)?.[0] ?? null;
@@ -155,7 +156,7 @@ const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zo
 const ESTADOS = new Set([
   'acre', 'alagoas', 'amapa', 'amazonas', 'bahia', 'ceara', 'espirito santo', 'goias', 'maranhao', 'mato grosso', 'mato grosso do sul',
   'minas gerais', 'para', 'paraiba', 'parana', 'pernambuco', 'piaui', 'rio grande do norte', 'rio grande do sul', 'rondonia',
-  'roraima', 'santa catarina', 'sergipe', 'tocantins', 'distrito federal', 'brasil',
+  'roraima', 'minas', 'santa catarina', 'sergipe', 'tocantins', 'distrito federal', 'brasil',
 ]);
 /** Onde o nome do lugar termina: "moro em Marabá e trabalho em…", "moro em Marabá mesmo", "moro em Marabá desde 2010". */
 const FIM_DO_LUGAR = /(?:^|\s)(?:e|mas|que|pois|porque|desde|ha|há|faz|com|onde|hoje|mesmo|tambem|também|agora|ja|já|mais|bem|perto|longe|ai|aí|la|lá|sim|ne|né|so|só|a|ha)(?:\s|$)|[,.;!?]/i;
@@ -167,13 +168,15 @@ function lugarEhCidade(bruto: string): string | null {
   if (!cortado) return null;
   const n = semAcento(cortado);
   const primeira = /^vila\s+(?:velha|rica)\b/.test(n) ? 'vilacidade' : n.split(/\s+/)[0];
+  // sigla ("IJ CODE", "TJMA"): órgão ou empresa, não cidade
+  if (/(?:^|\s)\p{Lu}{2,4}(?:\s|$)/u.test(cortado)) return null;
   if (NAO_E_CIDADE.test(primeira) || ESTADOS.has(n) || /^[a-z]{2}$/.test(n)) return null;
   return pareceCidade(cortado) ? cortado : null;
 }
 
 // "vim do Instagram", "sou de Deus", "venho de Uber" não são cidade; "aqui da Igreja" e "vim de…" (trajeto) nem entram
 const CIDADE_SOU_DE =
-  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho)\s+(?:d[aeo]s?|em)\s+(?!(?:Assembleia|Congrega[çc][ãa]o|Par[óo]quia|Cat[óo]lica|Batista|Ordem|Associa[çc][ãa]o|Sindicato|Comunidade|Capela|Templo|Minist[ée]rio|Deus|Jesus|Cristo|Nossa|Senhor|Maria|Uber|Fam[ií]lia|Igreja|F[eé]|Paz|Ambul[âa]ncia|Carro|Moto|[ÔO]nibus|T[aá]xi|Empresa|Escola|Faculdade|Prefeitura|Aplicativo|App|Peixes|Aqu[aá]rio|[ÁA]ries|Touro|G[eê]meos|C[aâ]ncer|Le[aã]o|Virgem|Libra|Escorpi[aã]o|Sagit[aá]rio|Capric[oó]rnio|Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
+  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho)\s+(d[aeo]s?|em)\s+(?!(?:Assembleia|Congrega[çc][ãa]o|Par[óo]quia|Cat[óo]lica|Batista|Ordem|Associa[çc][ãa]o|Sindicato|Comunidade|Capela|Templo|Minist[ée]rio|Deus|Jesus|Cristo|Nossa|Senhor|Maria|Uber|Fam[ií]lia|Igreja|F[eé]|Paz|Ambul[âa]ncia|Carro|Moto|[ÔO]nibus|T[aá]xi|Empresa|Escola|Faculdade|Prefeitura|Aplicativo|App|Peixes|Aqu[aá]rio|[ÁA]ries|Touro|G[eê]meos|C[aâ]ncer|Le[aã]o|Virgem|Libra|Escorpi[aã]o|Sagit[aá]rio|Capric[oó]rnio|Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)(\p{Lu}[\p{L}'\-]+(?:\s+(?:d[aeo]s?\s+)?\p{Lu}[\p{L}'\-]+){0,3})/u;
 const CIDADE_SOU_DAQUI = /(?<![\p{L}])[Ss]ou\s+daqui\b|(?<![\p{L}])[Ss]omos\s+daqui\b/u;
 
 /** "Não moro aqui", "nunca morei em Marabá", "já não sou daqui": o contrário de responder. */
@@ -191,8 +194,12 @@ function respostaDeCidade(texto: string): string | null {
   }
   const sou = CIDADE_SOU_DE.exec(t);
   if (sou && !negado(t, sou.index)) {
-    const lugar = lugarEhCidade(sou[1]);
-    if (lugar) return `${sou[0].slice(0, sou[0].indexOf(sou[1]))}${lugar}`.trim();
+    const lugar = lugarEhCidade(sou[2]);
+    // com artigo (da/do/das/dos) "sou da Vale", "sou do TJMA", "somos da Doce Amor Confeitaria" são empresa ou órgão: só cidade CONHECIDA
+    const comArtigo = /^d[ao]s?$/i.test(sou[1]);
+    if (lugar && (!comArtigo || CIDADES_CONHECIDAS.has(semAcento(lugar).replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim()))) {
+      return `${sou[0].slice(0, sou[0].indexOf(sou[2]))}${lugar}`.trim();
+    }
   }
   const daqui = CIDADE_SOU_DAQUI.exec(t);
   if (daqui && !negado(t, daqui.index)) return daqui[0].trim();

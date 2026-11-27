@@ -18,6 +18,8 @@ import {
 } from './midia-nao-lida.js';
 import { AUDIO_NAO_OUVIDO, instrucaoAudioNaoTranscrito } from '../controllers/webhook.controller.js';
 import { MARCA_ANEXO_NAO_LIDO } from '../lib/anexos-do-turno.js';
+import { semDiminutivo } from '../lib/sem-diminutivo.js';
+import { semIntimidade } from '../lib/sem-intimidade.js';
 import { MARCA_AUDIO_NAO_OUVIDO, type Fala } from './repeticao.js';
 import type { MensagemOficial } from '../services/kommo-talks.service.js';
 
@@ -104,14 +106,14 @@ test('silêncio, despedida ou "ótimo!" como se tivesse ouvido: sai a frase fixa
   ]) {
     const saida = respostaDeMidiaNaoLida({ entrada: AUDIO_SEM_OUVIR, resposta: r, ferramentas: [], falas: [p('oi'), ia('Oi! Como posso te chamar?'), p('...')], agoraLocal: AGORA });
     assert.equal(saida?.tipo, 'audio', r);
-    assert.equal(saida?.texto, 'Não consegui abrir seu áudio aqui 🙏 Me escreve rapidinho?', r);
+    assert.equal(saida?.texto, 'Não consegui abrir seu áudio aqui 🙏 Pode me escrever o que você queria falar?', r);
   }
 });
 
 test('o texto muda com o tipo da mídia', () => {
-  assert.equal(fraseDeMidiaNaoLida('imagem'), 'Não consegui abrir sua foto aqui 🙏 Me escreve rapidinho?');
-  assert.equal(fraseDeMidiaNaoLida('arquivo'), 'Não consegui abrir seu arquivo aqui 🙏 Me escreve rapidinho?');
-  assert.equal(fraseDeMidiaNaoLida('midia'), 'Não consegui abrir o que você mandou aqui 🙏 Me escreve rapidinho?');
+  assert.equal(fraseDeMidiaNaoLida('imagem'), 'Não consegui abrir sua foto aqui 🙏 Pode me escrever o que você queria falar?');
+  assert.equal(fraseDeMidiaNaoLida('arquivo'), 'Não consegui abrir seu arquivo aqui 🙏 Pode me escrever o que você queria falar?');
+  assert.equal(fraseDeMidiaNaoLida('midia'), 'Não consegui abrir o que você mandou aqui 🙏 Pode me escrever o que você queria falar?');
 });
 
 test('já passou para a equipe neste turno (pausar_ia): não mexe', () => {
@@ -122,7 +124,7 @@ test('já passou para a equipe neste turno (pausar_ia): não mexe', () => {
 });
 
 test('não repete a mesma frase duas vezes seguidas', () => {
-  const falas = [p('...'), ia('Não consegui abrir seu áudio aqui 🙏 Me escreve rapidinho?'), p('...')];
+  const falas = [p('...'), ia('Não consegui abrir seu áudio aqui 🙏 Pode me escrever o que você queria falar?'), p('...')];
   assert.equal(respostaDeMidiaNaoLida({ entrada: AUDIO_SEM_OUVIR, resposta: '', ferramentas: [], falas, agoraLocal: AGORA }), null);
 });
 
@@ -136,7 +138,7 @@ test('horários na mesa: repete os 2 da última fala da Sofia, com dia da semana
   const saida = respostaDeMidiaNaoLida({ entrada: AUDIO_SEM_OUVIR, resposta: '', ferramentas: [], falas, agoraLocal: AGORA });
   assert.equal(
     saida?.texto,
-    'Não consegui abrir seu áudio aqui 🙏 Me escreve rapidinho? Se for sobre o horário: terça 01/12 às 16h ou quarta 02/12 às 9h30?',
+    'Não consegui abrir seu áudio aqui 🙏 Pode me escrever o que você queria falar? Se for sobre o horário: terça 01/12 às 16h ou quarta 02/12 às 9h30?',
   );
 });
 
@@ -188,4 +190,15 @@ test('7: o <conversa_oficial> com texto da equipe ou áudio recuperado conta com
   // o bloco só com mídia que continua sem leitura NÃO conta como conteúdo
   const semLeitura = `<conversa_oficial>\nO que aconteceu:\n- 27/11 10:00 · Paciente: [áudio]\n- 27/11 10:01 · Paciente: [mensagem vazia]\nConsidere estas mensagens.\n</conversa_oficial>\n\n${AUDIO_SEM_OUVIR}`;
   assert.equal(midiaNaoLidaDoTurno(semLeitura), 'audio');
+});
+
+test('o texto FINAL é o testado: a frase fixa passa intacta pelo filtro de diminutivos e de intimidade do grafo', () => {
+  const horarios = ['terça 01/12 às 16h', 'quarta 02/12 às 9h30'];
+  for (const tipo of ['audio', 'imagem', 'arquivo', 'midia'] as const) {
+    for (const h of [[], horarios]) {
+      const frase = fraseDeMidiaNaoLida(tipo, h);
+      assert.equal(semIntimidade(semDiminutivo(frase)), frase, `${tipo} ${h.length}`);
+      assert.doesNotMatch(frase, /inh[oa]\b/i);
+    }
+  }
 });

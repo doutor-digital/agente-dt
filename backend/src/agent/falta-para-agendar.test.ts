@@ -200,7 +200,17 @@ test('placeholder e "não sei a cidade" NÃO são cidade (medido em 30 dias de f
     assert.match(renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: v }), /cidade → horário escolhido/, v);
   }
   // cidades de verdade que começam parecido continuam valendo
-  for (const v of ['Natal', 'Nova Iguaçu', 'Não-Me-Toque', 'Foz do Iguaçu', 'Fortaleza', 'Interlagos', 'Sem Peixe'.replace('Sem Peixe', 'Santa Inês')]) {
+  for (const v of ['Natal', 'Nova Iguaçu', 'Não-Me-Toque', 'Foz do Iguaçu', 'Fortaleza', 'Interlagos', 'Santa Inês']) {
     assert.ok(cidadeConhecida({ cidade: v }), `deveria contar: ${v}`);
   }
+});
+
+test('LIMITE CONHECIDO: "Sem Peixe" (RS) é cidade de verdade, mas começa por "sem" e é recusada junto com "sem cidade"; na dúvida a Sofia pergunta', () => {
+  // aceito de propósito: custa uma pergunta a mais a quem mora em Sem Peixe, e evita tratar "sem informação" como cidade (1.015 valores reais medidos)
+  assert.ok(!cidadeConhecida({ cidade: 'Sem Peixe' }));
+});
+
+test('"Interior de Boa Vista" / "interior do Pará" / "fora de Marabá" são lugar sem nome exato: recusados (limite conhecido)', () => {
+  for (const v of ['Interior de Boa Vista', 'interior do Pará', 'Fora de Marabá']) assert.ok(!cidadeConhecida({ cidade: v }), v);
+  assert.ok(cidadeConhecida({ cidade: 'Boa Vista' }));
 });

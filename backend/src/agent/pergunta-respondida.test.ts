@@ -402,3 +402,24 @@ test('4ª rodada: "moro em não informado" e placeholders no "moro em" também n
     assert.ok(!temas([p(fala)]).includes('cidade'), fala);
   }
 });
+
+// ── 5ª rodada do sênior (#519) ────────────────────────────────────────────────────────────────────────
+
+test('"sou da Vale", "sou do TJMA", "Sou da IJ CODE", "somos da Doce Amor Confeitaria", "somos de Minas" NÃO são cidade; com artigo só cidade conhecida', () => {
+  for (const fala of ['Sou da Vale', 'sou do TJMA', 'Sou da IJ CODE', 'somos da Doce Amor Confeitaria', 'somos de Minas', 'Sou de IJ CODE', 'Sou do Sindicato']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['Sou de Marabá', 'sou de Eldorado dos Carajás', 'Sou do Rio de Janeiro', 'Sou de Xambioá']) {
+    assert.ok(temas([p(fala)]).includes('cidade'), `deveria contar: ${fala}`);
+  }
+});
+
+test('nit: "hoje" não é "há quanto tempo"; "não quero atrapalhar seu trabalho" não é a pergunta da rotina', () => {
+  assert.ok(!temas([ia('E há quanto tempo você sente essa dor?'), p('hoje')]).includes('tempo de dor'));
+  assert.ok(temas([ia('E há quanto tempo você sente essa dor?'), p('desde ontem')]).includes('tempo de dor'));
+  const ja = jaRespondidas([p('a dor me atrapalha muito no trabalho')]);
+  assert.deepEqual(temasRepetidosNaResposta('Não quero atrapalhar seu trabalho, posso te ligar agora?', ja), []);
+  assert.deepEqual(temasRepetidosNaResposta('Para não atrapalhar sua rotina, qual horário fica melhor?', ja), []);
+  assert.deepEqual(temasRepetidosNaResposta('Essa dor atrapalha seu trabalho?', ja), ['impacto na rotina']);
+  assert.deepEqual(temasRepetidosNaResposta('Como essa dor tem atrapalhado sua rotina?', ja).length, 1);
+});

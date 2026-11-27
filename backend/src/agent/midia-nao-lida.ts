@@ -179,14 +179,14 @@ export function horariosNaMesa(falas: readonly Fala[], agoraLocal: string): stri
 }
 
 export function fraseDeMidiaNaoLida(tipo: TipoDeMidia, horarios: readonly string[] = []): string {
-  const base = `Não consegui abrir ${O_QUE_NAO_ABRIU[tipo]} aqui 🙏 Me escreve rapidinho?`;
+  const base = `Não consegui abrir ${O_QUE_NAO_ABRIU[tipo]} aqui 🙏 Pode me escrever o que você queria falar?`;
   return horarios.length > 0 ? `${base} Se for sobre o horário: ${horarios.join(' ou ')}?` : base;
 }
 
 /** A frase já foi a última fala da Sofia: não repete (o 2º áudio sem ouvir segue o caminho da equipe, repeticao.ts). */
 function jaFoiADaVez(falas: readonly Fala[]): boolean {
   const ultima = [...falas].reverse().find((f) => f.papel === 'ia');
-  return !!ultima && /N[ãa]o consegui abrir .{3,25} aqui 🙏 Me escreve rapidinho\?/.test(ultima.texto);
+  return !!ultima && /N[ãa]o consegui abrir .{3,25} aqui 🙏 Pode me escrever o que você queria falar\?/.test(ultima.texto);
 }
 
 /**

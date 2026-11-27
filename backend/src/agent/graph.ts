@@ -1617,16 +1617,16 @@ export async function buildAgentGraph(
           logger.warn({ err: String(err), unit: unit.slug }, 'repetição: a resposta refeita (sem o nome ou sem a pergunta repetida) falhou — fica a original');
         }
         const semOPedido = porNome ? !pedeNome(textoRefeito) : temasRepetidosNaResposta(textoRefeito, respondidas).length === 0;
-        // A refeita roda DEPOIS da trava de horário (vencido, inventado, "manhã ou tarde?"): ela não pode trazer horário que o rascunho
-        // não tinha, nem um que já passou. Só repete os do rascunho.
-        const semHorarioNovo = !refeitaTrazHorarioNovo(textoFinal, textoRefeito, agoraDaUnidade);
-        // As MESMAS travas que a resposta do modelo já passou acima (`aindaServe`): "manhã ou tarde?" sem horário, sondagem de objeção que ele
-        // não levantou, e o 3º pedido de nome. Falhou em qualquer uma: fica o rascunho original.
+        // A refeita da PERGUNTA REPETIDA (atrás da chave) roda DEPOIS das travas do turno e não pode desfazê-las: sem horário novo ou vencido,
+        // sem "manhã ou tarde?", sem sondagem de objeção que ele não levantou, sem o 3º pedido de nome. Falhou: fica o rascunho.
+        // A refeita do NOME segue exatamente como era (sem chave): só `semOPedido`, vazamento e reabertura de afirmação.
         const passaAsTravasDoTurno =
-          !perguntaTurnoSemHorario(textoRefeito, agoraDaUnidade) &&
-          !objecaoInventada(falas, textoRefeito) &&
-          !(pararDePedirNome(repeticao) && pedeNome(textoRefeito));
-        const serve = !!textoRefeito && semOPedido && semHorarioNovo && passaAsTravasDoTurno && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
+          porNome ||
+          (!refeitaTrazHorarioNovo(textoFinal, textoRefeito, agoraDaUnidade) &&
+            !perguntaTurnoSemHorario(textoRefeito, agoraDaUnidade) &&
+            !objecaoInventada(falas, textoRefeito) &&
+            !(pararDePedirNome(repeticao) && pedeNome(textoRefeito)));
+        const serve = !!textoRefeito && semOPedido && passaAsTravasDoTurno && !detectarVazamento(textoRefeito) && !(await reabreAfirmacao(textoRefeito));
         if (serve) {
           textoFinal = textoRefeito;
           response.content = textoRefeito;
