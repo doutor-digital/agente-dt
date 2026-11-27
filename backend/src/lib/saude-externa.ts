@@ -70,6 +70,7 @@ export const SQL_DA_SAUDE = `
            max(c.created_at) filter (where c.status = 'success') as ultimo_sucesso
       from llm_calls c
      where c.created_at > (now() at time zone 'utc') - interval '${CONSULTA_MIN} minutes'
+       and coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
      group by c.provider, c.unit_id
   ),
   por_unidade as (

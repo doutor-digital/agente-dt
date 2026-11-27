@@ -3379,3 +3379,167 @@ model VigiaAlerta {
 
   @@map("vigia_alertas")
 }
+
+// ─── Joaoof (27/11/2026): o agente que trabalha pelo João. Fase 1: só fala com ele, pelo Telegram. ───
+// Tudo aqui é tabela NOVA, sem FK para as demais: o Joaoof nasce desligado (JOAOOF_LIGADO) e pode ser removido sem tocar no resto.
+// NUNCA guarda telefone, CPF nem o texto inteiro de uma conversa: só um trecho curto, já mascarado (joaoof/privacidade.ts).
+
+/// A unidade como o Joaoof a conhece: o grupo «Mkt | Dr Hérnia …», quem manda lá e o que ele já aprendeu dela.
+model JoaoofUnidade {
+  slug      String   @id
+  nome      String
+  /// grupo de WhatsApp «Mkt | Dr Hérnia …» (id @g.us). Não é segredo, mas só vale para ler.
+  grupoJid  String?  @unique @map("grupo_jid")
+  /// o que o Joaoof já sabe da unidade (dono, horário, manias) — texto livre, curto
+  notas     String   @default("")
+  ativa     Boolean  @default(true)
+  criadoEm  DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("joaoof_unidades")
+}
+
+/// Quem aparece nos grupos. Identificado por um HMAC do número (nunca o número): o nome é o que o grupo mostra.
+model JoaoofPessoa {
+  id           String   @id @default(cuid())
+  chave        String   @unique
+  nome         String
+  /// joao | equipe-dd | unidade | agencia | desconhecido
+  papel        String   @default("desconhecido")
+  unidadeSlug  String?  @map("unidade_slug")
+  notas        String   @default("")
+  vistaEm      DateTime @default(now()) @map("vista_em")
+  criadoEm     DateTime @default(now()) @map("criado_em")
+
+  @@index([unidadeSlug])
+  @@map("joaoof_pessoas")
+}
+
+/// O que alguém pediu ao João ou à Doutor Digital. Uma linha por ASSUNTO (repetido vira `repeticoes`, não linha nova).
+model JoaoofDemanda {
+  id             String    @id @default(cuid())
+  /// o «#12» que o João vê e usa nas respostas
+  numero         Int       @unique @default(autoincrement())
+  unidadeSlug    String?   @map("unidade_slug")
+  solicitante    String    @default("")
+  titulo         String
+  descricao      String    @default("")
+  /// trecho original curto (máx. 280), já sem telefone nem CPF
+  trecho         String    @default("")
+  /// pedido | queixa | problema_ia | duvida | dinheiro | paciente | outro
+  categoria      String    @default("outro")
+  /// urgente | alta | normal | baixa
+  prioridade     String    @default("normal")
+  /// aberta | em_andamento | feita | descartada
+  status         String    @default("aberta")
+  /// quem vai fazer: joao | dd | lia | suzanne | … (texto livre; o João decide)
+  responsavel    String    @default("joao")
+  prazo          DateTime? @db.Date
+  prazoTexto     String    @default("") @map("prazo_texto")
+  /// de onde veio: grupo | vigia | telegram
+  fonte          String    @default("grupo")
+  /// ids das mensagens que a originaram (para não contar duas vezes)
+  fonteRefs      String[]  @default([]) @map("fonte_refs")
+  /// campos que o JOÃO mexeu (prioridade, prazo, responsavel…): a triagem automática não os sobrescreve (dois escritores = regravação eterna)
+  camposDoJoao   String[]  @default([]) @map("campos_do_joao")
+  repeticoes     Int       @default(1)
+  /// por que o Joaoof juntou/priorizou assim (uma linha) — ajuda o João a corrigir
+  motivo         String    @default("")
+  notaJoao       String    @default("") @map("nota_joao")
+  vistaEm        DateTime  @default(now()) @map("vista_em")
+  avisadaEm      DateTime? @map("avisada_em")
+  resolvidaEm    DateTime? @map("resolvida_em")
+  criadoEm       DateTime  @default(now()) @map("criado_em")
+  atualizadoEm   DateTime  @updatedAt @map("atualizado_em")
+
+  @@index([status, prioridade])
+  @@index([unidadeSlug, status])
+  @@map("joaoof_demandas")
+}
+
+/// Memória de longo prazo: o que o João decidiu, prefere ou respondeu. Só entra o que vale para a próxima vez.
+model JoaoofMemoria {
+  id           String   @id @default(cuid())
+  /// decisao | preferencia | resposta | fato
+  tipo         String
+  assunto      String
+  texto        String
+  unidadeSlug  String?  @map("unidade_slug")
+  /// telegram | grupo | vigia
+  origem       String   @default("telegram")
+  usos         Int      @default(0)
+  ativa        Boolean  @default(true)
+  criadoEm     DateTime @default(now()) @map("criado_em")
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@index([ativa, tipo])
+  @@index([unidadeSlug])
+  @@map("joaoof_memorias")
+}
+
+/// Cada coisa que o Joaoof mandou (ou mandaria, em modo seco) ao João. A chave impede repetir: «um aviso por assunto».
+model JoaoofAviso {
+  id         String   @id @default(cuid())
+  /// resumo | urgente | resposta
+  tipo       String
+  /// resumo: «2026-11-27/08»; urgente: o assunto («d:123»)
+  chave      String
+  demandaId  String?  @map("demanda_id")
+  texto      String
+  /// true = foi ao Telegram; false = modo seco (decidido, não enviado) ou falha de envio
+  enviado    Boolean  @default(false)
+  seco       Boolean  @default(false)
+  /// quando alguém reservou o envio. Um aviso não enviado só é retomado por outra instância depois que esta reserva envelhece.
+  reservadoEm DateTime @default(now()) @map("reservado_em")
+  criadoEm   DateTime @default(now()) @map("criado_em")
+
+  @@unique([tipo, chave])
+  @@index([criadoEm])
+  @@map("joaoof_avisos")
+}
+
+/// As últimas trocas com o João no Telegram (o contexto de «feito», «passa pra Lia»). Guarda ~40 linhas.
+model JoaoofConversa {
+  id        String   @id @default(cuid())
+  /// joao | joaoof
+  quem      String
+  texto     String
+  criadoEm  DateTime @default(now()) @map("criado_em")
+
+  @@index([criadoEm])
+  @@map("joaoof_conversa")
+}
+
+/// Pequenas anotações do próprio Joaoof (cursor de leitura, último resumo, aviso do teto). Chave → JSON.
+model JoaoofEstado {
+  chave        String   @id
+  valor        Json
+  atualizadoEm DateTime @updatedAt @map("atualizado_em")
+
+  @@map("joaoof_estado")
+}
+
+/// Fila de entrada do Joaoof: cada mensagem de grupo (ou evento do vigia) que ele ainda vai ler. Texto JÁ MASCARADO (sem telefone/CPF),
+/// curto, e apagado 7 dias depois de lido. `ref` é único por fonte: ler o mesmo grupo duas vezes não duplica.
+model JoaoofEntrada {
+  id           String    @id @default(cuid())
+  /// grupo | vigia
+  fonte        String
+  /// grupo: «<slug>:<id da mensagem no WhatsApp>»; vigia: «vigia:<id do evento>»
+  ref          String
+  unidadeSlug  String?   @map("unidade_slug")
+  autorNome    String    @default("") @map("autor_nome")
+  /// HMAC do número de quem escreveu (nunca o número); nulo se não há segredo configurado
+  autorChave   String?   @map("autor_chave")
+  /// vigia: info | aviso | critico
+  severidade   String    @default("")
+  texto        String
+  /// quando a mensagem foi escrita (não quando foi lida)
+  escritaEm    DateTime  @map("escrita_em")
+  processadaEm DateTime? @map("processada_em")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+
+  @@unique([fonte, ref])
+  @@index([processadaEm, escritaEm])
+  @@map("joaoof_entrada")
+}

@@ -1043,6 +1043,35 @@ export async function searchTreatments(
   }
 }
 
+/** Uma origem da franquia (`GET /api/general/sources`, guia §10.6). */
+export interface SpineOrigem {
+  idSource: number;
+  name: string;
+}
+
+/**
+ * As origens que ESTA franquia cadastrou (só leitura). Serve para conferir, antes de o lead sair, que a origem "IA SOFIA"
+ * (`units.spine_ia_source_id`) existe lá — o id é da franquia, não nosso. Lista que não vem no formato esperado é erro (nunca "lista vazia").
+ */
+export async function listarOrigens(unit: SpineUnit): Promise<SpineResult<{ origens: SpineOrigem[] }>> {
+  const http = client(unit);
+  if (!http) return { ok: false, error: 'unidade sem token da API Spine' };
+  try {
+    const { data } = await http.get<unknown>('/api/general/sources');
+    const bruto = data as { data?: unknown } | unknown[] | null | undefined;
+    const lista = Array.isArray(bruto) ? bruto : Array.isArray((bruto as { data?: unknown } | null | undefined)?.data) ? ((bruto as { data: unknown[] }).data) : null;
+    if (!lista) return { ok: false, error: 'a franquia devolveu a lista de origens num formato inesperado' };
+    const origens: SpineOrigem[] = [];
+    for (const r of lista as Array<Record<string, unknown>>) {
+      const id = Number(r?.idSource);
+      if (Number.isInteger(id) && id > 0 && typeof r?.name === 'string') origens.push({ idSource: id, name: r.name });
+    }
+    return { ok: true, data: { origens } };
+  } catch (err) {
+    return { ok: false, ...describe(err) };
+  }
+}
+
 export const SpineService = {
   searchTreatments,
   createLead,
@@ -1058,6 +1087,7 @@ export const SpineService = {
   convertLead,
   confirmSchedule,
   biLeadsSources,
+  listarOrigens,
   instanteNoFuso,
   localParaUtcIso,
   searchSchedules,

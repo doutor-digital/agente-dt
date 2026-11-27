@@ -70,6 +70,7 @@ import { startCutucadaAposEquipeWorker, stopCutucadaAposEquipeWorker } from './l
 import { startCampanhaWorker, stopCampanhaWorker } from './lib/campanha-worker.js';
 import { startResumoDiarioIaWorker, stopResumoDiarioIaWorker } from './lib/resumo-diario-ia-worker.js';
 import { startSuporteLembreteWorker, stopSuporteLembreteWorker } from './lib/suporte-lembrete-worker.js';
+import { startJoaoofWorker, stopJoaoofWorker } from './joaoof/worker.js';
 import { startDisparoWorker, stopDisparoWorker } from './lib/disparo-worker.js';
 import { startFaxinaDoMesWorker, stopFaxinaDoMesWorker } from './lib/faxina-do-mes-worker.js';
 import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preenche-campos-worker.js';
@@ -327,6 +328,7 @@ async function main(): Promise<void> {
       startCampanhaWorker();
       startResumoDiarioIaWorker();
       startSuporteLembreteWorker();
+      startJoaoofWorker(); // Joaoof (agente do João): nasce desligado; JOAOOF_LIGADO=seco|ligado
       startDisparoWorker();
       startFaxinaDoMesWorker();
       startPreencheCamposWorker();
@@ -366,6 +368,7 @@ async function main(): Promise<void> {
       stopCampanhaWorker();
       stopResumoDiarioIaWorker();
       stopSuporteLembreteWorker();
+      stopJoaoofWorker();
       stopDisparoWorker();
       stopFaxinaDoMesWorker();
       stopPreencheCamposWorker();

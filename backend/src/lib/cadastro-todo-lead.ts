@@ -29,6 +29,13 @@
  *
  * Nada aqui ignora `units.spine_sync_leads` nem o token da franquia: unidade sem espelhamento de leads
  * continua sem cadastrar, qualquer que seja o estado.
+ *
+ * 27/11/2026 — SEGUNDA CHAVE, `cadastro-lead-primeiro-contato` ("cadastrar TODO lead no 1º contato", pedido da franquia): quando
+ * ligada na unidade, a terceira trava (a leitura da IA "isto é lead?") deixa de existir — quem passou nas duas primeiras (número
+ * interno, 3+ unidades) é cadastrado no primeiro contato real, e o sincronizador cuida do resto (nome provisório se faltar, origem
+ * "IA SOFIA", busca do telefone entre leads e pacientes antes de criar, criação espaçada). Também não exige o casamento cartão ×
+ * paciente: a busca por telefone no sincronizador faz esse papel. Desligada, tudo o que está acima segue byte a byte. Em "só no
+ * papel" só decide e registra ("cadastraria (1º contato)"), e não cria nada. Se as DUAS chaves estão ligadas, vale a nova.
  */
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
@@ -42,6 +49,8 @@ import { resumoDaOrigem, veioDeAnuncio, type AnuncioDeOrigem } from '../agent/an
 import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { avaliarPelaIa, type DecisaoDaIa, type UnidadeDaIa } from './cadastro-triagem-ia.js';
 import { anuncioPelaFrase, esperarOrigem } from './origem-texto-pronto.js';
+import { agendarIndice } from './franquia-indice-telefones.js';
+import { PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
 import type { Unit } from '@prisma/client';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
@@ -54,8 +63,36 @@ export const DIAS_DA_TRAVA = 30;
 /** Empresa do grupo, não clínica: o telefone dela aparece em conversas de teste, não conta como unidade. */
 const UNIDADES_IGNORADAS = new Set(['hm-tecnologia']);
 
-export function estadoCadastroTodoLead(slug: string, raw: string | undefined = process.env.CADASTRO_TODO_LEAD_SLUGS): Estado {
+export const ID_AUTOMACAO_PRIMEIRO_CONTATO = 'cadastro-lead-primeiro-contato';
+
+/** Só a chave "Cadastrar TODO lead" (com a triagem pela IA), sem a de 27/11. */
+export function estadoDaTriagem(slug: string, raw: string | undefined = process.env.CADASTRO_TODO_LEAD_SLUGS): Estado {
   return estadoDaAutomacao(slug, ID_AUTOMACAO, raw);
+}
+
+/** A chave de 27/11: cadastrar no 1º contato, sem triagem pela IA e com origem IA SOFIA. */
+export function estadoPrimeiroContato(slug: string, raw: string | undefined = process.env.CADASTRO_LEAD_PRIMEIRO_CONTATO_SLUGS): Estado {
+  return estadoDaAutomacao(slug, ID_AUTOMACAO_PRIMEIRO_CONTATO, raw);
+}
+
+const PESO: Record<Estado, number> = { desligado: 0, seco: 1, ligado: 2 };
+
+/** O que vale na unidade: a mais forte das duas chaves. Quem só pergunta "o cadastro de lead por contato está desligado?" usa esta. */
+export function estadoCadastroTodoLead(slug: string, raw: string | undefined = process.env.CADASTRO_TODO_LEAD_SLUGS): Estado {
+  const a = estadoDaTriagem(slug, raw);
+  const b = estadoPrimeiroContato(slug);
+  return PESO[b] > PESO[a] ? b : a;
+}
+
+/**
+ * A regra do 1º contato manda neste lead? Ligada: sempre. Em "só no papel": só se a chave da triagem NÃO está ligada (senão a decisão
+ * que grava é a da triagem, e simular a outra regra pareceria que ela decide). `escreve` = pode criar de verdade.
+ */
+export function modoPrimeiroContato(slug: string): { vale: boolean; escreve: boolean } {
+  const novo = estadoPrimeiroContato(slug);
+  if (novo === 'ligado') return { vale: true, escreve: true };
+  if (novo === 'seco' && estadoDaTriagem(slug) !== 'ligado') return { vale: true, escreve: false };
+  return { vale: false, escreve: false };
 }
 
 /**
@@ -78,7 +115,7 @@ export interface Triagem {
   motivo: string;
   unidades?: string[];
   /** Por que `cadastrar`: veio de anúncio, ou a IA leu a conversa e viu interesse real. Sem isto, é quem agendou (26/09). */
-  origem?: 'anuncio' | 'ia';
+  origem?: 'anuncio' | 'ia' | 'primeiro-contato';
   /** Quando a decisão é da IA: quantas leituras este lead já teve, e se esta foi feita agora ou é a anterior reaproveitada. */
   leituras?: { feitas: number; maximo: number; nova: boolean };
   /** A IA não pôde ler (sem chave, fora do ar, resposta ilegível): é dúvida, mas quem opera precisa ver como alerta. */
@@ -176,11 +213,14 @@ export const depsPadrao: DepsDoCadastro = {
   async situacaoNaFranquia(unitId, leadId) {
     const l = await prisma.spineLeadLink.findUnique({
       where: { unitId_kommoLeadId: { unitId, kommoLeadId: leadId } },
-      select: { spineIdLead: true, spineIdClient: true, status: true, updatedAt: true },
+      select: { spineIdLead: true, spineIdClient: true, status: true, updatedAt: true, motivo: true },
     });
     // Vínculo só com `spineIdClient` (carga de implantação, widget "só cadastrar", Sofia ao cadastrar paciente) é gente que
     // JÁ está na franquia como paciente: criar um lead por cima duplica.
     if (l?.spineIdLead || l?.spineIdClient) return 'na-franquia';
+    // O 1º contato achou o telefone como PACIENTE e só anotou o motivo (telefone não prova que é a mesma pessoa, então não grava o idClient):
+    // está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
+    if (l?.status === 'ok' && (l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE)) return 'na-franquia';
     if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
       return 'tentou-ha-pouco';
     }
@@ -361,7 +401,7 @@ function jaLogado(chave: string): boolean {
 
 type UnidadeMinima = { id: string; slug: string };
 
-function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t: Triagem, telefone: string | null, legado: DecisaoDeCadastro): void {
+function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t: Triagem, telefone: string | null, legado: DecisaoDeCadastro, idAutomacao: string = ID_AUTOMACAO): void {
   const seco = estado === 'seco';
   const rotulo = seco ? ' [seco]' : '';
   const base = { leadId, unit: unit.slug, estado, telefone: finalDoTelefone(telefone) };
@@ -371,12 +411,12 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
     // avaliado, também para quem a regra de 26/09 já cadastraria: é o que deixa contar a cobertura (leads novos por dia
     // × leads avaliados aqui) — ver "Limitação" na descrição da automação.
     if (!seco || jaLogado(`${unit.id}|${leadId}|cadastraria`)) return;
-    const como = t.origem === 'ia' ? 'cadastraria pela IA' : t.origem === 'anuncio' ? 'cadastraria (anúncio)' : 'cadastraria';
+    const como = t.origem === 'ia' ? 'cadastraria pela IA' : t.origem === 'anuncio' ? 'cadastraria (anúncio)' : t.origem === 'primeiro-contato' ? 'cadastraria (1º contato)' : 'cadastraria';
     // `decisao` segue 'cadastraria' (quem conta cobertura no log não muda a consulta); `origem` diz por quê.
     logger.info({ ...base, decisao: 'cadastraria', origem: t.origem, leituras: t.leituras, jaCadastrariaPela26_09: legado.criar }, `cadastro-todo-lead${rotulo}: ${como} — ${t.motivo}`);
     if (!legado.criar) {
-      const valor = t.origem === 'ia' ? 'lead novo (a IA leu a conversa)' : t.origem === 'anuncio' ? 'lead novo (veio de anúncio)' : 'lead novo';
-      registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'gravaria', alvo: 'cadastro do lead na franquia', valor, motivo: t.motivo });
+      const valor = t.origem === 'ia' ? 'lead novo (a IA leu a conversa)' : t.origem === 'anuncio' ? 'lead novo (veio de anúncio)' : t.origem === 'primeiro-contato' ? 'lead novo (1º contato)' : 'lead novo';
+      registrarSimulacao(unit, idAutomacao, { leadId, acao: 'gravaria', alvo: 'cadastro do lead na franquia', valor, motivo: t.motivo });
     }
     return;
   }
@@ -392,7 +432,7 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
       : `dúvida — ${t.motivo}${quando}; ${seco ? 'não cadastraria agora' : 'não cadastra agora'} e reavalia numa mensagem futura`;
     // IA que não conseguiu ler é alarme (leads reais ficam retidos): warn, não rotina.
     (t.falhou ? logger.warn : logger.info).call(logger, { ...base, decisao, leituras: t.leituras, iaFalhou: t.falhou }, `cadastro-todo-lead${rotulo}: ${texto}`);
-    registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: ehNaoLead ? 'nao-lead-pela-ia' : 'duvida-da-ia', motivo: t.motivo });
+    registrarSimulacao(unit, idAutomacao, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: ehNaoLead ? 'nao-lead-pela-ia' : 'duvida-da-ia', motivo: t.motivo });
     return;
   }
 
@@ -406,12 +446,16 @@ function registrarDecisao(unit: UnidadeMinima, leadId: number, estado: Estado, t
   // 3+ unidades é o que pede olho humano; o resto é rotina.
   if (t.acao === 'varias-unidades' || t.acao === 'erro' || t.acao === 'sem-lista') logger.warn(aviso, msg);
   else logger.info(aviso, msg);
-  registrarSimulacao(unit, ID_AUTOMACAO, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao, motivo: t.motivo });
+  registrarSimulacao(unit, idAutomacao, { leadId, acao: 'pularia', alvo: 'cadastro do lead na franquia', valor: decisao, motivo: t.motivo });
 }
 
 /** O que o webhook faz: `soLead` = cria o LEAD e não o paciente (paciente continua só ao agendar). */
 export interface DecisaoDoLead extends DecisaoDeCadastro {
   soLead?: boolean;
+  /** Cadastro no 1º contato (chave de 27/11): nome provisório, origem IA SOFIA, busca do telefone antes de criar. */
+  primeiroContato?: boolean;
+  /** O telefone da conversa (para o sincronizador, quando o contato do Kommo não o traz). */
+  telefone?: string | null;
   /** Decisão de rotina (já está lá, esperando a próxima tentativa): o webhook não precisa de uma linha de log por mensagem. */
   silenciosa?: boolean;
 }
@@ -429,6 +473,7 @@ export async function decidirCadastroDoLead(
   const { unit, leadId, legado } = entrada;
   const estado = estadoCadastroTodoLead(unit.slug);
   if (estado === 'desligado') return legado;
+  const pc = modoPrimeiroContato(unit.slug);
 
   try {
     const situacao = await deps.situacaoNaFranquia(unit.id, leadId);
@@ -453,7 +498,8 @@ export async function decidirCadastroDoLead(
     let triagem = triar(telefone, unidades);
     // "Só lead" sem o casamento cartão × paciente cria lead em cima de quem já é paciente da franquia (a busca por
     // idClient → telefone → nome é do casamento). Quem já ia entrar pela regra de 26/09 (agendou) segue como segue hoje.
-    if (triagem.acao === 'cadastrar' && !legado.criar && !deps.casamentoLigado(unit.slug)) {
+    // (O 1º contato dispensa o casamento: a busca do telefone entre leads e pacientes, no sincronizador, é a trava dele.)
+    if (triagem.acao === 'cadastrar' && !legado.criar && !pc.vale && !deps.casamentoLigado(unit.slug)) {
       triagem = {
         acao: 'sem-casamento',
         motivo: MOTIVO_SEM_CASAMENTO,
@@ -464,11 +510,14 @@ export async function decidirCadastroDoLead(
     // (e poupa a leitura da IA de quem não seria criado de qualquer jeito).
     // Passou nas travas e só conversou (não agendou): anúncio é lead; o resto a IA lê (`triarOrigem`, nunca lança).
     // Quem agendou já deixou de ser dúvida: segue como segue hoje, sem gastar a leitura.
-    if (triagem.acao === 'cadastrar' && !legado.criar) triagem = await triarOrigem(unit, leadId, deps);
-    registrarDecisao(unit, leadId, estado, triagem, telefone, legado);
+    // 1º contato (27/11): sem a leitura da IA — quem passou nas travas de cima é lead.
+    if (triagem.acao === 'cadastrar' && !legado.criar) {
+      triagem = pc.vale ? { acao: 'cadastrar', origem: 'primeiro-contato', motivo: 'primeiro contato real do paciente com a unidade — lead novo na franquia' } : await triarOrigem(unit, leadId, deps);
+    }
+    registrarDecisao(unit, leadId, estado, triagem, telefone, legado, pc.vale && !pc.escreve ? ID_AUTOMACAO_PRIMEIRO_CONTATO : ID_AUTOMACAO);
 
     if (estado === 'seco') return legado;
-    if (triagem.acao === 'cadastrar') return { criar: true, motivo: triagem.motivo, soLead: !legado.criar };
+    if (triagem.acao === 'cadastrar') return { criar: true, motivo: triagem.motivo, soLead: !legado.criar, ...(pc.escreve && !legado.criar ? { primeiroContato: true, telefone } : {}) };
     // A IA barrou ou não sabe: sem linha de log por mensagem no webhook (o log da decisão já é por leitura).
     if (triagem.acao === 'nao-lead' || triagem.acao === 'duvida') return { criar: false, motivo: `${triagem.acao}: ${triagem.motivo}`, silenciosa: true };
     // Não deu para conferir (sem telefone, banco fora): quem já ia entrar pela regra de 26/09 (agendou) entra como entrava;
@@ -494,6 +543,10 @@ export function criaPacienteJuntoComOLead(spineSyncPatients: boolean, soLead: bo
 const emAndamento = new Set<string>();
 /** Quando cada lead foi tentado pela última vez (qualquer resultado). Memória do processo: reiniciar só custa uma leitura a mais. */
 const ultimasTentativas = new Map<string, number>();
+
+function esquecerTentativa(unitId: string, leadId: number): void {
+  ultimasTentativas.delete(`${unitId}|${leadId}`);
+}
 
 function tentouHaPouco(unitId: string, leadId: number): boolean {
   const t = ultimasTentativas.get(`${unitId}|${leadId}`);
@@ -530,7 +583,7 @@ export async function umCadastroPorVez<T>(unitId: string, leadId: number, fn: ()
 // ── o gancho do webhook ──────────────────────────────────────────────────────────────────────
 
 /** A assinatura de `syncLeadToSpine`: o webhook passa a própria função, sem um lambda no meio que possa esquecer de repassar `soLead`. */
-export type SincronizarLead<U> = (unit: U, leadId: number, opcoes: { soLead?: boolean }) => Promise<unknown>;
+export type SincronizarLead<U> = (unit: U, leadId: number, opcoes: { soLead?: boolean; primeiroContato?: boolean; telefone?: string | null }) => Promise<unknown>;
 
 /**
  * O que o fim do turno da IA faz com o lead: decide e, se for o caso, dispara o cadastro (sem esperar por ele).
@@ -545,9 +598,19 @@ export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
   const { unit, leadId } = entrada;
   // Se a ⚑ Origem deste lead está sendo gravada agora (chave `origem-texto-pronto`), espera: o espelho de leads lê a origem do cartão ao criar o lead na franquia.
   await esperarOrigem(unit.id, leadId);
+  // 1º contato (chave de 27/11), em "só no papel" ou ligada: já pede a carga do índice de telefones da franquia (em segundo plano), para
+  // que o primeiro lead depois de ligar não encontre o índice vazio e espere. Barato quando não é hora (uma leitura do status).
+  const comFranquia = unit as unknown as Partial<Unit>;
+  if (modoPrimeiroContato(unit.slug).vale && comFranquia.spineToken && comFranquia.spineEnabled) {
+    try { agendarIndice(comFranquia as Unit); } catch { /* nunca lança */ }
+  }
   const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);
   if (!decisao.criar) return { decisao, execucao: null };
-  const execucao = umCadastroPorVez(unit.id, leadId, () => sincronizar(unit, leadId, { soLead: decisao.soLead })).catch((err) => {
+  const execucao = umCadastroPorVez(unit.id, leadId, () => sincronizar(unit, leadId, { soLead: decisao.soLead, ...(decisao.primeiroContato ? { primeiroContato: true, telefone: decisao.telefone } : {}) })).then((r) => {
+    // Não criou por falta de prova (a busca do telefone falhou, o índice ainda não está pronto): a próxima mensagem tenta de novo, sem a espera de 10 min.
+    if (r && typeof r === 'object' && (r as { retentar?: boolean }).retentar) esquecerTentativa(unit.id, leadId);
+    return r;
+  }).catch((err) => {
     logger.warn({ err: String(err), leadId, unit: unit.slug }, 'spine-sync: erro inesperado');
   });
   return { decisao, execucao };
