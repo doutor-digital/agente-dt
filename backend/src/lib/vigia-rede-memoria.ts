@@ -32,7 +32,13 @@ export interface FraseEnviada {
 const MIN = 60_000;
 const DIA = 24 * 60 * MIN;
 
-export function leituraEmMemoria(chamadas: ChamadaLlm[], frases: FraseEnviada[] = [], nomeDaUnidade: (id: string) => string = (i) => i): Leitura {
+export function leituraEmMemoria(
+  chamadas: ChamadaLlm[],
+  frases: FraseEnviada[] = [],
+  nomeDaUnidade: (id: string) => string = (i) => i,
+  /** atalho dos testes: o "normal" do horário, sem gerar 4 semanas de tráfego */
+  baselineFixo?: number[],
+): Leitura {
   const na = (t: number, agora: Date, janelaMin: number) => t >= agora.getTime() - janelaMin * MIN && t <= agora.getTime();
   return {
     async errosAgrupados(agora: Date, janelaMin: number): Promise<GrupoDeErro[]> {
@@ -68,10 +74,11 @@ export function leituraEmMemoria(chamadas: ChamadaLlm[], frases: FraseEnviada[] 
       }
       return out;
     },
-    async baselineSucessos(agora: Date, janelaMin: number, dias: number): Promise<number[]> {
+    async baselineSucessos(agora: Date, janelaMin: number, semanas: number): Promise<number[]> {
+      if (baselineFixo) return baselineFixo;
       const out: number[] = [];
-      for (let d = 1; d <= dias; d++) {
-        const fim = agora.getTime() - d * DIA;
+      for (let d = 1; d <= semanas; d++) {
+        const fim = agora.getTime() - d * 7 * DIA;
         const ini = fim - janelaMin * MIN;
         out.push(chamadas.filter((c) => c.status === 'success' && c.t >= ini && c.t < fim).length);
       }

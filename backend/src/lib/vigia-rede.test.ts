@@ -38,7 +38,7 @@ function obsVazia(agora = d(T0)): Observacao {
     totaisFalhaJanela: { anthropic: { ok: 50, erro: 0 }, openai: { ok: 20, erro: 0 } },
     totaisParadaJanela: { anthropic: { ok: 100, erro: 0 }, openai: { ok: 40, erro: 0 } },
     ultimoSucesso: { anthropic: agora, openai: agora },
-    baseline: [100, 90, 110, 80, 95, 120, 100],
+    baseline: [100, 90, 110, 95],
     frases: { mensagens: 0, conversas: 0, unidades: [] },
   };
 }
@@ -146,8 +146,8 @@ test('IA PARADA: zero sucesso só alarma se o normal daquele horário é ter tr�
   const parada = obsVazia();
   parada.totaisParadaJanela = { anthropic: { ok: 0, erro: 0 }, openai: { ok: 0, erro: 0 } };
   assert.equal(achar(avaliar(parada), 'parada').ativo, true);
-  assert.equal(achar(avaliar(parada), 'parada').numeros.normal, 100);
-  const madrugada = { ...parada, baseline: [3, 5, 2, 8, 4, 0, 6] };
+  assert.equal(achar(avaliar(parada), 'parada').numeros.normal, 98, 'mediana de [100, 90, 110, 95]');
+  const madrugada = { ...parada, baseline: [3, 5, 2, 8] };
   assert.equal(achar(avaliar(madrugada), 'parada').ativo, false);
   const normal = obsVazia();
   assert.equal(achar(avaliar(normal), 'parada').ativo, false);
@@ -296,7 +296,7 @@ test('RODADA: queda de crédito → 1 aviso por conta, lembretes juntos, silênc
   });
   const frases: FraseEnviada[] = [];
   for (let t = quedaA; t < voltaA; t += 20 * MIN) frases.push({ t, conversa: `c${t}`, unidade: 'u1' });
-  const leitura = leituraEmMemoria(chamadas, frases, (id) => ({ u1: 'Caxias', u2: 'Salto' })[id] ?? id);
+  const leitura = leituraEmMemoria(chamadas, frases, (id) => ({ u1: 'Caxias', u2: 'Salto' })[id] ?? id, [100, 100, 100, 100]);
   const store = storeEmMemoria();
   const enviados: string[] = [];
 
@@ -383,8 +383,8 @@ test('RODADA: falha de leitura não muda estado nem manda aviso', async () => {
 
 test('RODADA: IA parada sozinha (sem erro registrado) avisa', async () => {
   // 8 dias de tráfego e, nas últimas 40 min, nada
-  const chamadas = trafego(T0 - 8 * D, T0 - 40 * MIN, (t) => [{ t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' }]);
-  const leitura = leituraEmMemoria(chamadas, []);
+  const chamadas = trafego(T0 - 2 * D, T0 - 40 * MIN, (t) => [{ t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' }]);
+  const leitura = leituraEmMemoria(chamadas, [], (i) => i, [100, 90, 110, 95]);
   const store = storeEmMemoria();
   const enviados: string[] = [];
   await rodarVigia({ leitura, store, agora: d(T0), enviar: async (t) => (enviados.push(t), true) });
@@ -396,7 +396,7 @@ test('RODADA: IA parada sozinha (sem erro registrado) avisa', async () => {
 test('RODADA: frase de queda sozinha (IA responde, mas pacientes recebem a frase) avisa uma vez, sem dado de paciente', async () => {
   const chamadas = trafego(T0 - 8 * D, T0, (t) => [{ t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' }]);
   const frases: FraseEnviada[] = [0, 1, 2, 3, 4].map((i) => ({ t: T0 - i * 4 * MIN, conversa: `conv-${i}`, unidade: 'u1' }));
-  const leitura = leituraEmMemoria(chamadas, frases, () => 'Caxias');
+  const leitura = leituraEmMemoria(chamadas, frases, () => 'Caxias', [100, 100, 100, 100]);
   const store = storeEmMemoria();
   const enviados: string[] = [];
   for (const dt of [0, 5, 10]) await rodarVigia({ leitura, store, agora: d(T0 + dt * MIN), enviar: async (t) => (enviados.push(t), true) });
@@ -404,4 +404,72 @@ test('RODADA: frase de queda sozinha (IA responde, mas pacientes recebem a frase
   assert.match(enviados[0], /FRASE DE QUEDA/);
   assert.match(enviados[0], /5 vezes.*5 pacientes.*Caxias/s);
   assert.doesNotMatch(enviados[0], /conv-/);
+});
+
+test('IA PARADA: o normal vem do MESMO DIA DA SEMANA nas últimas 4 semanas (domingo não se compara com terça)', async () => {
+  // o tráfego existe nas 3 últimas quintas (7, 14 e 21 dias antes), na janela de 30 min que termina em T0; nas ruas dos outros dias, nada
+  const chamadas: ChamadaLlm[] = [];
+  for (const semana of [1, 2, 3]) {
+    for (let t = T0 - semana * 7 * D - 29 * MIN; t <= T0 - semana * 7 * D; t += MIN) chamadas.push({ t, status: 'success', model: 'claude-sonnet-5' });
+  }
+  for (let t = T0 - 3 * D - 29 * MIN; t <= T0 - 3 * D; t += MIN) chamadas.push({ t, status: 'success', model: 'claude-sonnet-5' }); // um dia qualquer no meio da semana
+  const base = await leituraEmMemoria(chamadas).baselineSucessos(d(T0), 30, 4);
+  assert.deepEqual(base, [29, 29, 29, 0], 'janela [fim-30min, fim): 29 chamadas por minuto cheio');
+});
+
+test('IA FALHANDO: de madrugada, sem erro e com algumas chamadas boas, o estado fecha (senão a próxima falha viraria "ainda falhando há 11 h")', () => {
+  const obs = obsVazia();
+  obs.totaisFalhaJanela.openai = { ok: 4, erro: 0 };
+  const p = achar(avaliar(obs), 'falha:openai');
+  const estado: EstadoAlerta = { chave: p.chave, abertoEm: d(T0 - 11 * H), ultimoVistoEm: d(T0 - 11 * H), ultimoAvisoEm: d(T0 - 11 * H), lembretes: 0, resolvidoEm: null };
+  assert.equal(p.podeFechar(estado), true);
+});
+
+test('decidir: problema aberto que some e volta depois de mais de 30 min é aviso NOVO, não lembrete', () => {
+  const antigo = aberto({ abertoEm: d(T0 - 11 * H), ultimoVistoEm: d(T0 - 10 * H), ultimoAvisoEm: d(T0 - 10 * H) });
+  assert.equal(decidir(problema(), antigo, d(T0)), 'novo');
+  const recente = aberto({ ultimoVistoEm: d(T0 - 25 * MIN), ultimoAvisoEm: d(T0 - 25 * MIN) });
+  assert.equal(decidir(problema(), recente, d(T0)), 'atualizar');
+});
+
+test('RODADA: reabertura depois de uma pausa longa manda aviso NOVO com o "desde" do episódio novo', async () => {
+  const erro = (t: number): ChamadaLlm => ({ t, status: 'error', model: 'claude-sonnet-5', unidade: 'u1', mensagem: ANTHROPIC_SEM_SALDO });
+  const ok = (t: number): ChamadaLlm => ({ t, status: 'success', model: 'claude-sonnet-5', unidade: 'u1' });
+  // erros a T0-10h e depois, de novo, a T0; no meio, só sucessos (a volta nunca foi dita porque o estado foi preparado aberto)
+  const chamadas = [...trafego(T0 - 11 * H, T0 - 10 * H, (t) => [erro(t)]), ...trafego(T0 - 10 * H + MIN, T0 - 5 * MIN, (t) => [ok(t)]), ...trafego(T0 - 4 * MIN, T0, (t) => [erro(t)])];
+  const store = storeEmMemoria();
+  store.linhas.set('credito:anthropic', { chave: 'credito:anthropic', abertoEm: d(T0 - 11 * H), ultimoVistoEm: d(T0 - 10 * H), ultimoAvisoEm: d(T0 - 10 * H), lembretes: 2, resolvidoEm: null });
+  const enviados: string[] = [];
+  await rodarVigia({ leitura: leituraEmMemoria(chamadas, [], (i) => i, [100, 100, 100, 100]), store, agora: d(T0), enviar: async (t) => (enviados.push(t), true) });
+  assert.equal(enviados.length, 1);
+  assert.match(enviados[0], /^🔴 SOFIA SEM CRÉDITO/);
+  assert.doesNotMatch(enviados[0], /Ainda sem/);
+  assert.equal(store.linhas.get('credito:anthropic')?.lembretes, 0, 'ciclo zerado');
+});
+
+test('RODADA: uma chave que falha ao gravar não derruba as outras', async () => {
+  const chamadas = trafego(T0 - 2 * D, T0, (t) => [
+    { t, status: 'error', model: 'claude-sonnet-5', unidade: 'u1', mensagem: ANTHROPIC_SEM_SALDO },
+    { t, status: 'error', model: 'gpt-4o', unidade: 'u1', mensagem: OPENAI_SEM_SALDO },
+  ]);
+  const store = storeEmMemoria();
+  const abrirOriginal = store.abrir.bind(store);
+  store.abrir = async (chave, a, v) => {
+    if (chave === 'credito:anthropic') throw new Error('banco caiu');
+    return abrirOriginal(chave, a, v);
+  };
+  const enviados: string[] = [];
+  const r = await rodarVigia({ leitura: leituraEmMemoria(chamadas), store, agora: d(T0), enviar: async (t) => (enviados.push(t), true) });
+  assert.equal(r.find((x) => x.chave === 'credito:anthropic')?.erro, 'Error: banco caiu');
+  assert.equal(enviados.length, 1);
+  assert.match(enviados[0], /OpenAI/);
+});
+
+test('CRÉDITO: com uma só unidade atingida o aviso diz que pode ser a chave própria dela', () => {
+  const obs = obsVazia();
+  obs.errosSaldoJanela = [{ familia: 'openai', mensagem: OPENAI_SEM_SALDO, chamadas: 2, unidades: ['Salto'], primeiro: d(T0 - 5 * MIN), ultimo: d(T0) }];
+  const t = montarTexto(achar(avaliar(obs), 'credito:openai'), 'novo', { agora: d(T0), desde: d(T0 - 5 * MIN) });
+  assert.match(t, /chave própria/);
+  obs.errosSaldoJanela[0].unidades = ['Salto', 'Tatuí'];
+  assert.doesNotMatch(montarTexto(achar(avaliar(obs), 'credito:openai'), 'novo', { agora: d(T0), desde: d(T0) }), /chave própria/);
 });

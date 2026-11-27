@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { enviarAvisoDoVigia } from './vigia-rede-banco.js';
+import { enviarAvisoDoVigia, PREFIXO_DA_FRASE } from './vigia-rede-banco.js';
+import { FALLBACK_INDISPONIVEL } from '../agent/llm-policy.js';
 import { CHAT_JOAO_PADRAO } from './telegram.js';
 
 function espiao() {
@@ -53,4 +54,11 @@ test('o código do vigia não importa o relay de e-mail nem escolhe outro chat/c
     assert.doesNotMatch(fonte, /canal:\s*'(chamados|sofia)'/, `${arq} não usa outro canal`);
     assert.doesNotMatch(fonte, /enviarTelegram(Chamados|Sofia)/, `${arq} não usa os atalhos de outros canais`);
   }
+});
+
+test('o detector da frase de queda procura o começo REAL da frase que o paciente recebe (mexeu no texto? este teste avisa)', () => {
+  assert.ok(FALLBACK_INDISPONIVEL.startsWith(PREFIXO_DA_FRASE));
+  assert.ok(PREFIXO_DA_FRASE.length >= 30);
+  // em produção a frase é gravada em messages.content com este começo (conferido em 27/11/2026: 111 ocorrências)
+  assert.match(PREFIXO_DA_FRASE, /^Opa, tive uma instabilidade rapidinha/);
 });

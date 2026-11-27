@@ -28,7 +28,7 @@ import {
 
 export const VIGIA_TICK_MS = Number(process.env.VIGIA_REDE_TICK_MS) || 5 * 60_000;
 /** O começo da frase de queda: o texto pode ganhar um enfeite depois, o começo não muda. */
-const PREFIXO_DA_FRASE = FALLBACK_INDISPONIVEL.slice(0, 40);
+export const PREFIXO_DA_FRASE = FALLBACK_INDISPONIVEL.slice(0, 40);
 
 /** Instante `agora` como timestamp UTC sem fuso, comparável com as colunas `created_at`. */
 const utc = (agora: Date) => agora.toISOString();
@@ -94,15 +94,15 @@ export function criarLeituraDoBanco(): Leitura {
       return out;
     },
 
-    async baselineSucessos(agora: Date, janelaMin: number, dias: number): Promise<number[]> {
+    async baselineSucessos(agora: Date, janelaMin: number, semanas: number): Promise<number[]> {
       const rows = await prisma.$queryRaw<Array<{ n: number }>>`
         WITH t AS (SELECT (${utc(agora)}::timestamptz AT TIME ZONE 'UTC') AS agora)
         SELECT (SELECT count(*)::int
                   FROM llm_calls c
                  WHERE c.status = 'success'
-                   AND c.created_at >= t.agora - (g.d * interval '1 day') - (${janelaMin}::int * interval '1 minute')
-                   AND c.created_at < t.agora - (g.d * interval '1 day')) AS n
-          FROM t, generate_series(1, ${dias}::int) AS g(d)`;
+                   AND c.created_at >= t.agora - (g.d * interval '7 days') - (${janelaMin}::int * interval '1 minute')
+                   AND c.created_at < t.agora - (g.d * interval '7 days')) AS n
+          FROM t, generate_series(1, ${semanas}::int) AS g(d)`;
       return rows.map((r) => r.n);
     },
 
@@ -186,7 +186,7 @@ export async function varrerOVigia(): Promise<void> {
       store: criarStoreDoBanco(),
       enviar: (t) => enviarAvisoDoVigia(t),
     });
-    for (const a of avisos) logger.info({ chave: a.chave, acao: a.acao, entregue: a.entregue }, 'vigia-rede: aviso');
+    for (const a of avisos) (a.erro ? logger.warn : logger.info).call(logger, { chave: a.chave, acao: a.acao, entregue: a.entregue, erro: a.erro }, 'vigia-rede: aviso');
   } catch (err) {
     // Se a leitura falha, o estado não muda: o próximo tick refaz tudo.
     logger.warn({ err: String(err) }, 'vigia-rede: varredura falhou');

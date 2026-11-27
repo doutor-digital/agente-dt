@@ -35,11 +35,17 @@ export const LIMIARES = {
   /** IA parada: nenhuma chamada com sucesso na janela, num horário em que o normal é haver bastante. */
   paradaJanelaMin: 30,
   paradaBaselineMinimo: 20,
-  paradaDiasBaseline: 7,
+  /** o normal = mediana dos mesmos 30 min nas últimas N SEMANAS, no mesmo dia da semana (domingo não se compara com terça) */
+  paradaSemanasBaseline: 4,
   /** Frase de queda: pacientes de verdade recebendo "tive uma instabilidade". */
   fraseJanelaMin: 30,
   fraseMinimoMensagens: 4,
   fraseMinimoConversas: 3,
+  /**
+   * Problema aberto que some e volta depois de mais que isto (sem ter sido dado como "voltou", porque de madrugada não há
+   * tráfego para provar) é um episódio NOVO: aviso novo, não "ainda falhando há 11 h".
+   */
+  recorrenciaMs: 30 * 60_000,
   /** Lembrete: no máximo a cada 2 h enquanto durar. */
   lembreteMs: 2 * 60 * 60_000,
   /**
@@ -88,8 +94,8 @@ export interface Leitura {
   totaisPorFamilia(agora: Date, janelaMin: number): Promise<Record<Familia, TotaisDaFamilia>>;
   /** última chamada com sucesso de cada provedor (nas últimas 24 h) */
   ultimoSucesso(agora: Date): Promise<Record<Familia, Date | null>>;
-  /** sucessos (todos os provedores) em cada um dos N dias anteriores, na mesma hora do dia e na mesma janela */
-  baselineSucessos(agora: Date, janelaMin: number, dias: number): Promise<number[]>;
+  /** sucessos (todos os provedores) na mesma janela, no mesmo dia da semana e hora, em cada uma das N semanas anteriores */
+  baselineSucessos(agora: Date, janelaMin: number, semanas: number): Promise<number[]>;
   frases(agora: Date, janelaMin: number): Promise<Frases>;
 }
 
@@ -115,7 +121,7 @@ export async function coletar(leitura: Leitura, agora: Date): Promise<Observacao
       leitura.totaisPorFamilia(agora, L.falhaJanelaMin),
       leitura.totaisPorFamilia(agora, L.paradaJanelaMin),
       leitura.ultimoSucesso(agora),
-      leitura.baselineSucessos(agora, L.paradaJanelaMin, L.paradaDiasBaseline),
+      leitura.baselineSucessos(agora, L.paradaJanelaMin, L.paradaSemanasBaseline),
       leitura.frases(agora, L.fraseJanelaMin),
     ]);
   return { agora, errosSaldoJanela, errosFalhaJanela, totaisFalhaJanela, totaisParadaJanela, ultimoSucesso, baseline, frases };
@@ -208,7 +214,9 @@ export function avaliar(obs: Observacao): Problema[] {
     const total = Math.max(0, t.ok + t.erro - saldoN);
     const taxa = total > 0 ? erros / total : 0;
     const ativo = total >= L.falhaMinimoChamadas && taxa >= L.falhaTaxa;
-    const normal = total >= L.falhaMinimoChamadas && taxa < L.falhaTaxaNormal;
+    // "normal" com amostra cheia e taxa baixa, OU sem nenhum erro e com algumas chamadas boas (de madrugada a amostra cheia não chega)
+    const ok = obs.totaisFalhaJanela[familia].ok;
+    const normal = (total >= L.falhaMinimoChamadas && taxa < L.falhaTaxaNormal) || (erros === 0 && saldoN === 0 && ok >= 3);
     problemas.push({
       chave: `falha:${familia}`,
       tipo: 'falha',
@@ -228,7 +236,7 @@ export function avaliar(obs: Observacao): Problema[] {
     });
   }
 
-  // 3. IA PARADA: zero sucesso na janela, num horário em que o normal (mediana dos mesmos 30 min dos 7 dias anteriores) é haver tráfego.
+  // 3. IA PARADA: zero sucesso na janela, num horário em que o normal (mediana dos mesmos 30 min nas 4 semanas anteriores, no mesmo dia da semana) é haver tráfego.
   {
     const sucessos = FAMILIAS.reduce((s, f) => s + obs.totaisParadaJanela[f].ok, 0);
     const normal = mediana(obs.baseline);
@@ -290,7 +298,7 @@ export function suprimir(problemas: Problema[]): Problema[] {
 export type Acao = 'novo' | 'lembrete' | 'voltou' | 'atualizar' | 'absorver' | 'nada';
 
 /**
- * - `novo`      : problema ativo sem aviso entregue (abre o estado, se ainda não existe);
+ * - `novo`      : problema ativo sem aviso entregue, ou que voltou depois de sumir por mais de `recorrenciaMs` (reabre o estado);
  * - `lembrete`  : ativo, avisado há ≥ 2 h;
  * - `voltou`    : aberto, inativo e com prova de que voltou;
  * - `atualizar` : ativo, já avisado, dentro da janela de silêncio (só renova o "visto em");
@@ -304,6 +312,8 @@ export function decidir(p: Problema, estado: EstadoAlerta | null, agora: Date, l
   if (p.suprimidoPor) return 'absorver';
   if (p.ativo) {
     if (estado.ultimoAvisoEm === null) return 'novo';
+    // sumiu por um bom tempo e voltou: é outro episódio (o estado fica aberto quando de madrugada não há tráfego que prove a volta)
+    if (agora.getTime() - estado.ultimoVistoEm.getTime() > LIMIARES.recorrenciaMs) return 'novo';
     return agora.getTime() - estado.ultimoAvisoEm.getTime() >= lembreteMs ? 'lembrete' : 'atualizar';
   }
   if (!p.podeFechar(estado)) return 'nada';
@@ -376,6 +386,12 @@ export interface ContextoDoTexto {
   frases?: Frases;
 }
 
+function danoDaFrase(f: Frases | undefined): string {
+  return f && f.mensagens > 0
+    ? ` Pacientes já receberam a frase de queda ${f.mensagens}x (${plural(f.conversas, 'conversa', 'conversas')}) nos últimos ${LIMIARES.fraseJanelaMin} min.`
+    : '';
+}
+
 export function montarTexto(p: Problema, tipo: 'novo' | 'lembrete' | 'voltou', ctx: ContextoDoTexto): string {
   const desde = horaBrasilia(ctx.desde, ctx.agora);
   const dur = duracao(ctx.agora.getTime() - ctx.desde.getTime());
@@ -385,16 +401,15 @@ export function montarTexto(p: Problema, tipo: 'novo' | 'lembrete' | 'voltou', c
   if (p.tipo === 'credito' && p.familia) {
     const o = ONDE_PAGAR[p.familia];
     if (tipo === 'voltou') return `✅ Voltou: crédito da ${fam}. Ficou ${dur} fora (desde ${desde}, normalizou às ${horaBrasilia(ctx.agora, ctx.agora)}).`;
-    const dano =
-      ctx.frases && ctx.frases.mensagens > 0
-        ? ` Pacientes já receberam a frase de queda ${ctx.frases.mensagens}x (${plural(ctx.frases.conversas, 'conversa', 'conversas')}) nos últimos ${LIMIARES.fraseJanelaMin} min.`
-        : '';
+    const dano = danoDaFrase(ctx.frases);
+    // Unidade pode ter chave própria (unit.anthropicApiKey / chave da OpenAI): com 1 só unidade atingida, pode ser a chave dela e não a da rede.
+    const so1 = p.unidades.length === 1 ? ` Só 1 unidade atingida (pode ser a chave própria dela, não a da rede).` : '';
     if (tipo === 'lembrete') {
       return `🔴 Ainda sem crédito na ${fam}: já são ${dur} (desde ${desde}).${dano} Pague em ${o} e ligue a recarga automática.`;
     }
     return [
       `🔴 SOFIA SEM CRÉDITO — ${fam}`,
-      `Desde ${desde}: ${plural(Number(p.numeros.chamadas), 'chamada recusada', 'chamadas recusadas')} por falta de saldo nos últimos ${p.numeros.janelaMin} min.${und ? ` ${und}.` : ''}${dano}`,
+      `Desde ${desde}: ${plural(Number(p.numeros.chamadas), 'chamada recusada', 'chamadas recusadas')} por falta de saldo nos últimos ${p.numeros.janelaMin} min.${und ? ` ${und}.` : ''}${so1}${dano}`,
       `O que fazer: pague em ${o} e ligue a recarga automática.`,
     ].join('\n');
   }
@@ -402,10 +417,10 @@ export function montarTexto(p: Problema, tipo: 'novo' | 'lembrete' | 'voltou', c
   if (p.tipo === 'falha' && p.familia) {
     const base = `${p.numeros.pct}% das chamadas à ${fam} falharam nos últimos ${p.numeros.janelaMin} min (${p.numeros.erros} de ${p.numeros.total}). Erro mais comum: ${p.numeros.classe}.`;
     if (tipo === 'voltou') return `✅ Voltou ao normal: chamadas à ${fam}. Ficou ${dur} com falha (desde ${desde}).`;
-    if (tipo === 'lembrete') return `🟠 IA ainda falhando na ${fam} há ${dur} (desde ${desde}). ${base}`;
+    if (tipo === 'lembrete') return `🟠 IA ainda falhando na ${fam} há ${dur} (desde ${desde}). ${base}${danoDaFrase(ctx.frases)}`;
     return [
       `🟠 IA FALHANDO — ${fam}`,
-      `Desde ${desde}. ${base}${und ? ` ${und}.` : ''}`,
+      `Desde ${desde}. ${base}${und ? ` ${und}.` : ''}${danoDaFrase(ctx.frases)}`,
       'O que fazer: abrir o console → Execuções (ou llm_calls) e ver o erro; se for 401/403, a chave foi trocada ou revogada.',
     ].join('\n');
   }
@@ -458,13 +473,16 @@ export interface RegistroDeAviso {
   acao: Acao;
   texto?: string;
   entregue?: boolean;
+  /** falhou ao gravar o estado ou enviar: nada foi marcado, a próxima rodada tenta de novo */
+  erro?: string;
 }
 
 /**
  * Roda a vigilância uma vez e devolve o que decidiu (os testes e a simulação leem isto). Erro de leitura não muda estado.
  *
  * Lembretes saem JUNTOS: se mais de um problema está aberto, é UMA mensagem com todos (dois alarmes de saldo não viram
- * dois toques no celular), e só fora do silêncio noturno.
+ * dois toques no celular), e só fora do silêncio noturno. O lembrete conjunto cita TODOS os abertos e zera o relógio de todos
+ * (um que foi avisado há 25 min não volta a ser lembrado 2 h depois do lembrete dos outros).
  */
 export async function rodarVigia(deps: DepsDaRodada): Promise<RegistroDeAviso[]> {
   const agora = deps.agora ?? new Date();
@@ -480,30 +498,37 @@ export async function rodarVigia(deps: DepsDaRodada): Promise<RegistroDeAviso[]>
     const acao = decidir(p, estado, agora, deps.lembreteMs);
     if (acao === 'nada') continue;
 
-    if (acao === 'atualizar' || acao === 'lembrete') {
-      await deps.store.visto(p.chave, p.vistoEm);
-      emAberto.push(p);
-      if (acao === 'lembrete') lembreteDevido = true;
-      continue;
+    try {
+      if (acao === 'atualizar' || acao === 'lembrete') {
+        await deps.store.visto(p.chave, p.vistoEm);
+        emAberto.push(p);
+        if (acao === 'lembrete') lembreteDevido = true;
+        continue;
+      }
+      if (acao === 'absorver') {
+        await deps.store.fechar(p.chave, agora);
+        saida.push({ chave: p.chave, acao });
+        continue;
+      }
+
+      const aberto = estado !== null && estado.resolvidoEm === null;
+      // reabre (zera o ciclo) se não existe aberto OU se o aberto já foi avisado e agora é outro episódio; aviso que ainda não chegou é só tentado de novo
+      const reabrir = acao === 'novo' && (!aberto || estado.ultimoAvisoEm !== null);
+      if (reabrir) await deps.store.abrir(p.chave, p.inicioEm, p.vistoEm);
+      if (p.ativo && acao !== 'voltou') await deps.store.visto(p.chave, p.vistoEm);
+
+      const desde = estado && !estado.resolvidoEm && !reabrir ? estado.abertoEm : p.inicioEm;
+      const texto = montarTexto(p, acao, { agora, desde, frases: obs.frases });
+      const entregue = await deps.enviar(texto);
+      saida.push({ chave: p.chave, acao, texto, entregue });
+      if (!entregue) continue; // não marca: a próxima rodada tenta de novo
+
+      if (acao === 'voltou') await deps.store.fechar(p.chave, agora);
+      else await deps.store.avisou(p.chave, agora, false);
+    } catch (err) {
+      // um problema que falha ao gravar/enviar não derruba os outros; o estado só muda no que deu certo, então o próximo tick refaz
+      saida.push({ chave: p.chave, acao, erro: String(err) });
     }
-    if (acao === 'absorver') {
-      await deps.store.fechar(p.chave, agora);
-      saida.push({ chave: p.chave, acao });
-      continue;
-    }
-
-    const aberto = estado !== null && estado.resolvidoEm === null;
-    if (acao === 'novo' && !aberto) await deps.store.abrir(p.chave, p.inicioEm, p.vistoEm);
-    if (p.ativo && acao !== 'voltou') await deps.store.visto(p.chave, p.vistoEm);
-
-    const desde = estado && !estado.resolvidoEm ? estado.abertoEm : p.inicioEm;
-    const texto = montarTexto(p, acao, { agora, desde, frases: obs.frases });
-    const entregue = await deps.enviar(texto);
-    saida.push({ chave: p.chave, acao, texto, entregue });
-    if (!entregue) continue; // não marca: a próxima rodada tenta de novo
-
-    if (acao === 'voltou') await deps.store.fechar(p.chave, agora);
-    else await deps.store.avisou(p.chave, agora, false);
   }
 
   if (lembreteDevido && !emSilencioNoturno(agora)) {
@@ -516,9 +541,14 @@ export async function rodarVigia(deps: DepsDaRodada): Promise<RegistroDeAviso[]>
     const f = obs.frases;
     const dano = junto && f.mensagens > 0 ? `\nPacientes receberam a frase de queda ${f.mensagens}x (${plural(f.conversas, 'conversa', 'conversas')}) nos últimos ${LIMIARES.fraseJanelaMin} min.` : '';
     const texto = junto ? `🔔 Continuam abertos (${linhas.length}):\n${linhas.map((l) => `• ${l}`).join('\n')}${dano}` : linhas[0];
-    const entregue = await deps.enviar(texto);
-    saida.push({ chave: emAberto.map((p) => p.chave).join('+'), acao: 'lembrete', texto, entregue });
-    if (entregue) for (const p of emAberto) await deps.store.avisou(p.chave, agora, true);
+    const chave = emAberto.map((p) => p.chave).join('+');
+    try {
+      const entregue = await deps.enviar(texto);
+      saida.push({ chave, acao: 'lembrete', texto, entregue });
+      if (entregue) for (const p of emAberto) await deps.store.avisou(p.chave, agora, true);
+    } catch (err) {
+      saida.push({ chave, acao: 'lembrete', texto, erro: String(err) });
+    }
   }
   return saida;
 }
