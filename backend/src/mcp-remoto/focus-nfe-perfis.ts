@@ -36,6 +36,10 @@ export interface PerfilFiscal {
   percentualTotalTributosSimples?: number;
   /** IBS/CBS: CST, cClassTrib e cIndOp vêm da contabilidade; sem os três a nota não sai («a completar») */
   ibsCbs?: { situacaoTributaria: string; classificacaoTributaria: string; codigoIndicadorOperacao: string };
+  /** true = a clínica TAMBÉM emite NFS-e por fora (Emissor Nacional/portal): em PRODUÇÃO a série da DPS tem de ser PRÓPRIA e vir daqui (`serieDpsProducao`), nunca só do .env, para a Focus não repetir série/número que a clínica usa lá */
+  emiteTambemNoPortal?: boolean;
+  /** a série da DPS de produção DESTA unidade, escolhida de propósito (diferente da usada no portal). Sem ela, em produção, a unidade não emite */
+  serieDpsProducao?: number;
   /** de onde vieram os dados do perfil (quem informou, quando, e se a contabilidade confirmou): o resumo da nota repete isto */
   origem: string;
   /** de onde veio a alíquota, em texto, para o resumo da nota dizer a verdade */
@@ -52,6 +56,8 @@ export const PERFIS_FISCAIS: Readonly<Record<string, PerfilFiscal>> = {
     inscricaoMunicipal: '1000000007142',
     // E0120 (homologação): Açailândia não tem IM no CNC da NFS-e; a IM fica registrada aqui mas não vai no DPS
     enviarIM: false,
+    // a clínica JÁ emite NFS-e pelo Emissor Nacional (nota nº 38 em 27/11/2026; nº 402 em 31/10): a série de produção do conector tem de ser PRÓPRIA e definida aqui. Ainda NÃO definida.
+    emiteTambemNoPortal: true,
     // E0631 (homologação): município não ativo no Sistema Nacional + ME/EPP regime 1 + ISS não retido = alíquota NÃO informada
     municipioAtivoNoSistemaNacional: false,
     codigoTributacaoNacional: '040802',

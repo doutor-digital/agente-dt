@@ -75,7 +75,10 @@ export interface FiscalPedido {
 export interface PedidoDePreparo {
   unidade?: string;
   acao: 'emitir' | 'cancelar';
+  /** o tomador é QUEM PAGA (regra do Caixa da clínica) */
   tomador?: TomadorPedido;
+  /** nome do PACIENTE, só quando diferente de quem paga: entra na descrição («Paciente: Fulano») */
+  paciente?: string;
   valor?: number;
   descricao?: string;
   /** AAAA-MM-DD */
@@ -204,6 +207,19 @@ export function chaveDeNotaRepetida(unidade: string, ambiente: Ambiente, documen
   return createHash('sha256').update([unidade, ambiente, documento, valorCentavos, competencia, (origem ?? '').toLowerCase()].join('|')).digest('hex').slice(0, 32);
 }
 
+/**
+ * A clínica TAMBÉM emite NFS-e por fora (Emissor Nacional): em PRODUÇÃO a série da DPS do conector tem de ser PRÓPRIA e vir do perfil (`serieDpsProducao`), igual à da conta; o .env sozinho
+ * não vale. Repetir série/número que a clínica usa no portal é recusado pelo ambiente nacional (e pior: pode colidir com uma nota real).
+ */
+export function exigirSerieDeProducao(conta: Pick<ContaFocus, 'slug' | 'ambiente' | 'serieDps' | 'perfil'>): void {
+  if (conta.ambiente !== 'producao' || !conta.perfil?.emiteTambemNoPortal) return;
+  const propria = conta.perfil.serieDpsProducao;
+  if (propria === undefined) {
+    throw new ErroDeEntrada(`a unidade ${conta.slug} também emite NFS-e pelo Emissor Nacional e ainda NÃO tem série de DPS PRÓPRIA para a produção (serieDpsProducao no perfil fiscal, escolhida pelo João e pela contabilidade, diferente da usada no portal): em produção ela não emite. O .env sozinho não vale.`);
+  }
+  if (conta.serieDps !== propria) throw new ErroDeEntrada(`a série da conta (${conta.serieDps ?? 'nenhuma'}) não é a série própria do perfil (${propria}): a unidade não emite em produção. Nada foi feito.`);
+}
+
 export interface ResultadoDaValidacao {
   nota: NotaValidada;
   resumo: Record<string, unknown>;
@@ -224,6 +240,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
 
   if (conta.conflitoDePerfil) throw new ErroDeEntrada(`${conta.conflitoDePerfil} Nada foi preparado.`);
   if (!conta.cnpj || !conta.municipio) throw new ErroDeEntrada(`a unidade ${conta.slug} não tem CNPJ e município do prestador configurados (FOCUS_NFE_CNPJ_… e FOCUS_NFE_MUNICIPIO_…, ou um perfil fiscal): o João configura no servidor. Nada foi preparado.`);
+  exigirSerieDeProducao(conta);
   if (conta.ambiente === 'producao' && conta.serieDps === undefined) throw new ErroDeEntrada(`a unidade ${conta.slug} está em PRODUÇÃO sem a série da DPS (FOCUS_NFE_SERIE_DPS_…): o João e a contabilidade escolhem a série. Nada foi preparado.`);
 
   // ---- tomador
@@ -253,7 +270,16 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
   else valorCentavos = valorEmCentavos(a.valor);
   const textoDaDescricao = a.descricao?.trim() ? a.descricao : perfil?.descricaoDoServico;
   if (!textoDaDescricao) faltam.push('descricao: o texto do serviço que sai na nota');
-  const descricao = textoDaDescricao ? textoLimpo(textoDaDescricao, 'descricao', 3, 1000) : '';
+  let descricao = textoDaDescricao ? textoLimpo(textoDaDescricao, 'descricao', 3, 1000) : '';
+  // regra do Caixa da clínica: o tomador é QUEM PAGA; quando o pagador não é o paciente, o paciente é citado na DESCRIÇÃO («Paciente: Fulano»)
+  const pacienteNome = a.paciente?.trim() ? textoLimpoNome(a.paciente) : undefined;
+  const semAcento = (x: string) => x.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const pacienteDiferente = pacienteNome !== undefined && nome !== '' && semAcento(pacienteNome) !== semAcento(nome);
+  if (pacienteNome !== undefined && nome === '') faltam.push('tomador.nome: o nome de quem PAGA (o tomador da nota)');
+  if (pacienteDiferente) {
+    descricao = `${descricao}. Paciente: ${pacienteNome}`;
+    if (descricao.length > 1000) throw new ErroDeEntrada('descricao: com o nome do paciente passa de 1000 caracteres. Encurte a descrição. Nada foi preparado.');
+  }
   const informacoes = f.informacoesComplementares?.trim() ? textoLimpo(f.informacoesComplementares, 'fiscal.informacoesComplementares', 3, 2000) : undefined;
   let competencia = '';
   if (!a.dataCompetencia?.trim()) faltam.push('dataCompetencia: a data em que o serviço foi prestado (AAAA-MM-DD)');
@@ -312,6 +338,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     if (!omitirAliquota) faltam.push('fiscal.aliquotaIss: a alíquota do ISS em % (a contabilidade informa), ou "parametrizada" se a alíquota vem do Sistema Nacional');
   } else aliq = aliqBruta === 'parametrizada' ? 'parametrizada' : aliquota(aliqBruta);
   // regras descobertas na HOMOLOGAÇÃO (E0120, E0631): em produção valem as do ambiente nacional, que podem diferir: quem aprova confere com a contabilidade
+  if (conta.ambiente === 'producao' && perfil?.emiteTambemNoPortal) avisos.push(`a clínica também emite no Emissor Nacional (portal): confira que a série ${conta.serieDps} NÃO é a usada lá`);
   if (conta.ambiente === 'producao' && (omitirAliquota || (perfil && perfil.enviarIM === false))) avisos.push('PRODUÇÃO: esta nota sai ' + [perfil?.enviarIM === false ? 'SEM a inscrição municipal do prestador' : '', omitirAliquota ? 'SEM alíquota do ISS' : ''].filter(Boolean).join(' e ') + ', regra descoberta na HOMOLOGAÇÃO (E0120/E0631). Confirme com a contabilidade que vale também em produção antes de aprovar');
   if (opcao === 3 && regSimples === 1 && retencao === 1 && perfil && perfil.municipioAtivoNoSistemaNacional === undefined) avisos.push('não sei se este município está ativo no Sistema Nacional (perfil sem municipioAtivoNoSistemaNacional): ME/EPP regime 1 com ISS não retido pode ser recusada com E0631 se a alíquota for enviada');
   if (omitirAliquota && f.aliquotaIss !== undefined) avisos.push('a alíquota informada NÃO foi enviada: ME/EPP do Simples (regime 1) com ISS não retido em município fora do Sistema Nacional não leva alíquota no DPS (o ambiente nacional recusa com E0631)');
@@ -419,6 +446,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
       codigoDeTributacaoNacional: { valor: codigoTrib, origem: f.codigoTributacaoNacional?.trim() ? DE_QUEM_PEDIU : DO_PERFIL },
       ...(nbs ? { nbs: { valor: nbs, origem: f.codigoNbs?.trim() ? DE_QUEM_PEDIU : DO_PERFIL } } : {}),
       descricao: { texto: descricao, origem: a.descricao?.trim() ? DE_QUEM_PEDIU : DO_PERFIL },
+      ...(pacienteDiferente ? { pacienteNaDescricao: `${pacienteNome} (o tomador é quem paga: ${nome})` } : {}),
       ...(informacoes ? { informacoesComplementares: informacoes } : {}),
     },
     valorDaNota: dinheiro(valorCentavos / 100),
@@ -439,6 +467,7 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     totalAproximadoDeTributos: naoInformar ? 'NÃO informado (opção da contabilidade)' : `${pct(pTot!)} (total aproximado de tributos do Simples, Lei 12.741; ${f.percentualTotalTributosSimples !== undefined ? 'informado por quem pediu' : 'perfil da unidade'})`,
     reformaTributaria: { cst, cClassTrib: cClass, cIndOp, origemDoTrio: ibsDaPessoa ? DE_QUEM_PEDIU : DO_PERFIL, consumidorFinal: SIM_NAO(f.consumidorFinal === true), indicadorDoDestinatario: '0 — o destinatário é o próprio tomador', finalidade: '0 — NFS-e regular' },
     dps: { serie: conta.serieDps ?? 1, numero: 'reservado na confirmação' },
+    quemPaga: 'o TOMADOR da nota é quem PAGA (regra do Caixa da clínica)',
     ...(origem ? { origem } : {}),
   };
   return {
@@ -587,7 +616,7 @@ const CANCELAVEL = 'autorizado';
 async function prepararCancelamento(ctx: ContextoFocus, esc: EstadoEscritaFocus, c: ContaFocus, quem: QuemFocus, a: PedidoDePreparo) {
   // valor neutro (vazio, false, objeto vazio) é o que o modelo manda "por padrão": não é pedido de emissão e não derruba o cancelamento
   const neutro = (v: unknown) => v === undefined || v === null || v === '' || v === false || (typeof v === 'object' && Object.keys(v as object).length === 0);
-  const extras = (['tomador', 'valor', 'descricao', 'dataCompetencia', 'origem', 'fiscal'] as const).filter((k) => !neutro(a[k]));
+  const extras = (['tomador', 'paciente', 'valor', 'descricao', 'dataCompetencia', 'origem', 'fiscal'] as const).filter((k) => !neutro(a[k]));
   if (extras.length) throw new ErroDeEntrada(`para cancelar informe só a referência e a justificativa; estes campos são de emissão e não valem aqui: ${extras.join(', ')}`);
   if (!a.referencia?.trim()) throw new ErroDeEntrada('informe a referencia da nota a cancelar (veja em focus_notas)');
   if (!a.justificativa?.trim()) throw new ErroDeEntrada('informe a justificativa do cancelamento (15 a 255 caracteres): vai para o ambiente nacional');
@@ -685,6 +714,7 @@ export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscrit
   const hoje = diaLocal(agora);
   if (nota.dataCompetencia > hoje) throw new ErroDeEntrada(`a competência aprovada (${nota.dataCompetencia}) é futura (hoje é ${hoje}): não emiti. Prepare de novo. Nada foi emitido.`);
   const serie = c.serieDps ?? 1;
+  exigirSerieDeProducao(c);
   if (c.ambiente === 'producao' && c.serieDps === undefined) throw new ErroDeEntrada('produção sem a série da DPS configurada: não emiti. Nada foi emitido.');
   const chave = chaveDeNotaRepetida(c.slug, c.ambiente, nota.tomadorDocumento, nota.valorCentavos, nota.dataCompetencia, nota.origem);
   const criadoPor = quem.email || `usuario:${quem.id}`;
@@ -817,6 +847,7 @@ export function limparArgumentos(a: unknown): unknown {
     const doc = typeof x.cpf === 'string' ? x.cpf : typeof x.cnpj === 'string' ? x.cnpj : '';
     o.tomador = { documento: doc ? mascararDoc(doc) : null, nome: x.nome ? '[removido]' : null, email: x.email ? '[removido]' : null, telefone: x.telefone ? '[removido]' : null, endereco: x.endereco ? '[removido]' : null };
   }
+  if (typeof o.paciente === 'string') o.paciente = '[removido]';
   for (const k of ['descricao', 'origem', 'justificativa'] as const) {
     const v = o[k];
     if (typeof v === 'string' && (temDadoPessoal(v) || /@/.test(v))) o[k] = '[removido: continha número longo ou e-mail]';
@@ -885,12 +916,13 @@ export function registrarEscritaFocus(server: McpServer, ctx: ContextoFocus, esc
         'PRIMEIRO PASSO para EMITIR ou CANCELAR uma NFS-e NACIONAL pela Focus NFe (use para o que NÃO passa pelo Asaas: InfinitePay, Pix direto, maquininha). NÃO emite nem cancela: confere tudo, ' +
         'mostra o resumo COMPLETO (o AMBIENTE vem em maiúsculas: HOMOLOGAÇÃO é teste sem valor fiscal, PRODUÇÃO é nota real) e devolve um código. Mostre o resumo inteiro e os avisos à pessoa e só chame focus_confirmar_nota se ela aprovar. ' +
         'Só nas unidades que o João ligou. NUNCA suponha alíquota do ISS, retenção, regime nem código de serviço: o que a pessoa não disse e o perfil da unidade não traz, o conector recusa e lista (pergunte à pessoa ou à contabilidade). ' +
-        'acao "emitir": informe tomador (cpf ou cnpj, nome), valor, dataCompetencia (AAAA-MM-DD), origem (id da venda, sem dado pessoal; vale para nota repetida) e fiscal. acao "cancelar": informe referencia e justificativa (15 a 255 caracteres). ' +
+        'acao "emitir": informe o tomador = QUEM PAGA (cpf ou cnpj, nome; se o paciente for outra pessoa, informe `paciente` e o nome dele vai na descrição), valor, dataCompetencia (AAAA-MM-DD), origem (id da venda, sem dado pessoal; vale para nota repetida) e fiscal. acao "cancelar": informe referencia e justificativa (15 a 255 caracteres). ' +
         'Só para quem altera cartões.',
       inputSchema: {
         unidade: z.string().optional().describe('unidade com Focus NFe ligada (slug ou nome curto); opcional se só houver uma'),
         acao: z.enum(['emitir', 'cancelar']),
         tomador: tomadorSchema,
+        paciente: z.string().max(150).optional().describe('nome do PACIENTE, só se for diferente de quem paga: o tomador é SEMPRE quem paga, e o paciente é citado na descrição («Paciente: Fulano»)'),
         valor: z.number().positive().max(1_000_000).optional().describe('valor da nota em reais, no máximo 2 casas'),
         descricao: z.string().max(1000).optional().describe('texto do serviço que sai na nota (a unidade pode ter um padrão); sem CPF, telefone nem e-mail'),
         dataCompetencia: z.string().optional().describe('data em que o serviço foi prestado, AAAA-MM-DD'),

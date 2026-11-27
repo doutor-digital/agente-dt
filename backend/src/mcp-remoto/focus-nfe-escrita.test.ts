@@ -36,7 +36,8 @@ function pedido(sobre: Partial<PedidoDePreparo> = {}): PedidoDePreparo {
 function montar(op: { explicito?: boolean; ambiente?: Ambiente; serie?: number; unidades?: string[]; semPerfil?: boolean; tetoNota?: number; tetoDia?: number; porHora?: number; agora?: () => number } = {}) {
   const { focus, fonte } = focusEmMemoria();
   const armazem = armazemDeNotasEmMemoria();
-  const perfil = op.semPerfil ? undefined : PERFIS_FISCAIS[UNI];
+  // em produção a série própria vem do PERFIL (a clínica também emite no portal): os testes de produção a põem igual à série da conta
+  const perfil = op.semPerfil ? undefined : op.ambiente === 'producao' && op.serie !== undefined ? { ...PERFIS_FISCAIS[UNI]!, serieDpsProducao: op.serie } : PERFIS_FISCAIS[UNI];
   const conta: ContaFocus = {
     slug: UNI, nome: 'Açailândia', ambiente: op.ambiente ?? 'homologacao', cnpj: '63130582000140', municipio: '2100055', ...(op.serie !== undefined ? { serieDps: op.serie } : {}), numeroInicial: 1,
     ...(op.ambiente === 'producao' && op.explicito !== false ? { numeroInicialExplicito: true } : {}),
@@ -370,6 +371,66 @@ test('E0207: CPF com dígitos certos passa na checagem local, mas o aviso lembra
   await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ tomador: { cpf: '111.111.111-11', nome: NOME } })), /CPF inválido/);
 });
 
+test('tomador = QUEM PAGA; o paciente (se for outra pessoa) entra na descrição («Paciente: Fulano»); igual ao pagador não repete; auditoria e livro sem o nome', async () => {
+  const m = montar();
+  const { prep } = await prepararEConfirmar(m, pedido({ paciente: 'João da Silva Filho' }));
+  const corpo = m.focus.emitidas[0]!.corpo;
+  assert.equal(corpo.razao_social_tomador, NOME, 'o tomador é o pagador');
+  assert.equal(corpo.descricao_servico, 'Serviços de fisioterapia. Paciente: João da Silva Filho');
+  assert.match(JSON.stringify(prep.resumo), /pacienteNaDescricao.*João da Silva Filho.*quem paga/);
+  assert.match(JSON.stringify(prep.resumo), /quemPaga/);
+  assert.ok(!JSON.stringify(m.armazem.linhas).includes('João da Silva'), 'o livro não guarda o nome');
+  assert.ok(!JSON.stringify(limparArgumentos(pedido({ paciente: 'João da Silva Filho' }))).includes('João da Silva'), 'a auditoria não vê o nome');
+  // paciente igual ao pagador (mesmo com acento/caixa diferentes): a descrição não muda
+  const igual = montar();
+  await prepararEConfirmar(igual, pedido({ paciente: 'maria paciente de teste' }));
+  assert.equal(igual.focus.emitidas[0]!.corpo.descricao_servico, 'Serviços de fisioterapia');
+  // sem paciente: descrição do perfil
+  const sem = montar();
+  await prepararEConfirmar(sem);
+  assert.equal(sem.focus.emitidas[0]!.corpo.descricao_servico, 'Serviços de fisioterapia');
+  // o nome do paciente também não pode carregar documento
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ paciente: 'João 52998224725' })), /nome/);
+});
+
+test('produção: a clínica TAMBÉM emite no Emissor Nacional — sem série PRÓPRIA no perfil não emite (o .env sozinho não vale); com ela, o resumo avisa para conferir a série no portal; homologação não muda', async () => {
+  const sem = montar({ ambiente: 'producao' });
+  sem.ctx.contas.set(UNI, { ...sem.conta, serieDps: 900 }); // só o .env
+  await assert.rejects(() => prepararNota(sem.ctx, sem.esc, QUEM, pedido()), /também emite NFS-e pelo Emissor Nacional.*série de DPS PRÓPRIA.*\.env sozinho não vale/);
+  assert.equal(sem.focus.emitidas.length, 0);
+  // série do .env diferente da do perfil: não emite
+  const dif = montar({ ambiente: 'producao', serie: 900 });
+  dif.ctx.contas.set(UNI, { ...dif.conta, serieDps: 5 });
+  await assert.rejects(() => prepararNota(dif.ctx, dif.esc, QUEM, pedido()), /não é a série própria do perfil/);
+  // a emissão direta (automática futura) também recusa
+  const direto = montar({ ambiente: 'producao' });
+  const v = validarEmissao({ ...direto.conta, ambiente: 'homologacao' }, pedido(), '2026-11-26').nota;
+  await assert.rejects(() => emitirNotaConfirmada(direto.ctx, direto.esc, { ...direto.conta, serieDps: 900 }, QUEM, v, 'ddnfabc'), /série de DPS PRÓPRIA/);
+  assert.equal(direto.focus.emitidas.length, 0);
+  // com a série própria no perfil: emite, e o resumo avisa
+  const ok = montar({ ambiente: 'producao', serie: 900 });
+  const r = await prepararNota(ok.ctx, ok.esc, QUEM, pedido());
+  assert.ok(r.avisos.some((x) => /também emite no Emissor Nacional \(portal\): confira que a série 900 NÃO é a usada lá/.test(x)));
+  // o perfil de Açailândia ainda NÃO tem a série definida
+  assert.equal(PERFIS_FISCAIS[UNI]!.emiteTambemNoPortal, true);
+  assert.equal(PERFIS_FISCAIS[UNI]!.serieDpsProducao, undefined);
+  // homologação: nada muda (série 1, sem exigência)
+  const h = montar();
+  assert.ok((await prepararNota(h.ctx, h.esc, QUEM, pedido())).confirmacao);
+  assert.ok(!(await prepararNota(h.ctx, h.esc, QUEM, pedido({ origem: 'x2' }))).avisos.some((x) => /Emissor Nacional/.test(x)));
+});
+
+test('contaFocusDaConfig: em produção a série vem do PERFIL (própria); .env diferente do perfil tira a unidade; sem série no perfil a conta fica sem série', () => {
+  const token = 'TOKENdeTESTE1234567890abcdefghij';
+  const base = { slug: UNI, nome: 'Açailândia', token, ambiente: 'producao' as const, numeroInicial: 1 };
+  assert.equal(contaFocusDaConfig({ ...base, serieDps: 900 }).serieDps, undefined, 'só o .env não vale (o perfil ainda não tem série)');
+  const perfil = { ...PERFIS_FISCAIS[UNI]!, serieDpsProducao: 777 };
+  assert.equal(contaFocusDaConfig({ ...base }, {}, perfil).serieDps, 777);
+  assert.equal(contaFocusDaConfig({ ...base, serieDps: 777 }, {}, perfil).conflitoDePerfil, undefined);
+  assert.match(contaFocusDaConfig({ ...base, serieDps: 5 }, {}, perfil).conflitoDePerfil ?? '', /série de produção do ambiente.*diferente/);
+  assert.equal(contaFocusDaConfig({ ...base, ambiente: 'homologacao', serieDps: 5 }).serieDps, 5, 'homologação não muda');
+});
+
 test('o perfil de Açailândia tem os dados que o João e a contabilidade informaram (e nenhuma alíquota)', () => {
   const p = PERFIS_FISCAIS[UNI]!;
   assert.deepEqual(
@@ -398,7 +459,7 @@ test('o resumo e a resposta dizem o AMBIENTE em maiúsculas: HOMOLOGAÇÃO e PRO
 });
 
 test('produção sem a série da DPS não prepara; o ambiente mudando entre o resumo e a confirmação gasta o código e não emite', async () => {
-  await assert.rejects(() => prepararNota(montar({ ambiente: 'producao' }).ctx, montar({ ambiente: 'producao' }).esc, QUEM, pedido()), /PRODUÇÃO sem a série/);
+  await assert.rejects(() => prepararNota(montar({ ambiente: 'producao' }).ctx, montar({ ambiente: 'producao' }).esc, QUEM, pedido()), /série de DPS PRÓPRIA/);
   const m = montar();
   const prep = await prepararNota(m.ctx, m.esc, QUEM, pedido());
   m.ctx.contas.set(UNI, { ...m.conta, ambiente: 'producao', serieDps: 900 });

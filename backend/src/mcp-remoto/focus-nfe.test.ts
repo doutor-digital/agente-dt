@@ -80,7 +80,7 @@ test('focus_dados_fiscais: ambiente em maiúsculas, token aceito, perfil, o que 
   p.focus.tokenRecusado = true;
   const rp = (await dadosFiscais(p.ctx, LIM, {})) as { ambiente: string; faltaConfigurar: string[]; cuidados: string[]; tokenNaFocus: { recusado: string } };
   assert.equal(rp.ambiente, 'PRODUÇÃO');
-  assert.ok(rp.faltaConfigurar.some((x) => /FOCUS_NFE_SERIE_DPS/.test(x)));
+  assert.ok(rp.faltaConfigurar.some((x) => /serieDpsProducao.*TAMBÉM emite no Emissor Nacional/.test(x)), 'Açailândia em produção: série própria no perfil, não no .env');
   assert.match(rp.tokenNaFocus.recusado, /não reconheceu o token/);
   assert.ok(rp.cuidados.some((x) => /NÃO foi aceito/.test(x)));
 });

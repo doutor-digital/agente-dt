@@ -21,6 +21,8 @@
 # Os dados fiscais da unidade (CNPJ, município IBGE, inscrição municipal, cTribNac 04.08.02, NBS, texto do serviço) estão no código (focus-nfe-perfis.ts), não no .env, e foram informados pelo João
 # em 26/11/2026. A ALÍQUOTA DO ISS padrão é 0: decisão do João em 26/11 (Simples, ISS no DAS); SEM confirmação escrita da contabilidade. O resumo de cada nota mostra essa origem.
 # O perfil só vale para o CNPJ e o município dele: não configure FOCUS_NFE_CNPJ_/FOCUS_NFE_MUNICIPIO_ com outro valor (a unidade deixa de emitir).
+# SÉRIE EM PRODUÇÃO: a clínica TAMBÉM emite NFS-e pelo Emissor Nacional (portal). A série de produção de Açailândia vem do PERFIL (serieDpsProducao em focus-nfe-perfis.ts, escolhida pelo João e pela
+# contabilidade, DIFERENTE da usada no portal), não do .env: --serie só vale se for IGUAL à do perfil; enquanto o perfil não a definir, o conector não emite em produção.
 # NÚMERO DA DPS: o conector segue o próximo número que a Focus guarda para a série; em PRODUÇÃO, se ele não puder ser lido, a emissão é recusada, a menos que você passe --numero-inicial=N
 # (o número de partida combinado com a contabilidade, sem repetir um já usado no Asaas/portal).
 # TOKEN NA LINHA DE COMANDO DA VPS: `docker service update --env-add FOCUS_NFE_TOKEN_…=…` coloca o token na linha de comando do docker por instantes e `docker service inspect` o mostra (é o

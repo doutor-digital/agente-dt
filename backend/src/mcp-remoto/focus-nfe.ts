@@ -178,6 +178,14 @@ export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}
     conflitoDePerfil = `o perfil fiscal de ${c.slug} é do CNPJ e município cadastrados em focus-nfe-perfis.ts, mas o ambiente do servidor configurou outro CNPJ ou município (FOCUS_NFE_CNPJ_/FOCUS_NFE_MUNICIPIO_): o perfil não vale e a unidade NÃO emite até alguém conferir.`;
     perfil = undefined;
   }
+  // em produção, unidade que também emite no portal: a série é a do PERFIL (própria); a do .env só vale se for igual
+  let serieDps = c.serieDps;
+  if (c.ambiente === 'producao' && perfil?.emiteTambemNoPortal) {
+    if (c.serieDps !== undefined && perfil.serieDpsProducao !== undefined && c.serieDps !== perfil.serieDpsProducao) {
+      conflitoDePerfil = `a série de produção do ambiente (FOCUS_NFE_SERIE_DPS_…) é diferente da série própria do perfil de ${c.slug}: a unidade NÃO emite até alguém conferir.`;
+    }
+    serieDps = perfil.serieDpsProducao;
+  }
   const cnpj = c.cnpj ?? perfil?.cnpj;
   const municipio = c.municipio ?? perfil?.municipioIbge;
   return {
@@ -189,7 +197,7 @@ export function contaFocusDaConfig(c: ContaFocusConfig, op: OpcoesDeChamada = {}
     ...(perfil ? { perfil } : {}),
     ...(conflitoDePerfil ? { conflitoDePerfil } : {}),
     ...(c.numeroInicialExplicito ? { numeroInicialExplicito: true } : {}),
-    ...(c.serieDps !== undefined ? { serieDps: c.serieDps } : {}),
+    ...(serieDps !== undefined ? { serieDps } : {}),
     numeroInicial: c.numeroInicial,
     fonte: {
       testar: () => testarToken(cred, op),
@@ -415,7 +423,7 @@ export async function dadosFiscais(ctx: ContextoFocus, lim: LimitesDeEmissao, a:
   if (c.conflitoDePerfil) faltaConfigurar.push(c.conflitoDePerfil);
   if (!c.cnpj) faltaConfigurar.push('FOCUS_NFE_CNPJ_<UNIDADE> (CNPJ do prestador; unidade sem perfil fiscal em focus-nfe-perfis.ts)');
   if (!c.municipio) faltaConfigurar.push('FOCUS_NFE_MUNICIPIO_<UNIDADE> (código IBGE do município do prestador; unidade sem perfil fiscal)');
-  if (c.ambiente === 'producao' && c.serieDps === undefined) faltaConfigurar.push('FOCUS_NFE_SERIE_DPS_<UNIDADE> (a série da DPS em produção; a homologação usa a série 1)');
+  if (c.ambiente === 'producao' && c.serieDps === undefined) faltaConfigurar.push(c.perfil?.emiteTambemNoPortal ? 'serieDpsProducao no perfil fiscal (a clínica TAMBÉM emite no Emissor Nacional: escolha uma série PRÓPRIA, diferente da usada lá; o .env sozinho não vale)' : 'FOCUS_NFE_SERIE_DPS_<UNIDADE> (a série da DPS em produção; a homologação usa a série 1)');
   const [token, cadastro, empresa, gatilhos, consumo, proximo] = await Promise.all([
     melhor(() => c.fonte.testar()),
     c.cnpj ? melhor(() => c.fonte.cnpj(c.cnpj!)) : Promise.resolve(null),
@@ -429,6 +437,7 @@ export async function dadosFiscais(ctx: ContextoFocus, lim: LimitesDeEmissao, a:
   const serieDaFocus = dele ? (c.ambiente === 'producao' ? dele.serieNfsenProducao : dele.serieNfsenHomologacao) : undefined;
   const proximoDaFocus = dele ? (c.ambiente === 'producao' ? dele.proximoNumeroNfsenProducao : dele.proximoNumeroNfsenHomologacao) : undefined;
   const cuidados: string[] = [];
+  if (c.ambiente === 'producao' && c.perfil?.emiteTambemNoPortal && c.serieDps !== undefined) cuidados.push(`a clínica também emite no Emissor Nacional: confira que a série ${c.serieDps} NÃO é a usada lá`);
   if (token.ok === false) cuidados.push(`o token NÃO foi aceito pela Focus: ${token.motivo}`);
   if (serie !== undefined && serieDaFocus !== undefined && serieDaFocus !== serie) cuidados.push(`a série configurada no conector (${serie}) é diferente da série da NFS-e Nacional no cadastro da empresa na Focus (${serieDaFocus}): confirme com a contabilidade qual usar`);
   if (cadastro && cadastro.ok && cadastro.valor && c.municipio && cadastro.valor.codigoIbge && cadastro.valor.codigoIbge !== c.municipio) {
