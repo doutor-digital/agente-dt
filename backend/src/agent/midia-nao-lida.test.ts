@@ -9,9 +9,8 @@ import {
   fraseDeMidiaNaoLida,
   horariosNaMesa,
   INSTRUCAO_DE_PASSAR_PARA_EQUIPE,
-  liteSemLeitura,
+  liteAudioSemLeitura,
   MARCA_ANEXO_NAO_LIDO_DO_TURNO,
-  MARCA_MIDIA_NAO_ABERTA,
   midiaNaoLidaDoTurno,
   respostaDeMidiaNaoLida,
   respostaJaTrataDaMidia,
@@ -20,6 +19,7 @@ import {
 import { AUDIO_NAO_OUVIDO, instrucaoAudioNaoTranscrito } from '../controllers/webhook.controller.js';
 import { MARCA_ANEXO_NAO_LIDO } from '../lib/anexos-do-turno.js';
 import { MARCA_AUDIO_NAO_OUVIDO, type Fala } from './repeticao.js';
+import type { MensagemOficial } from '../services/kommo-talks.service.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
@@ -44,12 +44,12 @@ test('foto/arquivo ilegível: imagem, arquivo ou genérico', () => {
   assert.equal(midiaNaoLidaDoTurno(`${AUDIO_SEM_OUVIR}\n\n${MARCA_ANEXO_NAO_LIDO}`), 'midia');
 });
 
-test('Lite: o aviso de mídia + a marca de que ninguém abriu', () => {
+test('Lite: o aviso de mídia sozinho (sem a marca de áudio não ouvido) o código não trata', () => {
   const aviso = 'Você recebeu uma mensagem de mídia (ID da mensagem: 3EB0A1B2C3D4E5F6)';
-  assert.equal(midiaNaoLidaDoTurno(`${aviso}\n\n${MARCA_MIDIA_NAO_ABERTA}`), 'midia');
-  // sem a marca (a mídia foi lida, ou não sabemos) o código não age
   assert.equal(midiaNaoLidaDoTurno(aviso), null);
-  assert.equal(midiaNaoLidaDoTurno(`'messageContextInfo' is not yet supported\n\n${MARCA_MIDIA_NAO_ABERTA}`), 'midia');
+  assert.equal(midiaNaoLidaDoTurno(`'messageContextInfo' is not yet supported`), null);
+  // com a marca (o webhook a põe quando o áudio do Lite não foi lido) vira pedido para escrever
+  assert.equal(midiaNaoLidaDoTurno(`${aviso}\n\n${AUDIO_SEM_OUVIR}`), 'audio');
 });
 
 test('se ele escreveu algo junto, ou a mídia foi lida (transcrição), o modelo responde: o código não age', () => {
@@ -59,14 +59,26 @@ test('se ele escreveu algo junto, ou a mídia foi lida (transcrição), o modelo
   assert.equal(midiaNaoLidaDoTurno('oi, quero marcar'), null);
 });
 
-test('liteSemLeitura: só quando ninguém leu nada (nem áudio da rota oficial, nem anexo, nem o webhook)', () => {
+test('liteAudioSemLeitura: só ÁUDIO do paciente que a rota oficial lista e ninguém leu (figurinha, reação e foto ficam como antes)', () => {
   const aviso = 'Você recebeu uma mensagem de mídia (ID da mensagem: 3EB0A1B2C3D4E5F6)';
-  const base = { humanMessage: aviso, blocoOficial: '', textoDosAnexos: '', leituraNoWebhook: false };
-  assert.equal(liteSemLeitura(base), true);
-  assert.equal(liteSemLeitura({ ...base, blocoOficial: '<conversa_oficial>\n- 10:00 · Paciente: [áudio transcrito] "quero marcar"\n</conversa_oficial>' }), false);
-  assert.equal(liteSemLeitura({ ...base, textoDosAnexos: '[imagem do cliente]: exame' }), false);
-  assert.equal(liteSemLeitura({ ...base, leituraNoWebhook: true }), false);
-  assert.equal(liteSemLeitura({ ...base, humanMessage: 'oi, quero marcar' }), false);
+  const agora = Date.parse('2026-11-27T13:00:00Z');
+  const msg = (extra: Partial<MensagemOficial>): MensagemOficial =>
+    ({ id: 'm1', em: new Date(agora - 60_000), autor: 'paciente', direcao: 'entrada', texto: '', anexo: { tipo: 'voice', link: null }, ...extra }) as MensagemOficial;
+  const base = { humanMessage: aviso, blocoOficial: '', leituraNoWebhook: false, msgs: [msg({})], agora };
+  // o áudio está listado (ainda sem link, ou com link mas sem transcrição): não foi lido
+  assert.equal(liteAudioSemLeitura(base), true);
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ anexo: { tipo: 'voice', link: 'https://x/a.ogg' } })] }), true);
+  // foi transcrito pela rota oficial, ou o webhook já leu
+  assert.equal(liteAudioSemLeitura({ ...base, blocoOficial: '<conversa_oficial>\n- 10:00 · Paciente: [áudio transcrito] "quero marcar"\n</conversa_oficial>' }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, leituraNoWebhook: true }), false);
+  // figurinha/foto/reação: o aviso é o mesmo, mas não é áudio
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ anexo: { tipo: 'sticker', link: null } })] }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ anexo: { tipo: 'pic', link: null } })] }), false);
+  // rota oficial não lida, áudio antigo, áudio que a Sofia já respondeu, ou nem é aviso de mídia
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: null }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({ em: new Date(agora - 20 * 60_000) })] }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, msgs: [msg({}), msg({ id: 'm2', autor: 'sofia', direcao: 'saida', anexo: undefined, em: new Date(agora - 30_000) })] }), false);
+  assert.equal(liteAudioSemLeitura({ ...base, humanMessage: 'oi, quero marcar' }), false);
 });
 
 test('a resposta do modelo que já pede para escrever ou passa para a equipe NÃO é trocada (nunca em dobro)', () => {

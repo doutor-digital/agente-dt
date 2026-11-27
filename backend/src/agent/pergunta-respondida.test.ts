@@ -104,6 +104,50 @@ test('cidade: "moro em", "sou de", "aqui em" valem; "sou de confiança" e "vim d
   }
 });
 
+test('cidade: "moro em casa", "no sítio", "no centro" e bairro NÃO são cidade (achado da revisão)', () => {
+  for (const fala of ['moro em casa própria', 'moro no sítio', 'moro em apartamento', 'moro no centro', 'moro na fazenda']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const resp of ['no centro', 'bairro Nova Esperança', 'em casa']) {
+    assert.ok(!temas([ia('Em qual cidade você mora?'), p(resp)]).includes('cidade'), `não deveria contar: ${resp}`);
+  }
+});
+
+test('tempo: "desde que horas vocês abrem?" e "antes de 2 semanas" NÃO são o tempo da dor (achado da revisão)', () => {
+  for (const fala of ['desde que horas vocês abrem?', 'não consigo antes de 2 semanas', 'só depois de 3 meses']) {
+    assert.ok(!temas([p(fala)]).includes('tempo de dor'), `não deveria contar: ${fala}`);
+  }
+});
+
+test('confirmar a cidade que ele disse ("Você mora em Marabá, né?") não é repetir a pergunta; perguntar a cidade é', () => {
+  const ja = jaRespondidas([p('moro em Marabá')]);
+  assert.deepEqual(temasRepetidosNaResposta('Perfeito! Você mora em Marabá, né? Tenho terça às 16h.', ja), []);
+  assert.deepEqual(temasRepetidosNaResposta('Em qual cidade você mora?', ja), ['cidade']);
+});
+
+test('2ª revisão: negação, "vim do Hospital", resposta que é dor, cortesia e idade por extenso NÃO contam', () => {
+  for (const fala of ['Não moro aqui', 'nunca morei em Marabá', 'não sou daqui', 'Vim do Hospital Santa Rita, o médico indicou vocês', 'Sou da Unimed']) {
+    assert.ok(!temas([p(fala)]).includes('cidade'), `cidade não deveria contar: ${fala}`);
+  }
+  assert.ok(!temas([ia('Qual é a sua cidade?'), p('sinto dor na lombar')]).includes('cidade'));
+  assert.ok(!temas([ia('Qual é a sua cidade?'), p('Meu nome é João')]).includes('cidade'));
+  for (const fala of ['Boa tarde, desculpa incomodar, queria saber o preço', 'não quero atrapalhar', 'se não for incomodar']) {
+    assert.ok(!temas([p(fala)]).includes('impacto na rotina'), `rotina não deveria contar: ${fala}`);
+  }
+  for (const fala of ['tenho quarenta anos e dor na lombar', 'tenho trinta anos', 'preciso de 2 dias para pensar']) {
+    assert.ok(!temas([p(fala)]).includes('tempo de dor'), `tempo não deveria contar: ${fala}`);
+  }
+  // e o que é de verdade continua contando
+  assert.ok(temas([p('a dor me atrapalha muito no trabalho')]).includes('impacto na rotina'));
+  assert.ok(temas([p('isso atrapalha demais')]).includes('impacto na rotina'));
+  assert.ok(temas([p('minha dor é de 3 anos')]).includes('tempo de dor'));
+});
+
+test('2ª revisão: o trecho do cartão cita a chave que é cidade, não a que é lixo', () => {
+  const r = jaRespondidas([p('oi')], { cidade: 'lombar', municipio: 'Parauapebas' }).find((x) => x.tema === 'cidade');
+  assert.equal(r?.trecho, 'Parauapebas');
+});
+
 test('cidade: resposta curta logo depois da pergunta só dela conta; sim/não, preço e fala longa não', () => {
   assert.ok(temas([ia('Você mora aqui em Parauapebas?'), p('Parauapebas mesmo')]).includes('cidade'));
   assert.ok(temas([ia('Em qual cidade você mora?'), p('Marabá')]).includes('cidade'));
@@ -193,46 +237,57 @@ test('<falta_para_agendar> tira o tempo e a cidade que ele já disse na conversa
 // ── no prompt do turno ──────────────────────────────────────────────────────────────────────────────────
 
 const unit = { slug: 'unidade-de-teste', name: 'T', collectNameEnabled: false, personaEmojis: [], handoffKeywords: [] } as unknown as Unit;
+
+/** A chave nasce DESLIGADA (automacoes.ts): o teste liga a unidade de teste, como a tela faria. */
+function comChaveLigada<T>(valor: string | undefined, fn: () => T): T {
+  const antes = process.env.PERGUNTA_JA_RESPONDIDA_SLUGS;
+  if (valor === undefined) delete process.env.PERGUNTA_JA_RESPONDIDA_SLUGS;
+  else process.env.PERGUNTA_JA_RESPONDIDA_SLUGS = valor;
+  try {
+    return fn();
+  } finally {
+    if (antes === undefined) delete process.env.PERGUNTA_JA_RESPONDIDA_SLUGS;
+    else process.env.PERGUNTA_JA_RESPONDIDA_SLUGS = antes;
+  }
+}
 const conversa: Fala[] = [
   p('oi, dor na lombar há 3 anos, moro em Marabá'),
   ia('Entendi! E há quanto tempo você sente essa dor?'),
   p('já disse, 3 anos'),
 ];
 
-test('o <ja_respondido> entra no prompt do turno (conversa) e o falta_para_agendar não cobra de novo', () => {
-  const prompt = composeSystemPrompt({
-    unit,
-    historico: conversa,
-    leadMemory: { facts: { nome: 'Marcos', queixa: 'lombar' } } as never,
-  });
-  assert.match(prompt, /<ja_respondido>[\s\S]*TEMPO DE DOR/);
-  const falta = prompt.slice(prompt.indexOf('<falta_para_agendar>'), prompt.indexOf('</falta_para_agendar>'));
-  assert.ok(falta.length > 0);
-  assert.doesNotMatch(falta, /tempo de dor/);
-  assert.doesNotMatch(falta, /cidade/);
-});
+test('o <ja_respondido> entra no prompt do turno (conversa) e o falta_para_agendar não cobra de novo', () =>
+  comChaveLigada('unidade-de-teste', () => {
+    const prompt = composeSystemPrompt({
+      unit,
+      historico: conversa,
+      leadMemory: { facts: { nome: 'Marcos', queixa: 'lombar' } } as never,
+    });
+    assert.match(prompt, /<ja_respondido>[\s\S]*TEMPO DE DOR/);
+    const falta = prompt.slice(prompt.indexOf('<falta_para_agendar>'), prompt.indexOf('</falta_para_agendar>'));
+    assert.ok(falta.length > 0);
+    assert.doesNotMatch(falta, /tempo de dor/);
+    assert.doesNotMatch(falta, /cidade/);
+  }));
 
-test('o fato do cartão também vale no prompt (a cidade gravada)', () => {
-  const prompt = composeSystemPrompt({
-    unit,
-    historico: [p('oi, dor na lombar'), ia('Oi! Qual seu nome?'), p('Marcos')],
-    leadMemory: { facts: { nome: 'Marcos', queixa: 'lombar', cidade: 'Marabá' } } as never,
-  });
-  assert.match(prompt, /CIDADE: ele JÁ respondeu \(está no cartão\): "Marabá"/);
-});
+test('o fato do cartão também vale no prompt (a cidade gravada)', () =>
+  comChaveLigada('unidade-de-teste', () => {
+    const prompt = composeSystemPrompt({
+      unit,
+      historico: [p('oi, dor na lombar'), ia('Oi! Qual seu nome?'), p('Marcos')],
+      leadMemory: { facts: { nome: 'Marcos', queixa: 'lombar', cidade: 'Marabá' } } as never,
+    });
+    assert.match(prompt, /CIDADE: ele JÁ respondeu \(está no cartão\): "Marabá"/);
+  }));
 
-test('chave desligada: nada de bloco nem de lista enxugada', () => {
-  const antes = process.env.PERGUNTA_JA_RESPONDIDA_SLUGS;
-  // a chave nasce ligada (quandoVazio: 'todas'); com a lista preenchida sem a unidade, fica desligada
-  process.env.PERGUNTA_JA_RESPONDIDA_SLUGS = 'outra-unidade';
-  try {
+test('chave nasce DESLIGADA: sem ligar, nada de bloco nem de lista enxugada; ligada por "*" ou pelo slug, liga', () => {
+  comChaveLigada(undefined, () => {
     assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), false);
     const prompt = composeSystemPrompt({ unit, historico: conversa, leadMemory: { facts: { nome: 'Marcos', queixa: 'lombar' } } as never });
     assert.doesNotMatch(prompt, /<ja_respondido>/);
     assert.match(prompt, /tempo de dor/);
-  } finally {
-    if (antes === undefined) delete process.env.PERGUNTA_JA_RESPONDIDA_SLUGS;
-    else process.env.PERGUNTA_JA_RESPONDIDA_SLUGS = antes;
-  }
-  assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), true);
+  });
+  comChaveLigada('outra-unidade', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), false));
+  comChaveLigada('unidade-de-teste', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), true));
+  comChaveLigada('*', () => assert.equal(perguntaJaRespondidaLigada('unidade-de-teste'), true));
 });

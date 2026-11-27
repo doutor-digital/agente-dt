@@ -12,7 +12,7 @@
  * verdade. A resposta só conta quando há evidência: na dúvida, NÃO diz que foi respondida (perguntar uma vez a mais é
  * ruim; deixar de perguntar a cidade e oferecer horário a quem mora longe é pior).
  */
-import { cidadeConhecida, type Fatos } from './falta-para-agendar.js';
+import { cidadeConhecida, pareceCidade, type Fatos } from './falta-para-agendar.js';
 import { perguntasDe, respostaVazia, type Fala } from './repeticao.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
@@ -26,7 +26,7 @@ export interface JaRespondida {
   origem: 'conversa' | 'cartão';
 }
 
-/** Chave `pergunta-ja-respondida` (automacoes.ts): nasce LIGADA na rede toda; a tela desliga por unidade. */
+/** Chave `pergunta-ja-respondida` (automacoes.ts): nasce DESLIGADA; liga-se por unidade (piloto) pela tela ou pelo `.env`. */
 export function perguntaJaRespondidaLigada(slug: string): boolean {
   return automacaoLigada(slug, 'pergunta-ja-respondida', process.env.PERGUNTA_JA_RESPONDIDA_SLUGS);
 }
@@ -81,12 +81,19 @@ const APROX = String.raw`(?:(?:uns|umas|cerca\s+de|quase|mais\s+de|menos\s+de|ap
 const TEMPO_COM_VERBO = new RegExp(String.raw`\b(?:ha|faz|fazem|ja\s+faz)\s+${APROX}${NUM}\s+${UNID}\b`);
 const TEMPO_SEM_VERBO = new RegExp(String.raw`\b${APROX}${NUM}\s+${UNID}\b`, 'g');
 /** "em 2 semanas", "daqui 15 dias", "por 3 meses": prazo que vem, não há quanto tempo dói. */
-const ANTES_DE_PRAZO = /(?:^|\s)(?:em|daqui|dentro|cada|por|pra|para|ate|depois|durante|nos|nas|ultimos|ultimas|proximos|proximas|a)\s*$/;
+const ANTES_DE_PRAZO = /(?:^|\s)(?:em|daqui|dentro|cada|por|pra|para|ate|depois|durante|nos|nas|ultimos|ultimas|proximos|proximas|antes|a)\s*$/;
 /** A idade ("tenho 40 anos", "aos 52", "40 anos de idade") não é o tempo da dor. */
-const IDADE = /\b(?:tenho|tem|tinha|completei|completou)\s+\d+\s*anos|\d+\s*anos\s+de\s+idade|\baos\s+\d+|\bcom\s+\d+\s*anos/;
+const IDADE = new RegExp(
+  String.raw`\b(?:tenho|tem|tinha|completei|completou)\s+(?:\d+|${NUM})\s*anos|\d+\s*anos\s+de\s+idade|\baos\s+\d+|\bcom\s+\d+\s*anos` +
+    String.raw`|\b(?:vinte|trinta|quarenta|cinquenta|sessenta|setenta|oitenta|noventa)(?:\s+e\s+\w+)?\s+anos\b`,
+);
+/** "preciso de 2 dias": prazo. (Para meses e anos, "dor de 3 anos" é resposta.) */
+const DE_DE_PRAZO = /(?:^|\s)de\s*$/;
+/** "depois de 3 meses", "antes de 2 semanas", "dentro de 1 mês": prazo, com qualquer unidade. */
+const PRAZO_COM_DE = /(?:antes|depois|dentro|ate)\s+de\s*$/;
 const TEMPO_VAGO = /\b(?:ha|faz)\s+(?:muito\s+|bastante\s+)?(?:tempo|tempao|anos|meses)\b|\bha\s+um\s+tempao\b/;
 const TEMPO_DESDE =
-  /\bdesde\s+(?:o\s+|a\s+|de\s+)?(?:\d{4}|\d{1,2}\/\d{2,4}|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|ano\s+passado|mes\s+passado|semana\s+passada|ontem|anteontem|hoje|domingo|segunda|terca|quarta|quinta|sexta|sabado|que\s+\w+|crianca|adolescencia|natal|carnaval)/;
+  /\bdesde\s+(?:o\s+|a\s+|de\s+)?(?:\d{4}|\d{1,2}\/\d{2,4}|janeiro|fevereiro|marco|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro|ano\s+passado|mes\s+passado|semana\s+passada|ontem|anteontem|hoje|domingo|segunda|terca|quarta|quinta|sexta|sabado|crianca|adolescencia|natal|carnaval)/;
 
 function respostaDeTempo(texto: string): string | null {
   const t = semAcento(falaLimpa(texto));
@@ -95,7 +102,10 @@ function respostaDeTempo(texto: string): string | null {
   for (const m of t.matchAll(TEMPO_SEM_VERBO)) {
     if (/^um\s+dia$/.test(m[0].trim())) continue; // "um dia eu levantei peso": não é quanto tempo
     if (/anos?$/.test(m[0]) && (IDADE.test(t) || Number(/\d+/.exec(m[0])?.[0] ?? 0) > 15)) continue;
-    if (!ANTES_DE_PRAZO.test(t.slice(Math.max(0, m.index - 20), m.index))) return m[0].trim();
+    const antes = t.slice(Math.max(0, m.index - 20), m.index);
+    if (/(?:dias?|semanas?|quinzenas?)$/.test(m[0]) && DE_DE_PRAZO.test(antes)) continue;
+    if (PRAZO_COM_DE.test(antes)) continue;
+    if (!ANTES_DE_PRAZO.test(antes)) return m[0].trim();
   }
   return null;
 }
@@ -103,21 +113,36 @@ function respostaDeTempo(texto: string): string | null {
 // "moro em Marabá", "moramos no Pará", "resido na capital", "moro aqui perto", "sou de Parauapebas" (com maiúscula: "sou de
 // confiança" não é cidade), "venho de Eldorado", "aqui de Canaã".
 const CIDADE_MORO =
-  /(?<![\p{L}])(?:[Mm]oro|[Mm]orando|[Mm]ora|[Mm]oramos|[Rr]esido|[Rr]esidente)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na|perto\s+d[aeo]s?|pr[oó]ximo\s+(?:a|de|do|da))\s+[\p{L}][\p{L}'.-]*|aqui(?:\s+mesmo|\s+perto)?)/u;
+  /(?<![\p{L}])(?:[Mm]oro|[Mm]orando|[Mm]ora|[Mm]oramos|[Rr]esido|[Rr]esidente)\s+(?:aqui\s+|ali\s+|l[aá]\s+)?(?:(?:em|no|na|perto\s+d[aeo]s?|pr[oó]ximo\s+(?:a|de|do|da))\s+([\p{L}][\p{L}'.-]*)|aqui(?:\s+mesmo|\s+perto)?)/u;
+/** "moro em casa", "moro no sítio", "moro no centro": onde ele mora, não a cidade. */
+const NAO_E_CIDADE = /^(?:casa|apartamento|apto|ap|sitio|fazenda|roca|chacara|zona|bairro|centro|condominio|loteamento|residencial|setor|rua|avenida|av|interior|beira|predio|quarto|frente|fundos|cima|baixo|um|uma|outro|outra|onde|ca|la|ali)$/;
 // "vim do Instagram" não é cidade
 const CIDADE_SOU_DE =
-  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho|[Vv]im|[Vv]iemos|[Aa]qui|[Dd]aqui)\s+(?:d[aeo]s?|em)\s+(?!(?:Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site)\b)\p{Lu}[\p{L}'-]+/u;
+  /(?<![\p{L}])(?:[Ss]ou|[Ss]omos|[Vv]enho|[Vv]im|[Vv]iemos|[Aa]qui|[Dd]aqui)\s+(?:d[aeo]s?|em)\s+(?!(?:Instagram|Facebook|Google|WhatsApp|Whats|Insta|Face|TikTok|YouTube|An[uú]ncio|Site|Hospital|Cl[ií]nica|Posto|Unimed|M[eé]dico|Doutor|Dr|Dra|Fisio\w*|Ortoped\w*|Plano|Amil|Bradesco|SUS|Ambulat[óo]rio|Pronto|Santa\s+Casa|UPA|UBS)\b)\p{Lu}[\p{L}'-]+/u;
 const CIDADE_SOU_DAQUI = /(?<![\p{L}])[Ss]ou\s+daqui\b|(?<![\p{L}])[Ss]omos\s+daqui\b/u;
+
+/** "Não moro aqui", "nunca morei em Marabá", "já não sou daqui": o contrário de responder. */
+function negado(t: string, indice: number): boolean {
+  return /(?:\bn[ãa]o|\bnunca|\bj[aá]\s+n[ãa]o|\bdeixei\s+de)\s*$/i.test(t.slice(Math.max(0, indice - 14), indice));
+}
 
 function respostaDeCidade(texto: string): string | null {
   const t = falaLimpa(texto);
-  const m = CIDADE_MORO.exec(t) ?? CIDADE_SOU_DE.exec(t) ?? CIDADE_SOU_DAQUI.exec(t);
-  return m ? m[0].trim() : null;
+  const moro = CIDADE_MORO.exec(t);
+  if (moro && !negado(t, moro.index) && !(moro[1] && NAO_E_CIDADE.test(semAcento(moro[1])))) return moro[0].trim();
+  for (const re of [CIDADE_SOU_DE, CIDADE_SOU_DAQUI]) {
+    const m = re.exec(t);
+    if (m && !negado(t, m.index)) return m[0].trim();
+  }
+  return null;
 }
 
 const IMPACTO_RESPOSTA = new RegExp(
   [
-    String.raw`\b(?:atrapalh\w*|impede\w*|impedindo|limita\w*|prejudic\w*|incomod\w*)\b`,
+    // "isso me atrapalha", "a dor atrapalha muito": exige o sujeito (eu / a dor), para não pegar "desculpa incomodar" nem "não quero atrapalhar"
+    String.raw`\b(?:me|nos)\s+(?:\w+\s+){0,2}(?:atrapalh|impede|impedindo|limita|limitando|prejudic)\w*`,
+    String.raw`\b(?:dor|isso|ela|esta|essa)\s+(?:\w+\s+){0,2}(?:atrapalh|impede|impedindo|limita|limitando|prejudic)\w*`,
+    String.raw`\batrapalh\w*\s+(?:muito|bastante|demais|tudo|minha|meu|o\s+meu|a\s+minha)`,
     String.raw`\bnao\s+(?:consigo|conseguia|consegue|aguento)\s+(?:mais\s+)?(?:trabalhar|dormir|andar|ficar|levantar|sentar|abaixar|me\s+abaixar|fazer|pegar|carregar|brincar|cuidar|correr|caminhar|treinar|dirigir)`,
     String.raw`\b(?:acordo|acordando|durmo|dormindo)\s+(?:mal|com\s+dor|de\s+madrugada|varias\s+vezes)|\bnao\s+(?:durmo|consigo\s+dormir)`,
     String.raw`\btrabalh\w+\s+(?:com\s+dor|sofrendo|mal)|\b(?:parei|deixei)\s+de\s+(?:trabalhar|treinar|fazer|caminhar|correr)|\bafastad[oa]\b|\batestado\b`,
@@ -148,7 +173,7 @@ function doCartao(tema: Tema, fatos: Fatos | null | undefined): string | null {
   if (tema === 'cidade') {
     // a MESMA conta da lista <falta_para_agendar>: `localizacao` (onde dói) e parte do corpo não são cidade
     if (!cidadeConhecida(fatos)) return null;
-    const k = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'].find((c) => String(fatos[c] ?? '').trim());
+    const k = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'].find((c) => pareceCidade(fatos[c]));
     return k ? String(fatos[k]).trim().slice(0, 60) : 'consegue vir à unidade';
   }
   for (const k of FATO_DO_TEMA[tema]) {
@@ -159,6 +184,8 @@ function doCartao(tema: Tema, fatos: Fatos | null | undefined): string | null {
 }
 
 const PALAVRAS_DE_OUTRO_ASSUNTO = /\b(?:pre[cç]o|valor|quanto|custa|hor[aá]rio|consulta|agendar|marcar|dia|plano|conv[eê]nio|pix)\b/i;
+/** Resposta curta à pergunta da cidade que NÃO é cidade ("no centro", "bairro Nova Esperança", "em casa"). */
+const ONDE_MORA_SEM_CIDADE = /\b(?:bairro|centro|rua|avenida|av\.|casa|apartamento|s[ií]tio|fazenda|zona\s+rural|condom[ií]nio|loteamento)\b/i;
 
 /**
  * A fala logo depois de uma pergunta SÓ daquele tema responde a ela? Para tempo e rotina, qualquer fala que não seja vazia,
@@ -171,7 +198,9 @@ function respostaImediata(tema: Tema, fala: string, anterior: string | null): st
   if (!t || t.includes('?')) return null;
   const palavras = t.split(/\s+/).filter(Boolean);
   if (tema === 'cidade') {
-    if (palavras.length > 6 || PALAVRAS_DE_OUTRO_ASSUNTO.test(t)) return null;
+    // nome de cidade tem até 4 palavras; o resto (dor, nome, pedido) é outra coisa dita no lugar da resposta
+    if (palavras.length > 4 || PALAVRAS_DE_OUTRO_ASSUNTO.test(t) || ONDE_MORA_SEM_CIDADE.test(t) || !pareceCidade(t)) return null;
+    if (/\b(?:sinto|tenho|dor|doi|meu|minha|nome|chamo|chamar|pode|quero|queria|preciso|estou|to|vou|acho|nao|ja|ola|oi)\b/.test(semAcento(t))) return null;
     if (/^(?:sim|n[aã]o|ok|okay|t[aá]|isso|aham|uhum|obrigad[oa]|pode\s+ser)\b/i.test(t)) return null;
     return t.slice(0, 60);
   }
@@ -249,6 +278,8 @@ export function renderJaRespondido(ja: readonly JaRespondida[]): string {
   );
 }
 
+const CONFIRMA_CIDADE_DITA = /\bmora\s+(?:aqui\s+)?(?:em|no|na)\s+\p{Lu}/u;
+
 /** Os temas já respondidos que a resposta do modelo pergunta de novo. */
 export function temasRepetidosNaResposta(resposta: string, ja: readonly JaRespondida[]): Tema[] {
   if (ja.length === 0) return [];
@@ -256,7 +287,10 @@ export function temasRepetidosNaResposta(resposta: string, ja: readonly JaRespon
   const repetidos = new Set<Tema>();
   for (const q of perguntasDe(resposta)) {
     const tema = temaDaPergunta(q);
-    if (tema && respondidos.has(tema)) repetidos.add(tema);
+    if (!tema || !respondidos.has(tema)) continue;
+    // "Você mora em Marabá, né?" confirma o que ele disse (cita a cidade), não pergunta a cidade: não é repetição
+    if (tema === 'cidade' && CONFIRMA_CIDADE_DITA.test(q)) continue;
+    repetidos.add(tema);
   }
   return [...repetidos];
 }

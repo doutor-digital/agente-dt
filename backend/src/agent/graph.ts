@@ -1636,6 +1636,7 @@ export async function buildAgentGraph(
       // Mandou só um áudio, foto ou arquivo que ninguém leu e a resposta não diz isso (silêncio, despedida, "ótimo!" como se tivesse
       // ouvido): sai a frase fixa que pede para escrever, com os horários da mesa (midia-nao-lida.ts). Nunca depois de uma passagem
       // para a equipe, e nunca duas vezes seguidas.
+      let midiaFixa = false;
       if (!trava && !passouPorSinal && !candidatoNoTurno && !respostaFixa && midiaNaoLidaLigada(unit.slug)) {
         const fixa = respostaDeMidiaNaoLida({
           entrada: userMessage ?? '',
@@ -1646,6 +1647,7 @@ export async function buildAgentGraph(
         });
         if (fixa) {
           respostaFixa = true;
+          midiaFixa = true;
           await recorder.step({
             kind: 'THINKING',
             title: `📎 Mídia que ninguém leu (${fixa.tipo}) e a resposta não dizia isso — saiu o pedido para escrever`,
@@ -1658,7 +1660,7 @@ export async function buildAgentGraph(
 
       // Ele agradeceu, se despediu ou disse que vai se organizar (paciente-encerrou.ts): a resposta não empurra horário.
       // Quem retoma é a régua. Corte em código, sem modelo — sobra a parte calorosa, ou a despedida curta.
-      if (encerrou && empurraHorario(textoFinal, agoraDaUnidade)) {
+      if (encerrou && !midiaFixa && empurraHorario(textoFinal, agoraDaUnidade)) {
         const semEmpurrao = semEmpurrarHorario(textoFinal, agoraDaUnidade, encerrou);
         await recorder.step({
           kind: 'THINKING',

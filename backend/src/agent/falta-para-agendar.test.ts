@@ -104,6 +104,17 @@ test('27/11: cidade que veio de apelido mas é parte do corpo (fatos-canonicos g
   }
 });
 
+test('27/11: cidade com nome de parte do corpo (Braço do Norte, Dores do Indaiá) CONTA — o filtro é por valor, não por palavra solta', () => {
+  for (const cidade of ['Braço do Norte', 'Dores do Indaiá', 'Lagoa da Prata', 'Costa Rica', 'São José do Rio Preto', 'São João da Boa Vista', 'Campo Grande, Mato Grosso do Sul']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', cidade });
+    assert.ok(!/cidade/.test(b), `${cidade} deveria contar`);
+  }
+  for (const lixo of ['dor na lombar que desce pra perna', 'Lombar', 'Lado direito', 'dores nas costas']) {
+    const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'dor', tempo_dor: '1 ano', cidade: lixo });
+    assert.match(b, /cidade → horário escolhido/, lixo);
+  }
+});
+
 test('27/11: cidade de verdade conta, de qualquer nome de fato', () => {
   for (const [k, v] of [['cidade', 'Imperatriz'], ['municipio', 'Canaã dos Carajás'], ['cidade_paciente', 'São Paulo'], ['mora_em', 'Marabá']] as const) {
     const b = renderFaltaParaAgendar({ nome: 'Ana', queixa: 'lombar', tempo_dor: '2 anos', [k]: v });

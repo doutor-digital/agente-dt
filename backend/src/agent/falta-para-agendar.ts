@@ -52,13 +52,36 @@ interface Item {
  */
 const CHAVES_CIDADE = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'];
 const CHAVES_VEM_A_UNIDADE = ['consegue_vir', 'pode_vir', 'consegue_ir', 'vem_a_unidade'];
-const PARTE_DO_CORPO =
-  /\b(?:lombar|lombares|coluna|cervical|tor[aá]cic[ao]|costas|pesco[cç]o|nuca|ci[aá]tic[ao]|perna|pernas|bra[cç]o|bra[cç]os|quadril|joelho|ombro|gl[uú]teo|virilha|lado|direit[oa]|esquerd[oa]|regi[aã]o|dor|dores)\b/i;
+const PARTE_DO_CORPO = new Set([
+  'lombar', 'lombares', 'coluna', 'cervical', 'toracica', 'toracico', 'costas', 'pescoco', 'nuca', 'ciatico', 'ciatica',
+  'perna', 'pernas', 'braco', 'bracos', 'quadril', 'joelho', 'ombro', 'gluteo', 'virilha', 'lado', 'lados', 'direito',
+  'direita', 'esquerdo', 'esquerda', 'regiao', 'dor', 'dores', 'baixa', 'alta', 'parte', 'meio', 'inferior', 'superior',
+  'toda', 'todo', 'ambos', 'ambas', 'pe', 'tornozelo', 'cotovelo', 'punho', 'mao', 'maos',
+  // ligações de frase ("dor na lombar que desce pra perna")
+  'de', 'do', 'da', 'dos', 'das', 'e', 'na', 'no', 'nas', 'nos', 'a', 'o', 'que', 'doi', 'pra', 'para', 'com', 'sem', 'desce', 'ate', 'mais', 'muito', 'forte',
+]);
 const NEGATIVO = /^\s*(?:n[aã]o|nao|false|0|n)\b/i;
 
-function pareceCidade(valor: unknown): boolean {
+/**
+ * Cidade de verdade, não onde dói. Cidade que tem nome de parte do corpo ("Braço do Norte", "Dores do Indaiá") passa: o que
+ * se recusa é o valor feito SÓ de palavras de corpo/lado ("lombar", "Lado direito"), a frase comprida, ou o que tem palavra de
+ * corpo e foi escrito em minúscula (a IA grava a dor em minúscula; a cidade, com inicial maiúscula).
+ */
+export function pareceCidade(valor: unknown): boolean {
   const v = String(valor ?? '').trim();
-  return v.length > 1 && v.length <= 60 && /\p{L}/u.test(v) && !PARTE_DO_CORPO.test(v);
+  if (v.length < 2 || v.length > 60 || !/\p{L}/u.test(v)) return false;
+  const palavras = v
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z]+/)
+    .filter(Boolean);
+  if (palavras.length === 0) return false;
+  // frase, não cidade (os conectores não contam: "São José do Rio Preto" tem 4 palavras de nome)
+  if (palavras.filter((w) => !['de', 'do', 'da', 'dos', 'das', 'e'].includes(w)).length >= 6) return false;
+  if (palavras.every((w) => PARTE_DO_CORPO.has(w))) return false;
+  if (palavras.some((w) => PARTE_DO_CORPO.has(w)) && /^\p{Ll}/u.test(v)) return false;
+  return true;
 }
 
 export function cidadeConhecida(fatos: Fatos): boolean {

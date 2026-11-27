@@ -22,30 +22,43 @@ import { MARCA_AUDIO_NAO_OUVIDO, type Fala } from './repeticao.js';
 import { horariosOferecidos, horariosQueJaPassaram, type HorarioOferecido } from './horario-oferecido.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
 import { temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { desdeUltimaFalaDaSofia, type MensagemOficial } from '../services/kommo-talks.service.js';
 
 /** O mesmo texto de `MARCA_ANEXO_NAO_LIDO` (lib/anexos-do-turno.ts) e do webhook; o teste confere que continuam iguais. */
 export const MARCA_ANEXO_NAO_LIDO_DO_TURNO = '[cliente mandou uma imagem ou um arquivo, mas não foi possível ler]';
-/** O aviso do WhatsApp Lite quando o arquivo não carregou na rota oficial a tempo (o webhook o põe na mensagem do modelo). */
-export const MARCA_MIDIA_NAO_ABERTA = '[mídia do cliente — não deu pra abrir]';
 /** Trecho fixo do recado de `instrucaoAudioNaoTranscrito(true)`; o teste confere que continua lá. */
 export const INSTRUCAO_DE_PASSAR_PARA_EQUIPE = 'NÃO peça pra ele gravar de novo nem pra escrever';
 const IMAGEM_SEM_CONTEUDO = /\[(imagem|foto|arquivo|documento|pdf)[^\]]*sem conte[úu]do leg[íi]vel\]/i;
 
-/** Chave `midia-nao-lida-pede-escrever` (automacoes.ts): nasce LIGADA na rede toda; a tela desliga por unidade. */
+/** Chave `midia-nao-lida-pede-escrever` (automacoes.ts): nasce DESLIGADA; liga-se por unidade (piloto) pela tela ou pelo `.env`. */
 export function midiaNaoLidaLigada(slug: string): boolean {
   return automacaoLigada(slug, 'midia-nao-lida-pede-escrever', process.env.MIDIA_NAO_LIDA_PEDE_ESCREVER_SLUGS);
 }
 
 export type TipoDeMidia = 'audio' | 'imagem' | 'arquivo' | 'midia';
 
+/** Áudio do Lite recente o bastante para ser o deste turno (o turno pode ter esperado ~18 s pelo arquivo e pela fila). */
+const JANELA_DO_AUDIO_LITE_MS = 5 * 60_000;
+
 /**
- * WhatsApp Lite: o aviso de mídia está na fala e NADA a leu (nem o áudio transcrito pela rota oficial, nem foto/PDF lido,
- * nem leitura do próprio webhook). Quem chama põe `MARCA_MIDIA_NAO_ABERTA` na mensagem do modelo.
+ * WhatsApp Lite: o aviso de mídia está na fala e o ÁUDIO que ele anuncia não foi lido (nem pelo webhook, nem transcrito pela
+ * rota oficial). Só ÁUDIO: sticker, reação e foto de unidade que não lê anexo chegam com o mesmo aviso, e pedir "me escreve" a quem
+ * mandou um 👍 seria pior que o silêncio. Só vale se a rota oficial JÁ lista o áudio do paciente depois da última fala da Sofia
+ * (com ou sem link, mas sem transcrição). Quem chama põe `AUDIO_NAO_OUVIDO` na mensagem do modelo, como no áudio que falha no webhook.
  */
-export function liteSemLeitura(a: { humanMessage: string; blocoOficial: string; textoDosAnexos: string; leituraNoWebhook: boolean }): boolean {
-  if (!temMidiaSemArquivo(a.humanMessage) || a.leituraNoWebhook) return false;
+export function liteAudioSemLeitura(a: {
+  humanMessage: string;
+  blocoOficial: string;
+  leituraNoWebhook: boolean;
+  msgs: MensagemOficial[] | null;
+  agora?: number;
+}): boolean {
+  if (!temMidiaSemArquivo(a.humanMessage) || a.leituraNoWebhook || !a.msgs) return false;
   if (/\[áudio transcrito\]/.test(a.blocoOficial)) return false;
-  return !a.textoDosAnexos.trim();
+  const agora = a.agora ?? Date.now();
+  return desdeUltimaFalaDaSofia(a.msgs).some(
+    (m) => m.autor === 'paciente' && m.direcao === 'entrada' && m.anexo?.tipo === 'voice' && agora - m.em.getTime() < JANELA_DO_AUDIO_LITE_MS,
+  );
 }
 
 /** A fala do paciente sem as marcas do sistema, os avisos do Lite e as instruções internas. O que sobra é o que ELE escreveu. */
@@ -71,7 +84,6 @@ export function midiaNaoLidaDoTurno(entrada: string): TipoDeMidia | null {
   const tipos = new Set<TipoDeMidia>();
   if (entrada.includes(MARCA_AUDIO_NAO_OUVIDO)) tipos.add('audio');
   if (entrada.includes(MARCA_ANEXO_NAO_LIDO_DO_TURNO)) tipos.add('midia');
-  if (entrada.includes(MARCA_MIDIA_NAO_ABERTA)) tipos.add('midia');
   const semConteudo = IMAGEM_SEM_CONTEUDO.exec(entrada);
   if (semConteudo) tipos.add(/imagem|foto/i.test(semConteudo[1]) ? 'imagem' : 'arquivo');
   if (tipos.size === 0) return null;
