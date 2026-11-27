@@ -1,5 +1,6 @@
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
+import { agoraUtcSql } from './sql-tempo.js';
 
 /**
  * Impede que a mesma mensagem seja processada duas vezes.
@@ -86,7 +87,7 @@ async function inserirReivindicacao(key: string, agora: number, ttlMs: number): 
     VALUES (${key}, ${vencimento})
     ON CONFLICT ("key") DO UPDATE
       SET "expires_at" = EXCLUDED."expires_at"
-      WHERE "message_claims"."expires_at" <= NOW()
+      WHERE "message_claims"."expires_at" <= ${agoraUtcSql}
   `;
   return inseridas > 0;
 }

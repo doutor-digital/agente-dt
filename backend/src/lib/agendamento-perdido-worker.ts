@@ -8,6 +8,7 @@ import { enviarTelegramSofia } from './telegram.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { registrarSimulacao } from './so-no-papel.js';
 import { avisoClinicaAtivo, avisarClinicaNaoFechou, avisoSemTrecho, reenviarMarcouPendentes, silencioDepoisDe } from './aviso-clinica-agendamento.js';
+import { AGORA_UTC } from './sql-tempo.js';
 
 /**
  * Avisa quando a IA chegou a oferecer horário e não fechou.
@@ -241,7 +242,7 @@ async function candidatos(): Promise<Candidato[]> {
         from execution_steps s
         join execution_traces t on t.id = s.trace_id
         join units u            on u.id = t.unit_id
-       where s.created_at > now() - ($1 || ' hours')::interval
+       where s.created_at > ${AGORA_UTC} - ($1 || ' hours')::interval
          and s.title ilike '%consultar_horarios%'
          -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
          and s.title not ilike '%bloqueado%'
@@ -253,10 +254,10 @@ async function candidatos(): Promise<Candidato[]> {
                   -- O sucesso é gravado como "Consulta marcada: …", sem o nome da tool:
                   -- sem esta linha, marcar de primeira virava alerta de perdido.
                   and (s2.title ilike '%agendar_consulta%' or s2.title like 'Consulta marcada:%')
-                  and s2.created_at > now() - ($1 || ' hours')::interval
+                  and s2.created_at > ${AGORA_UTC} - ($1 || ' hours')::interval
              )
        group by t.unit_id, u.slug, u.kommo_subdomain, t.lead_id
-      having max(s.created_at) < now() - ($2 || ' minutes')::interval
+      having max(s.created_at) < ${AGORA_UTC} - ($2 || ' minutes')::interval
        limit 200
     )
     select o."unitId", o."slug", o."leadId", o."ofereceuEm",

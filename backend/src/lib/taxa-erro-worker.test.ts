@@ -81,3 +81,83 @@ test('o motivo é frase de gente, não número solto', () => {
   const r = amostra({ recentesTotal: 40, recentesErro: 12, baseTotal: 500, baseErro: 100 });
   assert.ok(r.motivo.length > 12, 'quem for acordado às 3h precisa entender sem abrir o código');
 });
+
+// ── queda geral (rede inteira) ──────────────────────────────────────────────
+
+import { classificarCausa, quedaGeral, montarRede, type AmostraDaRede } from './taxa-erro-worker.js';
+
+const rede = (o: Partial<AmostraDaRede>): AmostraDaRede => ({
+  escopo: 'rede',
+  total: 0,
+  erros: 0,
+  unidadesComErro: 0,
+  causas: {},
+  ...o,
+});
+
+test('causa: lê crédito, chave, limite e indisponibilidade pela mensagem do provedor', () => {
+  // as três mensagens reais da queda de 26/11 para 27/11
+  assert.equal(classificarCausa('400 invalid_request_error: Your credit balance is too low to access the Anthropic API'), 'credito');
+  assert.equal(classificarCausa('429 You have no credits remaining'), 'credito'); // 429 mas é crédito, não limite de taxa
+  assert.equal(classificarCausa('You exceeded your current quota, please check your plan and billing details'), 'credito');
+  assert.equal(classificarCausa('401 Incorrect API key provided'), 'autenticacao');
+  assert.equal(classificarCausa('403 Forbidden'), 'autenticacao');
+  assert.equal(classificarCausa('429 Rate limit reached for requests'), 'limite');
+  assert.equal(classificarCausa('529 overloaded_error'), 'indisponivel');
+  assert.equal(classificarCausa('fetch failed'), 'indisponivel');
+  assert.equal(classificarCausa('Unexpected token < in JSON'), 'outra');
+  assert.equal(classificarCausa(null), 'outra');
+});
+
+test('queda geral: 1.000 erros de crédito em 1.000 chamadas alarma e diz a causa, mesmo com 39 unidades abaixo do mínimo', () => {
+  // 1.000 chamadas da rede, todas com erro de crédito, repartidas em 39 unidades (~25 por unidade em 10 min;
+  // nenhuma passaria do mínimo de 20 numa janela de 30 min de madrugada com volume real).
+  const amostras = montarRede(
+    [
+      { provider: 'anthropic', rede: 0, total: 1000, erros: 1000, unidades: 39 },
+      { provider: null, rede: 1, total: 1000, erros: 1000, unidades: 39 },
+    ],
+    [
+      { provider: 'anthropic', msg: '400 invalid_request_error: Your credit balance is too low', n: 640 },
+      { provider: 'anthropic', msg: '429 You have no credits remaining', n: 360 },
+    ],
+  );
+  const v = quedaGeral(amostras);
+  assert.equal(v.alarme, true);
+  assert.equal(v.causa, 'credito');
+  assert.equal(v.escopo, 'rede');
+  assert.match(v.motivo, /100% das chamadas falhando nos últimos 10 min \(1000 de 1000, na rede toda\)/);
+  assert.match(v.motivo, /saldo de crédito/);
+});
+
+test('queda geral: um provedor caído alarma mesmo que o outro vá bem e dilua a rede', () => {
+  const amostras = montarRede(
+    [
+      { provider: 'anthropic', rede: 0, total: 40, erros: 40, unidades: 12 },
+      { provider: 'openai', rede: 0, total: 160, erros: 2, unidades: 2 },
+      { provider: null, rede: 1, total: 200, erros: 42, unidades: 12 },
+    ],
+    [{ provider: 'anthropic', msg: '401 invalid x-api-key', n: 40 }],
+  );
+  const v = quedaGeral(amostras);
+  assert.equal(v.alarme, true);
+  assert.equal(v.escopo, 'anthropic');
+  assert.equal(v.causa, 'autenticacao');
+});
+
+test('queda geral: madrugada com 6 chamadas, todas falhando por crédito, ainda alarma (sem o mínimo por unidade)', () => {
+  const v = quedaGeral([rede({ total: 6, erros: 6, unidadesComErro: 1, causas: { credito: 6 } })]);
+  assert.equal(v.alarme, true);
+});
+
+test('queda geral: NÃO alarma com amostra minúscula, com 89% de erro, ou com uma conversa quebrada só', () => {
+  assert.equal(quedaGeral([rede({ total: 3, erros: 3, unidadesComErro: 3, causas: { credito: 3 } })]).alarme, false, 'amostra < 5');
+  assert.equal(quedaGeral([rede({ total: 100, erros: 89, unidadesComErro: 20, causas: { credito: 89 } })]).alarme, false, '89% < 90%');
+  // uma única unidade, erro de formato: é a conversa dela, não a rede
+  assert.equal(quedaGeral([rede({ total: 8, erros: 8, unidadesComErro: 1, causas: { outra: 8 } })]).alarme, false);
+  assert.equal(quedaGeral([]).alarme, false);
+});
+
+test('queda geral: 90% exatos alarmam (limite inclusivo)', () => {
+  assert.equal(quedaGeral([rede({ total: 100, erros: 90, unidadesComErro: 9, causas: { indisponivel: 90 } })]).alarme, true);
+});
