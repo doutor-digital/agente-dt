@@ -20,7 +20,7 @@ export const PADROES = {
   credito: String.raw`credit balance|no credits?|out of credits?|insufficient[_ ]quota|exceeded your current quota|billing[_ ]hard[_ ]limit|billing[_ ]not[_ ]active|payment required|saldo (esgotado|insuficiente)|${COD}402\y`,
   autenticacao: String.raw`${COD}40[13]\y|invalid[_ ]api[_ ]key|incorrect api key|invalid x-api-key|authentication[_ ]error|authentication failed|unauthori[sz]ed|permission[_ ]denied|forbidden`,
   limite: String.raw`${COD}429\y|rate[_ ]limit|too many requests`,
-  indisponivel: String.raw`${COD}5[0-9][0-9]\y|overloaded|timeout|timed out|econn(reset|refused)|enotfound|fetch failed|socket hang up|service unavailable`,
+  indisponivel: String.raw`${COD}5[0-9][0-9]\y|overloaded|timeout|timed out|connection error|network error|econn(reset|refused)|enotfound|fetch failed|socket hang up|service unavailable`,
 } as const;
 
 const paraJs = (p: string) => new RegExp(p.replaceAll(String.raw`\y`, String.raw`\b`), 'i');

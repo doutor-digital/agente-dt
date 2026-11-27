@@ -168,7 +168,7 @@ export function observar(r: RespostaHttp): Observacao {
 export interface Estado {
   /** Quando começou o incidente corrente (ms), sem contar trocas de tipo no meio (degradado → fora continua o mesmo). */
   desde: number | null;
-  /** Último aviso por tipo de incidente (`tipo:causa`), em ms. Guardado mesmo depois de resolvido, para o throttle valer na oscilação. */
+  /** Último aviso por tipo de incidente, em ms. Vale só enquanto o incidente segue aberto: ao encerrar («voltou ao normal») zera, e queda nova avisa como ALERTA. */
   ultimoAviso: Record<string, number>;
   /** Rodadas OK seguidas desde o último incidente. */
   okSeguidos: number;

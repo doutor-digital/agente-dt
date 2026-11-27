@@ -71,13 +71,20 @@ export const SQL_DA_SAUDE = `
       from llm_calls c
      where c.created_at > (now() at time zone 'utc') - interval '${CONSULTA_MIN} minutes'
      group by c.provider, c.unit_id
+  ),
+  por_unidade as (
+    -- erros por unidade SOMADOS entre os provedores (o plano B conta junto); NULL fica de fora
+    select unit_id, sum(erros) as erros from u where unit_id is not null group by unit_id
   )
   select provider,
          grouping(provider)::int as rede,
          sum(total)::int as total,
          sum(erros)::int as erros,
          count(distinct unit_id) filter (where erros > 0)::int as unidades,
-         coalesce(max(erros), 0)::int as maior_unidade,
+         case when grouping(provider) = 1
+                then (select coalesce(max(erros), 0) from por_unidade)
+                else coalesce(max(erros) filter (where unit_id is not null), 0)
+           end::int as maior_unidade,
          sum(erros_credito)::int as erros_credito,
          sum(erros_chave)::int as erros_chave,
          sum(erros_limite)::int as erros_limite,

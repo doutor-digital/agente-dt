@@ -68,7 +68,7 @@ Mensagem livre só entra na janela de 24 h depois de o João ter escrito para o 
 {{1}}
 ```
 
-(uma única variável com o texto inteiro; o script manda em uma linha só, sem quebra de linha, como a Meta exige). Se a Meta recusar um corpo que seja só a variável, use `Alerta do sistema Doutor Digital: {{1}}` e ajuste o prefixo. Enquanto o modelo não é aprovado o script tenta texto livre (funciona só dentro da janela de 24 h), e o Telegram cobre.
+(uma única variável com o texto inteiro; o script manda em uma linha só, sem quebra de linha, como a Meta exige). Se a Meta recusar um corpo que seja só a variável, use `Alerta do sistema Doutor Digital: {{1}}` e ajuste o prefixo. Enquanto o modelo não é aprovado o script ainda tenta texto livre, mas **isso nunca conta como entrega**: fora da janela de 24 h a Meta devolve 200, aceita e descarta depois (o erro 131047 só chega pelo webhook). Só o modelo aprovado ou o Telegram confirmam; se nenhum confirmou, a rodada (e o TESTE) fica vermelha. O Telegram cobre enquanto isso.
 
 **O que NÃO está provado**: o envio real pelo Kapso. O formato (`POST /meta/whatsapp/v24.0/<phone_number_id>/messages`, `X-API-Key`, corpo de modelo da Meta) segue o que o repositório já usa para o Kapso e foi testado contra um servidor falso, mas não foi chamado de verdade (não toquei em produção). A primeira prova é rodar o workflow à mão com «teste» marcado.
 
@@ -102,3 +102,5 @@ Os dois PRs saem do `main` e não dependem um do outro. `backend/src/lib/causa-e
 - Um incidente em que só UMA unidade tem tráfego (madrugada) fica abaixo da regra de 2 unidades até uma segunda falar. É o preço de a chave poder ser por unidade; decisão do sênior.
 - Erros de chamada sem `unit_id` não entram na contagem de unidades.
 - `ops-alert.ts` (aviso de dentro da VPS) grava o horário do envio antes de saber se o relay aceitou; é anterior a este PR e não foi tocado.
+
+- O log do Actions é público: o script grava só `ok`/`atencao` e, por canal, `ok` verdadeiro/falso. Nada de tipo de incidente, causa, status HTTP, unidade, URL ou número.

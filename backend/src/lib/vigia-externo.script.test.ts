@@ -211,13 +211,28 @@ test('HEALTH_URL mal colada (sem https://) é vigia CEGO, não «servidor não r
   assert.match(txt, /HEALTH_URL/);
 });
 
-test('modelo do WhatsApp que LANÇA (conexão cortada) ainda tenta o texto livre', { skip: PULAR }, async () => {
+test('modelo do WhatsApp que LANÇA ainda tenta o texto livre, mas texto livre NUNCA prova entrega: sem Telegram a rodada fica vermelha', { skip: PULAR }, async () => {
   reset();
   saude = FORA;
   kapso = { modelo: 0, texto: 200 };
   const r = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')), { TELEGRAM_BOT_TOKEN: '' });
-  assert.equal(r.codigo, 0, r.saida);
+  assert.equal(r.codigo, 1, 'a Meta aceitou o texto (200) mas pode descartá-lo fora da janela de 24 h: não é confirmação');
   assert.deepEqual(recebidos.filter((x) => x.rota.startsWith('kapso')).map((x) => x.corpo.type), ['template', 'text']);
+});
+
+test('o TESTE fica vermelho se só o texto livre passou (sem modelo aprovado e sem Telegram)', { skip: PULAR }, async () => {
+  reset();
+  kapso = { modelo: 400, texto: 200 };
+  const r = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')), { TELEGRAM_BOT_TOKEN: '', MODO_TESTE: '1' });
+  assert.equal(r.codigo, 1, r.saida);
+});
+
+test('o log do Actions (público) não traz tipo de incidente, causa, status, unidade nem número', { skip: PULAR }, async () => {
+  reset();
+  saude = FORA;
+  const r = await rodar(mkdtempSync(join(tmpdir(), 'vigia-')));
+  assert.equal(r.codigo, 0, r.saida);
+  for (const proibido of ['credito', 'crédito', 'fora', 'autenticacao', 'status', 'codigo', 'motivo', '5599988887777', 'inacessivel']) assert.ok(!r.saida.toLowerCase().includes(proibido.toLowerCase()), `o log trouxe «${proibido}»: ${r.saida}`);
 });
 
 test('HEALTH_URL ainda não cadastrada: sai VERDE (exit 0) com aviso, sem mandar nada e sem gastar e-mail de falha', { skip: PULAR }, async () => {

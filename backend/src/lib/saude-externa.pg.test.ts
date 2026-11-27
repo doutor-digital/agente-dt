@@ -107,3 +107,18 @@ test('a consulta usa o índice de created_at (não varre a tabela): 30 mil linha
   assert.match(texto, /Index|Bitmap/, texto);
   assert.ok(!/Seq Scan on llm_calls/.test(texto), texto);
 });
+
+test('unidade que erra no provedor principal E no plano B: 80 de 81 erros da MESMA unidade não são «Sofia fora do ar»', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
+  await prisma.llmCall.deleteMany({});
+  S.esquecerSaudeGuardada();
+  const a = await prisma.unit.create({ data: { slug: 'u-dois-provedores-a', name: 'a' } });
+  const b = await prisma.unit.create({ data: { slug: 'u-dois-provedores-b', name: 'b' } });
+  for (let i = 0; i < 40; i++) await chamada(a.id, 3, 'error', 'anthropic', 'x');
+  for (let i = 0; i < 40; i++) await chamada(a.id, 3, 'error', 'openai', 'x');
+  await chamada(b.id, 3, 'error', 'anthropic', 'x');
+  const r = await S.consultarSaude();
+  assert.equal(r.chamadas, 81);
+  assert.equal(r.erros, 81);
+  assert.notEqual(r.estado, 'fora', JSON.stringify(r));
+});

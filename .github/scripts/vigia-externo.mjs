@@ -72,8 +72,10 @@ async function enviarKapso(texto) {
   }
   try {
     if (modelo.ok) return { canal: 'whatsapp', configurado: true, ok: true, via: 'modelo' };
-    const livre = await postar(url, cab, { messaging_product: 'whatsapp', to: para, type: 'text', text: { body: texto } });
-    return { canal: 'whatsapp', configurado: true, ok: livre.ok, via: livre.ok ? 'texto livre' : undefined, statusModelo: modelo.status, codigoModelo: modelo.codigo, statusTexto: livre.status };
+    // Texto livre é só TENTATIVA EXTRA, nunca prova de entrega: fora da janela de 24 h a Meta devolve 200, aceita e descarta depois
+    // (o erro 131047 só chega pelo webhook). Por isso `ok: false` aqui: sem modelo aprovado ou Telegram, a rodada fica vermelha.
+    await postar(url, cab, { messaging_product: 'whatsapp', to: para, type: 'text', text: { body: texto } });
+    return { canal: 'whatsapp', configurado: true, ok: false };
   } catch (err) {
     return { canal: 'whatsapp', configurado: true, ok: false, motivo: String(err?.name ?? 'erro') };
   }
@@ -93,7 +95,8 @@ async function enviarTelegram(texto) {
 
 async function avisar(texto) {
   const r = await Promise.all([enviarKapso(texto), enviarTelegram(texto)]);
-  for (const c of r) log({ canal: c.canal, configurado: c.configurado, ok: c.ok, via: c.via, status: c.status ?? c.statusModelo, codigo: c.codigoModelo, motivo: c.motivo });
+  // O log do Actions é PÚBLICO (o repositório é público): só canal e ok/falhou, sem status, código, motivo, causa, unidade ou número.
+  for (const c of r) log({ canal: c.canal, ok: c.ok });
   return r.some((c) => c.ok);
 }
 
@@ -124,14 +127,15 @@ async function main() {
   if (!env('HEALTH_URL')) {
     // Segredo ainda não cadastrado: sair VERDE com aviso. Vermelho aqui seria ~144 e-mails de «falhou» por dia até alguém cadastrar.
     console.log('::warning::HEALTH_URL não está cadastrado nos segredos do GitHub: o vigia externo está DESLIGADO (docs/vigia-externo.md)');
-    log({ vigia: 'desligado', motivo: 'HEALTH_URL ausente' });
+    log({ vigia: 'desligado' });
     return 0;
   }
   const resposta = await consultar();
   const obs = observar(resposta);
   const anterior = lerEstado();
   const { avisos, estado } = avancar(anterior ?? ESTADO_VAZIO, obs, Date.now());
-  log({ observado: obs.tipo, causa: obs.causa, avisos: avisos.map((a) => a.tipo) });
+  // sem tipo, causa, unidade ou número no log público: só se a rodada viu algo e quantos avisos saíram
+  log({ rodada: obs.tipo === 'ok' ? 'ok' : 'atencao', avisos: avisos.length });
 
   let entregue = true;
   for (const a of avisos) {
@@ -146,7 +150,7 @@ async function main() {
   // GitHub avisa por e-mail: o último recurso de quem não sabe que o alerta não está saindo.
   const voltou = avisos.some((a) => a.tipo === 'voltou');
   gravarEstado(voltou ? (anterior ?? ESTADO_VAZIO) : { ...estado, ultimoAviso: anterior?.ultimoAviso ?? {} });
-  log({ erro: 'nenhum canal entregou o aviso', configure: 'KAPSO_API_KEY + KAPSO_PHONE_NUMBER_ID + ALERTA_WHATSAPP_NUMERO e/ou TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID' });
+  log({ erro: 'nenhum canal confirmou a entrega (modelo do WhatsApp aprovado ou Telegram)' });
   return 1;
 }
 
