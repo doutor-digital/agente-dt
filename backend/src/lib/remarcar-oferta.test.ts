@@ -16,6 +16,9 @@ process.env.SESSION_JWT_SECRET ??= 'segredo-de-teste-com-mais-de-32-caracteres-o
 const { composeSystemPrompt } = await import('../agent/prompt-composer.js');
 const o = await import('./remarcar-oferta.js');
 const { classificarRespostaD1 } = await import('./confirmacao-d1.js');
+const { tratarRespostaD1, podeSerRespostaD1, ehRepeticaoDaRespostaD1, ultimaFalaFoiAPergunta, RESPOSTA_OFERTA_SOFIA } = await import('./confirmacao-d1.js');
+const { prisma } = await import('./prisma.js');
+const { recarregarAutomacoes } = await import('./automacoes-estado.js');
 
 function unidade(slug: string): Unit {
   return {
@@ -36,9 +39,25 @@ test('desligada (padrão): o prompt da Sofia NÃO muda — nenhuma linha da ofer
   } finally { restaurar(); }
 });
 
-test('só no papel: o prompt também NÃO muda (seco não mexe no que o paciente recebe)', () => {
-  // em seco o ambiente não liga: o estado «seco» vem da tela; sem linha na tela e sem lista, vale desligado
-  assert.equal(o.oferecerNovoHorario('doutor-hernia-olimpia', {} as NodeJS.ProcessEnv), 'desligado');
+test('SÓ NO PAPEL (gravado na tela): o prompt NÃO muda e o «Preciso remarcar» segue com a resposta pronta de sempre', async () => {
+  const delegado = prisma.unitAutomacao as unknown as { findMany: unknown };
+  const original = delegado.findMany;
+  delegado.findMany = async () => [{ automacao: 'remarcar-oferta', estado: 'seco', unit: { slug: 'doutor-hernia-olimpia' } }];
+  try {
+    await recarregarAutomacoes(); // pode devolver uma leitura já em andamento (a do banco que não existe)
+    await recarregarAutomacoes();
+    assert.equal(o.oferecerNovoHorario('doutor-hernia-olimpia'), 'seco');
+    assert.doesNotMatch(composeSystemPrompt({ unit: unidade('doutor-hernia-olimpia') }), /QUANDO O PACIENTE NÃO VAI CONSEGUIR IR/);
+    const { kommo, chamadas } = kommoFalso();
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo });
+    assert.equal(r, 'remarcar', 'o paciente não percebe diferença');
+    assert.match(chamadas.respostas[0], /pedir para a equipe/);
+  } finally {
+    delegado.findMany = async () => [];
+    await recarregarAutomacoes();
+    await recarregarAutomacoes(); // esvazia o mapa (o banco de teste não existe: sem isto o «seco» ficaria valendo para os testes seguintes)
+    delegado.findMany = original;
+  }
 });
 
 test('ligada: o prompt manda oferecer 2 horários da ferramenta, não cancelar nem remarcar antes de ele escolher, e respeitar «não quero mais»', () => {
@@ -81,7 +100,6 @@ test('o toque «Preciso remarcar» e «2» são pedido de remarcar (entram no ca
 
 // ── o tratador da resposta à pergunta de confirmação (confirmacao-d1.ts) ──────────────────────────────
 
-const { tratarRespostaD1, podeSerRespostaD1, ehRepeticaoDaRespostaD1, RESPOSTA_OFERTA_SOFIA } = await import('./confirmacao-d1.js');
 
 function kommoFalso() {
   const chamadas = { tarefas: [] as Array<{ text: string; completeAt: number }>, respostas: [] as string[] };
@@ -97,13 +115,15 @@ function kommoFalso() {
 const conversa = () => ({ id: 'c1', contactName: 'Maria', confirmacaoD1EnviadaEm: new Date(Date.now() - 3600_000), confirmacaoD1Resposta: null }) as never;
 const U = (slug: string) => ({ ...unidade(slug), spineEnabled: false, spineToken: null }) as unknown as Unit;
 
-test('LIGADA: «Preciso remarcar» não recebe a resposta pronta — vai para a Sofia, com a tarefa de segurança de 1 h', async () => {
+test('LIGADA: «Preciso remarcar» NÃO recebe «vou pedir para a equipe» — recebe uma frase de espera e a conversa segue com a Sofia; tarefa de segurança de 1 h', async () => {
   process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
   try {
     const { kommo, chamadas } = kommoFalso();
     const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo });
     assert.equal(r, 'remarcar_sofia');
-    assert.equal(chamadas.respostas.length, 0, 'nenhuma resposta pronta: quem responde é a Sofia');
+    assert.equal(chamadas.respostas.length, 1, 'uma frase de espera: se a Sofia estiver calada o paciente não fica no vazio');
+    assert.match(chamadas.respostas[0], /ver os horários mais próximos/);
+    assert.doesNotMatch(chamadas.respostas[0], /pedir para a equipe/);
     assert.equal(chamadas.tarefas.length, 1);
     assert.match(chamadas.tarefas[0].text, /deve ter oferecido 2 horários/);
     const prazo = chamadas.tarefas[0].completeAt - Math.floor(Date.now() / 1000);
@@ -138,5 +158,31 @@ test('depois da oferta, «1» ou «2» digitado é ESCOLHA de horário: não é 
   for (const texto of ['1', '2', 'Confirmo', 'Preciso remarcar']) {
     assert.equal(podeSerRespostaD1(conv, texto), false, `«${texto}» não pode ser tratado como resposta à véspera`);
     assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: [{ content: texto, createdAt: new Date(Date.now() - 300_000) }] }), false, texto);
+  }
+});
+
+test('«1» depois de a Sofia oferecer horários NÃO é «confirmo»: só vale se a última fala nossa é a pergunta de confirmação', () => {
+  const enviada = new Date('2026-11-30T09:00:00Z');
+  const depois = new Date('2026-11-30T09:00:05Z');
+  assert.equal(ultimaFalaFoiAPergunta(null, enviada), true, 'sem fala nenhuma depois');
+  assert.equal(ultimaFalaFoiAPergunta({ createdAt: depois, meta: { origem: 'confirmacao_d0', via: 'chat_botoes' } }, enviada), true, 'a própria pergunta');
+  assert.equal(ultimaFalaFoiAPergunta({ createdAt: new Date('2026-11-30T09:20:00Z'), meta: null }, enviada), false, 'a Sofia falou depois (sem origem)');
+  assert.equal(ultimaFalaFoiAPergunta({ createdAt: new Date('2026-11-30T09:20:00Z'), meta: { origem: 'remarcar_oferta_espera' } }, enviada), false);
+  assert.equal(ultimaFalaFoiAPergunta({ createdAt: new Date('2026-11-29T09:00:00Z'), meta: null }, enviada), true, 'fala antiga, anterior à pergunta');
+});
+
+test('LIGADA + a Sofia já falou depois da pergunta: o «1» do paciente vai para ela e NADA é confirmado', async () => {
+  process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
+  const original = prisma.message.findFirst;
+  (prisma.message as unknown as { findFirst: unknown }).findFirst = async () => ({ createdAt: new Date(), meta: null });
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: '1', conv: conversa(), kommo });
+    assert.equal(r, null);
+    assert.equal(chamadas.respostas.length, 0);
+    assert.equal(chamadas.tarefas.length, 0);
+  } finally {
+    (prisma.message as unknown as { findFirst: unknown }).findFirst = original;
+    restaurar();
   }
 });

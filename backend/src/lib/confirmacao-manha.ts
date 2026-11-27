@@ -47,12 +47,25 @@ export function dentroDaJanelaDaManha(quando: string, agoraLocal: string): boole
   return Number.isFinite(min) && min >= ANTECEDENCIA_MIN_MIN && min <= ANTECEDENCIA_MAX_MIN;
 }
 
+/**
+ * Filtro BARATO sobre o horário guardado no vínculo (pode estar velho): só poupa a chamada à franquia de quem, pelo que está gravado, não
+ * está nem perto da janela (margem de 30 min para cada lado). A decisão de verdade usa o horário que a franquia devolve agora.
+ */
+export function talvezDentroDaJanela(agendadoPara: string | null | undefined, agoraLocal: string): boolean {
+  if (!agendadoPara) return true;
+  if (agendadoPara.slice(0, 10) !== agoraLocal.slice(0, 10)) return false;
+  const min = minutosEntre(agoraLocal, agendadoPara);
+  if (!Number.isFinite(min)) return true;
+  return min >= ANTECEDENCIA_MIN_MIN - 30 && min <= ANTECEDENCIA_MAX_MIN + 30;
+}
+
 export type MotivoDeNaoMandar =
   | 'desligada'
   | 'robo_do_kommo'
   | 'consulta_nao_confirmada'
   | 'fora_da_janela'
   | 'clinica_fechada'
+  | 'leitura_falhou'
   | 'ja_perguntou'
   | 'etapa'
   | 'desistiu'

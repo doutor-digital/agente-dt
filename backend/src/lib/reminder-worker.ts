@@ -51,7 +51,7 @@ import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
 import { clinicaAtendendoAgora } from './cutucada-apos-equipe.js';
 import { registrarSimulacao } from './so-no-papel.js';
-import { estadoDaManha, decidirManha, textoConfirmacaoManha, MAX_ENVIOS_POR_VARREDURA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
+import { estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_VARREDURA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
 import { oferecerNovoHorario } from './remarcar-oferta.js';
 import { vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import {
@@ -579,6 +579,11 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       soma('adiados_pelo_teto');
       continue;
     }
+    // pelo horário gravado no vínculo, já se vê quem não está perto da janela: poupa a chamada à franquia (uma por consulta de hoje, a cada varredura)
+    if (!talvezDentroDaJanela(link.agendadoPara, agoraLocalISO)) {
+      soma('fora_da_janela');
+      continue;
+    }
     try {
       const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
       // sem `quando` verificado agora, ou fora da janela: sai antes de qualquer chamada ao Kommo
@@ -598,11 +603,17 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         continue;
       }
 
+      // Pergunta nova a um paciente só sai com TUDO lido: cartão, etapas e conversa. Falha de leitura = pula e a próxima varredura tenta de novo
+      // (sem isto, um soluço do Kommo perguntaria «você consegue vir?» a quem está em «Cancelado» ou escreveu «não vou poder»).
       const lead = await kommo.getLead(link.kommoLeadId).catch(() => null);
-      pipes ??= await kommo.listPipelines().catch(() => []);
-      const pipe = lead?.status_id ? (pipes.find((p) => p.id === lead.pipeline_id) ?? pipes.find((p) => p.statuses?.some((st) => st.id === lead.status_id))) : undefined;
-      const etapa = lead?.status_id ? (pipe?.statuses?.find((st) => st.id === lead.status_id)?.name ?? null) : null;
+      if (!pipes?.length) pipes = await kommo.listPipelines().catch(() => null);
       const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 40).catch(() => null);
+      if (!lead || !pipes?.length || !oficiais) {
+        soma('leitura_falhou');
+        continue;
+      }
+      const pipe = lead.status_id ? (pipes.find((p) => p.id === lead.pipeline_id) ?? pipes.find((p) => p.statuses?.some((st) => st.id === lead.status_id))) : undefined;
+      const etapa = lead.status_id ? (pipe?.statuses?.find((st) => st.id === lead.status_id)?.name ?? null) : null;
       const conv = await prisma.conversation.findFirst({
         where: { unitId: unit.id, leadId: String(link.kommoLeadId) },
         orderBy: { lastMessageAt: 'desc' },
@@ -620,8 +631,8 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         consulta,
         agoraLocal: agoraLocalISO,
         perguntouHoje,
-        etapaSemVespera: !!lead?.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa }) !== null,
-        desistiu: !!(oficiais && desistenciaEscrita(oficiais, marcadaEm)),
+        etapaSemVespera: !!lead.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa }) !== null,
+        desistiu: !!desistenciaEscrita(oficiais, marcadaEm),
         confirmadaNaFranquia: jaConfirmou({ idStatus: consulta.idStatus, oficiais }),
         confirmouNoWhatsapp: perguntouEstaConsulta && conv?.confirmacaoD1Resposta === 'confirmou',
         pediuParaRemarcar: perguntouEstaConsulta && (conv?.confirmacaoD1Resposta === 'remarcar' || conv?.confirmacaoD1Resposta === RESPOSTA_OFERTA_SOFIA),
@@ -637,7 +648,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
           acao: 'mandaria',
           alvo: 'mensagem',
           valor: textoConfirmacaoManha({
-            nome: primeiroNomeDoPaciente(lead?.name ?? null, null), quando, especialista: consulta.especialista,
+            nome: primeiroNomeDoPaciente(lead.name ?? null, null), quando, especialista: consulta.especialista,
             endereco: unit.clinicAddress, horaDoEnvio: hora, oferece: oferecerNovoHorario(unit.slug) === 'ligado', comBotoes: true,
           }),
           deEtapa: etapa,
@@ -651,7 +662,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         consulta: consulta as ConsultaReconciliada & { quando: string },
         toque: 'd0',
         chave,
-        titulo: lead?.name ?? null,
+        titulo: lead.name ?? null,
         oficiais,
         horaLocal: hora,
       });
@@ -678,9 +689,6 @@ async function varrer(): Promise<void> {
       await lembrarUnidade(unit).catch((err) => {
         logger.warn({ err: String(err), unit: unit.slug }, 'confirmação: erro na unidade (ignorado)');
       });
-      await lembrarManhaUnidade(unit).catch((err) => {
-        logger.warn({ err: String(err), unit: unit.slug }, 'confirmação da manhã: erro na unidade (ignorado)');
-      });
     }
   } catch (err) {
     logger.warn({ err: String(err) }, 'confirmação: varredura falhou');
@@ -689,9 +697,35 @@ async function varrer(): Promise<void> {
   }
 }
 
+/**
+ * A manhã tem a sua varredura, a cada 15 min: a janela de uma consulta das 10h é de 8h a 8h30 (a clínica abre às 8h), e uma varredura de
+ * hora em hora a acertaria ao acaso. É barata: unidade com a chave desligada sai antes de ler qualquer coisa.
+ */
+const SWEEP_MANHA_MS = 15 * 60_000;
+let timerManha: NodeJS.Timeout | null = null;
+let rodandoManha = false;
+
+async function varrerManha(): Promise<void> {
+  if (rodandoManha) return;
+  rodandoManha = true;
+  try {
+    const unidades = (await prisma.unit.findMany({ where: { spineEnabled: true } })).filter((u) => !emPausa(u) || u.pausaPor === PAUSA_POR);
+    for (const unit of unidades) {
+      await lembrarManhaUnidade(unit).catch((err) => {
+        logger.warn({ err: String(err), unit: unit.slug }, 'confirmação da manhã: erro na unidade (ignorado)');
+      });
+    }
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'confirmação da manhã: varredura falhou');
+  } finally {
+    rodandoManha = false;
+  }
+}
+
 export function startReminderWorker(): void {
   if (timer) return;
   timer = setInterval(() => void varrer(), SWEEP_MS);
+  timerManha = setInterval(() => void varrerManha(), SWEEP_MANHA_MS);
   void varrer();
   logger.info('confirmação de presença: worker iniciado (D-2 reforço + D-1 véspera + manhã da consulta)');
 }
@@ -699,4 +733,6 @@ export function startReminderWorker(): void {
 export function stopReminderWorker(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  if (timerManha) clearInterval(timerManha);
+  timerManha = null;
 }

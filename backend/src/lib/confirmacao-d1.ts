@@ -448,6 +448,16 @@ export function podeSerRespostaD1(
 export type ResultadoRespostaD1 = RespostaD1 | 'repetida' | 'remarcar_sofia';
 export const RESPOSTA_OFERTA_SOFIA = 'oferta_sofia';
 
+/**
+ * A última fala NOSSA na conversa é a pergunta de confirmação (a que gravou `confirmacaoD1EnviadaEm`)? Sem fala depois dela, ou com a fala marcada
+ * `confirmacao_*`, sim. Qualquer outra fala depois (a Sofia oferecendo horários, a recepção) = o paciente está respondendo a ELA.
+ */
+export function ultimaFalaFoiAPergunta(ultima: { createdAt: Date; meta: unknown } | null, enviadaEm: Date): boolean {
+  if (!ultima || ultima.createdAt.getTime() < enviadaEm.getTime()) return true;
+  const origem = (ultima.meta as { origem?: unknown } | null)?.origem;
+  return typeof origem === 'string' && origem.startsWith('confirmacao_');
+}
+
 export async function tratarRespostaD1(args: {
   unit: Unit;
   leadId: number;
@@ -480,6 +490,14 @@ export async function tratarRespostaD1(args: {
   if (Date.now() - conv.confirmacaoD1EnviadaEm.getTime() > janelaDaResposta(unit.slug)) return null;
   const resposta = classificarRespostaD1(texto);
   if (!resposta) return null;
+  // Com a oferta de horários ligada a Sofia fala em opções ("1"/"2"/"quinta 14h"): se a última fala nossa NÃO foi a pergunta de confirmação, o
+  // "1" é escolha de horário (ou conversa), nunca «confirmo» — confirmar presença que o paciente não deu é o pior erro desta tela.
+  if (oferecerNovoHorario(unit.slug) === 'ligado') {
+    const ultima = await prisma.message
+      .findFirst({ where: { conversationId: conv.id, role: 'assistant' }, orderBy: { createdAt: 'desc' }, select: { createdAt: true, meta: true } })
+      .catch(() => null);
+    if (!ultimaFalaFoiAPergunta(ultima, conv.confirmacaoD1EnviadaEm)) return null;
+  }
 
   const consulta = await consultaDoLead(unit, leadId).catch(() => null);
   // Janela longa do dia útil anterior (6 dias) FECHA no horário da consulta: depois dela, "ok" ou "não, obrigada" é conversa
@@ -518,8 +536,18 @@ export async function tratarRespostaD1(args: {
   } else {
     const oferta = oferecerNovoHorario(unit.slug);
     if (oferta === 'ligado') {
-      // Sem resposta pronta: a Sofia responde esta mesma mensagem com 2 horários de `consultar_horarios`. A consulta atual SEGUE de pé
-      // até ele escolher. A tarefa fica como rede de segurança (Sofia calada, paciente que não escolhe), com prazo de 1 h.
+      // Grava o estado ANTES de tudo: o Kommo reentrega o webhook e o paciente toca de novo, e sem a marca cada toque abriria outra tarefa.
+      await prisma.conversation
+        .update({ where: { id: conv.id }, data: { confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } })
+        .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: não gravei oferta_sofia'));
+      // A Sofia responde esta mesma mensagem com 2 horários de `consultar_horarios`; a consulta atual SEGUE de pé até ele escolher.
+      // A frase curta abaixo sai SEMPRE, na frente: se a Sofia estiver calada nesta etapa, em pausa ou fora do horário, o paciente não fica no vazio
+      // (antes ele recebia a resposta pronta). A tarefa (prazo de 1 h) é a rede de segurança da equipe.
+      const espera = `Sem problema${nome}! 🙏 Já vou ver os horários mais próximos para você. Se preferir, me diga qual dia e período ficam melhores.`;
+      await kommo.sendChatReply({ leadId, text: espera, chatId: null, talkId: null, contactId: null });
+      await prisma.message
+        .create({ data: { conversationId: conv.id, role: 'assistant', content: espera, meta: { origem: 'remarcar_oferta_espera' } } })
+        .catch(() => undefined);
       await kommo
         .createTask({
           leadId,
@@ -527,9 +555,6 @@ export async function tratarRespostaD1(args: {
           completeAt: Math.floor(Date.now() / 1000) + 3600,
         })
         .catch((err) => logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: falha ao abrir tarefa de remarcação'));
-      await prisma.conversation
-        .update({ where: { id: conv.id }, data: { confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } })
-        .catch(() => undefined);
       logger.info({ unit: unit.slug, leadId }, 'confirmação D-1: paciente pediu para remarcar — a Sofia oferece 2 horários');
       return 'remarcar_sofia';
     }

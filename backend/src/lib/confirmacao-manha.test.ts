@@ -42,6 +42,14 @@ test('a janela: hoje, de 5 h a 1 h 30 antes — nem antes, nem em cima da hora, 
   assert.equal(m.dentroDaJanelaDaManha('lixo', `${HOJE}T10:00`), false);
 });
 
+test('prefiltro barato pelo horário gravado: poupa a franquia de quem está longe da janela, sem descartar o que pode estar velho', () => {
+  assert.equal(m.talvezDentroDaJanela(`${HOJE}T14:30`, `${HOJE}T10:00`), true);
+  assert.equal(m.talvezDentroDaJanela(`${HOJE}T10:20`, `${HOJE}T10:00`), false, 'em cima da hora');
+  assert.equal(m.talvezDentroDaJanela(`${HOJE}T08:00`, `${HOJE}T10:00`), false, 'já passou');
+  assert.equal(m.talvezDentroDaJanela(`${HOJE}T18:00`, `${HOJE}T09:00`), false, 'muito cedo (9 h antes)');
+  assert.equal(m.talvezDentroDaJanela(null, `${HOJE}T10:00`), true, 'sem horário gravado: deixa a franquia decidir');
+});
+
 test('caso feliz: pergunta quem tem consulta hoje, confirmada na franquia, e ainda não respondeu nada', () => {
   assert.deepEqual(m.decidirManha(base()), { acao: 'mandar' });
 });
