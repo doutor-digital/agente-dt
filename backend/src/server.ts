@@ -75,6 +75,7 @@ import { startPreencheCamposWorker, stopPreencheCamposWorker } from './lib/preen
 import { startBlingRenovacaoWorker, stopBlingRenovacaoWorker } from './lib/bling-renovacao-worker.js';
 import { startFranquiaSyncWorker, stopFranquiaSyncWorker } from './lib/franquia-sync-worker.js';
 import { startFranquiaCalendarioWorker, stopFranquiaCalendarioWorker } from './lib/franquia-calendario-worker.js';
+import { startRecuperacaoAgendaWorker, stopRecuperacaoAgendaWorker } from './lib/recuperacao-agenda-worker.js';
 import { iniciarPurgaDoHistorico, pararPurgaDoHistorico } from './lib/agenda-historico.js';
 import { startUnidadePorCanalWorker, stopUnidadePorCanalWorker } from './lib/unidade-por-canal-worker.js';
 import { startUnidadeNoCartaoWorker, stopUnidadeNoCartaoWorker } from './lib/unidade-no-cartao-worker.js';
@@ -304,6 +305,7 @@ async function main(): Promise<void> {
       startCacheKeepaliveWorker();
       startFranquiaSyncWorker();
       startFranquiaCalendarioWorker();
+      startRecuperacaoAgendaWorker();
       iniciarPurgaDoHistorico();
       startParadosWorker();
       startMotivoNoCabecalhoWorker();
@@ -375,6 +377,7 @@ async function main(): Promise<void> {
       stopChatwootCapiWorker();
       stopFranquiaSyncWorker();
       stopFranquiaCalendarioWorker();
+      stopRecuperacaoAgendaWorker();
       pararPurgaDoHistorico();
       stopCacheKeepaliveWorker();
       stopWhatsappCostScheduler();

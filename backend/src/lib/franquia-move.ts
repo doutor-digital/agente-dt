@@ -192,6 +192,8 @@ function finalizado(t: TratamentoParaEtapa): boolean {
 function cancelado(t: TratamentoParaEtapa): boolean {
   return /cancel/.test(n(t.statusName ?? ''));
 }
+/** Tratamento cancelado (a regra da máquina de etapas). */
+export const tratamentoCancelado = cancelado;
 
 /**
  * 45 EM ANDAMENTO (ou nome equivalente). Um tratamento só PENDENTE (44, proposta sem pagamento)

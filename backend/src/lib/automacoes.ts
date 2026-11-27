@@ -1402,15 +1402,16 @@ export const AUTOMACOES: readonly Automacao[] = [
   {
     id: 'recuperacao-agenda',
     chave: 'RECUPERACAO_AGENDA_SLUGS',
-    nome: 'Histórico da agenda da franquia (base da lista de recuperação)',
+    nome: 'Lista diária: avaliação desmarcada ou faltosa (para a recepção ligar)',
     oQueFaz:
-      'Guarda, a cada varredura do sincronizador, as MUDANÇAS de status dos agendamentos da franquia (marcado → desmarcado, faltou, atendido…, com a hora em que a franquia lançou e a hora em que vimos). A franquia só devolve o estado atual: sem este histórico não dá para saber quando o paciente desmarcou nem se voltou a marcar depois. Base da lista diária de avaliações desmarcadas ou faltosas e da medição do retorno (próximos passos).',
+      'Todo dia de agenda, entre 8h e 12h, manda no grupo de WhatsApp da recepção a lista das avaliações que desmarcaram ou faltaram nos últimos 14 dias e cujo paciente ainda não voltou a marcar: primeiro nome, dia e hora da consulta, «desmarcou», «faltou» ou «desmarcou depois do horário (provável falta)» e o link do cartão do Kommo. Máximo de 15 pacientes por dia (RECUPERACAO_MAX_POR_DIA), do mais recente para o mais antigo; cada paciente aparece uma vez. Também guarda o histórico das mudanças de status da agenda da franquia (o que a franquia não guarda) e, depois, mede quantos da lista voltaram a marcar e a comparecer (ferramenta `recuperacao_agenda` do conector, só para quem escreve).',
     pegadinha:
-      'NASCE DESLIGADA. «Só no papel» e ligada fazem a MESMA coisa aqui (gravar o histórico: é observação, não toca em paciente, cartão nem etapa). Não chama a franquia de novo: usa a agenda que o sincronizador já leu (de −3 a +45 dias), então só funciona onde o sincronizador está ligado ou em «só no papel». Sem nome nem telefone no banco: o paciente é um HMAC com o segredo AGENDA_HISTORICO_SEGREDO (32+ caracteres, que NUNCA se gira: girar troca a chave de todos); SEM o segredo nada é gravado e o log diz por quê. AGENDA_HISTORICO_RETENCAO_DIAS (inteiro ≥ 120; vazio = nunca apaga) liga a purga diária do que passou do prazo. Lista da franquia incompleta (mais páginas que o teto) não grava nada.',
-    risco: 'comportamento',
+      'NASCE DESLIGADA. «Só no papel» lê a franquia, monta a lista, GRAVA quem entraria (essas linhas são o grupo de comparação da medição) e registra o histórico da agenda, mas não manda nada. Ligada só manda com destino da unidade em RECUPERACAO_DESTINOS (JSON {"slug": "<grupo>@g.us"}) e instância em RECUPERACAO_EVOLUTION_URL (ou a do aviso à recepção, AVISO_CLINICA_AGENDAMENTO_EVOLUTION_URL); sem destino não manda e não marca ninguém como listado. Só AVALIAÇÃO e variantes (reavaliação), nunca sessão. Sai da lista quem: já voltou a marcar ou foi atendido, tem consulta futura, está em tratamento (as MESMAS regras do sincronizador: sessão na agenda, ou tratamento aberto/«não iniciado»/pendente na franquia; status que não se reconhece também segura) ou tem no cartão etiqueta de não contatar, opt-out, motivo de perda «morto» (Sem interesse, Outra cidade…), ◷ Retomar em ou GANHO; cartão que não pôde ser lido deixa o paciente para a próxima rodada (na dúvida não liga). A recepção usa «Desmarcado» para tudo: desmarque lançado DEPOIS do horário da consulta aparece como provável falta, sem mudar nada na franquia. O link do cartão só vai quando o telefone o confirmou; senão vai «(cartão não achado, confira o opt-out)». Uma lista por unidade por dia, mesmo se o servidor reiniciar. Só a agenda lida: unidade com Kommo dividido (Petrópolis × Caxias) fica de fora. Sem nome nem telefone no banco (o paciente é um HMAC com o segredo AGENDA_HISTORICO_SEGREDO, 32+ caracteres, que NUNCA se gira; sem o segredo nada é gravado e a lista não roda) e nada de dado clínico. AGENDA_HISTORICO_RETENCAO_DIAS (inteiro ≥ 120; vazio = nunca apaga) liga a purga diária do que passou do prazo. NÃO grava nada no cartão nem na franquia. O retorno medido é correlação, não prova de que foi a ligação.',
+    risco: 'manda-mensagem',
     temSeco: true,
+    exigeSecoAntes: true,
     quandoVazio: 'desligado',
-    arquivo: 'src/lib/agenda-historico.ts',
+    arquivo: 'src/lib/recuperacao-agenda-worker.ts',
   },
 ] as const;
 

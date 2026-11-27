@@ -3247,11 +3247,11 @@ model InfinitepayVenda {
 }
 
 // ===========================================================================
-// Histórico da agenda da franquia (26/11/2026)
+// Histórico da agenda da franquia + lista de recuperação (26/11/2026)
 // ===========================================================================
 // A franquia só devolve o ESTADO ATUAL de cada agendamento (e só o último `modified`): quando um agendamento muda de status o anterior
-// se perde. Esta tabela guarda o que a franquia não guarda. Sem FK para `units` de propósito: o histórico não some junto com a
-// unidade (o `agente_dt` não tem como recriá-lo). Nenhum nome nem telefone de paciente: só a chave `paciente_chave` (HMAC com segredo, ver `agenda-historico.ts`).
+// se perde. Estas duas tabelas guardam o que a franquia não guarda. Sem FK para `units` de propósito: o histórico não some junto com a
+// unidade (o `agente_dt` não tem como recriá-lo). Nenhum nome nem telefone de paciente: só a chave `paciente_chave`.
 
 /// Uma linha por MUDANÇA de um agendamento (ou pela 1ª vez que o vimos). Só acrescenta.
 model AgendaStatusEvento {
@@ -3278,4 +3278,33 @@ model AgendaStatusEvento {
   @@index([unitId, pacienteChave, vistoEm])
   @@index([unitId, vistoEm])
   @@map("agenda_status_eventos")
+}
+
+/// Quem entrou na lista diária de recuperação (avaliação desmarcada ou faltosa). Uma linha por agendamento e modo: o «seco» é só o
+/// que a lista TERIA mostrado (ninguém recebeu), e vira o grupo de comparação da medição.
+model AgendaRecuperacaoItem {
+  id            String    @id @default(cuid())
+  unitId        String    @map("unit_id")
+  /// o agendamento de origem (o desmarcado ou faltoso)
+  idSchedule    Int       @map("id_schedule")
+  pacienteChave String    @map("paciente_chave")
+  categoria     String?
+  /// desmarcou | faltou | provavel_falta (desmarcado DEPOIS do horário)
+  tipo          String
+  inicioEm      DateTime  @map("inicio_em")
+  modificadoEm  DateTime? @map("modificado_em")
+  /// seco | ligado
+  modo          String
+  /// o dia da lista (AAAA-MM-DD, no fuso da unidade)
+  dia           String
+  /// o cartão do Kommo que a lista mostrou (só quando o casamento foi provado pelo telefone)
+  kommoLeadId   Int?      @map("kommo_lead_id")
+  /// simulado | enviando | enviado | pendente | incerto | sem_destino
+  envio         String    @default("simulado")
+  listadoEm     DateTime  @default(now()) @map("listado_em")
+
+  @@unique([unitId, idSchedule, modo])
+  @@index([unitId, listadoEm])
+  @@index([unitId, pacienteChave])
+  @@map("agenda_recuperacao_itens")
 }
