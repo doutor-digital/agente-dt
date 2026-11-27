@@ -99,6 +99,8 @@ export interface NotaValidada {
   tomadorMascarado: string;
   /** só para a chave de nota repetida; nunca vai ao livro nem a log */
   tomadorDocumento: string;
+  /** o nome do paciente (sem acento, minúsculo) quando diferente de quem paga: só para a chave de nota repetida; nunca vai ao livro nem a log */
+  pacienteNaChave: string | null;
   origem: string | null;
 }
 
@@ -203,8 +205,9 @@ export function textoLimpo(bruto: string, campo: string, min: number, max: numbe
   return t;
 }
 
-export function chaveDeNotaRepetida(unidade: string, ambiente: Ambiente, documento: string, valorCentavos: number, competencia: string, origem: string | null): string {
-  return createHash('sha256').update([unidade, ambiente, documento, valorCentavos, competencia, (origem ?? '').toLowerCase()].join('|')).digest('hex').slice(0, 32);
+export function chaveDeNotaRepetida(unidade: string, ambiente: Ambiente, documento: string, valorCentavos: number, competencia: string, origem: string | null, paciente: string | null = null): string {
+  // o paciente entra na chave: quem paga por dois pacientes (dois filhos) no mesmo dia e valor NÃO é nota repetida. Sem paciente diferente a chave é a de sempre.
+  return createHash('sha256').update([unidade, ambiente, documento, valorCentavos, competencia, (origem ?? '').toLowerCase(), ...(paciente ? [paciente] : [])].join('|')).digest('hex').slice(0, 32);
 }
 
 /**
@@ -217,6 +220,7 @@ export function exigirSerieDeProducao(conta: Pick<ContaFocus, 'slug' | 'ambiente
   if (propria === undefined) {
     throw new ErroDeEntrada(`a unidade ${conta.slug} também emite NFS-e pelo Emissor Nacional e ainda NÃO tem série de DPS PRÓPRIA para a produção (serieDpsProducao no perfil fiscal, escolhida pelo João e pela contabilidade, diferente da usada no portal): em produção ela não emite. O .env sozinho não vale.`);
   }
+  if (conta.perfil.serieDpsPortal !== undefined && propria === conta.perfil.serieDpsPortal) throw new ErroDeEntrada(`a série própria do perfil (${propria}) é a MESMA que a clínica usa no Emissor Nacional: escolha outra. A unidade não emite em produção.`);
   if (conta.serieDps !== propria) throw new ErroDeEntrada(`a série da conta (${conta.serieDps ?? 'nenhuma'}) não é a série própria do perfil (${propria}): a unidade não emite em produção. Nada foi feito.`);
 }
 
@@ -272,12 +276,11 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
   if (!textoDaDescricao) faltam.push('descricao: o texto do serviço que sai na nota');
   let descricao = textoDaDescricao ? textoLimpo(textoDaDescricao, 'descricao', 3, 1000) : '';
   // regra do Caixa da clínica: o tomador é QUEM PAGA; quando o pagador não é o paciente, o paciente é citado na DESCRIÇÃO («Paciente: Fulano»)
-  const pacienteNome = a.paciente?.trim() ? textoLimpoNome(a.paciente) : undefined;
+  const pacienteNome = a.paciente?.trim() ? textoLimpoNome(a.paciente, 'paciente') : undefined;
   const semAcento = (x: string) => x.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
   const pacienteDiferente = pacienteNome !== undefined && nome !== '' && semAcento(pacienteNome) !== semAcento(nome);
-  if (pacienteNome !== undefined && nome === '') faltam.push('tomador.nome: o nome de quem PAGA (o tomador da nota)');
   if (pacienteDiferente) {
-    descricao = `${descricao}. Paciente: ${pacienteNome}`;
+    descricao = `${descricao.replace(/[.\s]+$/, '')}. Paciente: ${pacienteNome}`;
     if (descricao.length > 1000) throw new ErroDeEntrada('descricao: com o nome do paciente passa de 1000 caracteres. Encurte a descrição. Nada foi preparado.');
   }
   const informacoes = f.informacoesComplementares?.trim() ? textoLimpo(f.informacoesComplementares, 'fiscal.informacoesComplementares', 3, 2000) : undefined;
@@ -471,16 +474,16 @@ export function validarEmissao(conta: ContaFocus, a: PedidoDePreparo, hoje: stri
     ...(origem ? { origem } : {}),
   };
   return {
-    nota: { corpo, valorCentavos, dataCompetencia: competencia, tomadorMascarado: mascararDoc(documento), tomadorDocumento: documento, origem },
+    nota: { corpo, valorCentavos, dataCompetencia: competencia, tomadorMascarado: mascararDoc(documento), tomadorDocumento: documento, pacienteNaChave: pacienteDiferente ? semAcento(pacienteNome!) : null, origem },
     resumo,
     avisos,
   };
 }
 
-function textoLimpoNome(bruto: string): string {
+function textoLimpoNome(bruto: string, campo = 'tomador.nome'): string {
   const t = bruto.replace(/\s+/g, ' ').trim();
-  if (t.length < 3 || t.length > 150) throw new ErroDeEntrada('tomador.nome: de 3 a 150 caracteres');
-  if (temDadoPessoal(t) || /@/.test(t)) throw new ErroDeEntrada('tomador.nome: não pode ter número de documento, telefone nem e-mail');
+  if (t.length < 3 || t.length > 150) throw new ErroDeEntrada(`${campo}: de 3 a 150 caracteres`);
+  if (temDadoPessoal(t) || /@/.test(t)) throw new ErroDeEntrada(`${campo}: não pode ter número de documento, telefone nem e-mail`);
   return t;
 }
 
@@ -590,7 +593,7 @@ async function prepararEmissao(ctx: ContextoFocus, esc: EstadoEscritaFocus, c: C
     if (numeroMinimoDaFocus(c, empresa) === undefined) throw new ErroDeEntrada(`${SEM_NUMERO_DA_DPS} Nada foi preparado.`);
   }
   // os limites e a nota repetida JÁ no resumo (sem reservar): ninguém aprova um resumo que vai falhar no confirmar com o código gasto. O confirmar reserva de verdade.
-  const chave = chaveDeNotaRepetida(c.slug, c.ambiente, v.nota.tomadorDocumento, v.nota.valorCentavos, v.nota.dataCompetencia, v.nota.origem);
+  const chave = chaveDeNotaRepetida(c.slug, c.ambiente, v.nota.tomadorDocumento, v.nota.valorCentavos, v.nota.dataCompetencia, v.nota.origem, v.nota.pacienteNaChave);
   const [livro, repetida] = await Promise.all([ctx.notas.ler(c.slug, c.ambiente, agora), ctx.notas.ativaPorChave(c.slug, c.ambiente, chave)]);
   try {
     conferirLimites(esc, livro, repetida, v.nota.valorCentavos, agora);
@@ -716,7 +719,7 @@ export async function emitirNotaConfirmada(ctx: ContextoFocus, esc: EstadoEscrit
   const serie = c.serieDps ?? 1;
   exigirSerieDeProducao(c);
   if (c.ambiente === 'producao' && c.serieDps === undefined) throw new ErroDeEntrada('produção sem a série da DPS configurada: não emiti. Nada foi emitido.');
-  const chave = chaveDeNotaRepetida(c.slug, c.ambiente, nota.tomadorDocumento, nota.valorCentavos, nota.dataCompetencia, nota.origem);
+  const chave = chaveDeNotaRepetida(c.slug, c.ambiente, nota.tomadorDocumento, nota.valorCentavos, nota.dataCompetencia, nota.origem, nota.pacienteNaChave);
   const criadoPor = quem.email || `usuario:${quem.id}`;
   return umaPorVez(esc, c.slug, async () => {
     // o número da DPS nunca fica abaixo do que a Focus já guarda para a série (a empresa dela tem `proximo_numero_nfsen_*`); DPS repetida é recusada pelo ambiente nacional

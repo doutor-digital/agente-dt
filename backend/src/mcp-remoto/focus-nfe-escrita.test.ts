@@ -390,7 +390,22 @@ test('tomador = QUEM PAGA; o paciente (se for outra pessoa) entra na descrição
   await prepararEConfirmar(sem);
   assert.equal(sem.focus.emitidas[0]!.corpo.descricao_servico, 'Serviços de fisioterapia');
   // o nome do paciente também não pode carregar documento
-  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ paciente: 'João 52998224725' })), /nome/);
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ paciente: 'João 52998224725' })), /paciente: não pode ter número/);
+});
+
+test('quem paga por DOIS pacientes no mesmo dia e valor não é nota repetida; o mesmo paciente de novo é; descrição com ponto final não duplica; erro do campo paciente diz «paciente»; série igual à do portal é recusada', async () => {
+  const m = montar();
+  await prepararEConfirmar(m, pedido({ paciente: 'Filho Um' }));
+  await prepararEConfirmar(m, pedido({ paciente: 'Filho Dois' }));
+  assert.equal(m.focus.emitidas.length, 2);
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ paciente: 'filho um' })), /NOTA REPETIDA/);
+  const ponto = montar();
+  await prepararEConfirmar(ponto, pedido({ descricao: 'Sessão de fisioterapia.', paciente: 'Filho Um' }));
+  assert.equal(ponto.focus.emitidas[0]!.corpo.descricao_servico, 'Sessão de fisioterapia. Paciente: Filho Um');
+  await assert.rejects(() => prepararNota(m.ctx, m.esc, QUEM, pedido({ paciente: 'Jo 12345678901' })), /paciente: não pode ter número de documento/);
+  const portal = montar({ ambiente: 'producao', serie: 900 });
+  portal.ctx.contas.set(UNI, { ...portal.conta, perfil: { ...portal.conta.perfil!, serieDpsPortal: 900 } });
+  await assert.rejects(() => prepararNota(portal.ctx, portal.esc, QUEM, pedido()), /MESMA que a clínica usa no Emissor Nacional/);
 });
 
 test('produção: a clínica TAMBÉM emite no Emissor Nacional — sem série PRÓPRIA no perfil não emite (o .env sozinho não vale); com ela, o resumo avisa para conferir a série no portal; homologação não muda', async () => {

@@ -155,6 +155,7 @@ rm -f "$RESP"
 echo
 if [ "$AMB" = "producao" ]; then
   echo "ATENÇÃO — PRODUÇÃO: as notas emitidas depois disto são REAIS (valor fiscal e tributário)."
+  echo "ATENÇÃO — SÉRIE: a série $SERIE precisa ser IGUAL à serieDpsProducao do perfil de Açailândia (focus-nfe-perfis.ts) e DIFERENTE da usada no Emissor Nacional. Se o perfil ainda não a define, o conector RECUSA toda emissão em produção (ligar agora não emite nada)."
 else
   echo "HOMOLOGAÇÃO: notas de teste, sem validade fiscal."
 fi

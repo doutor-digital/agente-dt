@@ -40,6 +40,8 @@ export interface PerfilFiscal {
   emiteTambemNoPortal?: boolean;
   /** a série da DPS de produção DESTA unidade, escolhida de propósito (diferente da usada no portal). Sem ela, em produção, a unidade não emite */
   serieDpsProducao?: number;
+  /** a série que a clínica usa no Emissor Nacional (portal), quando se sabe: a série de produção do conector NUNCA pode ser igual a ela */
+  serieDpsPortal?: number;
   /** de onde vieram os dados do perfil (quem informou, quando, e se a contabilidade confirmou): o resumo da nota repete isto */
   origem: string;
   /** de onde veio a alíquota, em texto, para o resumo da nota dizer a verdade */
