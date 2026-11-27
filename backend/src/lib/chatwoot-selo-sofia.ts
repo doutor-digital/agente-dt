@@ -135,12 +135,14 @@ const SELO_JS = String.raw`(function(){
   }
 
   function passar(){
-    espera = null;
+    espera = null; ultima = Date.now();
     if (!/\/app\/accounts\//.test(location.pathname)) { tirarBarra(); return; }
     garantirEstilo(); marcarCartoes(); barra();
   }
-  // freio: no máximo uma passada a cada 400 ms, por mais que o Chatwoot mexa na tela (o Vue mexe muito)
-  function agendar(){ if (!espera) espera = setTimeout(passar, 400); }
+  // freio: no máximo uma passada a cada 400 ms, por mais que o Chatwoot mexa na tela (o Vue mexe muito). A PRIMEIRA mudança depois de uma pausa passa já
+  // (antes esperava 400 ms mesmo com a tela parada: a barra enxuta e o selo apareciam tarde); o que vier em rajada segue contado a cada 400 ms
+  var ultima = 0;
+  function agendar(){ if (!espera) espera = setTimeout(passar, Math.max(0, 400 - (Date.now() - ultima))); }
   new MutationObserver(agendar).observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('visibilitychange', agendar);
   agendar();

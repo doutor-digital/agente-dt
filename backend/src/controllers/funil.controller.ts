@@ -53,6 +53,7 @@ import { assistenteJs } from '../lib/chatwoot-assistente-ui.js';
 import { FUNIL_FRESCO_MS, FUNIL_VELHO_MS, lerPaginasCruas, MemoriaDeLeitura, semArquivo, type Arquivo, type LeituraCrua } from '../lib/funil-leitura.js';
 import { guiaJs, guiaDaEtapaLigado } from '../lib/chatwoot-guia-etapas.js';
 import { contasSemAntecipado } from '../lib/guia-sem-antecipado.js';
+import { servirMenuJs } from '../lib/menu-js-servir.js';
 import { seloSofiaJs } from '../lib/chatwoot-selo-sofia.js';
 import { barraPorPapelJs } from '../lib/chatwoot-barra-papel.js';
 import { dominioContaJs } from '../lib/chatwoot-dominio-conta.js';
@@ -1841,7 +1842,7 @@ body{background:#f4f6f9}
  * tela. Passa ao quadro só o login de quem já está logado no Chatwoot (o cookie da sessão dele), e só para este servidor.
  * Se um dia o Chatwoot mudar o menu e o item não achar lugar, aparece um botão "Funil" no canto (nada quebra).
  */
-export async function menuFunilHandler(_req: Request, res: Response): Promise<void> {
+export async function menuFunilHandler(req: Request, res: Response): Promise<void> {
   if (!origemDoCrm()) {
     res.status(404).type('application/javascript').send('/* funil desligado */');
     return;
@@ -1853,12 +1854,10 @@ export async function menuFunilHandler(_req: Request, res: Response): Promise<vo
   } catch {
     /* fica o padrão */
   }
-  res
-    .type('application/javascript')
-    .set('Cache-Control', 'public, max-age=300')
-    .set('Cross-Origin-Resource-Policy', 'cross-origin')
-    // o endereço de cada clínica abre a conta DELA: só o mapa subdomínio → conta (em memória, relido do banco a cada minuto: o menu nunca espera o banco)
-    .send(montarMenuJs(agente, await contasSemAntecipado().catch(() => []), dominiosDasClinicas(contaChatwootDoAmbiente()?.conta ?? null)));
+  // o endereço de cada clínica abre a conta DELA: só o mapa subdomínio → conta (em memória, relido do banco a cada minuto: o menu nunca espera o banco)
+  const conteudo = montarMenuJs(agente, await contasSemAntecipado().catch(() => []), dominiosDasClinicas(contaChatwootDoAmbiente()?.conta ?? null));
+  // os bytes saem comprimidos, com ETag forte e 304 (lib/menu-js-servir.ts); o CONTEÚDO é o de sempre
+  await servirMenuJs(req, res, conteudo);
 }
 
 /**
@@ -2178,8 +2177,9 @@ const MENU_JS = String.raw`(function(){
       var li = a.closest('li') || a; if (li.style.display !== 'none') { li.style.display = 'none'; ocultos.push(li); }
     });
   }
-  var espera = null;
-  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre a tela se estava aberta (e acerta a margem)
-  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; enxugar(); if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
+  var espera = null, ultimaPassada = 0;
+  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre a tela se estava aberta (e acerta a margem). A primeira mudança depois de uma pausa passa já;
+  // a rajada segue contada a cada 300 ms (antes esperava 300 ms com a tela parada: o Hoje e o Funil apareciam tarde)
+  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; ultimaPassada = Date.now(); enxugar(); if (por()) { reabrir(); ajustar(); } }, Math.max(0, 300 - (Date.now() - ultimaPassada))); }).observe(document.documentElement, { childList: true, subtree: true });
   if (por()) reabrir(); setTimeout(function(){ if (!por() && /\/app\/accounts\//.test(location.pathname)) botao(); reabrir(); }, 8000);
 })();`;

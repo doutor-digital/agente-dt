@@ -24,9 +24,11 @@ const sha = (s: string) => createHash('sha256').update(s).digest('hex');
 // O menu.js que a MAIN de e14d8e85 entrega (montarMenuJs com o __AGENTE__ já trocado), por argumento: tamanho e SHA-256 medidos no código de main.
 // Sem a chave ligada o menu.js tem de sair BYTE A BYTE igual: é o que diz que ninguém, em nenhuma clínica, viu a barra mudar. Se alguém mexer DE PROPÓSITO
 // no menu.js, estes números mudam junto (o teste diz qual): para renovar, imprima length e sha256 de montarMenuJs('https://agente.exemplo.test', [], { 'x.exemplo.test': 5 }) e de [3, 7] em main.
+// Renovado de propósito (perf/menu-js): o freio das passadas do menu, do selo da Sofia e da barra agora deixa passar JÁ a primeira mudança depois de uma pausa
+// (antes esperava 300–400 ms); só o texto desses três freios mudou, o conteúdo do resto do arquivo é o mesmo.
 const DE_MAIN: Array<[readonly number[], number, string]> = [
-  [[], 118882, 'ae7b3bbbe7fec97b8e6790cdc5b20475f49e5266dad0d0b49a9a9633d968855b'],
-  [[3, 7], 118888, '861ee587575def73924f4fafdcf6365156986594f28a32f025dedf468aad48bd'],
+  [[], 119410, '985d61576d74d2484ec5d05bc2f4455bfc7d3c3f51f1464bc7bad02642d295bb'],
+  [[3, 7], 119416, '24a7137d25be3b32ce0b9968d63f6f4790d94350b6d822811ffff77563a8c25a'],
 ];
 const DOMINIOS = { 'x.exemplo.test': 5 };
 
@@ -145,4 +147,11 @@ test('as 5 pastas: na ordem da proposta e comparadas sem emoji, sem acento e sem
   // a função do navegador e a do servidor normalizam do mesmo jeito (o teste roda a do navegador de verdade)
   const chaveNavegador = new Function(`${js.match(/function chave\(t\)\{[^\n]*\}/)![0]}; return chave;`)() as (t: string) => string;
   for (const n of [...nomesNoCrm, 'Não atribuídas (3)', 'Todos', 'Minhas (12)']) assert.equal(chaveNavegador(n), chavePasta(n), n);
+});
+
+test('o freio da barra: a primeira mudança depois de uma pausa passa já (sem esperar 400 ms), e a rajada segue contada a cada 400 ms', () => {
+  const js = barraPorPapelJs(LIGADA);
+  assert.match(js, /espera = null; ultima = Date\.now\(\);/, 'a passada marca a hora em que rodou');
+  assert.match(js, /setTimeout\(passar, Math\.max\(0, 400 - \(Date\.now\(\) - ultima\)\)\)/);
+  assert.doesNotMatch(js, /setTimeout\(passar, 400\)/, 'nada de espera fixa de 400 ms');
 });

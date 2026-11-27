@@ -33,7 +33,8 @@ test('o bloco: ligado por padrão, «0» desliga; parseia; só lê; nada de dado
   // sem relógio curto: nada de setInterval; o freio do observador é de 400 ms
   assert.doesNotMatch(js, /setInterval\(/);
   assert.match(js, /new MutationObserver/);
-  assert.match(js, /setTimeout\(passar, 400\)/);
+  // o freio de 400 ms entre passadas segue (a primeira mudança depois de uma pausa passa já, a rajada é contada)
+  assert.match(js, /setTimeout\(passar, Math\.max\(0, 400 - \(Date\.now\(\) - ultima\)\)\)/);
   // textos do pedido do João
   assert.ok(js.includes('🤖 Sofia atendendo'));
   assert.ok(js.includes('🤖 A Sofia (IA) está atendendo esta conversa'));
