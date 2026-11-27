@@ -1102,6 +1102,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/conversa-direta.ts',
   },
   {
+    id: 'adiamento-propoe-dia',
+    chave: 'ADIAMENTO_PROPOE_DIA_SLUGS',
+    nome: 'Quem adia recebe um dia e dois horários, não um "te procuro"',
+    oQueFaz:
+      'Quando o paciente adia dizendo o motivo ou o quando ("vou falar com meu marido", "só recebo dia 5", "estou viajando", "mês que vem"), a Sofia consulta a agenda para depois do impedimento e propõe UM dia com dois horários reais ("já deixo pra depois que você receber? tenho 8h ou 14h"). Só marca se ele escolher. Antes, ela respondia "te procuro no dia X" e parava.',
+    pegadinha:
+      'NASCE DESLIGADA. Quem classifica a fala é um modelo leve (gpt-4o-mini, saída estruturada com schema: despedida, recusa, adiou com motivo, adiou sem motivo, escolheu horário, outro) e SÓ é chamado quando a fala tem sinal de adiamento ou despedida (custo: poucas chamadas por dia). Na dúvida, em falha, sem chave OpenAI ou sem resposta em 5 s, vale o comportamento de sempre: o corte de 21/10 (Araguaína), sem horário empurrado para quem agradece, se despede ou recusa. Só vale em unidade COM agenda (agenda ligada e token), para paciente SEM consulta de pé e fora de tratamento. UMA proposta só: se a Sofia já propôs horário depois de um adiamento, o segundo adiamento volta ao comportamento de sempre. Os horários vêm de consultar_horarios, nunca inventados. Não muda preço, a regra de segurar o preço até saber da dor nem a régua de follow-up. Não tem "só no papel": é texto do prompt e o corte do empurrão.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/adiamento-propoe-dia.ts',
+  },
+  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',

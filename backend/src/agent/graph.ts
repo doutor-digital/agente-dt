@@ -58,6 +58,7 @@ import {
   travaDoHorario,
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
+import type { AdiamentoDoTurno } from './adiamento-propoe-dia.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 import { adiouConfirmacao, confirmacaoAdiadaEstado, travarAgendamentoAdiado, type TurnoDaConfirmacao } from './confirmacao-adiada.js';
 
@@ -753,6 +754,8 @@ export async function buildAgentGraph(
     // A oferta do disparo de campanha que este paciente recebeu: o prompt a ensina à Sofia e o guardrail de preço a aceita.
     // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
     const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
+    // Chave `adiamento-propoe-dia`: o prompt classifica o adiamento (modelo leve + schema) e o deixa aqui; o corte do empurrão de horário lê o MESMO resultado.
+    const adiamentoDoTurno: { valor?: AdiamentoDoTurno | null } = {};
 
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
@@ -767,6 +770,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        adiamentoSaida: adiamentoDoTurno,
         agora: agoraDoTurno,
       });
       promptDoTurno = `${cacheable}\n${dynamic ?? ''}`;
@@ -785,6 +789,7 @@ export async function buildAgentGraph(
         leadId: state.leadId,
         historico: falas,
         ofertaSaida: ofertaDoTurno,
+        adiamentoSaida: adiamentoDoTurno,
         agora: agoraDoTurno,
       });
       promptDoTurno = dynamicPrompt;
@@ -1202,7 +1207,9 @@ export async function buildAgentGraph(
       // modelo escreve de novo com a agenda de agora. Gemini (exige assinatura na chamada de ferramenta) não recebe
       // chamada montada pelo código: refaz com a instrução. Com o plano B respondendo, só os cortes, sem modelo.
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
-      const encerrou = pacienteEncerrou(falas);
+      // Quem adiou COM motivo (classificado no prompt) e a Sofia vai propor dia e dois horários: não é "encerrou" — nem o corte nem o bloqueio da trava do
+      // horário valem; a trava do horário inventado RODA neste turno. Todo o resto segue o corte de 21/10, como no main.
+      const encerrou = adiamentoDoTurno.valor && tools.some((t) => t.name === 'consultar_horarios') ? null : pacienteEncerrou(falas);
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
         const travaHorario = travaDoHorario({
