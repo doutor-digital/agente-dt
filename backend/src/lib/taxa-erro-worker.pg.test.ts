@@ -111,6 +111,8 @@ test('queda geral contra o banco: 1.000 erros de crédito em 39 unidades, com 4.
   assert.equal(v.alarme, true, JSON.stringify(amostras));
   assert.equal(v.causa, 'credito');
   assert.equal(v.escopo, 'rede');
+  assert.equal(amostras[0].unidadesComErro, 39);
+  assert.equal(amostras[0].maiorUnidade, 26, 'a pior unidade tem 26 dos 1.000 erros (1000/39)');
   assert.equal(amostras[0].causas.credito, 1000, 'a causa é contada sobre TODOS os erros, não numa amostra');
 
   // duas varreduras ao mesmo tempo (o timer de 2 min e o de 10) dão a MESMA resposta: uma não conclui «sem queda» por estar ocupada

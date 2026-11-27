@@ -29,7 +29,7 @@ Opções avaliadas:
 
 Regra daqui para frente: SQL cru que compara coluna `timestamp` do agente_dt com "agora" usa `AGORA_UTC` / `agoraUtcSql` de `backend/src/lib/sql-tempo.ts`. Há uma trava (`sql-tempo.test.ts`) que reprova `now() -`, `now() +` ou `< now()` em qualquer arquivo novo, com 2 exceções justificadas (`worker-lease.ts` e `meta-eventos.ts`).
 
-## 3. O que foi corrigido (14 ocorrências em 5 arquivos)
+## 3. O que foi corrigido (13 ocorrências em 5 arquivos)
 
 A auditoria contou 15 em 7 arquivos pelo código que estava no servidor. Em `origin/main` de hoje o padrão `now() - interval` existe em 5 arquivos; `units.controller.ts`, `sla-alert-worker.ts`, `pagamento-antecipado.ts` e `franquia-sync-worker.ts` não têm mais a forma (conferido por busca de `now()`, `NOW()`, `::interval`, `make_interval`, `timestamptz`, `current_*`).
 
@@ -43,12 +43,14 @@ A auditoria contou 15 em 7 arquivos pelo código que estava no servidor. Em `ori
 
 Mudança de comportamento esperada em produção após o deploy (todas na direção do que o código já dizia): o aviso de agendamento perdido passa a sair 90 min depois da oferta e não 4h30; o preenchimento de campos passa a pegar conversas de 6 h a 72 h e não de 9 h a 75 h; o monitor de erro passa a ver 30 min de verdade (e por isso ganhou o olhar da rede inteira, ver `taxa-erro-worker.ts`).
 
+**Transição no deploy do dedup** (`message_claims`): as marcas gravadas antes do deploy têm `expires_at` em hora local (3 h atrás do UTC) e, lidas como UTC, parecem vencidas: uma mensagem reentregue nos primeiros minutos (TTL padrão de 10 min; reentrega do Kommo de 2 h) pode ser processada de novo uma vez. Convém publicar fora do pico; não precisa de migração, a tabela se renova em minutos.
+
 ### O monitor de taxa de erro depois do conserto
 
 Consertar a janela deixou o monitor mais fiel e mais cego ao mesmo tempo, então ele foi recalibrado junto (`lib/taxa-erro-worker.ts`):
 
 - **Por unidade**: janela de 30 min de verdade e mínimo de 20 chamadas, como antes. Como a janela antiga trazia ~8x mais chamadas, uma unidade pequena com a chave quebrada deixou de alcançar o mínimo; por isso entrou a regra «TODAS as chamadas falhando, com pelo menos 8» (`TAXA_ERRO_MINIMO_TUDO_FALHANDO`). A sensibilidade para taxas parciais em unidade com pouco volume é menor que a antiga, que era um efeito do bug.
-- **Da rede (queda geral)**: 90% ou mais das chamadas falhando nos últimos 10 min, na rede toda ou num provedor, com pelo menos 5 chamadas, sem o mínimo por unidade, **e erro em 2 unidades ou mais** (sem exceção para crédito ou chave: cada unidade pode ter a própria chave, `Unit.anthropicApiKey`, e uma acabando não é «a rede toda fora»; uma unidade só com tudo falhando é coberta pela regra por unidade). Só a queda da rede inteira cala os avisos por unidade. Chamadas `cancelled` (prazo estourado) ficam fora de todos os totais.
+- **Da rede (queda geral)**: 90% ou mais das chamadas falhando nos últimos 10 min, na rede toda ou num provedor, com pelo menos 5 chamadas, sem o mínimo por unidade, **e erro em 2 unidades ou mais, nenhuma delas com mais de 70% dos erros** (uma unidade em laço mais um erro isolado de outra não é queda da rede; sem exceção para crédito ou chave: cada unidade pode ter a própria chave, `Unit.anthropicApiKey`, e uma acabando não é «a rede toda fora»; uma unidade só com tudo falhando é coberta pela regra por unidade). Só a queda da rede inteira cala os avisos por unidade. Chamadas `cancelled` (prazo estourado) ficam fora de todos os totais.
 - **Causa**: lida da mensagem de erro (`lib/causa-erro-ia.ts`, a mesma regra em JS e em SQL, conferida contra um Postgres de verdade): crédito («credit balance», «no credits»), chave (401/403), limite (429) e indisponibilidade (5xx, timeout). Códigos só valem em contexto de status, para um «512 tokens» não virar «provedor fora do ar».
 - **Limite conhecido**: chamada `cancelled` (quem chamou desistiu: prazo estourado, sinal abortado) não conta, de propósito (o comentário de `statusDaFalha` em `openai.service.ts` diz que ela não pode acender este monitor). Um provedor que TRAVA, e cujas chamadas morrem no prazo do chamador, fica invisível a este monitor; o vigia externo (`feat/alerta-externo-saude`) tem a mesma regra. Cobrir isso é outro desenho (alarme de proporção de `cancelled`).
 - A varredura da rede roda a cada 2 min (`TAXA_ERRO_REDE_SWEEP_MS`); a por unidade continua a cada 10.

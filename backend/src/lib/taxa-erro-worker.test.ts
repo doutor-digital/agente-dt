@@ -104,6 +104,7 @@ const rede = (o: Partial<AmostraDaRede>): AmostraDaRede => ({
   total: 0,
   erros: 0,
   unidadesComErro: 0,
+  maiorUnidade: 0,
   causas: {},
   ...o,
 });
@@ -114,6 +115,7 @@ const linhaDaRede = (o: Partial<LinhaDaRede>): LinhaDaRede => ({
   total: 0,
   erros: 0,
   unidades: 0,
+  maior_unidade: 0,
   erros_credito: 0,
   erros_chave: 0,
   erros_limite: 0,
@@ -198,6 +200,13 @@ test('queda geral: NÃO alarma com amostra minúscula, com 89% de erro, ou com u
   assert.equal(quedaGeral([rede({ total: 100, erros: 89, unidadesComErro: 20, causas: { credito: 89 } })]).alarme, false, '89% < 90%');
   assert.equal(quedaGeral([rede({ total: 8, erros: 8, unidadesComErro: 1, causas: { indisponivel: 8 } })]).alarme, false);
   assert.equal(quedaGeral([]).alarme, false);
+});
+
+test('queda geral: UMA unidade em laço (100 erros) + outra com 1 erro NÃO é queda da rede, mesmo a 91% de erro', () => {
+  const v = quedaGeral([rede({ total: 111, erros: 101, unidadesComErro: 2, maiorUnidade: 100, causas: { outra: 101 } })]);
+  assert.equal(v.alarme, false);
+  // com os erros espalhados (nenhuma unidade passa de 70%) alarma
+  assert.equal(quedaGeral([rede({ total: 111, erros: 101, unidadesComErro: 5, maiorUnidade: 60, causas: { outra: 101 } })]).alarme, true);
 });
 
 test('queda geral: 90% exatos alarmam (limite inclusivo)', () => {

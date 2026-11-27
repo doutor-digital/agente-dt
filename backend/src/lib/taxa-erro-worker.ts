@@ -70,6 +70,8 @@ const TAXA_MINIMA_PARA_ALARMAR = Number(process.env.TAXA_ERRO_PISO) || 0.08;
 const REDE_JANELA_MIN = Number(process.env.TAXA_ERRO_REDE_JANELA_MIN) || 10;
 const REDE_TAXA = Number(process.env.TAXA_ERRO_REDE_TAXA) || 0.9;
 const REDE_MINIMO = Number(process.env.TAXA_ERRO_REDE_MINIMO) || 5;
+/** Nenhuma unidade pode responder por mais que esta fração dos erros: acima disso é o problema DELA, não da rede. */
+const REDE_MAIOR_UNIDADE = Number(process.env.TAXA_ERRO_REDE_MAIOR_UNIDADE) || 0.7;
 
 let timer: NodeJS.Timeout | null = null;
 let timerRede: NodeJS.Timeout | null = null;
@@ -157,6 +159,8 @@ export interface AmostraDaRede {
   erros: number;
   /** Quantas unidades distintas tiveram erro: uma conversa quebrada sozinha não é queda. */
   unidadesComErro: number;
+  /** Erros da unidade que mais errou: uma unidade em laço de reentrega não pode, sozinha, parecer queda da rede. */
+  maiorUnidade: number;
   /** Quantos erros por causa, lida da mensagem (contada no SQL, sobre TODOS os erros da janela, não numa amostra). */
   causas: Partial<Record<Causa, number>>;
 }
@@ -184,7 +188,8 @@ function causaDominante(causas: AmostraDaRede['causas']): Causa {
 /**
  * Queda geral = 90% (ou mais) das chamadas falhando na janela curta, SEM exigir o mínimo por unidade. O mínimo da
  * rede é pequeno de propósito (de madrugada são ~20 chamadas por 10 min). A salvaguarda contra falso alarme é UMA só: o erro
- * tem de aparecer em 2 unidades ou mais, na rede ou no provedor. Nem crédito nem chave abrem exceção: cada unidade pode ter a
+ * tem de aparecer em 2 unidades ou mais, na rede ou no provedor, e nenhuma unidade pode responder por mais de 70% dos erros (uma
+ * unidade em laço de reentrega, mais um erro isolado de outra, não é queda da rede). Nem crédito nem chave abrem exceção: cada unidade pode ter a
  * PRÓPRIA chave (`Unit.anthropicApiKey`), então a chave de uma acabando não é «a rede toda fora». Uma unidade só com tudo falhando
  * é coberta pela regra por unidade («todas as chamadas falhando», `pioroDemais`).
  */
@@ -194,6 +199,7 @@ export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
     const taxa = a.total > 0 ? a.erros / a.total : 0;
     if (a.total < REDE_MINIMO || taxa < REDE_TAXA) continue;
     if (a.unidadesComErro < 2) continue;
+    if (a.erros > 0 && a.maiorUnidade / a.erros > REDE_MAIOR_UNIDADE) continue;
     const causa = causaDominante(a.causas);
     candidatas.push({
       alarme: true,
@@ -219,6 +225,7 @@ export interface LinhaDaRede {
   total: number;
   erros: number;
   unidades: number;
+  maior_unidade: number;
   erros_credito: number;
   erros_chave: number;
   erros_limite: number;
@@ -233,19 +240,33 @@ export interface LinhaDaRede {
 export function sqlDaRede(): string {
   const f = filtrosSql('c.error_message');
   const rec = `c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval`;
+  // por (provedor, unidade) primeiro, para saber quantas unidades erraram e quanto errou a pior delas; depois soma por provedor e na rede (ROLLUP)
   return `
-    select c.provider as provider,
-           grouping(c.provider)::int as rede,
-           count(*) filter (where c.status <> 'cancelled')::int as total,
-           count(*) filter (where c.status = 'error')::int as erros,
-           count(distinct c.unit_id) filter (where c.status = 'error')::int as unidades,
-           count(*) filter (where c.status = 'error' and ${f.credito})::int as erros_credito,
-           count(*) filter (where c.status = 'error' and ${f.autenticacao})::int as erros_chave,
-           count(*) filter (where c.status = 'error' and ${f.limite})::int as erros_limite,
-           count(*) filter (where c.status = 'error' and ${f.indisponivel})::int as erros_indisponivel
-      from llm_calls c
-     where ${rec}
-     group by rollup (c.provider)
+    with u as (
+      select c.provider as provider,
+             c.unit_id as unit_id,
+             count(*) filter (where c.status <> 'cancelled') as total,
+             count(*) filter (where c.status = 'error') as erros,
+             count(*) filter (where c.status = 'error' and ${f.credito}) as erros_credito,
+             count(*) filter (where c.status = 'error' and ${f.autenticacao}) as erros_chave,
+             count(*) filter (where c.status = 'error' and ${f.limite}) as erros_limite,
+             count(*) filter (where c.status = 'error' and ${f.indisponivel}) as erros_indisponivel
+        from llm_calls c
+       where ${rec}
+       group by c.provider, c.unit_id
+    )
+    select provider,
+           grouping(provider)::int as rede,
+           sum(total)::int as total,
+           sum(erros)::int as erros,
+           count(distinct unit_id) filter (where erros > 0)::int as unidades,
+           coalesce(max(erros), 0)::int as maior_unidade,
+           sum(erros_credito)::int as erros_credito,
+           sum(erros_chave)::int as erros_chave,
+           sum(erros_limite)::int as erros_limite,
+           sum(erros_indisponivel)::int as erros_indisponivel
+      from u
+     group by rollup (provider)
   `;
 }
 
@@ -267,10 +288,10 @@ export function montarRede(linhas: LinhaDaRede[]): AmostraDaRede[] {
     // o que nenhuma regra reconhece também é uma causa: 39 erros «outra» + 1 de crédito não são «crédito esgotado»
     const outra = Number(l.erros) - pares.reduce((t, [, n]) => t + n, 0);
     if (outra > 0) causas.outra = outra;
-    return { escopo: l.rede ? 'rede' : (l.provider ?? '?'), total: Number(l.total), erros: Number(l.erros), unidadesComErro: Number(l.unidades), causas };
+    return { escopo: l.rede ? 'rede' : (l.provider ?? '?'), total: Number(l.total), erros: Number(l.erros), unidadesComErro: Number(l.unidades), maiorUnidade: Number(l.maior_unidade), causas };
   };
   const soma = linhas.find((l) => Number(l.rede) === 1);
-  const vazia: AmostraDaRede = { escopo: 'rede', total: 0, erros: 0, unidadesComErro: 0, causas: {} };
+  const vazia: AmostraDaRede = { escopo: 'rede', total: 0, erros: 0, unidadesComErro: 0, maiorUnidade: 0, causas: {} };
   return [soma ? paraAmostra(soma) : vazia, ...linhas.filter((l) => Number(l.rede) !== 1).map(paraAmostra)];
 }
 
@@ -293,7 +314,8 @@ function varrerRede(): Promise<boolean> {
           ? `${v.motivo} A IA não está respondendo nas unidades afetadas.`
           : `${v.motivo} Quem usa esse provedor está afetado; as unidades em outro provedor seguem normais.`,
       });
-      // Só a queda da REDE INTEIRA cala os avisos por unidade: com um provedor só caído, o problema de uma unidade em outro continua valendo.
+      // Só a queda da REDE INTEIRA cala os avisos por unidade: com um provedor só caído, o problema de uma unidade em outro continua valendo
+      // (e as unidades do provedor caído ainda recebem o aviso por unidade, além do do provedor: decisão consciente, o aviso do provedor diz a causa).
       return toda;
     } catch (err) {
       logger.warn({ err: String(err) }, 'varredura de queda geral falhou');
