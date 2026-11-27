@@ -10,6 +10,7 @@
  *   - `chamados` → `TELEGRAM_CHAMADOS_TOKEN` (+ `TELEGRAM_CHAMADOS_CHAT`): só chamados e o menu de suporte do WhatsApp;
  *   - `sofia`    → `TELEGRAM_SOFIA_TOKEN` (+ `TELEGRAM_SOFIA_CHAT`): o que a Sofia gera (sinal de alerta clínico, taxa de
  *     reserva, comprovante, agendamento perdido, resumo diário de qualidade).
+ *   - `joaoof`   → `JOAOOF_TELEGRAM_TOKEN` (+ `JOAOOF_TELEGRAM_CHAT`): o agente do João (opcional; sem ele cai no DD-Avisos).
  * Canal SEM token próprio cai no DD-Avisos: ninguém deixa de ser avisado enquanto o bot novo não é criado. O chat próprio só vale
  * junto do token próprio (o id de um grupo não serve para outro bot).
  *
@@ -27,13 +28,14 @@ export const CHAT_JOAO_PADRAO = '7822226023';
 /** O Telegram corta em 4096; folga para os acentos e o link. */
 const TETO_TEXTO = 3500;
 
-export type CanalTelegram = 'avisos' | 'chamados' | 'sofia';
+export type CanalTelegram = 'avisos' | 'chamados' | 'sofia' | 'joaoof';
 
 /** Prefixo das variáveis do canal (`<PREFIXO>_TOKEN` e `<PREFIXO>_CHAT`); o `avisos` é o bot de sempre. */
 const PREFIXO_DO_CANAL: Readonly<Record<CanalTelegram, string | null>> = {
   avisos: null,
   chamados: 'TELEGRAM_CHAMADOS',
   sofia: 'TELEGRAM_SOFIA',
+  joaoof: 'JOAOOF_TELEGRAM',
 };
 
 export interface ConfigTelegram {

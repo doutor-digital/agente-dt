@@ -107,6 +107,7 @@ async function medir(): Promise<Amostra[]> {
       from llm_calls c
       join units u on u.id = c.unit_id
      where c.created_at > ${AGORA_UTC} - interval '24 hours'
+       and coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
      group by u.slug, u.id
     `,
     String(JANELA_MIN),
@@ -255,6 +256,7 @@ export function sqlDaRede(): string {
              count(*) filter (where c.status = 'error' and ${f.indisponivel}) as erros_indisponivel
         from llm_calls c
        where ${rec}
+         and coalesce(c.endpoint, '') NOT LIKE 'joaoof.%'
        group by c.provider, c.unit_id
     ),
     por_unidade as (
