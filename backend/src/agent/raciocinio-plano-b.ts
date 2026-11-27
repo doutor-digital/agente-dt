@@ -93,10 +93,47 @@ function semMarcaDeCache(m: BaseMessage): BaseMessage {
 }
 
 /**
+ * O Claude guarda a chamada de ferramenta DUAS vezes na mensagem da IA: como bloco `tool_use` no conteúdo e em `tool_calls`.
+ * O conversor do Google transforma os dois em `functionCall` — o turno do modelo sai com 2 chamadas para 1 `functionResponse`
+ * e o Gemini responde 400 ("number of function response parts is not equal to number of function call parts"). Com o Google
+ * como reserva isso derrubaria quase toda conversa que já usou ferramenta. Aqui o bloco `tool_use` sai do conteúdo e fica só
+ * o `tool_calls`. Só sai o bloco que tem o `tool_call` correspondente: sem ele a resposta da ferramenta ficaria órfã.
+ *
+ * Função pura: não altera as mensagens recebidas.
+ */
+export function semToolUseParaGoogle(messages: BaseMessage[]): BaseMessage[] {
+  return messages.map((m) => {
+    if (m.getType() !== 'ai' || !Array.isArray(m.content)) return m;
+    const ai = m as AIMessage;
+    const ids = new Set((ai.tool_calls ?? []).map((c) => c.id));
+    const ehDuplicado = (b: unknown) =>
+      !!b && typeof b === 'object' && (b as { type?: unknown }).type === 'tool_use' && ids.has((b as { id?: string }).id);
+    if (!(ai.content as unknown[]).some(ehDuplicado)) return m;
+    const resto = (ai.content as unknown[]).filter((b) => !ehDuplicado(b));
+    const soTexto = resto.every((b) => typeof b === 'string' || (b as { type?: string })?.type === 'text');
+    const content = soTexto
+      ? resto.map((b) => (typeof b === 'string' ? b : ((b as { text?: string }).text ?? ''))).join('')
+      : resto;
+    return new AIMessage({
+      content: content as never,
+      tool_calls: ai.tool_calls,
+      invalid_tool_calls: ai.invalid_tool_calls,
+      additional_kwargs: ai.additional_kwargs,
+      response_metadata: ai.response_metadata,
+      usage_metadata: ai.usage_metadata,
+      id: ai.id,
+      name: ai.name,
+    });
+  });
+}
+
+/**
  * O que o plano B recebe: com o plano B na própria Anthropic, as mensagens vão como estão (a marca de cache e o raciocínio
- * valem lá); com OpenAI ou Google, sem os blocos de raciocínio e sem a marca de cache.
+ * valem lá); com OpenAI ou Google, sem os blocos de raciocínio e sem a marca de cache; com Google, também sem o `tool_use`
+ * duplicado do conteúdo.
  */
 export function mensagensParaPlanoB(provider: string, messages: BaseMessage[]): BaseMessage[] {
   if (provider === 'anthropic') return messages;
-  return semRaciocinioParaPlanoB(messages).map(semMarcaDeCache);
+  const limpas = semRaciocinioParaPlanoB(messages).map(semMarcaDeCache);
+  return provider === 'google' ? semToolUseParaGoogle(limpas) : limpas;
 }

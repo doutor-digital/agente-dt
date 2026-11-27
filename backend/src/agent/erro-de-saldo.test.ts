@@ -21,9 +21,29 @@ test('as duas frases reais de 26/11/2026 são saldo', () => {
   );
 });
 
-test('OpenAI insufficient_quota e Google RESOURCE_EXHAUSTED são cota', () => {
+test('OpenAI insufficient_quota e "exceeded your current quota" são saldo', () => {
   assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '429 You exceeded your current quota, please check your plan and billing details. insufficient_quota')), true);
-  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '[GoogleGenerativeAI Error]: [429 ] RESOURCE_EXHAUSTED: Quota exceeded for metric generate_content_free_tier_requests')), true);
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '429 You exceeded your current quota, please check your plan and billing details.')), true);
+});
+
+const GEMINI_POR_MINUTO =
+  '[GoogleGenerativeAI Error]: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 15, model: gemini-2.5-flash Please retry in 12.5s. [{"@type":"type.googleapis.com/google.rpc.QuotaFailure","violations":[{"quotaId":"GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]},{"@type":"type.googleapis.com/google.rpc.RetryInfo","retryDelay":"12s"}] RESOURCE_EXHAUSTED';
+const GEMINI_POR_DIA =
+  '[GoogleGenerativeAI Error]: [429 Too Many Requests] You exceeded your current quota, please check your plan and billing details. * Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 1500 [{"violations":[{"quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier"}]}] RESOURCE_EXHAUSTED';
+
+test('Gemini: limite POR MINUTO (passa em segundos) NÃO é saldo — não pode abrir circuito por 2 min', () => {
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, GEMINI_POR_MINUTO)), false);
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '429 RESOURCE_EXHAUSTED: Resource has been exhausted (e.g. check quota). retry in 3s')), false);
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '429 RESOURCE_EXHAUSTED')), false);
+});
+
+test('Gemini: cota por DIA e crédito pré-pago esgotado SÃO saldo', () => {
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, GEMINI_POR_DIA)), true);
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, 'RESOURCE_EXHAUSTED: Your prepayment credits are depleted. Please go to AI Studio to manage your project and billing.')), true);
+});
+
+test('OpenAI: 429 de rate limit por minuto/tokens NÃO é saldo, mesmo falando em "quota"/"billing"', () => {
+  assert.equal(ehErroDeSaldoOuCota(erroHttp(429, '429 Rate limit reached for gpt-4o-mini in organization org-x on tokens per min (TPM): Limit 200000, Used 199000. Please try again in 6ms. Visit billing to increase your quota')), false);
 });
 
 test('Anthropic "reached your specified API usage limits" é saldo', () => {

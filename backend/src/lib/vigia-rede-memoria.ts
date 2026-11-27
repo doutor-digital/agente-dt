@@ -5,6 +5,7 @@
  */
 import {
   familiaDoModelo,
+  ehModeloDoGoogle,
   FAMILIAS,
   type EstadoAlerta,
   type EstadoStore,
@@ -44,7 +45,7 @@ export function leituraEmMemoria(
     async errosAgrupados(agora: Date, janelaMin: number): Promise<GrupoDeErro[]> {
       const mapa = new Map<string, GrupoDeErro & { _u: Set<string> }>();
       for (const c of chamadas) {
-        if (c.status !== 'error' || !na(c.t, agora, janelaMin)) continue;
+        if (c.status !== 'error' || !na(c.t, agora, janelaMin) || ehModeloDoGoogle(c.model)) continue;
         const familia = familiaDoModelo(c.model);
         const mensagem = (c.mensagem ?? '').slice(0, 200);
         const k = `${familia}|${mensagem}`;
@@ -60,7 +61,7 @@ export function leituraEmMemoria(
     async totaisPorFamilia(agora: Date, janelaMin: number): Promise<Record<Familia, TotaisDaFamilia>> {
       const out: Record<Familia, TotaisDaFamilia> = { anthropic: { ok: 0, erro: 0 }, openai: { ok: 0, erro: 0 } };
       for (const c of chamadas) {
-        if (!na(c.t, agora, janelaMin)) continue;
+        if (!na(c.t, agora, janelaMin) || ehModeloDoGoogle(c.model)) continue;
         out[familiaDoModelo(c.model)][c.status === 'success' ? 'ok' : 'erro'] += 1;
       }
       return out;
@@ -68,7 +69,7 @@ export function leituraEmMemoria(
     async ultimoSucesso(agora: Date): Promise<Record<Familia, Date | null>> {
       const out: Record<Familia, Date | null> = { anthropic: null, openai: null };
       for (const c of chamadas) {
-        if (c.status !== 'success' || !na(c.t, agora, 24 * 60)) continue;
+        if (c.status !== 'success' || !na(c.t, agora, 24 * 60) || ehModeloDoGoogle(c.model)) continue;
         const f = familiaDoModelo(c.model);
         if (!out[f] || c.t > (out[f] as Date).getTime()) out[f] = new Date(c.t);
       }

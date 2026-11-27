@@ -12,10 +12,12 @@ import {
   CadeiaEsgotadaError,
   chaveDeSaldo,
   origemDoPrincipal,
+  tratarFalhaDoPrincipal,
+  CHAVE_SALDO_RESERVA_ANTHROPIC,
   type PassoDaCadeia,
   type ReservasGlobais,
 } from './cadeia-reserva.js';
-import { abrirCircuito, circuitoAberto, resetarCircuitos, estadoDoCircuito } from './circuito.js';
+import { abrirCircuito, circuitoAberto, resetarCircuitos, estadoDoCircuito, ehFalhaDeInfra, registrarFalha, CircuitoDeSaldoAbertoError } from './circuito.js';
 import { escolherPlanoB, type UnitCreds } from './llm-policy.js';
 import { alvoDoReescritor } from './pos-processamento-plano-b.js';
 
@@ -311,13 +313,13 @@ test('a reescrita do bastidor leva a chave reserva global (senão o createChatMo
   assert.deepEqual(vistas[0], { llmProvider: 'google', googleApiKey: 'g-reserva' });
 });
 
-// Contrato do grafo (mesmo estilo de pos-processamento-plano-b.test.ts): o plano B passa pela cadeia, e o circuito/saldo só com a cadeia ligada.
-test('graph.ts: o plano B sai da cadeia; saldo abre o circuito só com a chave reserva global configurada', () => {
+// Contrato do grafo (mesmo estilo de pos-processamento-plano-b.test.ts): a ligação não pode sumir em refatoração.
+test('graph.ts: o plano B sai da cadeia; o que o circuito aprende sai de tratarFalhaDoPrincipal', () => {
   const src = readFileSync(new URL('./graph.ts', import.meta.url), 'utf8').replace(/\s+/g, '');
   assert.ok(src.includes('constcadeiaViva=cadeiaCompletaLigada(reservasGlobais());'));
-  assert.ok(src.includes('if(cadeiaViva&&ehErroDeSaldoOuCota(err)){'));
-  assert.ok(src.includes('abrirCircuito(saldoDoPrincipal);'), 'saldo do principal tem de abrir o circuito DA CHAVE, não do provedor');
+  assert.ok(src.includes('tratarFalhaDoPrincipal({err,provider:providerasProvedor,saldoKey:saldoDoPrincipal,cadeiaViva,reservaFalhouPorOutroMotivo})'));
   assert.ok(src.includes('percorrerCadeia({passos:passosDeReserva,comCircuito:cadeiaViva,'));
+  assert.ok(src.includes('thrownewCircuitoDeSaldoAbertoError(saldoDoPrincipal)'), 'circuito de saldo aberto tem de ter erro próprio (não conta como infra)');
   assert.ok(!src.includes('escolherPlanoB('), 'o grafo voltou a escolher um plano B só, fora da cadeia');
   assert.ok(!/planoB:passosDeReserva\[0\],/.test(src), 'o rastro não pode levar o passo inteiro (tem a chave reserva)');
 });
@@ -365,4 +367,109 @@ test('origem da chave do principal: OpenAI sem chave própria usa a do ambiente'
   assert.equal(origemDoPrincipal('openai', { openaiApiKey: null }), 'ambiente');
   assert.equal(origemDoPrincipal('openai', { openaiApiKey: 'o' }), 'unidade');
   assert.equal(origemDoPrincipal('anthropic', { openaiApiKey: null }), 'unidade');
+});
+
+// ---- o que o circuito aprende com a falha do principal (defeitos 2 e 5 da revisão) -------------------
+
+const base429 = () => erroSaldo();
+
+test('uma unidade sem crédito NUNCA corta o provedor da rede: pular por circuito de saldo não conta como falha de infra', () => {
+  const saldoKey = chaveDeSaldo('anthropic', 'unidade', 'taubate');
+  abrirCircuito(saldoKey);
+  const pulo = new CircuitoDeSaldoAbertoError(saldoKey);
+  assert.equal(ehFalhaDeInfra(pulo), false);
+  // 10 mensagens da unidade sem crédito: o provedor continua de pé para as outras unidades
+  for (let i = 0; i < 10; i++) {
+    assert.equal(tratarFalhaDoPrincipal({ err: pulo, provider: 'anthropic', saldoKey, cadeiaViva: true, reservaFalhouPorOutroMotivo: false }), 'nenhum');
+  }
+  assert.equal(circuitoAberto('anthropic'), false);
+  assert.equal(estadoDoCircuito().find((e) => e.provedor === 'anthropic')?.falhasSeguidas, 0);
+});
+
+test('saldo no principal abre o circuito da CHAVE e não toca no do provedor', () => {
+  const saldoKey = chaveDeSaldo('anthropic', 'unidade', 'taubate');
+  assert.equal(tratarFalhaDoPrincipal({ err: base429(), provider: 'anthropic', saldoKey, cadeiaViva: true, reservaFalhouPorOutroMotivo: false }), 'saldo-abriu');
+  assert.equal(circuitoAberto(saldoKey), true);
+  assert.equal(circuitoAberto('anthropic'), false);
+  assert.equal(estadoDoCircuito().find((e) => e.provedor === saldoKey)?.aberto, true, 'o painel enxerga o circuito de saldo');
+});
+
+test('saldo com a cadeia desligada (sem env nova): não abre nada, como hoje', () => {
+  const saldoKey = chaveDeSaldo('anthropic', 'unidade', 'a');
+  assert.equal(tratarFalhaDoPrincipal({ err: base429(), provider: 'anthropic', saldoKey, cadeiaViva: false, reservaFalhouPorOutroMotivo: false }), 'nenhum');
+  assert.equal(circuitoAberto(saldoKey), false);
+  assert.equal(circuitoAberto('anthropic'), false);
+});
+
+test('chave reserva da Anthropic que falhou por TIMEOUT não deixa a chave da unidade abrir circuito (a reserva pode estar boa)', () => {
+  const saldoKey = chaveDeSaldo('anthropic', 'unidade', 'taubate');
+  const r = tratarFalhaDoPrincipal({ err: base429(), provider: 'anthropic', saldoKey, cadeiaViva: true, reservaFalhouPorOutroMotivo: true });
+  assert.equal(r, 'nenhum');
+  assert.equal(circuitoAberto(saldoKey), false);
+});
+
+test('infra continua igual: três falhas seguidas abrem o provedor', () => {
+  const timeout = Object.assign(new Error('IA não respondeu em 35000ms'), { name: 'LlmTimeoutError' });
+  const saldoKey = chaveDeSaldo('openai', 'ambiente', 'x');
+  const r = [1, 2, 3].map(() => tratarFalhaDoPrincipal({ err: timeout, provider: 'openai', saldoKey, cadeiaViva: false, reservaFalhouPorOutroMotivo: false }));
+  assert.deepEqual(r, ['nenhum', 'nenhum', 'infra-abriu']);
+  assert.equal(circuitoAberto('openai'), true);
+  registrarFalha('openai'); // (só para usar o import e provar que a contagem segue por provedor)
+});
+
+test('a reserva global da Anthropic sem saldo tem circuito próprio, compartilhado por todas as unidades', () => {
+  assert.equal(CHAVE_SALDO_RESERVA_ANTHROPIC, 'anthropic:reserva');
+  assert.equal(CHAVE_SALDO_RESERVA_ANTHROPIC, chaveDeSaldo('anthropic', 'reserva-global', 'qualquer-unidade'));
+});
+
+// ---- prazo da cadeia inteira -------------------------------------------------------------------
+
+test('prazo total: cada passo ganha só o que sobra e o passo sem tempo nem começa', async () => {
+  let agora = 1_000_000;
+  const chamados: string[] = [];
+  const r = percorrerCadeia({
+    passos: [passo('openai', { timeoutMs: 20_000 }), passo('google', { timeoutMs: 20_000 }), passo('anthropic', { timeoutMs: 20_000 })],
+    comCircuito: false,
+    unitId: 'u',
+    prazoAte: agora + 25_000,
+    agora: () => agora,
+    chamar: async (p) => {
+      chamados.push(p.provider);
+      agora += 20_000; // cada chamada gasta o teto
+      throw new Error('503 service unavailable');
+    },
+  });
+  await assert.rejects(r, (e) => {
+    assert.ok(e instanceof CadeiaEsgotadaError);
+    // openai gasta 20 s; sobram 5 s: google começa (com teto de 5 s) e gasta; anthropic já não tem tempo
+    return true;
+  });
+  assert.deepEqual(chamados, ['openai', 'google']);
+});
+
+test('prazo total: passo com menos de 2 s restantes é registrado como sem-tempo', async () => {
+  let agora = 0;
+  await assert.rejects(
+    percorrerCadeia({
+      passos: [passo('openai')],
+      comCircuito: false,
+      unitId: 'u',
+      prazoAte: 1_500,
+      agora: () => agora,
+      chamar: async () => 'nunca',
+    }),
+    (e) => e instanceof CadeiaEsgotadaError && e.tentativas[0].resultado === 'sem-tempo',
+  );
+});
+
+test('o rótulo da reserva global vai para a reescrita do bastidor (llm_calls "google-reserva")', () => {
+  const alvo = alvoDoReescritor({
+    unit: { llmProvider: 'anthropic' },
+    modelName: 'm',
+    provedorAtivo: 'anthropic',
+    planoBEmUso: { provider: 'google', modelName: 'gemini-2.5-flash', credenciais: { googleApiKey: 'g' }, rotulo: 'google-reserva' },
+    criarModelo: () => 'modelo',
+    maxTokens: 400,
+  });
+  assert.equal(alvo.provider, 'google-reserva');
 });

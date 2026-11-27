@@ -77,9 +77,8 @@ import { respostasSeguradas } from './entrega-falha.js';
 import {
   circuitoAberto,
   registrarSucesso,
-  registrarFalha,
-  ehFalhaDeInfra,
   abrirCircuito,
+  CircuitoDeSaldoAbertoError,
   type Provedor,
 } from './circuito.js';
 import { comChaveReserva, PROVEDOR_RESERVA } from './chave-reserva.js';
@@ -92,6 +91,9 @@ import {
   rotuloDoProvedor,
   chaveDeSaldo,
   origemDoPrincipal,
+  tratarFalhaDoPrincipal,
+  CHAVE_SALDO_RESERVA_ANTHROPIC,
+  CADEIA_PRAZO_TOTAL_MS,
   resumoDasTentativas,
   CadeiaEsgotadaError,
 } from './cadeia-reserva.js';
@@ -217,7 +219,7 @@ function stripGeminiUnsupported(node: unknown): void {
     }
   }
 }
-function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
+export function toolsParaGemini(tools: ReturnType<typeof buildTools>): unknown[] {
   return tools.map((t) => {
     let js: Record<string, unknown>;
     try {
@@ -910,16 +912,26 @@ export async function buildAgentGraph(
     const cadeiaViva = cadeiaCompletaLigada(reservasGlobais());
     // Saldo é da chave: o circuito de saldo do principal é desta unidade (ou do ambiente), não do provedor inteiro.
     const saldoDoPrincipal = chaveDeSaldo(provider as Provedor, origemDoPrincipal(provider as Provedor, unit), unit.id);
+    // A chave reserva da Anthropic foi tentada e falhou por OUTRO motivo que saldo (timeout, 5xx): não se sabe se ela está boa,
+    // então o saldo da chave da unidade não abre o circuito (abrir pularia a reserva por 2 min).
+    let reservaFalhouPorOutroMotivo = false;
+    const inicioDoTurnoMs = Date.now();
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
-      if (circuitoAberto(provider as Provedor) || circuitoAberto(saldoDoPrincipal)) {
+      if (circuitoAberto(provider as Provedor)) {
         throw new LlmTimeoutError(0);
+      }
+      // Circuito de SALDO da chave: erro à parte, que nunca conta como falha de infra do provedor.
+      if (circuitoAberto(saldoDoPrincipal)) {
+        throw new CircuitoDeSaldoAbertoError(saldoDoPrincipal);
       }
       let modeloReserva: typeof model | null = null;
       response = (await comChaveReserva({
         unidade: unit,
         provedor: provider,
+        // A reserva global da Anthropic sem saldo (circuito aberto) não é tentada de novo a cada mensagem.
+        chaveReserva: cadeiaViva && circuitoAberto(CHAVE_SALDO_RESERVA_ANTHROPIC) ? null : undefined,
         chamar: (chaveReserva) => {
           const modeloDaVez = chaveReserva ? montarModelo({ ...unit, anthropicApiKey: chaveReserva }) : model;
           if (chaveReserva) modeloReserva = modeloDaVez;
@@ -938,6 +950,7 @@ export async function buildAgentGraph(
           );
         },
         aoUsarReserva: async (falha) => {
+          registrarSucesso(CHAVE_SALDO_RESERVA_ANTHROPIC);
           if (modeloReserva) {
             modeloAtivo = modeloReserva;
             provedorAtivo = PROVEDOR_RESERVA;
@@ -950,6 +963,8 @@ export async function buildAgentGraph(
           });
         },
         aoFalharReserva: async (falha, erroReserva) => {
+          if (!ehErroDeSaldoOuCota(erroReserva)) reservaFalhouPorOutroMotivo = true;
+          else if (cadeiaViva) abrirCircuito(CHAVE_SALDO_RESERVA_ANTHROPIC);
           await recorder.step({
             kind: 'ERROR',
             title: `🔑 Chave da unidade recusada (${falha.status ?? '?'}/${falha.tipo}) e a chave reserva também falhou — seguindo pro plano B`,
@@ -970,10 +985,10 @@ export async function buildAgentGraph(
           latencyMs: Math.round(performance.now() - t0),
         });
       }
-      if (cadeiaViva && ehErroDeSaldoOuCota(err)) {
-        // Saldo/cota não passa com o tempo (26/11: 15 h sem resposta): corta o provedor já e deixa as próximas mensagens irem
+      const aprendeu = tratarFalhaDoPrincipal({ err, provider: provider as Provedor, saldoKey: saldoDoPrincipal, cadeiaViva, reservaFalhouPorOutroMotivo });
+      if (aprendeu === 'saldo-abriu') {
+        // Saldo/cota não passa com o tempo (26/11: 15 h sem resposta): corta a CHAVE já e deixa as próximas mensagens irem
         // direto pro reserva, sem pagar uma chamada morta cada uma. Só com a cadeia completa ligada (chave reserva global).
-        abrirCircuito(saldoDoPrincipal);
         logger.error({ provider, unit: unit.slug, erro: erroPrincipal.slice(0, 300) }, 'provedor de IA sem saldo/cota — circuito aberto, indo pro reserva');
         await recorder.step({
           kind: 'ERROR',
@@ -981,7 +996,7 @@ export async function buildAgentGraph(
           payload: { provider, erro: erroPrincipal.slice(0, 300) },
           latencyMs: Math.round(performance.now() - t0),
         });
-      } else if (ehFalhaDeInfra(err) && registrarFalha(provider as Provedor)) {
+      } else if (aprendeu === 'infra-abriu') {
         logger.error(
           { provider, unit: unit.slug, erro: erroPrincipal },
           'provedor de IA cortado após falhas seguidas — indo direto pro plano B',
@@ -1004,6 +1019,8 @@ export async function buildAgentGraph(
             passos: passosDeReserva,
             comCircuito: cadeiaViva,
             unitId: unit.id,
+            // principal + reservas dentro do prazo do deploy (60 s); sem a cadeia ligada, o plano B de hoje não tem prazo
+            prazoAte: cadeiaViva ? inicioDoTurnoMs + CADEIA_PRAZO_TOTAL_MS : undefined,
             chamar: async (passo) => {
               const modeloB = createChatModel(
                 { ...unit, ...passo.credenciais, llmProvider: passo.provider },
@@ -1039,7 +1056,7 @@ export async function buildAgentGraph(
           const planoB = { provider: vencedora.passo.provider, modelName: vencedora.passo.modelName };
 
           respondeuPlanoB = true;
-          planoBEmUso = { ...planoB, credenciais: vencedora.passo.credenciais };
+          planoBEmUso = { ...planoB, credenciais: vencedora.passo.credenciais, rotulo: rotuloDoProvedor(vencedora.passo) };
           await recorder.step({
             kind: 'THINKING',
             title:

@@ -70,6 +70,15 @@ export function familiaDoModelo(model: string | null | undefined): Familia {
   return /^claude/i.test(String(model ?? '')) ? 'anthropic' : 'openai';
 }
 
+/**
+ * Gemini (chave reserva do Google, PR da cadeia de reserva) NÃO é "openai": o vigia só acompanha as duas contas
+ * pagas (Anthropic e OpenAI). Sem isto, um sucesso do Gemini fecharia o alerta "OpenAI sem crédito" por engano e um erro
+ * dele o abriria. Essas chamadas ficam fora das três leituras da família (erros, totais, último sucesso).
+ */
+export function ehModeloDoGoogle(model: string | null | undefined): boolean {
+  return /^(models\/)?(gemini|gemma)/i.test(String(model ?? ''));
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // O que o banco entrega (a implementação real está em vigia-rede-banco.ts; os testes usam uma em memória)
 // ---------------------------------------------------------------------------------------------------------------

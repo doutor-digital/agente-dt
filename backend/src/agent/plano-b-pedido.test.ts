@@ -6,7 +6,8 @@ import { ChatOpenAI } from '@langchain/openai';
 import { DynamicStructuredTool } from '@langchain/core/tools';
 import { z } from 'zod';
 
-import { esconderLeadIdDoModelo, limparSchemaDoModelo } from './graph.js';
+import { esconderLeadIdDoModelo, limparSchemaDoModelo, toolsParaGemini } from './graph.js';
+import { createChatModel } from '../services/openai.service.js';
 import { toolsParaOpenAI } from './tools-openai.js';
 import { mensagensParaPlanoB } from './raciocinio-plano-b.js';
 
@@ -200,4 +201,67 @@ test('vários blocos de texto não colam uma frase na outra; invalid_tool_calls 
   const [saida] = mensagensParaPlanoB('google', [ia]);
   assert.equal(saida!.content, 'Meu nome é Ana.\n\nQuero agendar.');
   assert.equal((saida as AIMessage).invalid_tool_calls?.length, 1);
+});
+
+/** O pedido que o Gemini recebe (chave reserva global ou da unidade): o fetch global é trocado só durante a chamada. */
+async function pedidoParaOGoogle(tools: DynamicStructuredTool[], messages: BaseMessage[]) {
+  let corpo: { contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> } | null = null;
+  const fetchOriginal = globalThis.fetch;
+  globalThis.fetch = (async (_url: unknown, init: { body: string }) => {
+    corpo = JSON.parse(init.body);
+    return new Response(
+      JSON.stringify({
+        candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP', index: 0 }],
+        usageMetadata: { promptTokenCount: 1, candidatesTokenCount: 1, totalTokenCount: 2 },
+      }),
+      { status: 200, headers: { 'content-type': 'application/json' } },
+    );
+  }) as never;
+  try {
+    const modelo = createChatModel(
+      { llmProvider: 'google', googleApiKey: 'AIzaSy-chave-ficticia-de-teste', googleModel: 'gemini-2.5-flash', openaiTemperature: 0, openaiMaxTokens: 1024 } as never,
+      { model: 'gemini-2.5-flash', temperature: 0, maxTokens: 1024 },
+    );
+    const comTools = (modelo as unknown as { bindTools: (t: unknown[]) => { invoke: (m: BaseMessage[]) => Promise<unknown> } }).bindTools(toolsParaGemini(tools as never));
+    await comTools.invoke(messages);
+  } finally {
+    globalThis.fetch = fetchOriginal;
+  }
+  assert.ok(corpo);
+  return corpo as { contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> };
+}
+
+const contar = (c: Awaited<ReturnType<typeof pedidoParaOGoogle>>, campo: string) =>
+  c.contents.flatMap((x) => x.parts).filter((p) => campo in p).length;
+
+test('PLANO B (Google): histórico do Claude com ferramenta sai com 1 functionCall para 1 functionResponse (senão o Gemini dá 400)', async () => {
+  const corpo = await pedidoParaOGoogle(ferramentasDoClaude(), mensagensParaPlanoB('google', historicoDoClaude()));
+  assert.equal(contar(corpo, 'functionCall'), 1, 'a chamada de ferramenta saiu duplicada');
+  assert.equal(contar(corpo, 'functionResponse'), 1);
+  // o texto que a IA escreveu junto com a chamada continua lá
+  assert.ok(JSON.stringify(corpo).includes('vou etiquetar'));
+});
+
+test('PLANO B (Google): sem o conserto o pedido sairia com 2 functionCall (documenta o defeito)', async () => {
+  const corpo = await pedidoParaOGoogle(ferramentasDoClaude(), historicoDoClaude());
+  assert.equal(contar(corpo, 'functionCall'), 2);
+});
+
+test('PLANO B: o tool_use sem tool_call correspondente fica (não deixa a resposta da ferramenta órfã) e o original não é alterado', () => {
+  const ia = new AIMessage({
+    content: [{ type: 'text', text: 'x' }, { type: 'tool_use', id: 'toolu_9', name: 'aplicar_tag', input: {} }],
+    tool_calls: [],
+  });
+  const [saida] = mensagensParaPlanoB('google', [ia]);
+  assert.deepEqual((saida.content as Array<{ type: string }>).map((b) => b.type), ['text', 'tool_use']);
+  const completa = historicoDoClaude();
+  const antes = JSON.stringify(completa[2].content);
+  mensagensParaPlanoB('google', completa);
+  assert.equal(JSON.stringify(completa[2].content), antes);
+});
+
+test('PLANO B (OpenAI/Anthropic): o conserto do tool_use é só do Google', () => {
+  const h = historicoDoClaude();
+  assert.equal(mensagensParaPlanoB('anthropic', h), h);
+  assert.equal((mensagensParaPlanoB('openai', h)[2].content as unknown[]).length, 2);
 });

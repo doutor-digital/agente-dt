@@ -100,11 +100,22 @@ export function abrirCircuito(p: string, agora = Date.now(), descansoMs = DESCAN
   e.abertoAte = agora + descansoMs;
 }
 
+/** Lançado quando o circuito de SALDO da chave está aberto e a chamada nem é feita. Nunca conta como falha de infra. */
+export class CircuitoDeSaldoAbertoError extends Error {
+  constructor(public readonly chave: string) {
+    super(`circuito de saldo aberto (${chave}) — chamada não feita`);
+    this.name = 'CircuitoDeSaldoAbertoError';
+  }
+}
+
 /**
  * Distingue "o provedor está fora" de "o provedor respondeu e disse não".
  * Só o primeiro justifica cortar o tráfego.
  */
 export function ehFalhaDeInfra(err: unknown): boolean {
+  // Pular por circuito de SALDO aberto não é falha do provedor: contar aqui deixaria a unidade sem crédito
+  // (três mensagens bastam) cortar o provedor da rede toda.
+  if (err instanceof CircuitoDeSaldoAbertoError) return false;
   const msg = (err instanceof Error ? err.message : String(err ?? '')).toLowerCase();
   const nome = err instanceof Error ? err.name : '';
 
@@ -122,14 +133,19 @@ export function ehFalhaDeInfra(err: unknown): boolean {
   return false;
 }
 
-/** Retrato pro painel e pros testes. */
+/**
+ * Retrato pro painel e pros testes: os três provedores (circuito de infra) e, se existirem, os circuitos de SALDO por chave
+ * ("anthropic:<unidade>", "openai:ambiente", "google:reserva") que já foram abertos alguma vez.
+ */
 export function estadoDoCircuito(agora = Date.now()): Array<{
-  provedor: Provedor;
+  provedor: string;
   aberto: boolean;
   falhasSeguidas: number;
   voltaEmMs: number;
 }> {
-  return (['anthropic', 'openai', 'google'] as Provedor[]).map((p) => {
+  const chaves = new Set<string>(['anthropic', 'openai', 'google']);
+  for (const k of estados.keys()) chaves.add(k);
+  return [...chaves].map((p) => {
     const e = estadoDe(p);
     return {
       provedor: p,

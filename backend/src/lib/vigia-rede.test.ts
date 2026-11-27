@@ -7,6 +7,7 @@ import {
   duracao,
   emSilencioNoturno,
   familiaDoModelo,
+  ehModeloDoGoogle,
   haCausaRecente,
   horaBrasilia,
   LIMIARES,
@@ -529,4 +530,26 @@ test('texto: a classe dominante SOMA as chamadas por classe (request-id diferent
   const g = (mensagem: string, chamadas: number) => ({ familia: 'anthropic' as const, mensagem, chamadas, unidades: [], primeiro: d(T0), ultimo: d(T0) });
   const grupos = [...Array.from({ length: 50 }, (_, i) => g(`503 overloaded_error req_${i}`, 1)), g('403 permission denied', 3)];
   assert.match(classeDominante(grupos), /5xx/);
+});
+
+test('Gemini (chave reserva do Google) não conta como "openai": nem totais, nem último sucesso, nem erros', async () => {
+  assert.equal(ehModeloDoGoogle('gemini-2.5-flash'), true);
+  assert.equal(ehModeloDoGoogle('models/gemini-2.5-flash'), true);
+  assert.equal(ehModeloDoGoogle('gpt-4o-mini'), false);
+  assert.equal(ehModeloDoGoogle('claude-sonnet-5'), false);
+
+  const agora = d(T0);
+  const chamadas: ChamadaLlm[] = [
+    { t: T0 - 5 * MIN, status: 'success', model: 'gemini-2.5-flash' },
+    { t: T0 - 4 * MIN, status: 'error', model: 'gemini-2.5-flash', mensagem: '429 RESOURCE_EXHAUSTED quota' },
+    { t: T0 - 3 * MIN, status: 'error', model: 'gpt-4o-mini', mensagem: OPENAI_SEM_SALDO },
+  ];
+  const leitura = leituraEmMemoria(chamadas);
+  const totais = await leitura.totaisPorFamilia(agora, 30);
+  assert.deepEqual(totais.openai, { ok: 0, erro: 1 }, 'só a chamada da OpenAI conta');
+  const ultimo = await leitura.ultimoSucesso(agora);
+  assert.equal(ultimo.openai, null, 'um sucesso do Gemini não pode fechar o alerta "OpenAI sem crédito"');
+  const erros = await leitura.errosAgrupados(agora, 30);
+  assert.deepEqual(erros.map((e) => e.familia), ['openai']);
+  assert.match(erros[0].mensagem, /no credits remaining/);
 });

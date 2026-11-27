@@ -138,7 +138,7 @@ export function montarCadeia(args: MontarCadeiaArgs): PassoDaCadeia[] {
   return passos;
 }
 
-export type ResultadoDaTentativa = 'respondeu' | 'circuito-aberto' | 'saldo' | 'timeout' | 'erro';
+export type ResultadoDaTentativa = 'respondeu' | 'circuito-aberto' | 'saldo' | 'timeout' | 'erro' | 'sem-tempo';
 
 export interface Tentativa {
   provider: Provedor;
@@ -173,9 +173,20 @@ export interface PercorrerCadeiaArgs<T> {
   comCircuito: boolean;
   /** Unidade da conversa: escopo do circuito de saldo das chaves que são DELA. */
   unitId: string;
+  /**
+   * Instante (epoch ms) em que a cadeia INTEIRA tem de ter acabado. Cada passo ganha no máximo o que sobra; sem tempo
+   * suficiente o passo nem começa. O deploy espera 60 s (`stop_grace_period`): sem prazo o pior caso passava disso.
+   */
+  prazoAte?: number;
   /** Relógio injetável. */
   agora?: () => number;
 }
+
+/** Abaixo disso não vale começar outra chamada: ela estouraria o prazo antes de responder. */
+const PISO_DE_TEMPO_MS = 2_000;
+
+/** Prazo da cadeia inteira (principal + reservas) a partir do início do turno. 35 s do principal + 20 s do reserva de hoje = 55 s, abaixo dos 60 s do deploy. */
+export const CADEIA_PRAZO_TOTAL_MS = Number(process.env.AGENT_CADEIA_PRAZO_MS) || 55_000;
 
 function resumoDoErro(err: unknown): string {
   const m = err instanceof Error ? err.message : String(err ?? '');
@@ -203,8 +214,13 @@ export async function percorrerCadeia<T>(
     }
 
     const t0 = agora();
+    const restante = args.prazoAte === undefined ? Infinity : args.prazoAte - t0;
+    if (restante < PISO_DE_TEMPO_MS) {
+      tentativas.push({ ...base, resultado: 'sem-tempo', ms: 0 });
+      continue;
+    }
     try {
-      const resposta = await withTimeout(args.chamar(passo), passo.timeoutMs);
+      const resposta = await withTimeout(args.chamar(passo), Math.min(passo.timeoutMs, restante));
       if (args.comCircuito) {
         registrarSucesso(passo.provider);
         registrarSucesso(saldoKey);
@@ -236,6 +252,33 @@ export function resumoDasTentativas(tentativas: Tentativa[]): string {
     saldo: 'sem saldo/cota',
     timeout: 'não respondeu a tempo',
     erro: 'erro',
+    'sem-tempo': 'sem tempo',
   };
   return tentativas.map((t) => (t.resultado === 'respondeu' ? t.provider : `${t.provider} (${nome[t.resultado]})`)).join(' → ');
+}
+
+/** O circuito de saldo da chave reserva GLOBAL da Anthropic (a de `ANTHROPIC_RESERVE_API_KEY`): vale para todas as unidades. */
+export const CHAVE_SALDO_RESERVA_ANTHROPIC = chaveDeSaldo('anthropic', 'reserva-global', '');
+
+/**
+ * O principal falhou: decide o que o circuito aprende. Função à parte do grafo para ser testada de verdade.
+ *  - saldo/cota (com a cadeia ligada): abre o circuito da CHAVE — salvo se a chave reserva da Anthropic foi tentada e falhou
+ *    por OUTRO motivo (timeout, 5xx): aí não se sabe se ela está boa, e abrir tiraria da mesa justamente a chave que pode salvar;
+ *  - saldo NUNCA conta como falha de infra do provedor (senão a unidade sem crédito corta a rede toda);
+ *  - infra: três seguidas abrem o provedor, como sempre.
+ */
+export function tratarFalhaDoPrincipal(a: {
+  err: unknown;
+  provider: Provedor;
+  saldoKey: string;
+  cadeiaViva: boolean;
+  reservaFalhouPorOutroMotivo: boolean;
+}): 'saldo-abriu' | 'infra-abriu' | 'nenhum' {
+  const saldo = ehErroDeSaldoOuCota(a.err);
+  if (saldo) {
+    if (!a.cadeiaViva || a.reservaFalhouPorOutroMotivo) return 'nenhum';
+    abrirCircuito(a.saldoKey);
+    return 'saldo-abriu';
+  }
+  return ehFalhaDeInfra(a.err) && registrarFalha(a.provider) ? 'infra-abriu' : 'nenhum';
 }
