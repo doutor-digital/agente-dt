@@ -153,9 +153,17 @@ const INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO =
   `Se falta alguma dessas respostas, ${INSTRUCAO_SE_FALTA} (nunca sobre pagamento: a consulta é paga no dia, na clínica). ` +
   INSTRUCAO_FECHO;
 
-/** A instrução que vai junto da resposta reprovada, conforme a unidade aceite ou não pagamento antecipado. */
-export function instrucaoReservaSemMarcar(semAntecipado: boolean): string {
-  return semAntecipado ? INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO : INSTRUCAO_RESERVA_SEM_MARCAR;
+/** Chave `pix-depois-de-marcar`: a forma de pagamento vem DEPOIS de marcar, então a instrução não manda checar "como vai pagar". */
+const INSTRUCAO_RESERVA_SEM_MARCAR_PIX_DEPOIS =
+  INSTRUCAO_ABERTURA +
+  'Se o paciente JÁ escolheu o dia e a hora e confirmou que consegue ir, chame agendar_consulta AGORA (a forma de pagamento NÃO é perguntada antes: vem depois de marcar). ' +
+  `Se falta alguma dessas respostas, ${INSTRUCAO_SE_FALTA} (nunca sobre forma de pagamento). ` +
+  INSTRUCAO_FECHO;
+
+/** A instrução que vai junto da resposta reprovada, conforme a unidade aceite ou não pagamento antecipado (e a chave do Pix depois). */
+export function instrucaoReservaSemMarcar(semAntecipado: boolean, pixDepois = false): string {
+  if (semAntecipado) return INSTRUCAO_RESERVA_SEM_MARCAR_SEM_ANTECIPADO;
+  return pixDepois ? INSTRUCAO_RESERVA_SEM_MARCAR_PIX_DEPOIS : INSTRUCAO_RESERVA_SEM_MARCAR;
 }
 
 /**

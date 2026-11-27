@@ -28,6 +28,7 @@ import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from 
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
+import { pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -505,7 +506,7 @@ export function renderRegraDeAudio(): string {
   );
 }
 
-export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: string | null; systemPrompt?: string | null }): string {
+export function renderRulesGlobal(unit?: FlagsDePagamento & { slug?: string | null; sourceProdutos?: string | null; systemPrompt?: string | null }): string {
   // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
   const semAntecipado = unidadeSemAntecipado(unit);
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
@@ -527,13 +528,19 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { sourceProdutos?: s
   // a Sofia respondia a escolha do horário com "me passa seu nome completo e um telefone" e o paciente saía achando que a vaga estava
   // garantida (medido em produção em 19/11/2026: 6 conversas entre 05/11 e 17/11 em que a resposta à escolha do horário pedia
   // nome/telefone sem falar da taxa; caso `taxa-de-reserva-boa-vista` do Promptfoo reprovado). Nome e telefone só entram depois do comprovante, se o cadastro não existir.
+  // Chave `pix-depois-de-marcar` (agent/pix-depois-de-marcar.ts): a forma de pagamento deixa de ser passo ANTES de marcar.
+  const pixDepois = pixDepoisDeMarcar(unit, { semAntecipado, taxaObrigatoria: !!unit?.spineBookingRequiresPayment });
   const passos = semAntecipado
     ? 'dia → horário → dados'
     : unit?.spineBookingRequiresPayment
       ? 'dia → horário → taxa de agendamento (Pix + comprovante) → só então os dados (nome e telefone, se faltarem)'
-      : comSinal
-        ? 'dia → horário → dados → sinal (Pix)'
-        : 'dia → horário → dados → Pix';
+      : pixDepois
+        ? comSinal
+          ? 'dia → horário → dados → marcar (sem perguntar a forma de pagamento) → oferta do sinal (Pix), uma vez, DEPOIS de marcar'
+          : 'dia → horário → dados → marcar (sem perguntar a forma de pagamento: vale pagar na clínica)'
+        : comSinal
+          ? 'dia → horário → dados → sinal (Pix)'
+          : 'dia → horário → dados → Pix';
   // Taxa de reserva OBRIGATÓRIA (Boa Vista): não existe "Na clínica" como escolha — com esse exemplo a Sofia perguntava
   // "Pix antecipado ou pagar tudo na clínica no dia?" (Mivanildo 03/11, Maiza 04/11).
   const exemplosDeBotao = semAntecipado || unit?.spineBookingRequiresPayment
@@ -690,7 +697,7 @@ function renderPipelineIntents(unit: Unit): string {
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents)}`);
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents, { propoeDia: automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) })}`);
 }
 
 /**
@@ -705,9 +712,19 @@ function renderPipelineIntents(unit: Unit): string {
  * volta a conversar quando o paciente responde, porque EM ESPERA está nas etapas
  * permitidas.
  */
-function renderEsperaRules(intents: Record<string, number>): string {
+export function renderEsperaRules(intents: Record<string, number>, opcoes: { propoeDia?: boolean } = {}): string {
   const statusId = intents.waiting_deferred;
   if (!statusId) return '';
+  // Chave `adiamento-propoe-dia`: a regra 3 propõe um dia e dois horários reais (decisão do João, 27/11/2026). Corte de 21/10 preservado.
+  const regra3 = opcoes.propoeDia
+    ? `3. Responda ao adiamento COM UM DIA E DOIS HORÁRIOS, não só com "te procuro": se ele disse o QUANDO ou o POR QUÊ, chame consultar_horarios
+     para o primeiro dia útil EM ou DEPOIS do impedimento e proponha numa mensagem só — "combinado! já deixo pra {dia}, depois que você
+     {receber / falar com ele / voltar}? tenho {h1} ou {h2}". Os dois horários vêm SÓ de consultar_horarios: nunca invente vaga. Só chame
+     agendar_consulta se ele ESCOLHER um horário (a confirmação do dia segue valendo) e nunca diga "reservado" antes de marcar. Se ele recusar
+     marcar agora, ou se só agradeceu, se despediu ou recusou, NÃO empurre horário: "combinado, te procuro no dia DD/MM para marcarmos sua
+     consulta com o nosso especialista". Nunca prometa HORA de retorno. Sem pressão e sem insistir. Só então chame mover_etapa.`
+    : `3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
+     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.`;
   return `
 - EM ESPERA (statusId ${statusId}) — regras:
   1. Só quando o paciente QUER e adia. "Não tenho interesse", "não quero", "já resolvi"
@@ -725,8 +742,7 @@ function renderEsperaRules(intents: Record<string, number>): string {
      ⊘ Motivo da espera (Exames · Vai decidir · Viajando · Financeiro agora não · Outro) e
      ◷ Retomar em. Use a data que o paciente disser; se não disser, conte a partir de hoje:
      Exames +10 dias · Viajando +7 · Vai decidir +3 · Financeiro agora não +30 · Outro +7.
-  3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
-     consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.
+  ${regra3}
   4. Depois disso, não mande mais nada nesta conversa até a data. A retomada é automática.`;
 }
 
@@ -2113,6 +2129,8 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
   const encerrou = renderPacienteEncerrou(historico, {
     perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
+    // Adiou com motivo ("vou falar com meu marido", "só recebo dia 5"): propõe um dia e dois horários reais em vez de calar (a chave tem o porquê).
+    propoeDia: automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS),
   });
   if (encerrou) blocos.push(encerrou);
   // Só quando a ficha dá o valor da CONSULTA sem ambiguidade (os dois valores, antecipado e no dia). Com R$ solto nas

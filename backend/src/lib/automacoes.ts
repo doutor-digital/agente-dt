@@ -1102,6 +1102,32 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/conversa-direta.ts',
   },
   {
+    id: 'pix-depois-de-marcar',
+    chave: 'PIX_DEPOIS_DE_MARCAR_SLUGS',
+    nome: 'Sofia marca primeiro e oferece o Pix depois',
+    oQueFaz:
+      'A Sofia deixa de perguntar "Pix antecipado ou na clínica?" ANTES de marcar: com o dia confirmado ("consegue vir mesmo?") e o horário escolhido, ela marca. Depois de gravar, nas unidades com sinal por Pix ela oferece UMA vez o sinal (a consulta sai pelo preço com sinal; o preço não muda) e, se ele aceitar, gera o Pix; sem resposta, vale pagar na clínica. Nas unidades com pagamento antecipado por chave Pix fixa ela só marca e vale pagar na clínica.',
+    pegadinha:
+      'NASCE DESLIGADA. A confirmação do dia continua obrigatória (trava de 11/09: marcava no primeiro "ok" sem saber se o dia servia). Não muda nada em Boa Vista (taxa de reserva obrigatória) nem em unidade sem antecipado (Timbó), nem na remarcação. Sem sinal configurado na unidade (sinal_pix_centavos) não há oferta de Pix depois: só marca e fica "na clínica" (gravado na conversa, para a régua não cobrar Pix de quem nunca escolheu). Com sinal, a escolha NÃO é gravada como "na clínica": o Pix do sinal continua podendo ser pedido e o robô que lista "agendados sem Pix" continua enxergando a pessoa. Não tem "só no papel": é a regra da ferramenta agendar_consulta e do prompt. Piloto por unidade, medindo marcação E comparecimento.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/pagamento-da-unidade.ts',
+  },
+  {
+    id: 'adiamento-propoe-dia',
+    chave: 'ADIAMENTO_PROPOE_DIA_SLUGS',
+    nome: 'Quem adia recebe um dia e dois horários, não um "te procuro"',
+    oQueFaz:
+      'Quando o paciente adia dizendo o motivo ou o quando ("vou falar com meu marido", "só recebo dia 5", "estou viajando", "mês que vem"), a Sofia consulta a agenda para depois do impedimento e propõe UM dia com dois horários reais ("já deixo pra depois que você receber? tenho 8h ou 14h"). Só marca se ele escolher. Antes, ela respondia "te procuro no dia X" e parava.',
+    pegadinha:
+      'NASCE DESLIGADA. Não vale para quem só se despede, agradece, recusa ("não quero", "já resolvi") ou diz um "vou ver e te aviso" sem motivo nem data: esses seguem sem horário empurrado (corte de 21/10, Araguaína). Quem já tem consulta marcada não recebe proposta. Os horários vêm de consultar_horarios (a trava do horário inventado continua valendo neste turno). Não muda o preço, a regra de segurar o preço até saber da dor nem a régua de follow-up. Não tem "só no papel": é texto do prompt e o corte do empurrão.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/paciente-encerrou.ts',
+  },
+  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',

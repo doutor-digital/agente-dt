@@ -34,6 +34,71 @@ const IA_JA_FECHAVA =
 
 export type Encerramento = 'agradeceu' | 'concordou' | 'vai_se_organizar' | null;
 
+// ---------------------------------------------------------------------------------------------------------------------
+// Chave `adiamento-propoe-dia` (ADIAMENTO_PROPOE_DIA_SLUGS), decisão do João de 27/11/2026.
+//
+// Quem ADIA dizendo o motivo ou o quando ("vou falar com meu marido", "só recebo dia 5", "estou viajando") ouvia "te procuro no dia X" e a
+// conversa parava: em 30 dias de produção, 187 conversas com frase assim e 133 nunca marcaram. Com a chave ligada a Sofia propõe UM dia e DOIS
+// horários reais depois do motivo e só marca se ele escolher. O corte de 21/10 (Araguaína, commit 13cfbaf9) FICA para quem só agradece, se
+// despede, recusa ou diz um "vou ver e te aviso" sem motivo nem data: nesses, nada de horário empurrado.
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** Recusa de verdade: não é adiamento, é "não". Nunca recebe proposta de horário. */
+const RECUSOU = /n[ãa]o\s+(?:quero|tenho\s+interesse|me\s+interess)|j[áa]\s+(?:resolvi|me\s+resolvi|consegui\s+resolver)|desist|n[ãa]o\s+preciso|pare\s+de\s+me|me\s+tir[ae]\s+d[ao]/i;
+/** O motivo ou o quando do adiamento, nas palavras reais dos pacientes (relatório de 27/11, L1-04 e vizinhas). */
+const MOTIVO_DO_ADIAMENTO: RegExp[] = [
+  // "vou falar/conversar/ver com meu marido/minha esposa/meu filho…"
+  /\b(?:falar|conversar|ver|combinar|decidir|consultar|ver\s+isso)\b[^.!?\n]{0,25}\bcom\s+(?:o\s+|a\s+)?(?:meu|minha|meus|minhas)\s+(?:marido|esposo|esposa|mulher|namorad[oa]|filh[oa]s?|m[ãa]e|pai|irm[ãa]o?|famil\w*|m[ée]dico|patr[ãa]o|chefe)/i,
+  // dinheiro: "só recebo dia 8", "quando eu receber", "no dia do pagamento", "esse mês não dá"
+  /\brecebo\b|\bquando\s+(?:eu\s+)?receber|\breceber\s+(?:o\s+)?(?:sal[áa]rio|pagamento|dinheiro)|\bsal[áa]rio\b|\bdia\s+do\s+pagamento|\bfinal\s+do\s+m[êe]s|\bes(?:s|t)[ea]\s+m[êe]s\s+n[ãa]o\s+d[áa]/i,
+  // data: "mês que vem", "semana que vem", "depois do dia 05", "depois do carnaval", "a partir do dia 10"
+  /\bm[êe]s\s+que\s+vem|\bpr[óo]xim[oa]\s+(?:m[êe]s|semana)|\bsemana\s+que\s+vem|\bdepois\s+do\s+dia\s+\d|\bdepois\s+d[oae]s?\s+(?:feriado|carnaval|natal|ano\s+novo|f[ée]rias|viagem)|\ba\s+partir\s+d[eoa]\s+(?:dia\s+)?\d|\bs[óo]\s+(?:no\s+)?dia\s+\d/i,
+  // viagem
+  /\b(?:estou|t[oô]|to|vou\s+estar|vou)\s+(?:viajando|viajar)\b|\bde\s+viagem\b/i,
+];
+
+/**
+ * O paciente ADIOU dizendo o motivo ou o quando? Só fala dele neste turno, sem pergunta (quem pergunta quer resposta, não proposta),
+ * curta, e sem recusa. É isto — e não `pacienteEncerrou` — que a chave `adiamento-propoe-dia` usa para propor um dia em vez de calar.
+ */
+export function adiouComMotivo(falas: Fala[] | undefined): boolean {
+  if (!falas) return false;
+  const { textos } = turnoDoPaciente(falas);
+  const tudo = textos.join('\n').trim();
+  if (!tudo || tudo.length > 300 || tudo.includes('?')) return false;
+  if (RECUSOU.test(tudo)) return false;
+  return MOTIVO_DO_ADIAMENTO.some((re) => re.test(tudo));
+}
+
+/**
+ * O encerramento que vale para o CORTE de horário (graph.ts): o de sempre, exceto que — com a chave ligada — quem adiou com motivo NÃO é
+ * "encerrou": a resposta pode (e deve) propor o dia e os dois horários, e a trava do horário inventado continua rodando neste turno.
+ */
+export function encerramentoParaCorte(falas: Fala[], propoeDia: boolean): Encerramento {
+  if (propoeDia && adiouComMotivo(falas)) return null;
+  return pacienteEncerrou(falas);
+}
+
+/** O bloco do turno quando ele adiou com motivo e a chave está ligada: propor o dia, não empurrar nem calar. */
+export function renderPacienteAdiou(): string {
+  return (
+    '<paciente_adiou>\n(contado pelo sistema no histórico; vale mais que a regra da pergunta de continuidade e a de "sem horário")\n' +
+    'Ele ADIOU dizendo o motivo ou o quando ("vou falar com meu marido", "só recebo dia 5", "estou viajando", "mês que vem"). ' +
+    'Isto NÃO é despedida nem recusa: não feche com "te procuro depois", "fico no aguardo" ou "quando quiser me chama".\n' +
+    '- Se ele JÁ TEM consulta marcada: responda curto, lembre o dia e a hora numa frase e NÃO proponha outro horário.\n' +
+    '- Se ainda NÃO marcou: chame consultar_horarios para o primeiro dia útil EM ou DEPOIS do impedimento que ele disse (se ele só deu o motivo, ' +
+    'sem data, o dia útil que vem daqui a 2 ou 3 dias) e, numa mensagem só, proponha UM dia com os DOIS horários que a agenda devolveu, ' +
+    'retomando o motivo dele: "Combinado! Já deixo pra {dia}, depois que você {receber / falar com ele / voltar}? Tenho {h1} ou {h2}." ' +
+    'Os dois horários vêm SÓ de consultar_horarios; nunca invente vaga. Se a agenda não devolver horário nesse dia, não ofereça nenhum: ' +
+    '"combinado, te procuro no dia DD/MM".\n' +
+    '- Só chame agendar_consulta se ele ESCOLHER um dos horários (a confirmação do dia segue valendo). NUNCA diga que está reservado, guardado ou ' +
+    'garantido antes de marcar.\n' +
+    '- Se ele recusar marcar agora ou preferir avisar depois: aceite sem insistir ("Combinado, te procuro no dia DD/MM"). Uma proposta só: ' +
+    'não repita o horário na mensagem seguinte. Nunca prometa HORA de retorno.\n' +
+    '</paciente_adiou>'
+  );
+}
+
 /** As falas do paciente deste turno (as seguidas, depois da última fala da IA) e a fala da IA antes delas. */
 function turnoDoPaciente(falas: Fala[]): { textos: string[]; ultimaIa: string | null } {
   let fim = falas.length - 1;
@@ -74,7 +139,9 @@ export function pacienteEncerrou(falas: Fala[]): Encerramento {
  * que lhe fez esperar?". Ligada, quem adia ou encerra sem consulta recebe UMA pergunta sobre o motivo — nunca horário
  * (o corte de horário em graph.ts continua valendo). O "tá bom" depois da despedida da Sofia segue sem pergunta.
  */
-export function renderPacienteEncerrou(falas: Fala[] | undefined, opcoes: { perguntarMotivo?: boolean } = {}): string {
+export function renderPacienteEncerrou(falas: Fala[] | undefined, opcoes: { perguntarMotivo?: boolean; propoeDia?: boolean } = {}): string {
+  // Chave `adiamento-propoe-dia`: adiou com motivo → propõe o dia e os dois horários, em vez do "NÃO ofereça horário" de quem encerrou.
+  if (opcoes.propoeDia && adiouComMotivo(falas)) return renderPacienteAdiou();
   const enc = falas ? pacienteEncerrou(falas) : null;
   if (!enc) return '';
   if (opcoes.perguntarMotivo && enc !== 'concordou') {

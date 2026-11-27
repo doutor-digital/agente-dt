@@ -127,7 +127,8 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
     name: 'gerar_sinal_pix',
     description:
       'Gera o Pix do SINAL (Pix copia e cola de valor fixo no Asaas da clínica) para o paciente que escolheu garantir a vaga com sinal. ' +
-      'Chame SÓ depois de agendar_consulta dar certo e de ele ter escolhido o sinal (formaPagamento=sinal_pix). ' +
+      'Chame SÓ depois de agendar_consulta dar certo e de ele ter escolhido o sinal (formaPagamento=sinal_pix) ou aceitado a oferta do sinal que você fez DEPOIS de marcar ' +
+      '(nesse caso passe o leadId desta conversa). ' +
       'O sistema manda o código ao paciente numa mensagem separada. Chamar de novo devolve o MESMO Pix (e o manda de novo): use quando ele ' +
       'disser que não recebeu o código. Nunca use a chave Pix da clínica.',
     schema: z.object({

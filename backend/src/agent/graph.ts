@@ -57,7 +57,7 @@ import {
   semPerguntaDeTurno,
   travaDoHorario,
 } from './horario-oferecido.js';
-import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
+import { empurraHorario, encerramentoParaCorte, semEmpurrarHorario } from './paciente-encerrou.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 import { adiouConfirmacao, confirmacaoAdiadaEstado, travarAgendamentoAdiado, type TurnoDaConfirmacao } from './confirmacao-adiada.js';
 
@@ -123,6 +123,7 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -1202,7 +1203,10 @@ export async function buildAgentGraph(
       // modelo escreve de novo com a agenda de agora. Gemini (exige assinatura na chamada de ferramenta) não recebe
       // chamada montada pelo código: refaz com a instrução. Com o plano B respondendo, só os cortes, sem modelo.
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
-      const encerrou = pacienteEncerrou(falas);
+      // Chave `adiamento-propoe-dia`: quem adiou COM motivo ("vou falar com meu marido", "só recebo dia 5") não é "encerrou" — a resposta propõe
+      // o dia e dois horários, e a trava do horário inventado roda. Quem só agradece, se despede ou recusa segue cortado, como em 21/10.
+      const adiamentoPropoeDia = automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS);
+      const encerrou = encerramentoParaCorte(falas, adiamentoPropoeDia);
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
         const travaHorario = travaDoHorario({
@@ -1432,6 +1436,8 @@ export async function buildAgentGraph(
       // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): entra na mesma trava, com
       // uma instrução própria (a IA só marca se o paciente pediu horário NOVO) e, sem saída limpa, o recado fixo.
       const blocoDesmarcada = blocoDizDesmarcada(blocoConsulta);
+      // Chave `pix-depois-de-marcar`: a instrução da refeita não manda checar "como vai pagar" (a forma vem depois de marcar).
+      const pixDepois = pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !unidadeSemAntecipado(unit) && !!unit.spineBookingRequiresPayment });
       if (!promessa) promessa = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoConsulta, promessa });
       const desmarcada = blocoDesmarcada && !marcouAgora && !!promessa;
       if (promessa) {
@@ -1445,7 +1451,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit)) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit) || pixDepois) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit), pixDepois))],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,
