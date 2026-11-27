@@ -151,7 +151,9 @@ export function criarFerramentas(ctx: ContextoDasFerramentas): DynamicStructured
       refs: z.array(z.string()).optional().describe('ids das mensagens que originaram a demanda'),
       motivo: z.string().max(300).optional().describe('por que isto é demanda e por que esta prioridade'),
     }),
-    func: async (a) => {
+    func: async (a0) => {
+      // quem lê o grupo de UMA unidade só cria demanda dessa unidade (texto do grupo A não abre demanda em nome da B)
+      const a = ctx.escopo?.unidade ? { ...a0, unidade_slug: ctx.escopo.unidade } : a0;
       const conhecidas = (await repo.unidades()).map((u) => u.slug);
       if (a.unidade_slug && conhecidas.length > 0 && !conhecidas.includes(a.unidade_slug)) {
         return `RECUSADO: unidade_slug «${limpoParaPedido(a.unidade_slug, 60)}» não existe. Use um de: ${conhecidas.join(', ')} (ou omita).`;
@@ -313,7 +315,10 @@ export function criarFerramentas(ctx: ContextoDasFerramentas): DynamicStructured
     name: 'ler_mensagens_grupo',
     description: 'Lê as últimas mensagens do grupo «Mkt | Dr Hérnia» de uma unidade, para entender o contexto de um pedido. Telefones e CPF já vêm mascarados.',
     schema: z.object({ unidade_slug: z.string().min(2), ultimas: z.number().int().min(1).max(60).optional() }),
-    func: async (a) => (ctx.lerMensagens ? ctx.lerMensagens(a.unidade_slug, a.ultimas ?? 25) : 'Não há leitor de grupo configurado neste momento.'),
+    func: async (a) => {
+      if (ctx.escopo?.unidade && a.unidade_slug !== ctx.escopo.unidade) return `RECUSADO: neste lote você só pode ler o grupo de ${ctx.escopo.unidade}.`;
+      return ctx.lerMensagens ? ctx.lerMensagens(a.unidade_slug, a.ultimas ?? 25) : 'Não há leitor de grupo configurado neste momento.';
+    },
   });
 
   // quem tem a memória e o status NÃO lê texto de grupo (e quem lê grupo não escreve memória): é a divisão que fecha a injeção por mensagem

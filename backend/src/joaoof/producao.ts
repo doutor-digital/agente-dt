@@ -14,12 +14,16 @@ import type { ModeloDeChat } from './cerebro.js';
 import { rodarCerebro, type ResultadoDoCerebro } from './cerebro.js';
 import { canalDoJoaoof, chatDoJoao, modelosDoJoaoof, modoDoJoaoof, orcamentoDoJoaoof, ROTULO_LLM } from './config.js';
 import { brl, criarFreio, rotuloDaChamada, type DepsCusto, type Freio } from './custo.js';
-import { criarFerramentas } from './ferramentas.js';
+import { criarFerramentas, limpoParaPedido } from './ferramentas.js';
 import { repoPrisma } from './repo-prisma.js';
 import type { JoaoofRepo } from './repo.js';
 import type { DepsEntrega } from './avisos.js';
 import type { DepsTelegramJoao } from './telegram-joao.js';
 import type { DepsPasso } from './passo.js';
+import { entradaPrisma } from './entrada.js';
+import { configEvolution, lerGrupoNoEvolution, normalizarRegistro } from './evolution.js';
+import { rodarLote, type DepsTriagem } from './triagem.js';
+import { registrarEvento, type DepsVigia, type EventoDaVigia } from './vigia.js';
 
 const agora = () => new Date();
 
@@ -135,6 +139,7 @@ export async function textoDoCusto(): Promise<string> {
 
 export async function alertasDoJoaoof(): Promise<string[]> {
   const alertas: string[] = [];
+  // a fonte surda NÃO entra aqui: ela já sai como aviso próprio (1×/dia, no expediente) — duas mensagens para o mesmo fato seria barulho
   try {
     const s = await freioDoJoaoof().situacao();
     if (s.nivel === 'parado') alertas.push(`Joaoof parado: gasto do mês chegou a ${brl(s.gastoBrl)} (teto ${brl(s.tetoBrl)}).`);
@@ -161,6 +166,51 @@ export function depsTelegramReais(): DepsTelegramJoao {
     textoDoCusto,
     alertas: alertasDoJoaoof,
   };
+}
+
+/** O que a ferramenta `ler_mensagens_grupo` devolve ao cérebro: as últimas falas do grupo da unidade, já mascaradas. */
+export async function lerMensagensDoGrupoParaOCerebro(slug: string, n: number): Promise<string> {
+  const cfg = configEvolution();
+  if (!cfg) return 'Sem credencial da Evolution (JOAOOF_EVO_APIKEY): não consigo ler o grupo.';
+  const u = (await repoPrisma.unidades()).find((x) => x.slug === slug);
+  if (!u?.grupoJid) return `Não conheço o grupo da unidade ${slug}.`;
+  const r = await lerGrupoNoEvolution(cfg, u.grupoJid, 0, n);
+  if (!r.ok) return `Não consegui ler o grupo agora (${r.erro}).`;
+  const falas = r.registros
+    .map((reg) => normalizarRegistro(reg, slug, process.env.JOAOOF_SEGREDO_PESSOA))
+    .filter((m): m is NonNullable<typeof m> => m !== null)
+    .sort((a, b) => a.ts - b.ts)
+    .map((m) => `${new Date(m.ts * 1000).toISOString().slice(5, 16).replace('T', ' ')}Z ${limpoParaPedido(m.autorNome || 'alguém', 80)}: ${limpoParaPedido(m.texto, 300)}`);
+  return falas.length ? falas.join('\n') : 'Sem mensagens de gente nesse grupo no período lido.';
+}
+
+export function depsDeTriagemReais(): DepsTriagem {
+  return {
+    ...depsDeEntregaReais(),
+    entradas: entradaPrisma,
+    evolution: configEvolution(),
+    segredoPessoa: process.env.JOAOOF_SEGREDO_PESSOA,
+    executar: (o) => executarComModelo({ ...o, fonte: 'grupo', lerMensagens: lerMensagensDoGrupoParaOCerebro }),
+    intervaloMin: Math.max(5, Number(process.env.JOAOOF_LOTE_MIN) || 20),
+    retroativoHoras: Math.max(1, Number(process.env.JOAOOF_RETROATIVO_HORAS) || 24),
+    maxPorChamada: 60,
+    registrar: (nivel, dados, mensagem) => logger[nivel](dados, mensagem),
+  };
+}
+
+/** O relógio chama isto a cada minuto; o lote respeita o intervalo sozinho. */
+export function loteReal(): () => Promise<void> {
+  const deps = depsDeTriagemReais();
+  return async () => {
+    const r = await rodarLote(deps);
+    if (r.rodou && r.motivo !== 'sem-mensagens') logger.info({ ...r }, 'joaoof: lote');
+  };
+}
+
+/** Ponto de entrada do vigia com a fiação real (ver `vigia.ts`). */
+export function registrarEventoReal(e: EventoDaVigia) {
+  const deps: DepsVigia = { entradas: entradaPrisma, modo: () => modoDoJoaoof(process.env.JOAOOF_LIGADO), agora };
+  return registrarEvento(deps, e);
 }
 
 export function depsDoPasso(lote?: DepsPasso['lote']): DepsPasso {
