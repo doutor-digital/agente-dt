@@ -3518,3 +3518,28 @@ model JoaoofEstado {
 
   @@map("joaoof_estado")
 }
+
+/// Fila de entrada do Joaoof: cada mensagem de grupo (ou evento do vigia) que ele ainda vai ler. Texto JÁ MASCARADO (sem telefone/CPF),
+/// curto, e apagado 7 dias depois de lido. `ref` é único por fonte: ler o mesmo grupo duas vezes não duplica.
+model JoaoofEntrada {
+  id           String    @id @default(cuid())
+  /// grupo | vigia
+  fonte        String
+  /// grupo: «<slug>:<id da mensagem no WhatsApp>»; vigia: «vigia:<id do evento>»
+  ref          String
+  unidadeSlug  String?   @map("unidade_slug")
+  autorNome    String    @default("") @map("autor_nome")
+  /// HMAC do número de quem escreveu (nunca o número); nulo se não há segredo configurado
+  autorChave   String?   @map("autor_chave")
+  /// vigia: info | aviso | critico
+  severidade   String    @default("")
+  texto        String
+  /// quando a mensagem foi escrita (não quando foi lida)
+  escritaEm    DateTime  @map("escrita_em")
+  processadaEm DateTime? @map("processada_em")
+  criadoEm     DateTime  @default(now()) @map("criado_em")
+
+  @@unique([fonte, ref])
+  @@index([processadaEm, escritaEm])
+  @@map("joaoof_entrada")
+}

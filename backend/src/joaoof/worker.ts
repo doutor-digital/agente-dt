@@ -5,14 +5,14 @@
 import { logger } from '../lib/logger.js';
 import { modoDoJoaoof, valorDoModoReconhecido } from './config.js';
 import { passoDoJoaoof, type DepsPasso } from './passo.js';
-import { depsDoPasso, telegramDoJoaoofConfigurado } from './producao.js';
+import { depsDoPasso, loteReal, telegramDoJoaoofConfigurado } from './producao.js';
 
 const PASSO_MS = 60_000;
 let timer: NodeJS.Timeout | null = null;
 let rodando = false;
 
-/** `lote`: a triagem dos grupos (entra no PR da leitura dos grupos); sem ele o relógio só entrega os resumos. */
-export function startJoaoofWorker(lote?: DepsPasso['lote']): void {
+/** `lote`: a triagem dos grupos (padrão: a real); o teste passa outro. */
+export function startJoaoofWorker(lote: DepsPasso['lote'] = loteReal()): void {
   if (timer) return;
   const raw = process.env.JOAOOF_LIGADO;
   if (!valorDoModoReconhecido(raw)) logger.warn({ valor: raw }, 'joaoof: JOAOOF_LIGADO com valor desconhecido — tratado como desligado. Use desligado, seco ou ligado');
