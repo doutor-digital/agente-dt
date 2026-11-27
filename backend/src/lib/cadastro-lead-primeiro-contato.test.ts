@@ -177,3 +177,11 @@ test('"retentar" (a busca do telefone falhou) libera a PRÓXIMA mensagem sem esp
   assert.equal(n, 1, 'sem retentar, a espera de 10 min segura a 2ª mensagem');
   assert.equal(segunda.decisao.criar, false);
 });
+
+test('paciente que o 1º contato já achou (só o motivo no vínculo, sem idClient): fica RESOLVIDO — a próxima mensagem não refaz Kommo nem busca', async () => {
+  const vinculo = (o: Record<string, unknown>) => Object.defineProperty(prisma, 'spineLeadLink', { value: { findUnique: async () => ({ spineIdLead: null, spineIdClient: null, status: 'ok', updatedAt: new Date(0), motivo: null, ...o }) }, configurable: true });
+  vinculo({ motivo: 'paciente já existe na franquia (idClient 9001, achado pelo telefone no índice): não criei lead' });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-bebedouro', 70), 'na-franquia');
+  vinculo({ motivo: 'o telefone é de 2 pacientes da franquia (1, 2): não criei lead — a SDR escolhe no widget' });
+  assert.notEqual(await depsPadrao.situacaoNaFranquia('u-bebedouro', 71), 'na-franquia', 'conflito não é resolvido: a equipe ainda decide');
+});

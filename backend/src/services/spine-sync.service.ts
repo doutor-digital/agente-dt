@@ -11,7 +11,7 @@ import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
 import { decidirCadastro, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE } from './paciente-existente.js';
 import { nomeProvisorioDoLead } from '../lib/nome-provisorio.js';
-import { verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
+import { lembrarLeadCriado, verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
 import { conferirOrigemIaSofia, type ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
 import { chaveDaFranquia, espacarCriacao } from '../lib/franquia-espacamento.js';
 import { chaveDoTelefone } from '../lib/franquia-indice-telefones.js';
@@ -521,7 +521,7 @@ async function vincularAoQueJaExiste(unit: Unit, kommoLeadId: number, achado: Ex
     await prisma.spineLeadLink.upsert({
       where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
       create: { unitId: unit.id, kommoLeadId, motivo, ...idDoLead },
-      update: { motivo, ...(atual?.spineIdLead ? {} : idDoLead) },
+      update: { motivo, ...(atual?.spineIdLead ? {} : { ...idDoLead, ...(ehPaciente ? {} : { status: 'ok' }) }) },
     });
   } catch (err) {
     logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui gravar o vínculo com o que já existe na franquia');
@@ -548,7 +548,8 @@ async function antesDeCriarNoPrimeiroContato(
   }
 
   const fone = payload.whatsapp;
-  if (!fone) return { resultado: { ok: false, motivo: 'sem telefone para conferir se já está na franquia', retentar: true }, soltar: null };
+  // sem telefone é causa permanente (não melhora numa nova tentativa): sem `retentar`, vale a espera de 10 min
+  if (!fone) return { resultado: { ok: false, motivo: 'sem telefone para conferir se já está na franquia' }, soltar: null };
   const chave = `${chaveDaFranquia(unit)}|${chaveDoTelefone(fone) ?? fone}`;
   if (telefonesEmCriacao.has(chave)) {
     return { resultado: { ok: false, motivo: 'outro cadastro deste mesmo telefone está em andamento', retentar: true }, soltar: null };
@@ -685,6 +686,8 @@ export async function syncLeadToSpine(
     }
 
     await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
+  // 1º contato: um 2º cartão do mesmo número, minutos depois, tem de achar este lead (o índice e o cache dos recentes ainda não o têm)
+  if (pc) lembrarLeadCriado(unit.id, preparo.payload.whatsapp, r.data.idLead);
 
     if (criaPacienteJuntoComOLead(unit.spineSyncPatients, opcoes.soLead)) {
       const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);

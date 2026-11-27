@@ -19,7 +19,7 @@ import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { limparCacheEsquema } from '../lib/kommo-schema.js';
 import { syncLeadToSpine, type DepsDoPrimeiroContato } from './spine-sync.service.js';
 import { MOTIVO_SEM_CASAMENTO } from '../lib/cadastro-todo-lead.js';
-import type { JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
+import { _limparRecentesParaTeste, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
 import type { ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
 
 const feitos: string[] = [];
@@ -121,6 +121,7 @@ beforeEach(() => {
   telefoneDoContato = '+55 11 98888-7777';
   campoOrigem = 'Instagram';
   limparCacheEsquema();
+  _limparRecentesParaTeste();
   casamento('desligado'); // o 1º contato NÃO exige o casamento (a busca do telefone faz esse papel)
 });
 
@@ -274,4 +275,31 @@ test('SEM a chave, quem agenda (sem soLead): o lead ainda vira paciente na mesma
   assert.equal(r.ok, true);
   assert.deepEqual(feitos, ['createLead', 'createClient']);
   assert.equal(leadsCriados[0].idSource, 23, 'origem de marketing (Instagram) como era, com spine_ia_source_leads desligado');
+});
+
+test('2º cartão do MESMO número minutos depois: acha o lead que acabamos de criar e NÃO cria outro', async () => {
+  // o índice e os recentes (falsos) continuam sem saber do lead; quem sabe é a memória do que acabamos de criar
+  const d = deps({ achado: { tipo: 'nao' } });
+  assert.equal((await syncLeadToSpine(unidade(), 50, PC(d))).ok, true);
+  const segundo = await syncLeadToSpine(unidade(), 51, PC(d));
+  assert.equal(segundo.ok, true);
+  assert.equal(segundo.jaExistia, true);
+  assert.equal(segundo.spineIdLead, 777);
+  assert.deepEqual(feitos, ['createLead'], 'um lead só');
+});
+
+test('lead achado: o vínculo que já existia como "falhou" passa a "ok" (senão o agendamento duplicaria o lead)', async () => {
+  const d = deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } });
+  await syncLeadToSpine(unidade(), 53, PC(d));
+  const v = vinculos[0] as { update: Record<string, unknown> };
+  assert.equal(v.update.status, 'ok');
+  assert.equal(v.update.spineIdLead, 4321);
+});
+
+test('sem telefone nenhum, não pede retentar (causa permanente: vale a espera de 10 min)', async () => {
+  titulo = 'Maria Souza Lima';
+  telefoneDoContato = null;
+  const r = await syncLeadToSpine(unidade(), 52, PC(deps(), null));
+  assert.equal(r.ok, false);
+  assert.equal(r.retentar, undefined);
 });

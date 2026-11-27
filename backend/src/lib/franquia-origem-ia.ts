@@ -37,14 +37,15 @@ const depsPadrao: DepsDaOrigem = { listar: (u) => SpineService.listarOrigens(u),
 /** A lista de origens quase nunca muda: 6 h para o que deu certo, 10 min para o que falhou. */
 export const VALIDADE_OK_MS = 6 * 3600_000;
 export const VALIDADE_FALHA_MS = 10 * 60_000;
-const guardadas = new Map<string, { em: number; lista: SpineOrigem[] | null; erro?: string }>();
+const guardadas = new Map<string, { em: number; lista: SpineOrigem[] | null; erro?: string; curta?: boolean }>();
 
 /** Só para teste. */
 export function _limparOrigensParaTeste(): void {
   guardadas.clear();
 }
 
-const ehIaSofia = (nome: string) => /^\s*ia\s*sofia\s*$/i.test(nome);
+/** "IA SOFIA", "IA Sofia - Doutor Digital", "Sofia IA": a franquia dá o nome; o que não pode é o id apontar para outra origem (Google, Site…). */
+const ehIaSofia = (nome: string) => /sofia/i.test(nome);
 
 export async function conferirOrigemIaSofia(unit: UnidadeDaOrigem, deps: DepsDaOrigem = depsPadrao): Promise<ConferenciaDaOrigem> {
   const id = unit.spineIaSourceId;
@@ -54,7 +55,7 @@ export async function conferirOrigemIaSofia(unit: UnidadeDaOrigem, deps: DepsDaO
   const agora = deps.agora();
   const chave = unit.id;
   let g = guardadas.get(chave);
-  if (!g || agora - g.em > (g.lista ? VALIDADE_OK_MS : VALIDADE_FALHA_MS)) {
+  if (!g || agora - g.em > (g.lista && !g.curta ? VALIDADE_OK_MS : VALIDADE_FALHA_MS)) {
     const r = await deps.listar(unit).catch((err): SpineResult<{ origens: SpineOrigem[] }> => ({ ok: false, error: String(err) }));
     g = r.ok && r.data ? { em: agora, lista: r.data.origens } : { em: agora, lista: null, erro: r.error ?? 'sem resposta' };
     guardadas.set(chave, g);
@@ -64,6 +65,8 @@ export async function conferirOrigemIaSofia(unit: UnidadeDaOrigem, deps: DepsDaO
     return { situacao: 'nao-deu-para-conferir', idSource: id, motivo: `não consegui ler a lista de origens da franquia (${g.erro}) — sigo com o id ${id} configurado` };
   }
   const achada = g.lista.find((o) => o.idSource === id);
+  // Lista lida mas SEM a origem: a franquia pode corrigir a qualquer hora — reconfere em 10 min, não em 6 h.
+  g.curta = !achada || !ehIaSofia(achada.name);
   if (!achada) {
     return { situacao: 'faltando', motivo: `a origem ${id} configurada como "IA SOFIA" NÃO existe na lista de origens desta franquia` };
   }

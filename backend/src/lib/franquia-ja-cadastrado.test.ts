@@ -5,7 +5,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import type { Unit } from '@prisma/client';
-import { DIAS_DE_LEADS_RECENTES, _limparRecentesParaTeste, lerRecentes, verificarJaCadastrado, type DepsJaCadastrado, type Recentes } from './franquia-ja-cadastrado.js';
+import { DIAS_DE_LEADS_RECENTES, _limparRecentesParaTeste, depsPadrao, lembrarLeadCriado, lerRecentes, verificarJaCadastrado, type DepsJaCadastrado, type Recentes } from './franquia-ja-cadastrado.js';
 import type { Entrada, RespostaDoIndice } from './franquia-indice-telefones.js';
 import type { SpinePaginaTelefones, SpineResult } from '../services/spine.service.js';
 
@@ -145,4 +145,23 @@ test('recentes: janela de leads maior que o teto não vira "não está lá"', as
   await assert.rejects(lerRecentes(U as Unit, Date.now(), f.buscar), /não coube/);
 });
 
+
+
 beforeEach(() => _limparRecentesParaTeste());
+
+test('o lead que NÓS acabamos de criar é achado por um 2º cartão do mesmo número, antes de o índice e o cache dos recentes o conhecerem', async () => {
+  lembrarLeadCriado(U.id, '+5511988887777', 777);
+  const d = deps({ indice: resposta([]), recentes: new Map() });
+  const r = await verificarJaCadastrado(U, '5511988887777', d);
+  assert.deepEqual(r, { tipo: 'achou', origem: 'lead', id: 777, por: 'recentes' });
+  assert.equal((await verificarJaCadastrado({ id: 'outra-unidade', slug: 'x' }, '5511988887777', d)).tipo, 'nao', 'vale só para a unidade que criou');
+});
+
+test('franquia fora do ar: a leitura que falhou fica guardada por 2 min — nova mensagem NÃO refaz as chamadas', async () => {
+  // sem token a leitura falha na hora, sem rede: o que se prova é o cache de falha de produção (`depsPadrao.recentes`)
+  const unit = { id: 'u-falha', slug: 'doutor-hernia-serra', spineToken: null, spineBaseUrl: 'http://127.0.0.1:1' } as unknown as Unit;
+  const a = depsPadrao.recentes(unit);
+  await assert.rejects(a, /sem token/);
+  const b = depsPadrao.recentes(unit);
+  assert.equal(a, b, 'a segunda leitura é a MESMA promessa rejeitada: nenhuma chamada nova à franquia');
+});

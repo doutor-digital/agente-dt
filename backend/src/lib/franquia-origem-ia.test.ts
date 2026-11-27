@@ -52,3 +52,16 @@ test('a lista é guardada: duas conferências, uma chamada; falha é reconferida
   await conferirOrigemIaSofia(unit(), com({ ok: false, error: '500' }, () => 1_000 + 11 * 60_000));
   assert.equal(chamadas, 2);
 });
+
+test('a franquia dá o nome que quiser contendo "Sofia" ("IA Sofia - Doutor Digital"): ok — o que barra é o id apontar para OUTRA origem', async () => {
+  const r = await conferirOrigemIaSofia(unit(), com({ ok: true, data: { origens: [{ idSource: 10002, name: 'IA Sofia - Doutor Digital' }] } }));
+  assert.equal(r.situacao, 'ok');
+});
+
+test('origem faltando é reconferida em 10 min (a franquia pode corrigir), não em 6 h', async () => {
+  const semOrigem = { ok: true, data: { origens: [{ idSource: 20, name: 'WhatsApp' }] } };
+  assert.equal((await conferirOrigemIaSofia(unit(), com(semOrigem))).situacao, 'faltando');
+  const r = await conferirOrigemIaSofia(unit(), com(LISTA, () => 1_000 + 11 * 60_000));
+  assert.equal(r.situacao, 'ok');
+  assert.equal(chamadas, 2);
+});

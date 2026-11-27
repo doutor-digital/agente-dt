@@ -90,7 +90,22 @@ export async function lerRecentes(unit: Unit, agora: number, buscar: BuscarPagin
   return out;
 }
 
-const guardados = new Map<string, { em: number; valor: Promise<Recentes> }>();
+/** Leitura que falhou fica guardada pouco: a franquia lenta ou fora não pode virar uma rajada de leituras (uma por mensagem, cada uma com várias chamadas). */
+export const VALIDADE_DA_FALHA_MS = 2 * 60_000;
+const guardados = new Map<string, { em: number; falhou: boolean; valor: Promise<Recentes> }>();
+
+/** Lead que NÓS acabamos de criar: o cache dos recentes (5 min) e o índice (até 20 h) ainda não o conhecem, e um 2º cartão do mesmo número chegaria antes. */
+export const VALIDADE_DOS_CRIADOS_MS = 36 * 3600_000;
+const criadosPorMim = new Map<string, { em: number; id: number }>();
+const chaveDoCriado = (unitId: string, chave: string) => `${unitId}|${chave}`;
+
+/** Chamado logo depois de `createLead` dar certo. */
+export function lembrarLeadCriado(unitId: string, telefone: string | null | undefined, idLead: number | null | undefined, agora: number = Date.now()): void {
+  const chave = chaveDoTelefone(telefone);
+  if (!chave || !idLead) return;
+  if (criadosPorMim.size > 20_000) criadosPorMim.clear();
+  criadosPorMim.set(chaveDoCriado(unitId, chave), { em: agora, id: idLead });
+}
 
 export const depsPadrao: DepsJaCadastrado = {
   indice: (unitId, chave) => consultarIndice(unitId, chave),
@@ -98,19 +113,19 @@ export const depsPadrao: DepsJaCadastrado = {
   recentes(unit) {
     const agora = Date.now();
     const g = guardados.get(unit.id);
-    if (g && agora - g.em < VALIDADE_DOS_RECENTES_MS) return g.valor;
-    const valor = lerRecentes(unit, agora);
-    guardados.set(unit.id, { em: agora, valor });
-    // leitura que falhou não fica guardada: a próxima tenta de novo
-    valor.catch(() => { if (guardados.get(unit.id)?.valor === valor) guardados.delete(unit.id); });
+    if (g && agora - g.em < (g.falhou ? VALIDADE_DA_FALHA_MS : VALIDADE_DOS_RECENTES_MS)) return g.valor;
+    const entrada = { em: agora, falhou: false, valor: lerRecentes(unit, agora) };
+    guardados.set(unit.id, entrada);
+    entrada.valor.catch(() => { entrada.falhou = true; entrada.em = Date.now(); });
     if (guardados.size > 200) guardados.clear();
-    return valor;
+    return entrada.valor;
   },
 };
 
 /** Só para teste. */
 export function _limparRecentesParaTeste(): void {
   guardados.clear();
+  criadosPorMim.clear();
 }
 
 /** O cadastro que vale quando o índice tem o telefone como paciente e como lead: o de paciente. */
@@ -126,6 +141,9 @@ export async function verificarJaCadastrado(
 ): Promise<JaCadastrado> {
   const chave = chaveDoTelefone(telefone);
   if (!chave) return { tipo: 'indeterminado', motivo: 'o telefone não tem 8 dígitos — não dá para conferir se já está na franquia' };
+
+  const criado = criadosPorMim.get(chaveDoCriado(unit.id, chave));
+  if (criado && Date.now() - criado.em < VALIDADE_DOS_CRIADOS_MS) return { tipo: 'achou', origem: 'lead', id: criado.id, por: 'recentes' };
 
   let resposta: RespostaDoIndice;
   try {
