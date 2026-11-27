@@ -360,7 +360,7 @@ export { semArquivo, type Arquivo };
 
 /**
  * A leitura crua guardada por conta e conjunto de caixas (a mesma serve ao quadro, ao Hoje, às Oportunidades e a todas as atendentes que
- * enxergam as mesmas caixas). Fresca por 90 s; até 5 min serve na hora e relê em segundo plano (um pedido de cada vez por caixa: `lote`). Escrita do servidor invalida (ver `cw`).
+ * enxergam as mesmas caixas). Fresca por 90 s; até 3 min serve na hora e relê em segundo plano (um pedido de cada vez por caixa: `lote`). Escrita do servidor invalida (ver `cw`).
  * As páginas guardadas NÃO podem ser alteradas por quem as recebe (`semArquivo` devolve cópia quando muda algo).
  */
 const leituraDoFunil = new MemoriaDeLeitura<LeituraCrua>(FUNIL_FRESCO_MS, FUNIL_VELHO_MS, Date.now, (e) => logger.warn({ err: String(e) }, 'funil: não consegui renovar a leitura das caixas em segundo plano (segue a antiga)'));

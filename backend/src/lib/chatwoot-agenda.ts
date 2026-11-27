@@ -18,7 +18,7 @@ import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
 import { isDeepStrictEqual } from 'node:util';
-import { paginasDaCaixa } from './chatwoot-caixa-lista.js';
+import { paginasDaCaixa, TETO_DA_LEITURA } from './chatwoot-caixa-lista.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { ATRIBUTO_OUTROS_HORARIOS, CAIXAS_REGUA, ehArquivo } from './chatwoot-regua.js';
 import { atributosParaGravar, etapasDoContexto, papeisDosAtributos } from './chatwoot-etapas.js';
@@ -219,7 +219,7 @@ const seguradasLogadas = new Set<string>();
 async function conversasDaCaixa(ctx: ContextoChatwoot, caixa: number): Promise<{ conversas: ConversaDaCaixa[]; reaproveitada: boolean }> {
   const saida: ConversaDaCaixa[] = [];
   const mapa = etapasDoContexto(ctx);
-  const lida = await paginasDaCaixa(ctx, caixa, { maxPaginas: MAX_PAGINAS, validadeMs: VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
+  const lida = await paginasDaCaixa(ctx, caixa, { maxPaginas: MAX_PAGINAS, lerAte: TETO_DA_LEITURA, validadeMs: VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
   for (const lista of lida.paginas as any[][]) {
     for (const c of lista) {
       const tel = String(c?.meta?.sender?.phone_number ?? '');

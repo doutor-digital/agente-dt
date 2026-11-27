@@ -320,8 +320,10 @@ async function lerUltimaPublica(ctx: ContextoChatwoot, conversationId: number): 
 /** O que o histórico de mensagens de uma conversa já respondeu, por `last_activity_at` (só nasce mensagem nova se ele andar). */
 const respostasPorAtividade = new Map<string, { atividade: number; valor: unknown }>();
 const LIMITE_DAS_RESPOSTAS = 20_000;
+const ESPERA_PARA_GUARDAR_MS = 3_000;
 async function porAtividade<T>(ctx: ContextoChatwoot, tipo: string, id: number, atividade: number | undefined, ler: () => Promise<T>): Promise<T> {
-  if (!(Number(atividade) > 0)) return ler();
+  // `last_activity_at` tem resolução de segundo: se a última atividade é de agora, outra mensagem pode chegar no MESMO segundo depois da leitura e o guardado ficaria errado
+  if (!(Number(atividade) > 0) || Number(atividade) * 1000 > Date.now() - ESPERA_PARA_GUARDAR_MS) return ler();
   const k = `${ctx.conta?.url ?? ''}|${ctx.conta?.conta ?? ''}|${tipo}|${id}`;
   const g = respostasPorAtividade.get(k);
   if (g && g.atividade === atividade) return g.valor as T;
@@ -333,8 +335,11 @@ async function porAtividade<T>(ctx: ContextoChatwoot, tipo: string, id: number, 
 /** Só para teste. */
 export const _esquecerRespostasPorAtividade = (): void => respostasPorAtividade.clear();
 
-/** A régua é quem ESCREVE nas conversas a partir desta leitura: aceita uma listagem de até 60 s (o CAPI e a agenda aceitam mais e aproveitam a dela). */
-export const VALIDADE_DA_LISTA_DA_REGUA_MS = 60_000;
+/**
+ * A régua é quem mais ESCREVE nas conversas (grava a lista de atributos inteira) a partir desta leitura: ela só aceita a listagem que ELA mesma lê agora (validade 0, só
+ * junta com leitura que está começando neste instante). Quem aproveita a leitura dela são o CAPI (4 min) e a agenda (7 min, que confere a conversa viva antes de gravar).
+ */
+export const VALIDADE_DA_LISTA_DA_REGUA_MS = 0;
 
 export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
   return {

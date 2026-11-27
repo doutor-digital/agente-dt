@@ -67,7 +67,7 @@ test('régua + CAPI + agenda no mesmo ritmo: ANTES 3 varreduras da caixa (3×41 
   const antes = listagens();
   assert.equal(antes, 3 * 41, 'antes: 3 leituras iguais da mesma caixa');
   esquecerListasDaCaixa(ctx);
-  // DEPOIS: a régua lê (validade 60 s), o CAPI e a agenda aceitam a dela
+  // DEPOIS: a régua lê (ela só aceita leitura dela mesma, validade 0), o CAPI e a agenda aceitam a dela
   const r = await W.chatDoChatwoot(ctx).paginas!(3, 200);
   const k = await CAPI.chatDoCapi(ctx).paginas!(3, 200);
   const g = await paginasDaCaixa(ctx, 3, { maxPaginas: 40, validadeMs: AG.VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
@@ -83,14 +83,14 @@ test('régua + CAPI + agenda no mesmo ritmo: ANTES 3 varreduras da caixa (3×41 
   void b; void c;
 });
 
-test('a régua (validade 60 s) NÃO aceita leitura velha: lê de novo; o CAPI e a agenda aceitam a de 3 e de 6 min mas não a de 20 min', async () => {
+test('a régua (validade 0) NÃO aceita leitura de ninguém: lê de novo; o CAPI e a agenda aceitam a dela de 2,5 e de 6 min mas não a de 5,5 min (CAPI) nem a de 20 min', async () => {
   const { ctx, listagens } = chatwoot(100);
   let t = 5_000_000;
   const pedir = (validadeMs: number) => paginasDaCaixa(ctx, 3, { maxPaginas: 200, validadeMs, origem: 'x', agora: () => t });
-  await pedir(60_000);
+  await pedir(W.VALIDADE_DA_LISTA_DA_REGUA_MS);
   const base = listagens();
-  t += 90_000;
-  assert.equal((await pedir(60_000)).reaproveitada, false, 'régua com leitura de 90 s: relê');
+  t += 5_000;
+  assert.equal((await pedir(W.VALIDADE_DA_LISTA_DA_REGUA_MS)).reaproveitada, false, 'régua nunca aproveita leitura (nem de 5 s): ela grava a partir do que lê');
   t += 150_000; // 2,5 min depois da leitura da régua
   assert.equal((await pedir(CAPI.VALIDADE_DA_LISTA_DO_CAPI_MS)).reaproveitada, true, 'CAPI aceita');
   t += 3 * 60_000; // 5,5 min
@@ -100,6 +100,17 @@ test('a régua (validade 60 s) NÃO aceita leitura velha: lê de novo; o CAPI e 
   t += 20 * 60_000;
   assert.equal((await pedir(AG.VALIDADE_DA_LISTA_DA_AGENDA_MS)).reaproveitada, false, 'passou da validade e da vida máxima: relê');
   assert.equal(listagens() - base, 3 * 5, '3 leituras novas (a da régua, a do CAPI aos 5,5 min e a final) de 5 pedidos cada (4 páginas cheias + a vazia)');
+});
+
+test('a agenda, quando é a primeira a ler, lê como a régua (até o teto de 200) e entrega só as 40 primeiras: a mesma leitura serve ao CAPI, sem 2ª varredura', async () => {
+  const { ctx, listagens } = chatwoot(1000);
+  const g = await paginasDaCaixa(ctx, 3, { maxPaginas: 40, lerAte: 200, validadeMs: AG.VALIDADE_DA_LISTA_DA_AGENDA_MS, origem: 'agenda' });
+  assert.equal(g.paginas.length, 40);
+  assert.equal(g.truncada, true, 'para a agenda a caixa passa do teto de 40, como antes');
+  const lidas = listagens();
+  const k = await CAPI.chatDoCapi(ctx).paginas!(3, 200);
+  assert.equal(listagens(), lidas, 'o CAPI aproveita');
+  assert.equal(k.paginas.length, 40, '1000 conversas = 40 páginas cheias (a 41ª é a vazia)');
 });
 
 test('leituras ao mesmo tempo viram UMA; conta e caixa diferentes não se misturam; falha não fica guardada e chega a todos que esperavam', async () => {
@@ -194,7 +205,11 @@ test('régua: o histórico da conversa só é pedido de novo quando `last_activi
   const d2 = await chat.ultimaDoPaciente(9, 2000);
   assert.equal(pedidos.length - antes, 1, 'a segunda não foi ao Chatwoot');
   assert.deepEqual(d1, d2);
-  // outra conversa com o mesmo id em outra conta não herda
+  // atividade de agora: outra mensagem pode chegar no mesmo segundo depois da leitura — não guarda
+  const n0 = pedidos.length;
+  await chat.ultimaPublica(9, Math.floor(Date.now() / 1000));
+  await chat.ultimaPublica(9, Math.floor(Date.now() / 1000));
+  assert.equal(pedidos.length - n0, 2, 'atividade de menos de 3 s atrás: sempre relê');
   W._esquecerRespostasPorAtividade();
 });
 
