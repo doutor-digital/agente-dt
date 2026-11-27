@@ -22,6 +22,8 @@ export interface LinhaDoProvedor {
   erros: number;
   /** Unidades distintas com erro: uma conversa quebrada sozinha não é queda. */
   unidadesComErro: number;
+  /** Erros da unidade que mais errou: uma unidade em laço mais um erro isolado de outra não é queda. */
+  maiorUnidade: number;
   errosCredito: number;
   errosChave: number;
   errosLimite: number;
@@ -72,6 +74,9 @@ function causaDe(l: LinhaDoProvedor): Causa {
   return melhor;
 }
 
+/** Erro espalhado: 2 unidades ou mais com erro e nenhuma respondendo por mais de 70% deles. */
+const espalhado = (l: LinhaDoProvedor) => l.unidadesComErro >= 2 && (l.erros === 0 || l.maiorUnidade / l.erros <= 0.7);
+
 const taxa = (l: LinhaDoProvedor) => (l.total > 0 ? l.erros / l.total : 0);
 const pct = (x: number) => `${Math.round(x * 100)}%`;
 
@@ -88,14 +93,14 @@ export function decidirSaude(linhas: LinhaDoProvedor[], regras: Regras = REGRAS_
   const provedores = linhas.filter((l) => l.escopo !== 'rede');
   // FORA é a REDE inteira: um provedor sozinho a 100% pode ter a chave de reserva ou o outro provedor atendendo (o primeiro erro é
   // gravado como `anthropic` e o sucesso que o salvou como outro provedor); a Sofia segue respondendo. Esse caso é «degradado».
-  if (rede && rede.total >= regras.foraMinimo && taxa(rede) >= regras.foraTaxa && rede.unidadesComErro >= 2) {
+  if (rede && rede.total >= regras.foraMinimo && taxa(rede) >= regras.foraTaxa && espalhado(rede)) {
     return { estado: 'fora', causa: causaDe(rede), escopo: 'rede', motivo: `${pct(taxa(rede))} das chamadas à IA falhando (${rede.erros} de ${rede.total})` };
   }
   const degradados: LinhaDoProvedor[] = [];
-  if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa && rede.unidadesComErro >= 2) degradados.push(rede);
+  if (rede && rede.total >= regras.degradadoMinimo && taxa(rede) >= regras.degradadoTaxa && espalhado(rede)) degradados.push(rede);
   for (const p of provedores) {
     // um provedor a 90% ou mais também cai aqui (taxa >= 50%): o aviso diz o provedor e a causa; «fora» fica para a rede inteira
-    if (p.total >= regras.provedorDegradadoMinimo && taxa(p) >= regras.provedorDegradadoTaxa && p.unidadesComErro >= 2) degradados.push(p);
+    if (p.total >= regras.provedorDegradadoMinimo && taxa(p) >= regras.provedorDegradadoTaxa && espalhado(p)) degradados.push(p);
   }
   if (degradados.length) {
     const l = degradados.sort((a, b) => taxa(b) - taxa(a))[0];
@@ -136,7 +141,9 @@ const CAUSAS: ReadonlySet<string> = new Set(['credito', 'autenticacao', 'limite'
 export function observar(r: RespostaHttp): Observacao {
   if (r.status === null) return { tipo: 'inacessivel', causa: null, resumo: 'o servidor não respondeu (sem resposta ou tempo esgotado)' };
   const c = r.corpo as { estado?: unknown; causa?: unknown; motivo?: unknown } | null;
-  if (r.status === 401 || r.status === 403 || r.status === 404) {
+  const doApp = c && typeof c === 'object' && ['not_found', 'unauthorized', 'url_invalida'].includes(String((c as { error?: unknown }).error));
+  // 404 SEM o JSON do app (texto puro do Traefik, «page not found») é a rota que sumiu com o contêiner: servidor fora, não vigia cego
+  if ((r.status === 401 || r.status === 403 || r.status === 404) && (doApp || r.status !== 404)) {
     return { tipo: 'cego', causa: null, resumo: `o endpoint de saúde respondeu ${r.status}: conferir os segredos HEALTH_URL e HEALTH_IA_TOKEN no GitHub e HEALTH_IA_TOKEN no servidor` };
   }
   const estado = c && typeof c === 'object' ? c.estado : undefined;
@@ -149,6 +156,7 @@ export function observar(r: RespostaHttp): Observacao {
   if (c && typeof c === 'object' && (c as { error?: unknown }).error === 'db_unavailable') {
     return { tipo: 'inacessivel', causa: null, resumo: 'o servidor está de pé, mas o banco de dados não respondeu' };
   }
+  if (r.status === 404) return { tipo: 'inacessivel', causa: null, resumo: 'a rota respondeu 404 fora do aplicativo (o contêiner saiu do roteador?)' };
   if (r.status >= 500 || r.status === 429 || r.status === 408) {
     return { tipo: 'inacessivel', causa: null, resumo: `o servidor respondeu ${r.status} sem dados de saúde` };
   }
@@ -254,6 +262,8 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
     if (e.desde === null) return { avisos: [], estado: { ...e, okSeguidos: 0, ultimaObservacao: null } };
     const okSeguidos = e.okSeguidos + 1;
     if (okSeguidos < OK_PARA_RESOLVER) return { avisos: [], estado: { ...e, okSeguidos } };
+    // incidente que nunca foi anunciado (nenhum canal entregou): «voltou» sairia do nada; encerra em silêncio
+    if (Object.keys(e.ultimoAviso).length === 0) return { avisos: [], estado: { ...ESTADO_VAZIO } };
     const minutos = minutosEntre(e.desde, agoraMs);
     const abriu = e.abertura ?? e.ultimaObservacao;
     const antes = abriu ? `${TITULO[abriu.tipo]}${abriu.resumo ? ` (${abriu.resumo})` : ''}` : 'o problema';
@@ -281,7 +291,8 @@ export function avancar(anterior: Estado | null, obs: Observacao, agoraMs: numbe
   const minutos = minutosEntre(desde, agoraMs);
   const intervaloMs = (minutos >= LIMITE_LONGO_MIN ? INTERVALO_LONGO_MIN : INTERVALO_MIN) * 60_000;
   const ultimo = e.ultimoAviso[chave];
-  const devido = ultimo === undefined || agoraMs - ultimo >= intervaloMs;
+  // folga de 2 min: o cron do GitHub tem jitter de minutos e uma rodada que chega 29m50s depois não pode adiar o lembrete em 10 min
+  const devido = ultimo === undefined || agoraMs - ultimo >= intervaloMs - 2 * 60_000;
   const estado: Estado = {
     desde,
     ultimoAviso: devido ? { ...e.ultimoAviso, [chave]: agoraMs } : e.ultimoAviso,

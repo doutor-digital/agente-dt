@@ -32,6 +32,7 @@ interface Linha {
   total: number;
   erros: number;
   unidades: number;
+  maior_unidade: number;
   erros_credito: number;
   erros_chave: number;
   erros_limite: number;
@@ -57,20 +58,34 @@ const F = filtrosSql('c.error_message');
 
 /** A consulta. Exportada para o teste contra Postgres de verdade; as regexes são constantes do arquivo, sem entrada de usuário. */
 export const SQL_DA_SAUDE = `
-  select c.provider as provider,
-         grouping(c.provider)::int as rede,
-         count(*) filter (where c.status <> 'cancelled' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as total,
-         count(*) filter (where c.status = 'error' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros,
-         count(distinct c.unit_id) filter (where c.status = 'error' and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as unidades,
-         count(*) filter (where c.status = 'error' and ${F.credito} and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros_credito,
-         count(*) filter (where c.status = 'error' and ${F.autenticacao} and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros_chave,
-         count(*) filter (where c.status = 'error' and ${F.limite} and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros_limite,
-         count(*) filter (where c.status = 'error' and ${F.indisponivel} and c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes')::int as erros_indisponivel,
-         max(c.created_at) filter (where c.status = 'success') as ultimo_sucesso
-    from llm_calls c
-   where c.created_at > (now() at time zone 'utc') - interval '${CONSULTA_MIN} minutes'
-   group by rollup (c.provider)
-`;
+  with u as (
+    select c.provider as provider,
+           c.unit_id as unit_id,
+           count(*) filter (where c.status <> 'cancelled' and RECENTE) as total,
+           count(*) filter (where c.status = 'error' and RECENTE) as erros,
+           count(*) filter (where c.status = 'error' and ${F.credito} and RECENTE) as erros_credito,
+           count(*) filter (where c.status = 'error' and ${F.autenticacao} and RECENTE) as erros_chave,
+           count(*) filter (where c.status = 'error' and ${F.limite} and RECENTE) as erros_limite,
+           count(*) filter (where c.status = 'error' and ${F.indisponivel} and RECENTE) as erros_indisponivel,
+           max(c.created_at) filter (where c.status = 'success') as ultimo_sucesso
+      from llm_calls c
+     where c.created_at > (now() at time zone 'utc') - interval '${CONSULTA_MIN} minutes'
+     group by c.provider, c.unit_id
+  )
+  select provider,
+         grouping(provider)::int as rede,
+         sum(total)::int as total,
+         sum(erros)::int as erros,
+         count(distinct unit_id) filter (where erros > 0)::int as unidades,
+         coalesce(max(erros), 0)::int as maior_unidade,
+         sum(erros_credito)::int as erros_credito,
+         sum(erros_chave)::int as erros_chave,
+         sum(erros_limite)::int as erros_limite,
+         sum(erros_indisponivel)::int as erros_indisponivel,
+         max(ultimo_sucesso) as ultimo_sucesso
+    from u
+   group by rollup (provider)
+`.replaceAll('RECENTE', `c.created_at > (now() at time zone 'utc') - interval '${JANELA_MIN} minutes'`);
 
 /** PURA: linhas do banco → resposta. `agoraMs` é o relógio do processo (o `timestamp` do banco é UTC, como o `Date` do Prisma). */
 export function montarResposta(linhas: Linha[], agoraMs: number): RespostaDeSaude {
@@ -80,6 +95,7 @@ export function montarResposta(linhas: Linha[], agoraMs: number): RespostaDeSaud
     total: Number(l.total),
     erros: Number(l.erros),
     unidadesComErro: Number(l.unidades),
+    maiorUnidade: Number(l.maior_unidade),
     errosCredito: Number(l.erros_credito),
     errosChave: Number(l.erros_chave),
     errosLimite: Number(l.erros_limite),

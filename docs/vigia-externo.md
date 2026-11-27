@@ -29,16 +29,17 @@ GitHub Actions (cron, a cada ~10 min)
 
 | Estado | Quando |
 |---|---|
-| `fora` | 90% ou mais das chamadas falhando na REDE inteira, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
+| `fora` | 90% ou mais das chamadas falhando na REDE inteira, com pelo menos 5 chamadas (de madrugada a rede toda faz ~20 por 10 min), e o erro aparece em 2 unidades ou mais, nenhuma com mais de 70% dos erros, sem exceção (cada unidade pode ter a própria chave: `Unit.anthropicApiKey`; a de uma acabando não é a rede toda fora) |
 | `degradado` | 25% da rede falhando com pelo menos 10 chamadas, ou metade de um provedor (inclusive um provedor a 100%: a chave de reserva ou o outro provedor pode estar atendendo; o aviso diz o provedor e a causa) com pelo menos 5 chamadas; os dois com erro em 2 unidades ou mais |
 | `ok` | o resto. Silêncio (nenhuma chamada) NÃO é queda |
 | `inacessivel` (visto pelo vigia) | o servidor não respondeu, ou respondeu 5xx sem dado de saúde: VPS, Traefik ou processo fora. Só avisa na **2ª rodada seguida**, inclusive com outro incidente já aberto (um deploy ou reinício de ~1 min não pode acordar ninguém) |
-| `cego` (visto pelo vigia) | 401/403/404 do endpoint: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo. Também só na 2ª rodada seguida |
+| `cego` (visto pelo vigia) | 401/403 ou 404 COM o JSON do app (`not_found`); um 404 em texto puro do Traefik é a rota que sumiu junto com o contêiner e vira `inacessivel`: segredo errado ou rota desligada. Vigia cego não pode parecer vigia tranquilo. Também só na 2ª rodada seguida |
 
 **Throttle e «voltou ao normal»**:
 
 - No máximo **1 aviso por tipo de incidente a cada 30 min** (só o **tipo**: a causa dominante pode mudar de rodada para rodada e vai no texto, não na chave). Incidente aberto há mais de 2 h lembra só de 2 em 2 h. Trocar de tipo (degradado para fora) avisa na hora.
 - «VOLTOU AO NORMAL» sai uma vez, depois de 2 rodadas ok seguidas (um respiro no meio da queda não encerra o incidente), e cita a leitura que abriu o incidente. Encerrado o incidente o throttle zera: uma queda nova, mesmo 10 min depois, avisa como queda (ALERTA), não como LEMBRETE; LEMBRETE é só a repetição de um incidente que segue aberto.
+- Incidente que nenhum canal anunciou termina em silêncio (nada de «VOLTOU AO NORMAL» sobre uma queda que o João nunca soube). O intervalo de 30 min tem folga de 2 min por causa do atraso do cron do GitHub.
 - Se **nenhum** canal entrega, a rodada fica **vermelha** (exit 1, e o GitHub avisa por e-mail quem editou o cron) e o throttle **não** é gasto: a rodada seguinte tenta de novo.
 - Teste do alarme: o workflow tem `workflow_dispatch` com a opção «teste» e um cron mensal (dia 1, 09h de Brasília) que manda um aviso de TESTE. Se o aviso mensal não chegar, o canal morreu e a rodada fica vermelha.
 
@@ -48,8 +49,8 @@ No GitHub: Settings > Secrets and variables > Actions > New repository secret.
 
 | Segredo | Valor | Obrigatório |
 |---|---|---|
-| `HEALTH_URL` | `https://automacao.doutordigitalconsultoria.com/api/health/ia` (ou o domínio do agente em produção; o roteador do Traefik aceita `AGENT_DOMAIN`, `automacao.` e `franquia.`) | sim |
-| `HEALTH_IA_TOKEN` | um texto aleatório longo, por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (`/opt/doutordigital/agente-dt/.env`) | sim |
+| `HEALTH_URL` | `https://<domínio do agente em produção>/api/health/ia` (o host que o roteador do Traefik serve, ver `AGENT_DOMAIN` no `docker-compose.yml`; não está escrito aqui porque o repositório é público) | sim |
+| `HEALTH_IA_TOKEN` | um texto aleatório longo, por exemplo `openssl rand -hex 32`. **O mesmo valor** precisa estar em `HEALTH_IA_TOKEN` no `.env` do servidor (o `env_file` do `docker-compose.yml`) | sim |
 | `TELEGRAM_BOT_TOKEN` | token do bot DD-Avisos (o mesmo `TELEGRAM_BOT_TOKEN` do servidor) | recomendado (é o canal que já funciona hoje) |
 | `TELEGRAM_CHAT_ID` | o chat do João no Telegram (o mesmo `TELEGRAM_CHAT_JOAO` do servidor; ver `backend/src/lib/telegram.ts`) | junto com o token |
 | `KAPSO_API_KEY` | a chave do Kapso (a que o servidor usa como `KAPSO_API_KEY`) | para o WhatsApp |

@@ -18,7 +18,7 @@ async function consultar() {
   try {
     new URL(url);
   } catch {
-    return { status: 404, corpo: null }; // segredo mal colado (sem https://): é o vigia que está cego, não o servidor que caiu
+    return { status: 404, corpo: { error: 'url_invalida' } }; // segredo mal colado (sem https://): é o vigia que está cego, não o servidor que caiu
   }
   let ultimo = { status: null, corpo: null };
   for (let tentativa = 1; tentativa <= 2; tentativa++) {
@@ -67,7 +67,8 @@ async function enviarKapso(texto) {
       template: { name: env('KAPSO_TEMPLATE', 'alerta_sistema'), language: { code: env('KAPSO_TEMPLATE_IDIOMA', 'pt_BR') }, components: [{ type: 'body', parameters: [{ type: 'text', text: umaLinha(texto, 900) }] }] },
     });
   } catch {
-    // o modelo estourou o prazo ou a rede falhou: ainda vale tentar o texto livre abaixo
+    // o modelo estourou o prazo ou a rede falhou: ainda vale tentar o texto livre abaixo. Se a Meta tinha aceitado o modelo antes de a
+    // resposta voltar, o João recebe a mensagem duas vezes: duplicado raro e aceito de propósito (perder o alerta é pior).
   }
   try {
     if (modelo.ok) return { canal: 'whatsapp', configurado: true, ok: true, via: 'modelo' };

@@ -18,6 +18,7 @@ const linha = (o: Partial<LinhaDoProvedor>): LinhaDoProvedor => ({
   total: 0,
   erros: 0,
   unidadesComErro: 0,
+  maiorUnidade: 0,
   errosCredito: 0,
   errosChave: 0,
   errosLimite: 0,
@@ -47,6 +48,34 @@ test('a causa «outra» conta: 19 erros sem causa + 1 de crédito é FORA por ca
   const s = decidirSaude([linha({ total: 20, erros: 20, unidadesComErro: 4, errosCredito: 1 })]);
   assert.equal(s.estado, 'fora');
   assert.equal(s.causa, 'outra');
+});
+
+test('uma unidade em laço (100 erros) + outra com 1 erro NÃO é FORA, mas erros espalhados são', () => {
+  assert.equal(decidirSaude([linha({ total: 111, erros: 101, unidadesComErro: 2, maiorUnidade: 100, errosIndisponivel: 101 })]).estado, 'ok');
+  assert.equal(decidirSaude([linha({ total: 111, erros: 101, unidadesComErro: 5, maiorUnidade: 60, errosIndisponivel: 101 })]).estado, 'fora');
+});
+
+test('404 em texto puro do Traefik (rota sumiu) é servidor INACESSÍVEL; 404 com o JSON do app é vigia CEGO', () => {
+  assert.equal(observar({ status: 404, corpo: null }).tipo, 'inacessivel');
+  assert.equal(observar({ status: 404, corpo: 'page not found' }).tipo, 'inacessivel');
+  assert.equal(observar({ status: 404, corpo: { error: 'not_found' } }).tipo, 'cego');
+  assert.equal(observar({ status: 404, corpo: { error: 'url_invalida' } }).tipo, 'cego');
+  assert.equal(observar({ status: 401, corpo: { error: 'unauthorized' } }).tipo, 'cego');
+});
+
+test('incidente que NENHUM canal anunciou termina em silêncio (sem «voltou» do nada)', () => {
+  // estado como o script o deixa quando a entrega falha: incidente aberto, mas sem aviso registrado
+  const aberto = { ...ESTADO_VAZIO, desde: T0, ultimoAviso: {}, ultimaObservacao: FORA, abertura: FORA, okSeguidos: 1 };
+  const r = avancar(aberto, OK, T0 + 20 * MIN);
+  assert.equal(r.avisos.length, 0);
+  assert.equal(r.estado.desde, null);
+});
+
+test('o lembrete de 30 min não atrasa 10 min por jitter do cron (rodada a 29m50s do último aviso já é devida)', () => {
+  const e1 = avancar(null, FORA, T0);
+  const r = avancar(e1.estado, FORA, T0 + 29 * MIN + 50_000);
+  assert.deepEqual(r.avisos.map((a) => a.tipo), ['lembrete']);
+  assert.equal(avancar(e1.estado, FORA, T0 + 27 * MIN).avisos.length, 0);
 });
 
 test('degradado na rede também exige erro em 2 unidades ou mais', () => {

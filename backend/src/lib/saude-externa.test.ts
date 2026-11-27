@@ -11,6 +11,7 @@ const linha = (o: Record<string, unknown>) => ({
   total: 0,
   erros: 0,
   unidades: 0,
+  maior_unidade: 0,
   erros_credito: 0,
   erros_chave: 0,
   erros_limite: 0,
@@ -46,7 +47,7 @@ test('madrugada sem chamada nenhuma é ok e diz que silêncio não é queda', ()
 
 test('a consulta é UMA só, pelo created_at, em UTC (nunca now() puro) e só olha a última hora', () => {
   assert.match(SQL_DA_SAUDE, /from llm_calls c/i);
-  assert.equal((SQL_DA_SAUDE.match(/from\s/gi) ?? []).length, 1);
+  assert.equal((SQL_DA_SAUDE.match(/from llm_calls/gi) ?? []).length, 1, 'a tabela é lida uma vez só (o CTE agrega por provedor e unidade)');
   assert.match(SQL_DA_SAUDE, /where c\.created_at > \(now\(\) at time zone 'utc'\) - interval '60 minutes'/);
   assert.ok(!/(?<![.\w])now\(\)\s*[-+]/.test(SQL_DA_SAUDE), 'now() puro cobriria 3 h a mais');
 });
