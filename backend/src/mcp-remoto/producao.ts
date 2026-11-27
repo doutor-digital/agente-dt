@@ -663,7 +663,7 @@ async function montar(app: Express, urlPublica: string): Promise<void> {
   const infinitepay = criarContextoInfinitepay(new Map(), escritaInfinitepay.armazem);
   // a rota é montada SEMPRE: sem o segredo ela responde 503 e avisa o João (um 404 faria a InfinitePay desistir de avisar o pagamento de links vivos)
   montarRotaDoWebhookInfinitepay(app, { ctx: infinitepay, armazem: escritaInfinitepay.armazem, segredo: segredoDoAviso, alertar: (texto) => enviarTelegram(texto), aoPagar: emitirLinkPago, log: logger });
-  // a Sofia cobra o sinal por este MESMO contexto e estado (mesmos tetos, mesma trava, mesmo livro): ver lib/sinal-infinitepay.ts
+  // a Sofia cobra o sinal por este MESMO contexto e estado (mesma trava por unidade, mesmo armazém), mas com a origem `sofia`: livro, tetos e limite por hora PRÓPRIOS (ver infinitepay-escrita.ts e lib/sinal-infinitepay.ts)
   registrarInfinitepayDoServidor({ ctx: infinitepay, esc: escritaInfinitepay });
   // relatórios exportados do app da InfinitePay (o que a API dela não lê): leitura para todos, pedir e importar só para quem escreve
   const relatoriosInfinitepay = armazemDeRelatoriosPrisma(prisma as never);

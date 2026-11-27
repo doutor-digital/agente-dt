@@ -1,9 +1,11 @@
 /** O armazém dos links em memória, com o mesmo contrato do de produção (trava → ler → conferir → gravar a intenção). Só para testes. */
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import type { LinkGuardado } from './infinitepay.js';
-import { LivroDeLinks, acumularRevisao, type ArmazemDeEscrita, type EventoDoLink, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
+import { LivroDeLinks, acumularRevisao, origemSubstituivel, type ArmazemDeEscrita, type EventoDoLink, type PedidoDeReserva, type ResultadoDaCriacao } from './infinitepay-escrita.js';
 
 interface Linha extends LinkGuardado {
+  /** conector | caixa | sofia (ausente = conector) */
+  origem?: string;
   chave: string | null;
   criadoEmMs: number;
 }
@@ -17,7 +19,7 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
   // uma reserva por vez, como a trava do banco
   let fila: Promise<unknown> = Promise.resolve();
   const livro = (unidade: string) =>
-    new LivroDeLinks(linhas.filter((l) => l.unidade === unidade).map((l) => ({ valorCentavos: l.valorCentavos, status: l.status, em: l.criadoEmMs, chave: l.chave, orderNsu: l.orderNsu, url: l.url })));
+    new LivroDeLinks(linhas.filter((l) => l.unidade === unidade).map((l) => ({ valorCentavos: l.valorCentavos, status: l.status, em: l.criadoEmMs, chave: l.chave, orderNsu: l.orderNsu, url: l.url, origem: l.origem })));
   return {
     linhas,
     async listar(f) {
@@ -30,17 +32,26 @@ export function armazemEmMemoria(inicial: Array<Partial<LinkGuardado> & { orderN
     async ler(unidade) {
       return livro(unidade);
     },
+    async porOrigemRef(unidade, origemRef) {
+      const l = [...linhas].reverse().find((x) => x.unidade === unidade && x.origemRef === origemRef);
+      return l ? { ...l } : null;
+    },
     reservar(p: PedidoDeReserva) {
       const feita = fila.then(() => {
         const existente = linhas.find((l) => l.unidade === p.unidade && l.orderNsu === p.orderNsu);
         // referência de link RECUSADO (falhou) pode ser usada de novo, como no banco, mas a linha recusada FICA (com a referência trocada) e continua contando no limite por hora
         if (existente && existente.status !== 'falhou') throw new ErroDeEntrada(`a referência ${p.orderNsu} já foi usada nesta unidade.`);
+        const vivo = p.origemRef === undefined ? undefined : linhas.find((l) => l.unidade === p.unidade && l.origemRef === p.origemRef && !origemSubstituivel(l, p.agora));
+        if (vivo) throw new ErroDeEntrada(`a referência de origem ${p.origemRef} já tem um link (${vivo.orderNsu}). Nada foi criado.`);
         p.conferir(livro(p.unidade));
+        if (p.origemRef !== undefined) for (const l of linhas) if (l.unidade === p.unidade && l.origemRef === p.origemRef && origemSubstituivel(l, p.agora)) l.origemRef = `${p.origemRef}~f${p.agora}`;
         if (existente) existente.orderNsu = `${p.orderNsu}~f${p.agora}`;
         linhas.push({
           orderNsu: p.orderNsu, unidade: p.unidade, status: 'intencao', url: null, valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte.toISOString(),
           criadoPor: p.criadoPor, criadoEm: new Date(p.agora).toISOString(), invoiceSlug: null, transactionNsu: null, formaPagamento: null, parcelas: null, valorPagoCentavos: null,
           reciboUrl: null, revisao: null, pagoEm: null, liquidadoEm: null, ultimoEvento: null, erro: null, chave: p.chave, criadoEmMs: p.agora,
+          origem: p.origem,
+          ...(p.origemRef !== undefined ? { origemRef: p.origemRef } : {}),
         });
       });
       fila = feita.catch(() => undefined);

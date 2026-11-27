@@ -25,6 +25,7 @@ export interface LinhaDoLink {
   liquidadoEm: Date | null;
   ultimoEvento: string | null;
   erro: string | null;
+  origemRef?: string | null;
 }
 
 export interface BancoDeLinks {
@@ -58,6 +59,7 @@ export function comoLinkGuardado(l: LinhaDoLink): LinkGuardado {
     liquidadoEm: iso(l.liquidadoEm),
     ultimoEvento: l.ultimoEvento,
     erro: l.erro,
+    origemRef: l.origemRef ?? null,
   };
 }
 
@@ -91,6 +93,8 @@ export function armazemDeLinksPrisma(db: BancoDeLinks): ArmazemDeLinks {
 export interface TabelaDeEscrita {
   findMany(args: { where: Record<string, unknown>; select?: Record<string, boolean>; orderBy?: Record<string, string>; take?: number }): Promise<unknown[]>;
   findUnique(args: { where: { unitSlug_orderNsu: { unitSlug: string; orderNsu: string } } }): Promise<LinhaDoLink | null>;
+  /** o link de uma referência de origem (`@@unique([unitSlug, origemRef])`) */
+  findFirst(args: { where: Record<string, unknown>; orderBy?: Record<string, string> }): Promise<LinhaDoLink | null>;
   create(args: { data: Record<string, unknown> }): Promise<unknown>;
   updateMany(args: { where: Record<string, unknown>; data: Record<string, unknown> }): Promise<{ count: number }>;
 }
@@ -100,16 +104,16 @@ export interface BancoDeEscrita extends BancoDeLinks {
   $transaction<T>(fn: (tx: { $executeRaw(consulta: TemplateStringsArray, ...valores: unknown[]): Promise<number>; infinitepayLink: TabelaDeEscrita }) => Promise<T>, opcoes?: { timeout?: number; maxWait?: number }): Promise<T>;
 }
 
-type LinhaDoLivro = { valorCentavos: number; status: string; createdAt: Date; chaveDuplicata: string | null; orderNsu: string; url: string | null };
+type LinhaDoLivro = { valorCentavos: number; status: string; createdAt: Date; chaveDuplicata: string | null; orderNsu: string; url: string | null; origem: string };
 
-const SELECIONA_LIVRO = { valorCentavos: true, status: true, createdAt: true, chaveDuplicata: true, orderNsu: true, url: true };
+const SELECIONA_LIVRO = { valorCentavos: true, status: true, createdAt: true, chaveDuplicata: true, orderNsu: true, url: true, origem: true };
 
 async function lerLivro(t: Pick<TabelaDeEscrita, 'findMany'>, unidade: string, agora: number): Promise<LivroDeLinks> {
   const linhas = (await t.findMany({
     where: { unitSlug: unidade, createdAt: { gte: new Date(agora - LIMITES_INFINITEPAY.janelaLivroMs) } },
     select: SELECIONA_LIVRO,
   })) as LinhaDoLivro[];
-  const itens: ItemDoLivro[] = linhas.map((l) => ({ valorCentavos: l.valorCentavos, status: l.status, em: l.createdAt.getTime(), chave: l.chaveDuplicata, orderNsu: l.orderNsu, url: l.url }));
+  const itens: ItemDoLivro[] = linhas.map((l) => ({ valorCentavos: l.valorCentavos, status: l.status, em: l.createdAt.getTime(), chave: l.chaveDuplicata, orderNsu: l.orderNsu, url: l.url, origem: l.origem }));
   return new LivroDeLinks(itens);
 }
 
@@ -131,20 +135,38 @@ export function armazemDeEscritaPrisma(db: BancoDeEscrita): ArmazemDeEscrita {
         throw new ErroDeEntrada(FALHA_DO_BANCO_INFINITEPAY);
       }
     },
+    async porOrigemRef(unidade, origemRef) {
+      try {
+        const l = await db.infinitepayLink.findFirst({ where: { unitSlug: unidade, origemRef }, orderBy: { createdAt: 'desc' } });
+        return l ? comoLinkGuardado(l) : null;
+      } catch {
+        throw new ErroDeEntrada(FALHA_DO_BANCO_INFINITEPAY);
+      }
+    },
     async reservar(p: PedidoDeReserva) {
       try {
         await db.$transaction(
           async (tx) => {
             await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`infinitepay-dinheiro:${p.unidade}`}::text, 0))`;
             p.conferir(await lerLivro(tx.infinitepayLink, p.unidade, p.agora));
-            const dados = { valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte, criadoPor: p.criadoPor, chaveDuplicata: p.chave };
+            const dados = { valorCentavos: p.valorCentavos, descricao: p.descricao, validoAte: p.validoAte, criadoPor: p.criadoPor, chaveDuplicata: p.chave, origem: p.origem };
             // a referência de um link que a InfinitePay RECUSOU (falhou) pode ser usada de novo: nada existe lá. A linha recusada NÃO é reaproveitada (isso apagaria a
             // tentativa do limite por hora): ela fica como histórico, com a referência trocada por `<ref>~f<instante>`, e a tentativa nova ganha a sua própria linha.
             await tx.infinitepayLink.updateMany({
               where: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'falhou' },
               data: { orderNsu: `${p.orderNsu}~f${p.agora}` },
             });
-            await tx.infinitepayLink.create({ data: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'intencao', ...dados } });
+            if (p.origemRef !== undefined) {
+              // mesma regra da referência do pedido: só o link RECUSADO libera a referência de origem (a linha fica de histórico, com a referência trocada); um vivo recusa — a corrida
+              // entre duas instâncias é pega aqui, dentro da trava da unidade, e o índice único é a última defesa
+              const agora = new Date(p.agora);
+              // «não vale mais»: recusado ou vencido sem pagamento (mesma regra de `origemSubstituivel`; `cancelado` NÃO libera: o webhook ainda aceita `pago` depois dele)
+              const morto = [{ status: 'falhou' }, { status: 'criado', validoAte: { lt: agora } }];
+              const vivo = await tx.infinitepayLink.findFirst({ where: { unitSlug: p.unidade, origemRef: p.origemRef, NOT: { OR: morto } } });
+              if (vivo) throw new ErroDeEntrada(`a referência de origem ${p.origemRef} já tem um link (${vivo.orderNsu}). Nada foi criado.`);
+              await tx.infinitepayLink.updateMany({ where: { unitSlug: p.unidade, origemRef: p.origemRef, OR: morto }, data: { origemRef: `${p.origemRef}~f${p.agora}` } });
+            }
+            await tx.infinitepayLink.create({ data: { unitSlug: p.unidade, orderNsu: p.orderNsu, status: 'intencao', ...(p.origemRef !== undefined ? { origemRef: p.origemRef } : {}), ...dados } });
           },
           { timeout: 15_000, maxWait: 15_000 },
         );
