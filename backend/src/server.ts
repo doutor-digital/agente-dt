@@ -40,6 +40,7 @@ import { startPrometeuSemMarcarWorker, stopPrometeuSemMarcarWorker } from './lib
 import { startEtiquetasAutoWorker, stopEtiquetasAutoWorker } from './lib/etiquetas-auto-worker.js';
 import { startRotinaExLeadWorker, stopRotinaExLeadWorker } from './lib/rotina-exlead-worker.js';
 import { startTaxaErroWorker, stopTaxaErroWorker } from './lib/taxa-erro-worker.js';
+import { startVigiaRedeWorker, stopVigiaRedeWorker } from './lib/vigia-rede-banco.js';
 import { startCardValidationWorker, stopCardValidationWorker } from './lib/card-validation-worker.js';
 import { startStaleReplyMonitor } from './lib/stale-reply-monitor.js';
 import { startJudgeWorker, stopJudgeWorker } from './lib/judge-worker.js';
@@ -299,6 +300,7 @@ async function main(): Promise<void> {
       startEtiquetasAutoWorker();
       startRotinaExLeadWorker();
       startTaxaErroWorker();
+      startVigiaRedeWorker();
       startCardValidationWorker();
       startResultadosWorker();
       startVozSessaoWorker();
@@ -395,6 +397,7 @@ async function main(): Promise<void> {
       stopEtiquetasAutoWorker();
       stopRotinaExLeadWorker();
       stopTaxaErroWorker();
+      stopVigiaRedeWorker();
       stopCardValidationWorker();
       stopResultadosWorker();
       stopVozSessaoWorker();

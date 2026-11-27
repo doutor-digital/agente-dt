@@ -1,0 +1,56 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { enviarAvisoDoVigia } from './vigia-rede-banco.js';
+import { CHAT_JOAO_PADRAO } from './telegram.js';
+
+function espiao() {
+  const chamadas: Array<{ url: string; chat: string; texto: string }> = [];
+  const fetchFalso = (async (url: string | URL | Request, init?: RequestInit) => {
+    const corpo = JSON.parse(String(init?.body ?? '{}')) as { chat_id: string; text: string };
+    chamadas.push({ url: String(url), chat: String(corpo.chat_id), texto: corpo.text });
+    return new Response('{"ok":true}', { status: 200 });
+  }) as typeof fetch;
+  return { chamadas, fetchFalso };
+}
+
+test('o vigia só manda para o Telegram PESSOAL do João (bot DD-Avisos, chat do João), nunca outro chat', async () => {
+  const { chamadas, fetchFalso } = espiao();
+  // Ambiente de produção com TODOS os canais e grupos configurados: nenhum deles pode ser o destino.
+  const env = {
+    TELEGRAM_BOT_TOKEN: 'token-avisos-123',
+    TELEGRAM_CHAT_JOAO: '7822226023',
+    TELEGRAM_CHAMADOS_TOKEN: 'token-chamados-456',
+    TELEGRAM_CHAMADOS_CHAT: '-1001111111111',
+    TELEGRAM_SOFIA_TOKEN: 'token-sofia-789',
+    TELEGRAM_SOFIA_CHAT: '-1002222222222',
+  } as NodeJS.ProcessEnv;
+  assert.equal(await enviarAvisoDoVigia('teste', { env, fetch: fetchFalso }), true);
+  assert.equal(chamadas.length, 1);
+  assert.equal(chamadas[0].chat, '7822226023', 'chat do João');
+  assert.ok(chamadas[0].url.includes('/bottoken-avisos-123/'), 'bot do canal avisos');
+  assert.ok(!chamadas[0].url.includes('chamados') && !chamadas[0].url.includes('sofia'));
+});
+
+test('sem TELEGRAM_CHAT_JOAO configurado, cai no chat padrão do João (o mesmo dos avisos do Asaas)', async () => {
+  const { chamadas, fetchFalso } = espiao();
+  await enviarAvisoDoVigia('teste', { env: { TELEGRAM_BOT_TOKEN: 'tok-abc-123' } as NodeJS.ProcessEnv, fetch: fetchFalso });
+  assert.equal(chamadas[0].chat, CHAT_JOAO_PADRAO);
+  assert.equal(CHAT_JOAO_PADRAO, '7822226023');
+});
+
+test('sem token do Telegram, o aviso não sai (e não vai para e-mail/relay)', async () => {
+  const { chamadas, fetchFalso } = espiao();
+  assert.equal(await enviarAvisoDoVigia('teste', { env: {} as NodeJS.ProcessEnv, fetch: fetchFalso }), false);
+  assert.equal(chamadas.length, 0);
+});
+
+test('o código do vigia não importa o relay de e-mail nem escolhe outro chat/canal', () => {
+  for (const arq of ['vigia-rede.ts', 'vigia-rede-banco.ts']) {
+    const fonte = readFileSync(new URL(`./${arq}`, import.meta.url), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+    assert.doesNotMatch(fonte, /opsAlert|ALERT_RELAY|alertrelay/, `${arq} não usa o relay de e-mail`);
+    assert.doesNotMatch(fonte, /\bchat\s*:/, `${arq} não passa chat próprio ao Telegram`);
+    assert.doesNotMatch(fonte, /canal:\s*'(chamados|sofia)'/, `${arq} não usa outro canal`);
+    assert.doesNotMatch(fonte, /enviarTelegram(Chamados|Sofia)/, `${arq} não usa os atalhos de outros canais`);
+  }
+});

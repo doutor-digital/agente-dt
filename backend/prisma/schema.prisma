@@ -3364,3 +3364,18 @@ model AgendaRecuperacaoItem {
   @@index([unitId, pacienteChave])
   @@map("agenda_recuperacao_itens")
 }
+
+/// Estado do vigia da rede (lib/vigia-rede): um problema por chave (`credito:anthropic`, `falha:openai`, `parada`, `frase`).
+/// Fica no banco, e não em memória, para sobreviver a deploy e a troca de líder sem repetir o aviso nem perder o "voltou".
+/// `resolvido_em` nulo = problema aberto. Só guarda contagens e horários: nunca dado de paciente.
+model VigiaAlerta {
+  chave         String    @id
+  abertoEm      DateTime  @map("aberto_em")
+  /// a última vez que o problema foi visto (no crédito, a hora do último erro); a prova de volta tem que ser posterior
+  ultimoVistoEm DateTime  @map("ultimo_visto_em")
+  ultimoAvisoEm DateTime? @map("ultimo_aviso_em")
+  lembretes     Int       @default(0)
+  resolvidoEm   DateTime? @map("resolvido_em")
+
+  @@map("vigia_alertas")
+}

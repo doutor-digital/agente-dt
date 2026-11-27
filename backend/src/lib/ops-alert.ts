@@ -37,13 +37,24 @@ export async function opsAlert(args: {
   }
 }
 
+/**
+ * O provedor recusou porque a CONTA está sem crédito (e não por limite de uso por minuto nem por erro nosso).
+ *
+ * As duas frases reais de 26/11/2026, que deixaram a Sofia 15 h fora sem ninguém saber:
+ *  - Anthropic: `400 … "Your credit balance is too low to access the Anthropic API…"`
+ *  - OpenAI:    `429 You have no credits remaining. Add credits to continue using the API at …`
+ * O 429 da OpenAI por saldo vem com o MESMO código do 429 de rate limit, então o que decide é o texto.
+ */
 export function ehErroDeSaldo(msg: string): boolean {
-  const m = msg.toLowerCase();
+  const m = String(msg ?? '').toLowerCase();
   return (
     m.includes('credit balance is too low') ||
+    m.includes('no credits remaining') ||
     m.includes('insufficient_quota') ||
     m.includes('insufficient quota') ||
-    m.includes('billing') && m.includes('quota') ||
+    m.includes('insufficient credits') ||
+    m.includes('out of credits') ||
+    (m.includes('billing') && m.includes('quota')) ||
     (m.includes('exceeded') && m.includes('quota')) ||
     m.includes('payment required')
   );
