@@ -2177,8 +2177,9 @@ const MENU_JS = String.raw`(function(){
       var li = a.closest('li') || a; if (li.style.display !== 'none') { li.style.display = 'none'; ocultos.push(li); }
     });
   }
-  var espera = null;
-  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre a tela se estava aberta (e acerta a margem)
-  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; enxugar(); if (por()) { reabrir(); ajustar(); } }, 300); }).observe(document.documentElement, { childList: true, subtree: true });
+  var espera = null, ultimaPassada = 0;
+  // o menu do Chatwoot nasce depois do script: quando o item entra, reabre a tela se estava aberta (e acerta a margem). A primeira mudança depois de uma pausa passa já;
+  // a rajada segue contada a cada 300 ms (antes esperava 300 ms com a tela parada: o Hoje e o Funil apareciam tarde)
+  new MutationObserver(function(){ if (espera) return; espera = setTimeout(function(){ espera = null; ultimaPassada = Date.now(); enxugar(); if (por()) { reabrir(); ajustar(); } }, Math.max(0, 300 - (Date.now() - ultimaPassada))); }).observe(document.documentElement, { childList: true, subtree: true });
   if (por()) reabrir(); setTimeout(function(){ if (!por() && /\/app\/accounts\//.test(location.pathname)) botao(); reabrir(); }, 8000);
 })();`;
