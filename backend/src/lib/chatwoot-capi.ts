@@ -30,6 +30,7 @@ import { createHash } from 'node:crypto';
 import { logger } from './logger.js';
 import { prisma } from './prisma.js';
 import { estadoDaAutomacao, type Estado } from './automacoes-estado.js';
+import { paginasDaCaixa } from './chatwoot-caixa-lista.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
 import { conversaDoChatwoot, ehArquivo, ehSim, type ConversaRegua } from './chatwoot-regua.js';
 import { referraisGuardados } from './kapso-referral.js';
@@ -52,6 +53,11 @@ export const MAX_ENVIOS_POR_CICLO = 30;
 export const MAX_BUSCAS_DE_CLIQUE_POR_CICLO = 40;
 /** Páginas de 20 mensagens: 15 páginas = 300 mensagens para achar a primeira da conversa. */
 const MAX_PAGINAS_DE_MENSAGENS = 15;
+/**
+ * O CAPI aceita a listagem que a régua acabou de ler (ela roda ~90 s antes, no mesmo ritmo de 10 min): ele só detecta a ENTRADA de uma conversa num estado e
+ * manda o evento à Meta, e o que importa ali é a ordem de minutos, não de segundos. Ele não escreve no Chatwoot.
+ */
+export const VALIDADE_DA_LISTA_DO_CAPI_MS = 4 * 60_000;
 const VALOR_PADRAO_DO_FECHAMENTO = 3500;
 
 // ── a decisão (pura) ───────────────────────────────────────────────────────────────────────────────
@@ -194,6 +200,8 @@ export interface ArmazemCapi {
 export interface ChatDoCapi {
   /** uma página (25) da listagem da caixa; vazia = acabou */
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
+  /** a caixa inteira (as páginas não vazias até `max`), dividida com a régua e a agenda; opcional: sem ela lê página a página com `pagina` (o mesmo resultado) */
+  paginas?(caixa: number, max: number): Promise<{ paginas: unknown[][] }>;
   /** o clique de anúncio da conversa (lê as mensagens até a primeira); null = não veio de anúncio */
   clique(conversationId: number, caixa: number): Promise<CliqueDoAnuncio | null>;
 }
@@ -248,16 +256,21 @@ export function chatDoCapi(ctx: ContextoChatwoot): ChatDoCapi {
     async pagina(caixa, pagina) {
       const r = (await chamar(ctx, 'GET', 'conversations', {
         query: { inbox_id: String(caixa), status: 'all', assignee_type: 'all', page: String(pagina) },
+        baixa: true,
+        origem: 'capi',
       })) as { data?: { payload?: unknown[] }; payload?: unknown[] } | null;
       const lista = r?.data?.payload ?? r?.payload ?? [];
       return Array.isArray(lista) ? lista : [];
+    },
+    async paginas(caixa, max) {
+      return { paginas: (await paginasDaCaixa(ctx, caixa, { maxPaginas: max, validadeMs: VALIDADE_DA_LISTA_DO_CAPI_MS, origem: 'capi' })).paginas };
     },
     async clique(conversationId, caixa) {
       const todas: unknown[] = [];
       let antes: number | null = null;
       let chegouAoInicio = false;
       for (let i = 0; i < MAX_PAGINAS_DE_MENSAGENS; i++) {
-        const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, antes ? { query: { before: String(antes) } } : {})) as { payload?: any[] } | null;
+        const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { ...(antes ? { query: { before: String(antes) } } : {}), baixa: true, origem: 'capi-mensagens' })) as { payload?: any[] } | null;
         const lista = Array.isArray(r?.payload) ? r.payload : [];
         if (!lista.length) {
           chegouAoInicio = true;
@@ -388,9 +401,16 @@ async function lerConversas(chat: ChatDoCapi, caixa: number): Promise<ConversaRe
   const mapa = etapasDaCaixa(caixa);
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
-  for (let p = 1; p <= MAX_PAGINAS; p++) {
-    const pagina = await chat.pagina(caixa, p);
-    if (pagina.length === 0) break;
+  const paginas: unknown[][] = [];
+  if (chat.paginas) paginas.push(...(await chat.paginas(caixa, MAX_PAGINAS)).paginas);
+  else {
+    for (let p = 1; p <= MAX_PAGINAS; p++) {
+      const pagina = await chat.pagina(caixa, p);
+      if (pagina.length === 0) break;
+      paginas.push(pagina);
+    }
+  }
+  for (const pagina of paginas) {
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw, mapa);
       // arquivo do histórico não vira evento de conversão para a Meta

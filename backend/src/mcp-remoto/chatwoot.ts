@@ -19,6 +19,7 @@ import { z } from 'zod';
 import type { Auditar } from '../franquia-mcp/ferramentas.js';
 import { ErroDeEntrada } from '../franquia-mcp/travas.js';
 import { executar } from './ferramenta.js';
+import { limitadorDoChatwoot } from '../lib/chatwoot-limite.js';
 
 export interface ContaChatwoot {
   url: string;
@@ -234,21 +235,31 @@ export async function chamar(
   ctx: ContextoChatwoot,
   metodo: Metodo,
   caminhoBruto: string,
-  o: { corpo?: unknown; query?: Record<string, string>; sessao?: SessaoDoChatwoot | null } = {},
+  o: {
+    corpo?: unknown;
+    query?: Record<string, string>;
+    sessao?: SessaoDoChatwoot | null;
+    /** trabalho de FUNDO (varredura sem ninguém esperando): passa pelo freio de `chatwoot-limite`. Quem tem gente esperando NÃO marca. */
+    baixa?: boolean;
+    /** quem pede (`regua`, `capi`, `agenda`, `funil`…): só para a conta no log; sem isso conta como `sessao` ou `conector` */
+    origem?: string;
+  } = {},
 ): Promise<unknown> {
   const conta = ctx.conta;
   if (!conta) throw new ErroDeEntrada('o Chatwoot não está ligado neste conector');
   const caminho = caminhoSeguro(caminhoBruto);
   const qs = o.query && Object.keys(o.query).length ? `?${new URLSearchParams(o.query)}` : '';
   const url = `${conta.url}/api/v1/accounts/${conta.conta}${caminho ? `/${caminho}` : ''}${qs}`;
-  const r = await ctx.fetch(url, {
-    method: metodo,
-    headers: o.sessao
-      ? { 'access-token': o.sessao.token, client: o.sessao.client, uid: o.sessao.uid, 'token-type': 'Bearer', 'Content-Type': 'application/json', Accept: 'application/json' }
-      : { api_access_token: conta.token, 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: metodo === 'GET' || metodo === 'DELETE' ? undefined : JSON.stringify(o.corpo ?? {}),
-    signal: AbortSignal.timeout(60_000),
-  });
+  const r = await limitadorDoChatwoot.executar(conta.url, o.origem ?? (o.sessao ? 'sessao' : 'conector'), o.baixa === true, () =>
+    ctx.fetch(url, {
+      method: metodo,
+      headers: o.sessao
+        ? { 'access-token': o.sessao.token, client: o.sessao.client, uid: o.sessao.uid, 'token-type': 'Bearer', 'Content-Type': 'application/json', Accept: 'application/json' }
+        : { api_access_token: conta.token, 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: metodo === 'GET' || metodo === 'DELETE' ? undefined : JSON.stringify(o.corpo ?? {}),
+      signal: AbortSignal.timeout(60_000), // conta do tempo DEPOIS da espera do freio
+    }),
+  );
   const texto = await r.text();
   let dados: unknown;
   try {

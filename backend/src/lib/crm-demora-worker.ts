@@ -89,7 +89,7 @@ export function armazemDoBanco(): Armazem {
 }
 
 async function paginaDeMensagens(ctx: ContextoChatwoot, id: number, antes?: number): Promise<any[]> {
-  const r = (await chamar(ctx, 'GET', `conversations/${id}/messages`, { query: antes ? { before: String(antes) } : {} })) as { payload?: unknown[] } | null;
+  const r = (await chamar(ctx, 'GET', `conversations/${id}/messages`, { query: antes ? { before: String(antes) } : {}, baixa: true, origem: 'crm-demora' })) as { payload?: unknown[] } | null;
   return Array.isArray(r?.payload) ? r.payload : [];
 }
 
@@ -126,7 +126,7 @@ export function mundoReal(): MundoDaDemora {
       const vistas = new Set<number>();
       for (const status of ['open', 'pending']) {
         for (let p = 1; p <= MAX_PAGINAS; p++) {
-          const r = (await chamar(ctx, 'GET', 'conversations', { query: { inbox_id: String(caixa), status, assignee_type: 'all', page: String(p) } })) as
+          const r = (await chamar(ctx, 'GET', 'conversations', { query: { inbox_id: String(caixa), status, assignee_type: 'all', page: String(p) }, baixa: true, origem: 'crm-demora' })) as
             | { data?: { payload?: unknown[] }; payload?: unknown[] }
             | null;
           const pagina = (r?.data?.payload ?? r?.payload ?? []) as any[];
@@ -145,7 +145,7 @@ export function mundoReal(): MundoDaDemora {
       }
       return todas;
     },
-    conversa: (ctx, id) => chamar(ctx, 'GET', `conversations/${id}`),
+    conversa: (ctx, id) => chamar(ctx, 'GET', `conversations/${id}`, { baixa: true, origem: 'crm-demora' }),
     async mensagens(ctx, id) {
       // o Chatwoot devolve as 20 mais novas em ordem crescente; `before=<id>` traz as 20 anteriores
       let todas: any[] = await paginaDeMensagens(ctx, id);

@@ -360,11 +360,14 @@ test('quadro: a 2ª abertura (e a de OUTRA atendente das mesmas caixas) não rel
   assert.ok(chamadas.filter((c) => c.url.includes('/inboxes')).every((c) => ['agente', 'admin'].includes(c.headers['access-token'] ?? '')));
 });
 
-test('quadro: depois de 20 s serve o velho NA HORA e relê UMA vez em segundo plano; depois de 2 min espera a leitura nova', async () => {
+test('quadro: depois de 90 s serve o velho NA HORA e relê UMA vez em segundo plano; depois de 3 min espera a leitura nova', async () => {
   _esquecerLeituraDoFunil();
   await quadro('agente');
   const base = paginasLidas();
   mock.timers.tick(30_000);
+  await quadro('agente');
+  assert.equal(paginasLidas(), base, 'aos 30 s ainda é fresco (era 20 s: a atualização de 60 s da tela relia tudo a cada minuto)');
+  mock.timers.tick(70_000); // 100 s: passou dos 90 s
   await quadro('agente');
   await quadro('admin');
   await new Promise((r) => setImmediate(r));
@@ -375,7 +378,7 @@ test('quadro: depois de 20 s serve o velho NA HORA e relê UMA vez em segundo pl
   await quadro('agente'); // já renovada: fresca de novo
   assert.equal(paginasLidas(), depoisDoVelho);
   mock.timers.tick(200_000);
-  await quadro('agente'); // passou de 2 min: lê de novo e espera
+  await quadro('agente'); // passou de 3 min: lê de novo e espera
   assert.equal(paginasLidas(), depoisDoVelho + porLeitura);
 });
 

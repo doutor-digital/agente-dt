@@ -30,6 +30,7 @@ import { chaveDoTelefone } from './chatwoot-lida.js';
 import { enviarPelaEvolution } from './alerta-whatsapp.js';
 import { createKommoClientSemFreio } from '../services/kommo.service.js';
 import { chamar, contaChatwootDoAmbiente, contextoDaCaixa, criarContextoChatwoot, type ContextoChatwoot } from '../mcp-remoto/chatwoot.js';
+import { paginasDaCaixa } from './chatwoot-caixa-lista.js';
 import {
   atualizarVistos,
   CAIXAS_CLOUD,
@@ -106,10 +107,15 @@ export interface EnvioTemplate {
 export interface Chat {
   /** uma página (25) da listagem da caixa; vazia = acabou */
   pagina(caixa: number, pagina: number): Promise<unknown[]>;
+  /**
+   * A caixa inteira de uma vez (as páginas não vazias até `max`), dividindo a leitura com o CAPI e a agenda (`chatwoot-caixa-lista`). Opcional: quem não
+   * tem (o teste) lê página a página com `pagina`, que dá o mesmo resultado.
+   */
+  paginas?(caixa: number, max: number): Promise<{ paginas: unknown[][]; truncada: boolean }>;
   /** Com `template`, vai o template (o `texto` é o que aparece na conversa); sem ele, texto livre. */
   mensagem(conversationId: number, texto: string, privada: boolean, template?: EnvioTemplate): Promise<void>;
   /** Quando o PACIENTE escreveu por último nesta conversa (mensagem recebida); null = nunca. Conta a janela de 24 h. */
-  ultimaDoPaciente(conversationId: number): Promise<Date | null>;
+  ultimaDoPaciente(conversationId: number, atividade?: number): Promise<Date | null>;
   /**
    * Os templates APROVADOS (no idioma da régua) que o Chatwoot guarda na caixa: nome → quantos {{n}} o corpo tem (null = não deu para
    * contar). Lança se não deu para ler.
@@ -121,8 +127,11 @@ export interface Chat {
   prioridade(conversationId: number, prioridade: 'urgent' | 'high' | 'medium' | 'low'): Promise<void>;
   /** atribui a conversa a um agente (o app do Chatwoot avisa a pessoa) */
   atribuir(conversationId: number, agente: number): Promise<void>;
-  /** a última mensagem pública (não nota) da conversa; null = nenhuma */
-  ultimaPublica(conversationId: number): Promise<MensagemResumo | null>;
+  /**
+   * a última mensagem pública (não nota) da conversa; null = nenhuma. `atividade` = o `last_activity_at` que a listagem trouxe: se for o mesmo da
+   * última vez, nenhuma mensagem nasceu desde então e a resposta guardada vale (não pede de novo ao Chatwoot).
+   */
+  ultimaPublica(conversationId: number, atividade?: number): Promise<MensagemResumo | null>;
 }
 
 /** Cartão ativo no Kommo da unidade para este telefone (null = nenhum). Lança se não deu para consultar. */
@@ -280,37 +289,91 @@ export function paramsDoTemplate(t: EnvioTemplate): Record<string, unknown> {
   return { name: t.nome, language: t.idioma, content_mode: 'rendered', ...(t.variaveis.length ? { processed_params: { body } } : {}) };
 }
 
+/**
+ * `baixa` = quem pede é a varredura da régua (ela passa o `last_activity_at` da listagem). Sem ele quem pede é a TELA (o painel de tarefas, o worker de tarefas): não pode
+ * esperar na fila do freio atrás da varredura.
+ */
+/** O PACIENTE escreveu por último quando? (as 20 mais novas; `before=<id>` traz as 20 anteriores, até `PAGINAS_PARA_ACHAR_O_PACIENTE`). */
+async function lerUltimaDoPaciente(ctx: ContextoChatwoot, conversationId: number, baixa: boolean): Promise<Date | null> {
+  let antes: number | undefined;
+  for (let i = 0; i < PAGINAS_PARA_ACHAR_O_PACIENTE; i++) {
+    const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {}, baixa, origem: baixa ? 'regua-mensagens' : 'tarefas-mensagens' })) as { payload?: unknown[] } | null;
+    const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ id?: number; message_type?: number; created_at?: number }>) : [];
+    if (lista.length === 0) return null;
+    for (let j = lista.length - 1; j >= 0; j--) {
+      const m = lista[j]!;
+      if (Number(m.message_type) === 0 && Number(m.created_at) > 0) return new Date(Number(m.created_at) * 1000);
+    }
+    const primeiro = Number(lista[0]?.id);
+    if (!Number.isInteger(primeiro) || primeiro <= 0) return null;
+    antes = primeiro;
+  }
+  return null;
+}
+
+async function lerUltimaPublica(ctx: ContextoChatwoot, conversationId: number, baixa: boolean): Promise<MensagemResumo | null> {
+  const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { baixa, origem: baixa ? 'regua-mensagens' : 'tarefas-mensagens' })) as { payload?: unknown[] } | null;
+  const lista = Array.isArray(r?.payload) ? r.payload : [];
+  for (let i = lista.length - 1; i >= 0; i--) {
+    const m = resumoDaMensagem(lista[i]);
+    if (m && !m.privada) return m;
+  }
+  return null;
+}
+
+/** O que o histórico de mensagens de uma conversa já respondeu, por `last_activity_at` (só nasce mensagem nova se ele andar). */
+const respostasPorAtividade = new Map<string, { atividade: number; valor: unknown }>();
+const LIMITE_DAS_RESPOSTAS = 20_000;
+const ESPERA_PARA_GUARDAR_MS = 3_000;
+async function porAtividade<T>(ctx: ContextoChatwoot, tipo: string, id: number, atividade: number | undefined, ler: () => Promise<T>): Promise<T> {
+  // `last_activity_at` tem resolução de segundo: se a última atividade é de agora, outra mensagem pode chegar no MESMO segundo depois da leitura e o guardado ficaria errado
+  if (!(Number(atividade) > 0) || Number(atividade) * 1000 > Date.now() - ESPERA_PARA_GUARDAR_MS) return ler();
+  const k = `${ctx.conta?.url ?? ''}|${ctx.conta?.conta ?? ''}|${tipo}|${id}`;
+  const g = respostasPorAtividade.get(k);
+  if (g && g.atividade === atividade) return g.valor as T;
+  const valor = await ler();
+  if (respostasPorAtividade.size >= LIMITE_DAS_RESPOSTAS) {
+    // despeja só as mais antigas (a ordem do Map é a de inserção): zerar tudo refaria milhares de pedidos de uma vez no ciclo seguinte
+    let sobra = Math.ceil(LIMITE_DAS_RESPOSTAS / 10);
+    for (const chave of respostasPorAtividade.keys()) {
+      if (sobra-- <= 0) break;
+      respostasPorAtividade.delete(chave);
+    }
+  }
+  respostasPorAtividade.set(k, { atividade: Number(atividade), valor });
+  return valor;
+}
+/** Só para teste. */
+export const _esquecerRespostasPorAtividade = (): void => respostasPorAtividade.clear();
+
+/**
+ * A régua é quem mais ESCREVE nas conversas (grava a lista de atributos inteira) a partir desta leitura: ela só aceita a listagem que ELA mesma lê agora (validade 0, só
+ * junta com leitura que está começando neste instante). Quem aproveita a leitura dela são o CAPI (4 min) e a agenda (7 min, que confere a conversa viva antes de gravar).
+ */
+export const VALIDADE_DA_LISTA_DA_REGUA_MS = 0;
+
 export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
   return {
     async pagina(caixa, pagina) {
       const r = (await chamar(ctx, 'GET', 'conversations', {
         query: { inbox_id: String(caixa), status: 'all', assignee_type: 'all', page: String(pagina) },
+        baixa: true,
+        origem: 'regua',
       })) as { data?: { payload?: unknown[] }; payload?: unknown[] } | null;
       const lista = r?.data?.payload ?? r?.payload ?? [];
       return Array.isArray(lista) ? lista : [];
+    },
+    async paginas(caixa, max) {
+      const r = await paginasDaCaixa(ctx, caixa, { maxPaginas: max, validadeMs: VALIDADE_DA_LISTA_DA_REGUA_MS, origem: 'regua' });
+      return { paginas: r.paginas, truncada: r.truncada };
     },
     async mensagem(conversationId, texto, privada, template) {
       await chamar(ctx, 'POST', `conversations/${conversationId}/messages`, {
         corpo: { content: texto, message_type: 'outgoing', private: privada, ...(template ? { template_params: paramsDoTemplate(template) } : {}) },
       });
     },
-    async ultimaDoPaciente(conversationId) {
-      // o Chatwoot devolve as 20 mais novas em ordem crescente; `before=<id>` traz as 20 anteriores
-      let antes: number | undefined;
-      for (let i = 0; i < PAGINAS_PARA_ACHAR_O_PACIENTE; i++) {
-        const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`, { query: antes ? { before: String(antes) } : {} })) as { payload?: unknown[] } | null;
-        const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ id?: number; message_type?: number; created_at?: number }>) : [];
-        if (lista.length === 0) return null;
-        for (let j = lista.length - 1; j >= 0; j--) {
-          const m = lista[j]!;
-          if (Number(m.message_type) === 0 && Number(m.created_at) > 0) return new Date(Number(m.created_at) * 1000);
-        }
-        const primeiro = Number(lista[0]?.id);
-        if (!Number.isInteger(primeiro) || primeiro <= 0) return null;
-        antes = primeiro;
-      }
-      return null;
-    },
+    ultimaDoPaciente: (conversationId, atividade) => porAtividade(ctx, 'paciente', conversationId, atividade, () => lerUltimaDoPaciente(ctx, conversationId, atividade !== undefined)),
+    ultimaPublica: (conversationId, atividade) => porAtividade(ctx, 'publica', conversationId, atividade, () => lerUltimaPublica(ctx, conversationId, atividade !== undefined)),
     async templatesAprovados(caixa) {
       const r = (await chamar(ctx, 'GET', `inboxes/${caixa}/message_templates`)) as { payload?: unknown[] } | null;
       const lista = Array.isArray(r?.payload) ? (r.payload as Array<{ name?: string; language?: string; status?: string; components?: Array<{ type?: string; text?: string }> }>) : [];
@@ -335,15 +398,6 @@ export function chatDoChatwoot(ctx: ContextoChatwoot): Chat {
     },
     async prioridade(conversationId, prioridade) {
       await chamar(ctx, 'POST', `conversations/${conversationId}/toggle_priority`, { corpo: { priority: prioridade } });
-    },
-    async ultimaPublica(conversationId) {
-      const r = (await chamar(ctx, 'GET', `conversations/${conversationId}/messages`)) as { payload?: unknown[] } | null;
-      const lista = Array.isArray(r?.payload) ? r.payload : [];
-      for (let i = lista.length - 1; i >= 0; i--) {
-        const m = resumoDaMensagem(lista[i]);
-        if (m && !m.privada) return m;
-      }
-      return null;
     },
   };
 }
@@ -393,18 +447,24 @@ export function quemFalaPorTelefone(lista: ReadonlyArray<{ c: ConversaRegua; ati
   return saida;
 }
 
-export async function lerConversas(chat: Pick<Chat, 'pagina'>, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; atividades: Map<number, number>; truncada: boolean }> {
+async function lerPaginasUmaAUma(chat: Pick<Chat, 'pagina'>, caixa: number): Promise<{ paginas: unknown[][]; truncada: boolean }> {
+  const paginas: unknown[][] = [];
+  for (let p = 1; p <= MAX_PAGINAS; p++) {
+    const pagina = await chat.pagina(caixa, p);
+    if (pagina.length === 0) return { paginas, truncada: false };
+    paginas.push(pagina);
+  }
+  return { paginas, truncada: true };
+}
+
+export async function lerConversas(chat: Pick<Chat, 'pagina' | 'paginas'>, caixa: number, agora: Date): Promise<{ conversas: ConversaRegua[]; atividades: Map<number, number>; truncada: boolean }> {
   const vistas = new Set<number>();
   const conversas: ConversaRegua[] = [];
   const atividades = new Map<number, number>();
-  let truncada = true;
   const mapa = etapasDaCaixa(caixa);
-  for (let p = 1; p <= MAX_PAGINAS; p++) {
-    const pagina = await chat.pagina(caixa, p);
-    if (pagina.length === 0) {
-      truncada = false;
-      break;
-    }
+  // a caixa inteira: dividida com o CAPI e a agenda quando o `Chat` sabe (produção); senão página a página, parando na vazia (o mesmo resultado)
+  const { paginas, truncada } = chat.paginas ? await chat.paginas(caixa, MAX_PAGINAS) : await lerPaginasUmaAUma(chat, caixa);
+  for (const pagina of paginas) {
     for (const raw of pagina) {
       const c = conversaDoChatwoot(raw, mapa);
       // conversa de arquivo (histórico unificado, ninguém mexeu depois, sem consulta marcada): a régua não toca
@@ -516,7 +576,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
     if (c.ultima && !c.ultima.saida && !c.ultima.privada) return c.ultima.criadaEm;
     let p = historicoDoPaciente.get(c.id);
     if (!p) {
-      p = deps.chat.ultimaDoPaciente(c.id);
+      p = deps.chat.ultimaDoPaciente(c.id, atividades.get(c.id));
       historicoDoPaciente.set(c.id, p);
     }
     return p;
@@ -527,7 +587,7 @@ export async function cicloDaCaixa(deps: DepsDoCiclo, caixa: number, slug: strin
       // as outras conversas do mesmo telefone SÓ têm a memória atualizada (acima): nada de mensagem, nota, etiqueta, prioridade nem
       // atribuição — qualquer escrita conta como atividade no Chatwoot e faria a irmã velha virar «a que fala»
       if (!fala) continue;
-      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id);
+      if (precisaUltimaPublica(c)) c.ultima = await chat.ultimaPublica(c.id, atividades.get(c.id));
       // a que fala junta o que TODAS as conversas do mesmo telefone já mandaram (mesma regra|chave): conversa nova não repete a véspera
       const feitosDaConversa = new Set<string>(feitosPorConversa.get(c.id) ?? []);
       for (const id of irmas) for (const f of feitosPorConversa.get(id) ?? []) feitosDaConversa.add(f);

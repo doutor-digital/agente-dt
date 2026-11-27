@@ -176,6 +176,13 @@ export class MemoriaDeLeitura<T> {
   }
 }
 
-/** Fresco: serve direto. Velho: serve na hora e renova em segundo plano. Passou disso: lê de novo e espera. */
-export const FUNIL_FRESCO_MS = 20_000;
-export const FUNIL_VELHO_MS = 120_000;
+/**
+ * Fresco: serve direto. Velho: serve na hora e renova em segundo plano. Passou disso: lê de novo e espera.
+ *
+ * 27/11/2026: era 20 s / 2 min. As telas se atualizam sozinhas a cada 60 s (Hoje) e 120 s (as outras) e a leitura são ~41 páginas em fila; com 20 s de
+ * «fresco» TODA atualização de TODA aba aberta passava do prazo e disparava uma varredura inteira em segundo plano (medido: ~300 páginas em 10 min só
+ * por isso, num Chatwoot de um processo só). Com 90 s a atualização de 60 s cai dentro do prazo e a renovação vira uma a cada ~2 min; quem MOVE ou
+ * escreve pelo funil continua invalidando na hora (nunca vê o quadro velho). O «velho» sobe só de 2 para 3 min: é o máximo de idade que a tela mostra enquanto a renovação corre.
+ */
+export const FUNIL_FRESCO_MS = 90_000;
+export const FUNIL_VELHO_MS = 180_000;
