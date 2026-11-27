@@ -38,6 +38,7 @@ before(async () => {
       if (i > 60) throw new Error('postgres descartável não subiu em 30 s');
       await new Promise((r2) => setTimeout(r2, 500));
     }
+    process.env.ALERT_RELAY_URL = 'http://127.0.0.1:1'; // o aviso de verdade não sai no teste
     process.env.DATABASE_URL = `postgresql://postgres:x@127.0.0.1:${porta}/postgres`;
     execFileSync('pnpm', ['exec', 'prisma', 'db', 'push', '--skip-generate'], { cwd: BACKEND, env: process.env, stdio: 'ignore' });
     ({ prisma } = await import('./prisma.js'));
@@ -102,5 +103,51 @@ test('queda geral contra o banco: 1.000 erros de crédito em 39 unidades, com 4.
   const v = W.quedaGeral(amostras);
   assert.equal(v.alarme, true, JSON.stringify(amostras));
   assert.equal(v.causa, 'credito');
+  assert.equal(v.escopo, 'rede');
+  assert.equal(amostras[0].causas.credito, 1000, 'a causa é contada sobre TODOS os erros, não numa amostra');
 
+  // duas varreduras ao mesmo tempo (o timer de 2 min e o de 10) dão a MESMA resposta: uma não conclui «sem queda» por estar ocupada
+  const [x, y] = await Promise.all([W._internos.varrerRede(), W._internos.varrerRede()]);
+  assert.deepEqual([x, y], [true, true]);
+
+});
+
+test('a causa lida em SQL e a lida em JS concordam em cada mensagem (inclusive com request_id único em cada erro)', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
+  const { classificarCausa, filtrosSql } = await import('./causa-erro-ia.js');
+  const corpus = [
+    '400 invalid_request_error: Your credit balance is too low to access the Anthropic API. request_id=req_011CV8x9aB',
+    '429 You have no credits remaining',
+    'You exceeded your current quota, please check your plan and billing details',
+    'billing_not_active: the account is not active',
+    '402 Payment Required',
+    '401 Incorrect API key provided: sk-...abcd',
+    'Request failed with status code 403',
+    'error: 401 invalid x-api-key',
+    '403 Forbidden',
+    'authentication_error: invalid x-api-key',
+    '429 Rate limit reached for gpt-4o in organization',
+    'Too Many Requests',
+    '529 overloaded_error',
+    '503 Service Unavailable',
+    'Request timed out.',
+    'fetch failed',
+    'ECONNRESET',
+    'messages: text too long (512 tokens max)',
+    'pedido 401 do cliente 503 não encontrado',
+    'erro ao ler a billing address',
+    'Unexpected token < in JSON',
+    '',
+  ];
+  const f = filtrosSql('v.msg');
+  const linhas = await prisma.$queryRawUnsafe<Array<{ msg: string; c: boolean; a: boolean; l: boolean; i: boolean }>>(
+    `select v.msg, (${f.credito}) as c, (${f.autenticacao}) as a, (${f.limite}) as l, (${f.indisponivel}) as i from (select unnest($1::text[]) as msg) v`,
+    corpus,
+  );
+  assert.equal(linhas.length, corpus.length);
+  for (const r of linhas) {
+    const sql = r.c ? 'credito' : r.a ? 'autenticacao' : r.l ? 'limite' : r.i ? 'indisponivel' : 'outra';
+    assert.equal(sql, classificarCausa(r.msg), `SQL e JS discordam em: ${JSON.stringify(r.msg)}`);
+    assert.equal([r.c, r.a, r.l, r.i].filter(Boolean).length <= 1, true, 'as condições do SQL são exclusivas');
+  }
 });

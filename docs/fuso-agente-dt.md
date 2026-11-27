@@ -43,6 +43,16 @@ A auditoria contou 15 em 7 arquivos pelo código que estava no servidor. Em `ori
 
 Mudança de comportamento esperada em produção após o deploy (todas na direção do que o código já dizia): o aviso de agendamento perdido passa a sair 90 min depois da oferta e não 4h30; o preenchimento de campos passa a pegar conversas de 6 h a 72 h e não de 9 h a 75 h; o monitor de erro passa a ver 30 min de verdade (e por isso ganhou o olhar da rede inteira, ver `taxa-erro-worker.ts`).
 
+### O monitor de taxa de erro depois do conserto
+
+Consertar a janela deixou o monitor mais fiel e mais cego ao mesmo tempo, então ele foi recalibrado junto (`lib/taxa-erro-worker.ts`):
+
+- **Por unidade**: janela de 30 min de verdade e mínimo de 20 chamadas, como antes. Como a janela antiga trazia ~8x mais chamadas, uma unidade pequena com a chave quebrada deixou de alcançar o mínimo; por isso entrou a regra «TODAS as chamadas falhando, com pelo menos 8» (`TAXA_ERRO_MINIMO_TUDO_FALHANDO`). A sensibilidade para taxas parciais em unidade com pouco volume é menor que a antiga, que era um efeito do bug.
+- **Da rede (queda geral)**: 90% ou mais das chamadas falhando nos últimos 10 min, na rede toda ou num provedor, com pelo menos 5 chamadas, sem o mínimo por unidade. Para não acusar «todas as unidades» por uma só, um provedor isolado precisa de erro em 2 unidades ou mais; a rede inteira aceita 1 unidade só se a causa for de conta (crédito, chave). Só a queda da rede inteira cala os avisos por unidade.
+- **Causa**: lida da mensagem de erro (`lib/causa-erro-ia.ts`, a mesma regra em JS e em SQL, conferida contra um Postgres de verdade): crédito («credit balance», «no credits»), chave (401/403), limite (429) e indisponibilidade (5xx, timeout). Códigos só valem em contexto de status, para um «512 tokens» não virar «provedor fora do ar».
+- A varredura da rede roda a cada 2 min (`TAXA_ERRO_REDE_SWEEP_MS`); a por unidade continua a cada 10.
+- Limite que continua: o aviso sai pelo `opsAlert` (relay dentro da VPS). O alerta de fora do servidor é o PR do vigia externo.
+
 ## 4. Os `DEFAULT now()`: quem grava hora local?
 
 Contagem no repositório: 83 `@default(now())` no schema, 82 `DEFAULT CURRENT_TIMESTAMP` nas migrations. **Em tabela escrita pelo Prisma o default não dispara**: o motor do Prisma gera o valor, em UTC (prova na seção 1). O default do banco só dispara para quem insere por SQL cru sem informar a coluna. Escritores de SQL cru no `backend/src` (busca por `INSERT INTO`/`UPDATE` + `now()`):

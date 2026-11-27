@@ -2,6 +2,9 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import { opsAlert } from './ops-alert.js';
 import { AGORA_UTC } from './sql-tempo.js';
+import { classificarCausa, filtrosSql, type Causa } from './causa-erro-ia.js';
+
+export { classificarCausa, type Causa };
 
 /**
  * Avisa quando a taxa de erro sobe.
@@ -48,6 +51,12 @@ const JANELA_MIN = Number(process.env.TAXA_ERRO_JANELA_MIN) || 30;
 /** Abaixo disso não há amostra pra concluir nada. */
 const MINIMO_CHAMADAS = Number(process.env.TAXA_ERRO_MINIMO) || 20;
 
+/**
+ * Com a janela agora de 30 min de verdade, o mínimo de 20 deixou de pegar a unidade pequena com a chave quebrada (antes a
+ * janela de 3h30 trazia ~8x mais chamadas). Unidade em que TODAS as chamadas falham, com pelo menos isto, alarma mesmo assim.
+ */
+const MINIMO_TUDO_FALHANDO = Number(process.env.TAXA_ERRO_MINIMO_TUDO_FALHANDO) || 8;
+
 /** Taxa que já é ruim por si só, mesmo sem comparação. */
 const TAXA_ABSURDA = Number(process.env.TAXA_ERRO_ABSURDA) || 0.25;
 
@@ -65,7 +74,6 @@ const REDE_MINIMO = Number(process.env.TAXA_ERRO_REDE_MINIMO) || 5;
 let timer: NodeJS.Timeout | null = null;
 let timerRede: NodeJS.Timeout | null = null;
 let rodando = false;
-let rodandoRede = false;
 
 interface Amostra {
   slug: string;
@@ -105,6 +113,9 @@ export function pioroDemais(a: Amostra): { alarme: boolean; motivo: string; taxa
   const taxa = a.recentesTotal > 0 ? a.recentesErro / a.recentesTotal : 0;
   const base = a.baseTotal > 0 ? a.baseErro / a.baseTotal : 0;
 
+  if (a.recentesTotal >= MINIMO_TUDO_FALHANDO && a.recentesErro === a.recentesTotal && a.recentesTotal < MINIMO_CHAMADAS) {
+    return { alarme: true, motivo: `todas as ${a.recentesTotal} chamadas falhando`, taxa };
+  }
   if (a.recentesTotal < MINIMO_CHAMADAS) {
     return { alarme: false, motivo: 'amostra pequena demais pra concluir', taxa };
   }
@@ -130,29 +141,6 @@ export function pioroDemais(a: Amostra): { alarme: boolean; motivo: string; taxa
 
 // ── Queda geral ─────────────────────────────────────────────────────────────
 
-export type Causa = 'credito' | 'autenticacao' | 'limite' | 'indisponivel' | 'outra';
-
-/**
- * Lê a causa na mensagem de erro do provedor. A ORDEM importa: «429 … no credits remaining» é crédito, não limite
- * de taxa; «400 invalid_request_error … credit balance» também é crédito (a Anthropic devolve 400 para saldo zerado).
- */
-export function classificarCausa(mensagem: string | null | undefined): Causa {
-  const m = (mensagem ?? '').toLowerCase();
-  if (
-    /credit balance|no credits?|out of credits?|insufficient[_ ]quota|exceeded your current quota|billing|payment required|saldo/.test(m)
-  ) {
-    return 'credito';
-  }
-  if (/\b40[13]\b|invalid[_ ]api[_ ]key|authentication|unauthori[sz]ed|permission[_ ]denied|forbidden|invalid x-api-key/.test(m)) {
-    return 'autenticacao';
-  }
-  if (/\b429\b|rate[_ ]limit|too many requests/.test(m)) return 'limite';
-  if (/\b5\d\d\b|overloaded|timeout|timed out|econn|enotfound|fetch failed|socket hang up|unavailable/.test(m)) {
-    return 'indisponivel';
-  }
-  return 'outra';
-}
-
 const FRASE_DA_CAUSA: Record<Causa, string> = {
   credito: 'saldo de crédito do provedor esgotado (recarregar na conta do provedor)',
   autenticacao: 'chave de API recusada pelo provedor (401/403: chave revogada, trocada ou sem permissão)',
@@ -168,7 +156,7 @@ export interface AmostraDaRede {
   erros: number;
   /** Quantas unidades distintas tiveram erro: uma conversa quebrada sozinha não é queda. */
   unidadesComErro: number;
-  /** Quantos erros por causa, lida da mensagem. */
+  /** Quantos erros por causa, lida da mensagem (contada no SQL, sobre TODOS os erros da janela, não numa amostra). */
   causas: Partial<Record<Causa, number>>;
 }
 
@@ -194,9 +182,12 @@ function causaDominante(causas: AmostraDaRede['causas']): Causa {
 
 /**
  * Queda geral = 90% (ou mais) das chamadas falhando na janela curta, SEM exigir o mínimo por unidade. O mínimo da
- * rede é pequeno de propósito (de madrugada são ~20 chamadas por 10 min), e a salvaguarda contra falso alarme é outra:
- * ou o erro aparece em 2 unidades ou mais, ou a causa é de CONTA (crédito, chave) — esses dois não são uma conversa
- * esquisita, são o provedor recusando tudo.
+ * rede é pequeno de propósito (de madrugada são ~20 chamadas por 10 min). A salvaguarda contra falso alarme:
+ *  - o erro aparece em 2 unidades ou mais; OU
+ *  - o escopo é a REDE INTEIRA e a causa é de CONTA (crédito, chave): se 90% de tudo o que a rede fez foi recusado por
+ *    crédito ou chave, não é uma conversa esquisita, mesmo que de madrugada só uma unidade tenha falado.
+ * Um PROVEDOR isolado exige 2 unidades sempre: uma unidade com a chave dela quebrada, fazendo 5 chamadas seguidas, não é
+ * «todas as unidades estão afetadas».
  */
 export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
   const candidatas: VeredictoDaRede[] = [];
@@ -205,7 +196,7 @@ export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
     if (a.total < REDE_MINIMO || taxa < REDE_TAXA) continue;
     const causa = causaDominante(a.causas);
     const decisiva = causa === 'credito' || causa === 'autenticacao';
-    if (a.unidadesComErro < 2 && !decisiva) continue;
+    if (a.unidadesComErro < 2 && !(a.escopo === 'rede' && decisiva)) continue;
     candidatas.push({
       alarme: true,
       escopo: a.escopo,
@@ -223,98 +214,94 @@ export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
   return candidatas[0];
 }
 
-interface LinhaTotais {
+export interface LinhaDaRede {
   provider: string | null;
   /** 1 na linha que soma a rede toda (ROLLUP), 0 nas linhas por provedor. */
   rede: number;
   total: number;
   erros: number;
   unidades: number;
-}
-interface LinhaMensagem {
-  provider: string | null;
-  msg: string;
-  n: number;
+  erros_credito: number;
+  erros_chave: number;
+  erros_limite: number;
+  erros_indisponivel: number;
+  erros_outra: number;
 }
 
-/** Duas consultas pequenas (10 min), ambas pelo índice de `created_at`. */
-async function medirRede(): Promise<AmostraDaRede[]> {
-  const totais = await prisma.$queryRawUnsafe<LinhaTotais[]>(
-    `
+/**
+ * UMA consulta (10 min, pelo índice de `created_at`). A causa é contada no SQL, sobre todos os erros: agrupar por texto de
+ * erro e pegar os 100 maiores falhava justo com mensagem que traz um `request_id` único (cada erro vira um grupo de 1).
+ */
+export function sqlDaRede(): string {
+  const f = filtrosSql('c.error_message');
+  const rec = `c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval`;
+  return `
     select c.provider as provider,
            grouping(c.provider)::int as rede,
            count(*)::int as total,
            count(*) filter (where c.status = 'error')::int as erros,
-           count(distinct c.unit_id) filter (where c.status = 'error')::int as unidades
+           count(distinct c.unit_id) filter (where c.status = 'error')::int as unidades,
+           count(*) filter (where c.status = 'error' and ${f.credito})::int as erros_credito,
+           count(*) filter (where c.status = 'error' and ${f.autenticacao})::int as erros_chave,
+           count(*) filter (where c.status = 'error' and ${f.limite})::int as erros_limite,
+           count(*) filter (where c.status = 'error' and ${f.indisponivel})::int as erros_indisponivel
       from llm_calls c
-     where c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval
+     where ${rec}
      group by rollup (c.provider)
-    `,
-    String(REDE_JANELA_MIN),
-  );
-  const mensagens = await prisma.$queryRawUnsafe<LinhaMensagem[]>(
-    `
-    select c.provider as provider,
-           left(coalesce(c.error_message, ''), 300) as msg,
-           count(*)::int as n
-      from llm_calls c
-     where c.status = 'error'
-       and c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval
-     group by 1, 2
-     order by n desc
-     limit 100
-    `,
-    String(REDE_JANELA_MIN),
-  );
-  return montarRede(totais, mensagens);
+  `;
 }
 
-/** PURA: junta as duas consultas na forma que `quedaGeral` espera (linha `rede` = soma, vinda do ROLLUP). */
-export function montarRede(totais: LinhaTotais[], mensagens: LinhaMensagem[]): AmostraDaRede[] {
-  const nome = (p: string | null) => p ?? '?';
-  const porProvedor = new Map<string, AmostraDaRede>();
-  let rede: AmostraDaRede = { escopo: 'rede', total: 0, erros: 0, unidadesComErro: 0, causas: {} };
-  for (const t of totais) {
-    const a: AmostraDaRede = {
-      escopo: t.rede ? 'rede' : nome(t.provider),
-      total: Number(t.total),
-      erros: Number(t.erros),
-      unidadesComErro: Number(t.unidades),
-      causas: {},
-    };
-    if (t.rede) rede = a;
-    else porProvedor.set(a.escopo, a);
-  }
-  for (const m of mensagens) {
-    const c = classificarCausa(m.msg);
-    const n = Number(m.n);
-    rede.causas[c] = (rede.causas[c] ?? 0) + n;
-    const a = porProvedor.get(nome(m.provider));
-    if (a) a.causas[c] = (a.causas[c] ?? 0) + n;
-  }
-  return [rede, ...porProvedor.values()];
+async function medirRede(): Promise<AmostraDaRede[]> {
+  return montarRede(await prisma.$queryRawUnsafe<LinhaDaRede[]>(sqlDaRede(), String(REDE_JANELA_MIN)));
 }
 
-/** Devolve `true` se há queda geral (e já avisou). */
-async function varrerRede(): Promise<boolean> {
-  if (rodandoRede) return false;
-  rodandoRede = true;
-  try {
-    const v = quedaGeral(await medirRede());
-    if (!v.alarme) return false;
-    logger.error({ escopo: v.escopo, taxa: v.taxa, causa: v.causa }, `queda geral da IA: ${v.motivo}`);
-    void opsAlert({
-      chave: `queda-geral:${v.escopo}`,
-      title: 'IA FORA DO AR: queda geral',
-      message: `${v.motivo} Todas as unidades estão afetadas; a Sofia não está respondendo.`,
-    });
-    return true;
-  } catch (err) {
-    logger.warn({ err: String(err) }, 'varredura de queda geral falhou');
-    return false;
-  } finally {
-    rodandoRede = false;
-  }
+/** PURA: linhas do banco → o que `quedaGeral` espera (a linha `rede` vem do ROLLUP). */
+export function montarRede(linhas: LinhaDaRede[]): AmostraDaRede[] {
+  const paraAmostra = (l: LinhaDaRede): AmostraDaRede => {
+    const causas: AmostraDaRede['causas'] = {};
+    const pares: Array<[Causa, number]> = [
+      ['credito', Number(l.erros_credito)],
+      ['autenticacao', Number(l.erros_chave)],
+      ['limite', Number(l.erros_limite)],
+      ['indisponivel', Number(l.erros_indisponivel)],
+    ];
+    for (const [c, n] of pares) if (n > 0) causas[c] = n;
+    return { escopo: l.rede ? 'rede' : (l.provider ?? '?'), total: Number(l.total), erros: Number(l.erros), unidadesComErro: Number(l.unidades), causas };
+  };
+  const soma = linhas.find((l) => Number(l.rede) === 1);
+  const vazia: AmostraDaRede = { escopo: 'rede', total: 0, erros: 0, unidadesComErro: 0, causas: {} };
+  return [soma ? paraAmostra(soma) : vazia, ...linhas.filter((l) => Number(l.rede) !== 1).map(paraAmostra)];
+}
+
+/** Uma varredura da rede por vez: quem chegar enquanto uma roda espera o MESMO resultado (e não conclui «sem queda» por falta de leitura). */
+let emVoo: Promise<boolean> | null = null;
+
+/** Devolve `true` se há queda geral que cobre a REDE INTEIRA (e já avisou). */
+function varrerRede(): Promise<boolean> {
+  if (emVoo) return emVoo;
+  emVoo = (async () => {
+    try {
+      const v = quedaGeral(await medirRede());
+      if (!v.alarme) return false;
+      logger.error({ escopo: v.escopo, taxa: v.taxa, causa: v.causa }, `queda geral da IA: ${v.motivo}`);
+      const toda = v.escopo === 'rede';
+      void opsAlert({
+        chave: `queda-geral:${v.escopo}`,
+        title: toda ? 'IA FORA DO AR: queda geral' : `IA FORA DO AR no provedor ${v.escopo}`,
+        message: toda
+          ? `${v.motivo} Todas as unidades estão afetadas; a Sofia não está respondendo.`
+          : `${v.motivo} Quem usa esse provedor está afetado; as unidades em outro provedor seguem normais.`,
+      });
+      // Só a queda da REDE INTEIRA cala os avisos por unidade: com um provedor só caído, o problema de uma unidade em outro continua valendo.
+      return toda;
+    } catch (err) {
+      logger.warn({ err: String(err) }, 'varredura de queda geral falhou');
+      return false;
+    } finally {
+      emVoo = null;
+    }
+  })();
+  return emVoo;
 }
 
 async function varrer(): Promise<void> {

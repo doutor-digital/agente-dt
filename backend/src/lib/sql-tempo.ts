@@ -11,7 +11,7 @@ import { Prisma } from '@prisma/client';
  * A SAÍDA: `now() AT TIME ZONE 'utc'` devolve um `timestamp` já em UTC, do mesmo "relógio" que o Prisma grava,
  * e a comparação passa a ser timestamp × timestamp, sem conversão de fuso nenhuma — qualquer que seja o `TimeZone`
  * da sessão. Foi preferido a mudar o fuso da conexão (`options=-c timezone=UTC`) porque isso alteraria o significado
- * de tudo que hoje depende de `now()`/`CURRENT_DATE` em hora local (ver docs/estudos/fuso-agente-dt.md).
+ * de tudo que hoje depende de `now()`/`CURRENT_DATE` em hora local (ver docs/fuso-agente-dt.md).
  *
  * USE em qualquer SQL cru que compare uma coluna `timestamp` do agente_dt com "agora". NÃO use em coluna
  * `timestamptz` (aí o `now()` puro já está certo) nem em coluna gravada pelo próprio `now()` do banco
