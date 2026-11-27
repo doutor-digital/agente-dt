@@ -99,6 +99,11 @@ test('queda geral contra o banco: 1.000 erros de crédito em 39 unidades, com 4.
     data: Array.from({ length: 4000 }, () => ({ unitId: unidades[0].id, provider: 'anthropic', model: 'm', status: 'success', createdAt: minutosAtras(60) })),
   });
 
+  // 3.000 chamadas `cancelled` (prazo estourado) na mesma janela NÃO podem diluir a taxa: não são do provedor
+  await prisma.llmCall.createMany({
+    data: Array.from({ length: 3000 }, () => ({ unitId: unidades[0].id, provider: 'anthropic', model: 'm', status: 'cancelled', createdAt: minutosAtras(2) })),
+  });
+
   const amostras = await W._internos.medirRede();
   const v = W.quedaGeral(amostras);
   assert.equal(v.alarme, true, JSON.stringify(amostras));
@@ -125,6 +130,8 @@ test('a causa lida em SQL e a lida em JS concordam em cada mensagem (inclusive c
     'Request failed with status code 403',
     'error: 401 invalid x-api-key',
     '403 Forbidden',
+    'Error code: 429 - slow down',
+    'Error code: 402 - balance exhausted',
     'authentication_error: invalid x-api-key',
     '429 Rate limit reached for gpt-4o in organization',
     'Too Many Requests',

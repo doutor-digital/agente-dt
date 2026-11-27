@@ -131,6 +131,8 @@ test('causa: lê crédito, chave, limite e indisponibilidade pela mensagem do pr
   assert.equal(classificarCausa('Request failed with status code 403'), 'autenticacao');
   assert.equal(classificarCausa('403 Forbidden'), 'autenticacao');
   assert.equal(classificarCausa('429 Rate limit reached for requests'), 'limite');
+  assert.equal(classificarCausa('Error code: 429 - {"error": "slow down"}'), 'limite');
+  assert.equal(classificarCausa('Error code: 402 - balance exhausted'), 'credito');
   assert.equal(classificarCausa('529 overloaded_error'), 'indisponivel');
   assert.equal(classificarCausa('fetch failed'), 'indisponivel');
   assert.equal(classificarCausa('Unexpected token < in JSON'), 'outra');

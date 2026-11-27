@@ -229,7 +229,8 @@ export interface LinhaDaRede {
 }
 
 /**
- * UMA consulta (10 min, pelo índice de `created_at`). A causa é contada no SQL, sobre todos os erros: agrupar por texto de
+ * UMA consulta (10 min, pelo índice de `created_at`). Chamada `cancelled` (quem chamou desistiu: prazo estourado, sinal abortado) não é do
+ * provedor e fica FORA do total: contá-la diluiria a taxa justo quando o provedor trava. A causa é contada no SQL, sobre todos os erros: agrupar por texto de
  * erro e pegar os 100 maiores falhava justo com mensagem que traz um `request_id` único (cada erro vira um grupo de 1).
  */
 export function sqlDaRede(): string {
@@ -238,7 +239,7 @@ export function sqlDaRede(): string {
   return `
     select c.provider as provider,
            grouping(c.provider)::int as rede,
-           count(*)::int as total,
+           count(*) filter (where c.status <> 'cancelled')::int as total,
            count(*) filter (where c.status = 'error')::int as erros,
            count(distinct c.unit_id) filter (where c.status = 'error')::int as unidades,
            count(*) filter (where c.status = 'error' and ${f.credito})::int as erros_credito,
