@@ -78,7 +78,7 @@ const { _esquecerLeituraDoFunil, funilQuadroHandler, funilNotaHandler, semArquiv
 const { corsDoAssistente } = await import('./assistente.controller.js');
 
 function resp() {
-  const r = { codigo: 200, corpo: undefined as any, tipo: '', status(n: number) { r.codigo = n; return r; }, json(c: unknown) { r.corpo = c; return r; }, type(t: string) { r.tipo = t; return r; }, set() { return r; }, send(c: unknown) { r.corpo = c; return r; } };
+  const r = { codigo: 200, corpo: undefined as any, tipo: '', status(n: number) { r.codigo = n; return r; }, json(c: unknown) { r.corpo = c; return r; }, type(t: string) { r.tipo = t; return r; }, set() { return r; }, vary() { return r; }, send(c: unknown) { r.corpo = c; return r; } };
   return r;
 }
 const pedido = (login: string | null, query: Record<string, string> = {}, extra: Record<string, string> = {}) => {
@@ -233,7 +233,7 @@ test('menu.js com o banco PRESO: o menu não espera a lista de contas (sai no pr
   const t0 = Date.now();
   await menuFunilHandler({} as Request, asRes(r));
   // o relógio do teste é simulado só no Date (mock.timers): o prazo real é de timers, então o que vale é o menu ter saído COM o conteúdo
-  assert.equal(r.tipo, 'application/javascript');
+  assert.match(r.tipo, /^application\/javascript/);
   assert.match(String(r.corpo), /"semAntecipado":\[\]/);
   assert.doesNotThrow(() => new Function(String(r.corpo)));
   assert.ok(Date.now() - t0 < 3000, `o menu esperou ${Date.now() - t0} ms pelo banco preso`);
