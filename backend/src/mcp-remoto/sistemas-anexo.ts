@@ -292,19 +292,21 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       title: 'Sistema novo (Caixa/Financeiro/RH): anexar o arquivo de um endereço a um lançamento ou à pasta de um colaborador',
       description:
         'O SERVIDOR baixa o arquivo de um endereço e o anexa, como sistemas_anexar_envio — para quando o seu ambiente não alcança o site. Destinos (tabela): ' +
-        '"caixa_lanc" ou "fin_lanc" (comprovante de um lançamento: lancamento + tipo) ou "rh_colaborador" (documento na PASTA DO COLABORADOR no RH: id do colaborador em rh_docs, col="colaboradores", + tipo_documento em texto livre, ex.: "Advertência assinada"; ' +
-        'o servidor confere o colaborador ANTES de baixar e a resposta diz QUEM é em destino.quemE). ' +
-        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa e na pasta do colaborador e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro, e 25 segundos. ` +
+        '"caixa_lanc" ou "fin_lanc" (comprovante de um lançamento: lancamento + tipo) ou "rh_colaborador" (documento na PASTA DO COLABORADOR no RH: id do colaborador em rh_docs, col="colaboradores", + tipo_documento em texto livre, ex.: "Advertência assinada", + nome_colaborador com nome e sobrenome que a pessoa confirmou; ' +
+        'o servidor confere o colaborador e o NOME ANTES de baixar: nome que não bate com o cadastro do id = nada gravado; a resposta diz QUEM é em destino.quemE). ' +
+        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa, ${DOCUMENTO_MAX_BYTES / 1024 / 1024} MB na pasta do colaborador e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro, e 25 segundos. ` +
         'O endereço tem que levar DIRETO ao arquivo: PDF, JPG ou PNG (na pasta do colaborador também DOCX e XLSX). Uma PÁGINA (HTML) não vale: o servidor não tem navegador para imprimir a página em PDF; nesse caso peça à pessoa o arquivo e use sistemas_preparar_anexo ou sistemas_preparar_documento. ' +
         'ClickSign: use o endereço "signed" de list_envelope_documents (o PDF assinado, nunca o "ziped"); ele VENCE EM 5 MINUTOS, então chame esta ferramenta logo depois de listar. ' +
         'Grava direto (sem prévia de confirmação): confira o destino com a pessoa antes.',
       inputSchema: {
         sistema: SISTEMA,
         tabela: TABELA_URL,
-        lancamento: LANC.optional().describe('caixa_lanc e fin_lanc: id (uuid) do lançamento, o de sistemas_consultar'),
-        tipo: TIPO.optional().describe('caixa_lanc e fin_lanc: comprovante, nota_fiscal ou recibo'),
+        // folgados no schema ("" não derruba a chamada de rh_colaborador); caixa_lanc/fin_lanc conferem no código
+        lancamento: z.string().max(64).optional().describe('caixa_lanc e fin_lanc: id (uuid) do lançamento, o de sistemas_consultar'),
+        tipo: z.union([TIPO, z.literal('')]).optional().describe('caixa_lanc e fin_lanc: comprovante, nota_fiscal ou recibo'),
         id: z.string().max(64).optional().describe('rh_colaborador: o id do colaborador (rh_docs, col="colaboradores"; de sistemas_consultar)'),
         tipo_documento: z.string().max(80).optional().describe('rh_colaborador: o tipo do documento, texto livre (ex.: "Ata de reunião assinada", "Advertência assinada", "Aviso de férias assinado")'),
+        nome_colaborador: z.string().max(120).optional().describe('rh_colaborador: nome E sobrenome do colaborador, como a pessoa confirmou; o servidor confere com o cadastro do id ANTES de baixar e recusa se não bater'),
         url: z.string().url().max(2000).describe('endereço https do arquivo'),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
@@ -313,7 +315,7 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
       executar('sistemas_anexar_url', args, auditar, async () => {
         if (args.tabela === 'rh_colaborador') {
           // o colaborador é conferido ANTES do download (id que não existe não gasta rede)
-          const { d, quemE } = await conferirColaborador(ctx, quem, args.sistema, args.id, args.tipo_documento, enviadoNome);
+          const { d, quemE } = await conferirColaborador(ctx, quem, args.sistema, args.id, args.tipo_documento, enviadoNome, args.nome_colaborador);
           const b = await baixar(args.url, { dominios: deps.dominios, maxBytes: DOCUMENTO_MAX_BYTES, ...deps.download });
           const tipo = detectarTipo(b.bytes);
           if (!tipo || !ACEITOS_DOCUMENTO_RH.includes(tipo)) {
