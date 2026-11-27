@@ -751,7 +751,9 @@ function Esteira({
 }) {
   const temToken = status?.hasToken ?? false;
   const c: Record<string, number> = hist?.contagem ?? {};
-  const enviados = c.ok ?? 0;
+  const jaExistiam = (hist?.contagem.jaExistiam?.lead ?? 0) + (hist?.contagem.jaExistiam?.paciente ?? 0);
+  // "ok" inclui quem a franquia já tinha (o telefone já era lead/paciente lá): esses não foram enviados por nós
+  const enviados = Math.max(0, (c.ok ?? 0) - jaExistiam);
   const falharam = c.falhou ?? 0;
   const esperando = c.ignorado ?? 0;
   const pacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
@@ -1696,7 +1698,16 @@ function Historico({
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        <Tile label="Enviados hoje" valor={hist.hoje} cor="text-emerald-400" />
+        <Tile
+          label="Enviados hoje"
+          valor={hist.hoje}
+          cor="text-emerald-400"
+          hint={
+            hist.hojeJaExistiam && hist.hojeJaExistiam.lead + hist.hojeJaExistiam.paciente > 0
+              ? `+ ${hist.hojeJaExistiam.lead + hist.hojeJaExistiam.paciente} já estavam na franquia (${hist.hojeJaExistiam.lead} lead, ${hist.hojeJaExistiam.paciente} paciente) — não foram enviados por nós`
+              : undefined
+          }
+        />
         <Tile
           label="Falharam"
           valor={hist.contagem.falhou}

@@ -24,7 +24,7 @@ Object.defineProperty(prisma, 'spineLeadLink', {
   value: {
     findMany: async (a: { select?: unknown }) => (a.select ? links.map((l) => ({ motivo: l.motivo })) : links),
     groupBy: async () => [{ status: 'ok', _count: { _all: links.length } }],
-    count: async () => 0,
+    count: async (a: { where: { motivo?: { startsWith: string } } }) => (a.where.motivo ? links.filter((l) => (l.motivo ?? '').startsWith(a.where.motivo!.startsWith)).length : 0),
   },
   configurable: true,
 });
@@ -58,6 +58,7 @@ test('lead-links: o que já existia na franquia NÃO conta como "enviado por nó
   const r = await chamar(listLeadLinksHandler);
   assert.equal(r.hoje, 1, 'um só foi enviado por nós');
   assert.deepEqual(r.hojeJaExistiam, { lead: 2, paciente: 1 });
+  assert.deepEqual(r.contagem.jaExistiam, { lead: 2, paciente: 1 }, 'o total dos "ok" que a franquia já tinha — a tela subtrai para dizer quantos ENVIAMOS')
   assert.equal(r.conferencia.checado, true);
   assert.equal(r.conferencia.enviadosPorNos, 1);
   assert.deepEqual(r.conferencia.faltando, [], 'o lead antigo (200) não é cobrado como faltando');

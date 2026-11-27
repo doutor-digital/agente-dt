@@ -219,8 +219,7 @@ export const depsPadrao: DepsDoCadastro = {
     // Vínculo só com `spineIdClient` (carga de implantação, widget "só cadastrar", Sofia ao cadastrar paciente) é gente que
     // JÁ está na franquia como paciente: criar um lead por cima duplica.
     if (l?.spineIdLead || l?.spineIdClient) return 'na-franquia';
-    // O 1º contato achou o telefone como PACIENTE (ou como lead de OUTRO primeiro nome) e só anotou o motivo (telefone não prova que é a mesma
-    // pessoa, então não grava o id): está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
+    // O 1º contato achou o telefone como PACIENTE ou como LEAD e só anotou o motivo (telefone não prova que é a mesma pessoa, então nunca grava o id): está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
     if (l?.status === 'ok' && ((l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE) || (l.motivo ?? '').startsWith(PREFIXO_LEAD_EXISTENTE))) return 'na-franquia';
     if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
       return 'tentou-ha-pouco';

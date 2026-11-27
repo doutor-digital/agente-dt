@@ -1160,6 +1160,8 @@ export interface SpineLeadLink {
   agendadoPara?: string | null;
   status: 'ok' | 'falhou' | 'ignorado';
   motivo: string | null;
+  /** De onde veio o vínculo "ok": criado por nós, ou o telefone já era lead/paciente na franquia. `null` se não é "ok". */
+  tipo?: 'criado' | 'lead-ja-existia' | 'paciente-ja-existia' | null;
   tentativas: number;
   createdAt: string;
   updatedAt: string;
@@ -1177,8 +1179,10 @@ export interface SpineConferencia {
 export interface SpineLeadLinksResponse {
   links: SpineLeadLink[];
   total: number;
+  /** Criados por nós hoje (o que já existia na franquia vai em `hojeJaExistiam`). */
   hoje: number;
-  contagem: { ok: number; falhou: number; ignorado: number };
+  hojeJaExistiam?: { lead: number; paciente: number };
+  contagem: { ok: number; falhou: number; ignorado: number; jaExistiam?: { lead: number; paciente: number } };
   conferencia: SpineConferencia;
 }
 

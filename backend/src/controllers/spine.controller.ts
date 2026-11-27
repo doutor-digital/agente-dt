@@ -8,7 +8,7 @@ import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { apagarDoCache } from '../lib/cache-agenda.js';
 import { conferirOrigemIaSofia } from '../lib/franquia-origem-ia.js';
-import { contarPorTipoDoVinculo, tipoDoVinculo } from '../services/paciente-existente.js';
+import { contarPorTipoDoVinculo, PREFIXO_LEAD_EXISTENTE, PREFIXO_PACIENTE_EXISTENTE, tipoDoVinculo } from '../services/paciente-existente.js';
 import { lerImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
 import { estadoPrimeiroContato } from '../lib/cadastro-todo-lead.js';
 
@@ -722,10 +722,12 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   const inicioHoje = new Date();
   inicioHoje.setUTCHours(0, 0, 0, 0);
 
-  const [links, porStatus, hojeMotivos] = await Promise.all([
+  const [links, porStatus, hojeMotivos, jaExistiamLead, jaExistiamPaciente] = await Promise.all([
     prisma.spineLeadLink.findMany({ where: { unitId }, orderBy: { updatedAt: 'desc' }, take: 40 }),
     prisma.spineLeadLink.groupBy({ by: ['status'], where: { unitId }, _count: { _all: true } }),
     prisma.spineLeadLink.findMany({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } }, select: { motivo: true } }),
+    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', motivo: { startsWith: PREFIXO_LEAD_EXISTENTE } } }),
+    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', motivo: { startsWith: PREFIXO_PACIENTE_EXISTENTE } } }),
   ]);
   // "ok" hoje separado em: criado por NÓS × o telefone já era lead lá × já era paciente lá. Só o primeiro foi ENVIADO à franquia.
   const hojePorTipo = contarPorTipoDoVinculo(hojeMotivos.map((v) => v.motivo));
@@ -777,6 +779,8 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
     hojeJaExistiam: { lead: hojePorTipo['lead-ja-existia'], paciente: hojePorTipo['paciente-ja-existia'] },
     contagem: {
       ok: contagem.ok ?? 0,
+      // dos "ok", quantos NÃO foram enviados por nós: o telefone já era lead / paciente na franquia
+      jaExistiam: { lead: jaExistiamLead, paciente: jaExistiamPaciente },
       falhou: contagem.falhou ?? 0,
       ignorado: contagem.ignorado ?? 0,
     },

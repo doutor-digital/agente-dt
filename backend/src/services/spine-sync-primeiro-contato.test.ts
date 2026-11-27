@@ -19,6 +19,7 @@ import { _semearParaTeste } from '../lib/automacoes-estado.js';
 import { limparCacheEsquema } from '../lib/kommo-schema.js';
 import { syncLeadToSpine, type DepsDoPrimeiroContato } from './spine-sync.service.js';
 import { MOTIVO_SEM_CASAMENTO } from '../lib/cadastro-todo-lead.js';
+import { leadAchadoNoMotivo, leadParaConverter } from './paciente-existente.js';
 import { _limparRecentesParaTeste, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
 import type { ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
 
@@ -191,54 +192,47 @@ test('sem nome E sem telefone em lugar nenhum: não cria (nunca sem nome, nunca 
   assert.deepEqual(feitos, []);
 });
 
-test('SECRETÁRIA CADASTROU PRIMEIRO (lead, MESMO primeiro nome): NÃO cria, vincula o id do lead e grava o motivo', async () => {
+test('SECRETÁRIA CADASTROU PRIMEIRO (lead): NÃO cria, NÃO vincula nenhum id ao cartão, e guarda o id e o NOME do lead só no motivo', async () => {
   const r = await syncLeadToSpine(unidade(), 20, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' }, nomeDoLead: 'Maria da Silva' })));
   assert.equal(r.ok, true);
   assert.equal(r.jaExistia, true);
-  assert.equal(r.spineIdLead, 4321);
+  assert.equal(r.spineIdLead, undefined, 'o lead achado nunca é devolvido como o do cartão');
   assert.deepEqual(feitos, []);
   const v = vinculos[0] as { create: Record<string, unknown> };
-  assert.equal(v.create.spineIdLead, 4321);
+  assert.equal(v.create.spineIdLead, undefined);
+  assert.equal(v.create.spineIdClient, undefined);
   assert.equal(v.create.status, 'ok');
-  assert.match(String(v.create.motivo), /lead já existe na franquia \(idLead 4321/);
+  assert.deepEqual(leadAchadoNoMotivo(String(v.create.motivo)), { id: 4321, nome: 'Maria da Silva' });
 });
 
-test('MÃE E FILHA no mesmo WhatsApp: o lead da mãe NÃO vira o lead do cartão da filha (só o motivo; nenhum id)', async () => {
-  titulo = 'Joana Souza Lima'; // a filha escreve do WhatsApp da mãe
-  nomeDoContato = 'Joana Souza Lima';
+test('CASO REAL MÃE E FILHA: o cartão tem o PERFIL DA MÃE (o nome bate exatamente com o lead dela) — mesmo assim o lead da mãe NÃO é vinculado', async () => {
+  titulo = 'Lead 55555'; // a filha ainda não se apresentou: o nome do cartão vem do perfil do WhatsApp, que é o da mãe
+  nomeDoContato = 'Maria da Silva';
   const r = await syncLeadToSpine(unidade(), 60, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' }, nomeDoLead: 'Maria da Silva' })));
   assert.equal(r.ok, true);
-  assert.equal(r.jaExistia, true);
-  assert.equal(r.spineIdLead, undefined, 'não devolve o id do lead da mãe');
+  assert.equal(r.spineIdLead, undefined);
   assert.deepEqual(feitos, [], 'não cria lead por cima');
   const v = vinculos[0] as { create: Record<string, unknown> };
-  assert.equal(v.create.spineIdLead, undefined, 'o vínculo NÃO leva o id do lead da mãe (a agenda o converteria em paciente com o nome da filha)');
+  assert.equal(v.create.spineIdLead, undefined, 'o vínculo NÃO leva o id do lead da mãe: a agenda o converteria em paciente com o nome da filha');
   assert.equal(v.create.status, 'ok', 'mas fica resolvido: não reconsulta a cada 10 min');
-  assert.match(String(v.create.motivo), /lead já existe na franquia \(idLead 4321/);
-  assert.match(String(v.create.motivo), /NÃO vinculado/);
+  // e na hora de agendar, a consulta da filha não converte o lead da mãe
+  assert.equal(leadParaConverter({ spineIdLead: null, motivo: String(v.create.motivo) }, 'Joana da Silva').id, null);
 });
 
-test('lead achado e o nome do lead NÃO conferiu (franquia fora / não achou na janela): não vincula', async () => {
+test('lead achado e o nome do lead NÃO conferiu (franquia fora / não achou na janela): motivo sem nome — o lead nunca será convertido', async () => {
   const r = await syncLeadToSpine(unidade(), 61, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' }, nomeDoLead: null })));
   assert.equal(r.ok, true);
-  assert.equal(r.spineIdLead, undefined);
-  assert.equal((vinculos[0] as { create: Record<string, unknown> }).create.spineIdLead, undefined);
+  const v = vinculos[0] as { create: Record<string, unknown> };
+  assert.equal(v.create.spineIdLead, undefined);
+  assert.deepEqual(leadAchadoNoMotivo(String(v.create.motivo)), { id: 4321, nome: null });
+  assert.equal(leadParaConverter({ spineIdLead: null, motivo: String(v.create.motivo) }, 'Maria da Silva').id, null);
 });
 
-test('lead achado com nome PROVISÓRIO no cartão (sem nome do paciente): não dá para comparar — não vincula', async () => {
-  titulo = 'Lead 22261987';
-  nomeDoContato = 'Ocupado';
-  const r = await syncLeadToSpine(unidade(), 62, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' }, nomeDoLead: 'Paciente WhatsApp (final 7777)' })));
-  assert.equal(r.ok, true);
-  assert.equal(r.spineIdLead, undefined);
-  assert.equal((vinculos[0] as { create: Record<string, unknown> }).create.spineIdLead, undefined);
-});
-
-test('o vínculo que já sabe o lead/paciente NÃO é reescrito pelo 1º contato (nem motivo, nem status, nem id) — e o resultado diz o id que FICOU, não o que quase foi', async () => {
+test('o vínculo que já sabe o lead/paciente NÃO é reescrito pelo 1º contato (nem motivo, nem status, nem id)', async () => {
   vinculoAtual = { spineIdLead: 99, spineIdClient: null };
   const r = await syncLeadToSpine(unidade(), 63, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } })));
   assert.deepEqual((vinculos[0] as { update: unknown }).update, {});
-  assert.equal(r.spineIdLead, 99);
+  assert.equal(r.spineIdLead, undefined);
 });
 
 test('SECRETÁRIA CADASTROU PRIMEIRO (paciente): NÃO cria, e o id do paciente fica só no MOTIVO (telefone não prova que é a mesma pessoa)', async () => {
@@ -340,30 +334,18 @@ test('SEM a chave, quem agenda (sem soLead): o lead ainda vira paciente na mesma
   assert.equal(leadsCriados[0].idSource, 23, 'origem de marketing (Instagram) como era, com spine_ia_source_leads desligado');
 });
 
-test('2º cartão do MESMO número minutos depois: acha o lead que acabamos de criar e NÃO cria outro (e a memória do NOME evita ir à franquia)', async () => {
-  // o índice e os recentes (falsos) continuam sem saber do lead; quem sabe é a memória do que acabamos de criar
+test('2º cartão do MESMO número minutos depois: acha o lead que acabamos de criar e NÃO cria outro — e também NÃO o vincula ao 2º cartão', async () => {
+  // o índice e os recentes (falsos) continuam sem saber do lead; quem sabe é a memória do que acabamos de criar (com o NOME dele)
   const d = deps({ achado: { tipo: 'nao' } });
-  // sem `nomeDoLead` de propósito: o nome vem da memória do que criamos, e o "nome do lead" da franquia nem é consultado
   delete (d as { nomeDoLead?: unknown }).nomeDoLead;
   assert.equal((await syncLeadToSpine(unidade(), 50, PC(d))).ok, true);
   const segundo = await syncLeadToSpine(unidade(), 51, PC(d));
   assert.equal(segundo.ok, true);
   assert.equal(segundo.jaExistia, true);
-  assert.equal(segundo.spineIdLead, 777, 'mesma pessoa (Maria): vincula');
-  assert.deepEqual(feitos, ['createLead'], 'um lead só');
-});
-
-test('2º cartão do mesmo número mas OUTRA pessoa (a filha): acha o lead da mãe que acabamos de criar, não cria outro e NÃO o adota', async () => {
-  const d = deps({ achado: { tipo: 'nao' } });
-  delete (d as { nomeDoLead?: unknown }).nomeDoLead;
-  assert.equal((await syncLeadToSpine(unidade(), 70, PC(d))).ok, true); // Maria Souza Lima
-  titulo = 'Joana Souza Lima';
-  nomeDoContato = 'Joana Souza Lima';
-  const segundo = await syncLeadToSpine(unidade(), 71, PC(d));
-  assert.equal(segundo.ok, true);
-  assert.equal(segundo.jaExistia, true);
   assert.equal(segundo.spineIdLead, undefined);
   assert.deepEqual(feitos, ['createLead'], 'um lead só');
+  const v = vinculos[vinculos.length - 1] as { create: Record<string, unknown> };
+  assert.deepEqual(leadAchadoNoMotivo(String(v.create.motivo)), { id: 777, nome: 'Maria Souza Lima' }, 'o nome vem da memória, sem ir à franquia');
 });
 
 test('ÍNDICE QUE NÃO VAI CHEGAR (agenda desligada / carga cortada): para ANTES de ler o Kommo, sem pedir nova tentativa, e não cria', async () => {
@@ -377,12 +359,12 @@ test('ÍNDICE QUE NÃO VAI CHEGAR (agenda desligada / carga cortada): para ANTES
   assert.equal(d.buscas, 0);
 });
 
-test('lead achado (mesmo nome): o vínculo que já existia como "falhou" passa a "ok" (senão o agendamento duplicaria o lead)', async () => {
+test('lead achado: o vínculo que já existia como "falhou" passa a "ok" (para de reconsultar), sem id', async () => {
   const d = deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } });
   await syncLeadToSpine(unidade(), 53, PC(d));
   const v = vinculos[0] as { update: Record<string, unknown> };
   assert.equal(v.update.status, 'ok');
-  assert.equal(v.update.spineIdLead, 4321);
+  assert.equal(v.update.spineIdLead, undefined);
 });
 
 test('sem telefone nenhum, não pede retentar (causa permanente: vale a espera de 10 min)', async () => {
