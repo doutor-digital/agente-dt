@@ -198,7 +198,7 @@ export async function conferirColaborador(
   if (tipoDocumento.length < 2) throw new ErroDeEntrada('diga o tipo do documento em tipo_documento (ex.: "Advertência assinada", "Ata de reunião", "Aviso de férias assinado")');
   // a gravação é DIRETA: o nome que a pessoa confirmou é conferido com o do id ANTES de baixar (id errado = advertência na pasta de outra pessoa)
   const palavrasInformadas = palavrasDoNome(nomeInformado);
-  if (palavrasInformadas.length < 2) {
+  if (new Set(palavrasInformadas).size < 2) {
     throw new ErroDeEntrada('rh_colaborador precisa de nome_colaborador com nome E sobrenome do colaborador (como a pessoa confirmou): ele é conferido com o cadastro do id antes de gravar');
   }
   const c = resolverSistema(ctx, sistema);
@@ -213,26 +213,33 @@ export async function conferirColaborador(
   if (!nomeConfere(palavrasInformadas, palavrasDoNome(doCadastro))) {
     throw new ErroDeEntrada(
       doCadastro
-        ? `o id ${id} é de «${doCadastro}», não de «${nomeInformado}»: nada foi baixado nem gravado. Confira o id com sistemas_consultar e com a pessoa.`
+        ? // SEM nomes na mensagem: o texto do erro vai para a auditoria do conector (e o modelo não copia o nome do cadastro para tentar de novo)
+          `o nome informado em nome_colaborador não bate com o cadastro do id ${id}: nada foi baixado nem gravado. Confira o id com sistemas_consultar e o nome com a pessoa.`
         : 'o servidor não disse o nome do colaborador desse id: sem conferir o nome, não gravo. Nada foi baixado.',
     );
   }
   return { d, quemE };
 }
 
-/** palavras do nome, sem acento e sem as ligações curtas (da, de, do, dos, e) */
+/** ligações que não contam na conferência do nome */
+const LIGACOES = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
+
+/** palavras do nome, sem acento, sem caixa e sem as ligações (da, de, do, das, dos, e) */
 function palavrasDoNome(nome: string): string[] {
   return nome
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .split(/[^a-z]+/)
-    .filter((p) => p.length >= 3);
+    .filter((p) => p.length > 0 && !LIGACOES.has(p));
 }
 
-/** o 1º nome é IGUAL e cada palavra informada existe INTEIRA no nome do cadastro ("Maria Silva" não confere com "Maria Costa") */
+/**
+ * o 1º nome é IGUAL, há pelo menos 2 palavras DIFERENTES ("Maria Maria" não vale como nome e sobrenome) e cada palavra informada
+ * existe INTEIRA no nome do cadastro ("Maria Silva" não confere com "Maria Costa")
+ */
 export function nomeConfere(informado: readonly string[], cadastro: readonly string[]): boolean {
-  if (informado.length < 2 || cadastro.length === 0 || informado[0] !== cadastro[0]) return false;
+  if (new Set(informado).size < 2 || cadastro.length === 0 || informado[0] !== cadastro[0]) return false;
   return informado.every((p) => cadastro.includes(p));
 }
 

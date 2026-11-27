@@ -379,7 +379,11 @@ test('anexar_url rh_colaborador: o NOME informado tem que bater com o cadastro d
     const k = await cliente(a);
     const base = { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Advertência assinada', url: URL_ASSINADO };
     const outro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora Costa' });
-    assert.ok(outro.erro && /é de «Colaboradora Exemplo da Silva», não de «Colaboradora Costa»/.test(outro.texto), outro.texto);
+    assert.ok(outro.erro && /não bate com o cadastro do id c-123/.test(outro.texto), outro.texto);
+    assert.ok(!/Exemplo|Costa/.test(outro.texto), 'o erro não traz nome nenhum');
+    assert.ok(!/Exemplo|Costa|Silva/.test(JSON.stringify(a.auditoria)), 'nem a auditoria (que guarda o texto do erro)');
+    const repetido = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora Colaboradora' });
+    assert.ok(repetido.erro && /nome E sobrenome/.test(repetido.texto), repetido.texto);
     const soPrimeiro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora' });
     assert.ok(soPrimeiro.erro && /nome E sobrenome/.test(soPrimeiro.texto), soPrimeiro.texto);
     const semNome = await k.chamar('sistemas_anexar_url', base);
@@ -405,7 +409,9 @@ test('nomeConfere: 1º nome igual e cada palavra inteira no cadastro', () => {
   const cad = ['maria', 'heloisa', 'sabino', 'costa'];
   assert.ok(nomeConfere(['maria', 'costa'], cad));
   assert.ok(nomeConfere(['maria', 'heloisa', 'sabino'], cad));
-  for (const inf of [['maria'], ['heloisa', 'costa'], ['maria', 'silva'], ['mar', 'costa'], ['maria', 'cost']]) assert.ok(!nomeConfere(inf, cad), inf.join(' '));
+  for (const inf of [['maria'], ['maria', 'maria'], ['heloisa', 'costa'], ['maria', 'silva'], ['mar', 'costa'], ['maria', 'cost']]) assert.ok(!nomeConfere(inf, cad), inf.join(' '));
+  // ligações não contam dos dois lados: "Maria dos Santos" confere com "Maria Santos"
+  assert.ok(nomeConfere(['maria', 'santos'], ['maria', 'santos']));
   assert.ok(!nomeConfere(['maria', 'costa'], []));
 });
 
