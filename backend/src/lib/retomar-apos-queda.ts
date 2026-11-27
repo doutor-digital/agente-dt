@@ -151,6 +151,8 @@ export interface ResultadoDaConversa {
   /** `simulado` = nada foi gravado (sem `--aplicar`); `feito`; `nada` = fechada sem agir (não há o que gravar); `falhou` (a tarefa/retomada deu erro); `adiado` (o banco não confirmou — rodar de novo). */
   efeito: Efeito;
   detalhe?: string;
+  /** Os traces que voltaram ao coalescer (a execução espera o turno deles terminar e confere o que a IA disse). */
+  retomados?: string[];
 }
 
 export interface DepsDaRetomada {
@@ -256,27 +258,33 @@ export async function retomarConversa(deps: DepsDaRetomada, c: CandidataDaQueda,
     // Pegou a vez? Uma vez só, em qualquer processo. Conferida DE NOVO antes: a reivindicação não se devolve por pouco.
     if (await deps.conversaAndou(c.conversaId, c.quedaEm)) return fechar('conversa_andou_depois_da_queda');
     const vez = await deps.reivindicar(c.conversaId);
-    if (vez === 'perdeu') return fechar('ja_retomada_antes');
+    // Já retomada antes e ela AINDA termina na frase de queda (a retomada anterior caiu, ou a IA voltou a falhar): fechar em silêncio deixaria
+    // o paciente sem ninguém para sempre. Quem sabe é a recepção.
+    if (vez === 'perdeu') return tarefa('ja_retomada_antes_e_segue_sem_resposta');
     if (vez === 'incerto') return { ...base, acao: 'reinjetar', motivo: 'banco_nao_confirmou_a_reivindicacao', efeito: 'adiado' };
 
     deps.plantarAviso(unit, c.leadId);
     // Da mais nova para a mais velha: o coalescer usa a execução (contexto do chat) de quem abre o burst, e a mais nova é a que vale;
     // ele mesmo reordena por chegada, então o turno lê as mensagens na ordem em que o paciente as escreveu.
     let falhou: string | null = null;
+    const retomados: string[] = [];
     for (const { t, ctx } of [...vao].reverse()) {
       try {
         const r = await deps.agendar(t, unit, ctx);
-        if (r !== 'retomado') falhou = r;
+        if (r === 'retomado') retomados.push(t.traceId);
+        else falhou = r;
       } catch (err) {
         falhou = String(err);
       }
     }
     if (falhou) {
-      // Parte pode ter ido: a conversa NÃO volta a ser retomada (a reivindicação fica), a recepção fica sabendo.
+      // Nada voltou: devolve a vez (a próxima rodada pode tentar) e a recepção fica sabendo. Parte voltou: a reivindicação fica (não se
+      // retoma duas vezes), o turno que partiu segue e é esperado, e a recepção fica sabendo que parte pode ter sido respondida.
+      if (retomados.length === 0) await deps.liberarReivindicacao(c.conversaId).catch(() => undefined);
       const t = await tarefa(`falha_ao_retomar:${falhou}`);
-      return { ...t, detalhe: `${t.detalhe ?? ''} (parte das mensagens pode ter voltado para a IA)`.trim() };
+      return retomados.length === 0 ? t : { ...t, retomados, detalhe: `${t.detalhe ?? ''} (parte das mensagens voltou para a IA)`.trim() };
     }
-    return { ...base, acao: 'reinjetar', motivo: 'sem_resposta_da_equipe_nada_pausa_dentro_do_horario', efeito: simulado, detalhe: `${vao.length} mensagem(ns) voltaram em 1 turno` };
+    return { ...base, acao: 'reinjetar', motivo: 'sem_resposta_da_equipe_nada_pausa_dentro_do_horario', efeito: simulado, detalhe: `${vao.length} mensagem(ns) voltaram em 1 turno`, retomados };
   } catch (err) {
     // Conversa com problema não derruba as outras.
     return { ...base, acao: 'tarefa', motivo: 'erro_inesperado', efeito: 'falhou', detalhe: String(err) };
@@ -338,13 +346,17 @@ export async function executar(
       if (!c) return;
       const inicio = deps.agora();
       let r = await retomarConversa(deps, c, opcoes.aplicar);
-      if (opcoes.aplicar && r.acao === 'reinjetar' && r.efeito === 'feito') {
-        const terminou = await deps.esperarTurno(c.pedidos.map((p) => p.traceId));
+      if (opcoes.aplicar && r.retomados?.length) {
+        const terminou = await deps.esperarTurno(r.retomados);
         if (await deps.respondeuComQueda(c.conversaId, inicio)) {
+          // O modelo ainda está fora do ar: para tudo, e devolve a vez desta conversa para a próxima rodada (senão ela nunca mais seria tentada).
           interrompida = true;
-          r = { ...r, efeito: 'falhou', detalhe: 'a IA respondeu com a frase de queda DE NOVO — execução interrompida' };
+          await deps.liberarReivindicacao(c.conversaId).catch(() => undefined);
+          r = { ...r, efeito: 'falhou', detalhe: 'a IA respondeu com a frase de queda DE NOVO — execução interrompida (a vez desta conversa foi devolvida)' };
         } else if (!terminou) {
-          r = { ...r, detalhe: `${r.detalhe ?? ''} (o turno não terminou em ${Math.round(ESPERA_MAX_DO_TURNO_MS / 60_000)} min; confira o trace)`.trim() };
+          // Turno que não termina em 5 min = modelo lento ou travado: não dá para saber o que vai dizer. Não segue para as próximas.
+          interrompida = true;
+          r = { ...r, efeito: 'falhou', detalhe: `o turno não terminou em ${Math.round(ESPERA_MAX_DO_TURNO_MS / 60_000)} min — execução interrompida; confira o trace e a conversa antes de rodar de novo` };
         }
       }
       resultados.push(r);

@@ -12,7 +12,7 @@
  * Opções:
  *   --desde / --ate   janela da FRASE DE QUEDA (padrão: 26/11/2026 21:00 UTC até agora)
  *   --unidade         só estas unidades (slugs separados por vírgula)
- *   --paralelo        conversas ao mesmo tempo com `--aplicar` (padrão 3; cada uma espera o seu turno terminar)
+ *   --paralelo        conversas ao mesmo tempo com `--aplicar` (padrão 2; cada uma espera o seu turno terminar)
  *   --aplicar         age de verdade. Antes confere que o modelo ESTÁ de pé (llm_calls dos últimos 10 min: com chamada e sem erro);
  *                     `--ignorar-saude` pula essa conferência (só se você mesmo conferiu).
  *
@@ -56,6 +56,9 @@ import {
   type DepsDaExecucao,
 } from '../lib/retomar-apos-queda.js';
 
+/** Motivos de fechar SEM tarefa em que o paciente continua sem resposta de verdade (o contrário de `equipe_respondeu…`, `conversa_andou…`). */
+const SEGUEM_SEM_RESPOSTA = new Set(['ia_pausada', 'etapa_fechada', 'sem_mensagem_do_paciente_ligada_a_queda', 'unidade_ou_lead_invalido']);
+
 const DESDE_PADRAO = '2026-11-26T21:00:00Z';
 /** Depois do último turno, o que ele deixou rodando em segundo plano ainda precisa terminar antes do `process.exit`. */
 const GRACA_APOS_OS_TURNOS_MS = 20_000;
@@ -82,7 +85,7 @@ export function lerArgs(argv: string[], agora: Date = new Date()): ArgsDoScript 
     if (Number.isNaN(d.getTime())) throw new Error(`${nome}: data inválida "${v}" (use 2026-11-26T21:00:00Z)`);
     return d;
   };
-  const paralelo = Number(valor('--paralelo') ?? 3);
+  const paralelo = Number(valor('--paralelo') ?? 2);
   if (!Number.isInteger(paralelo) || paralelo < 1 || paralelo > 8) throw new Error('--paralelo: um inteiro de 1 a 8');
   return {
     aplicar: argv.includes('--aplicar'),
@@ -184,14 +187,18 @@ export function depsDeProducaoDaQueda(): DepsDaExecucao {
   const base = depsDeProducao(ganchosDeRecuperacao);
   const depsRetomada = {
     ...DEPS_RETOMADA_PADRAO,
+    // Não bloqueia o agendamento: as mensagens de uma conversa precisam entrar no coalescer coladas (a janela é de 8 s), e o passo é só rastro.
     async registrar(t: TurnoPerdido, unit: Unit, leadId: number): Promise<void> {
       const recorder = new TraceRecorder(t.traceId, unit.id);
-      await syncRecorderSequence(recorder, t.traceId);
-      await recorder.step({
-        kind: 'THINKING',
-        title: '♻ Retomado depois da queda da IA: o paciente recebeu o aviso de instabilidade e ficou sem resposta; esta mensagem volta para a IA (uma vez só)',
-        payload: { leadId, retomadoAposQueda: true },
-      });
+      void syncRecorderSequence(recorder, t.traceId)
+        .then(() =>
+          recorder.step({
+            kind: 'THINKING',
+            title: '♻ Retomado depois da queda da IA: o paciente recebeu o aviso de instabilidade e ficou sem resposta; esta mensagem volta para a IA (uma vez só)',
+            payload: { leadId, retomadoAposQueda: true },
+          }),
+        )
+        .catch((err) => logger.warn({ err: String(err), traceId: t.traceId }, 'retomar-apos-queda: não gravei o passo de retomada (o turno segue)'));
     },
   };
   return {
@@ -268,6 +275,11 @@ async function main(): Promise<void> {
   for (const [k, n] of Object.entries(resumo.porMotivo).sort((x, y) => y[1] - x[1])) console.log(`  ${String(n).padStart(3)}  ${k}`);
   const ignoradas = candidatas.reduce((s, c) => s + c.ignoradas, 0);
   if (ignoradas) console.log(`mensagens do paciente no trecho que não se ligam a nenhuma queda (ficaram de fora): ${ignoradas}`);
+  const seguemSemResposta = resumo.resultados.filter((r) => r.acao === 'fechar' && SEGUEM_SEM_RESPOSTA.has(r.motivo));
+  if (seguemSemResposta.length) {
+    console.log(`\nFECHADAS SEM AÇÃO que ainda terminam na frase de queda (a equipe é quem atende; confira se alguém está olhando): ${seguemSemResposta.length}`);
+    for (const r of seguemSemResposta) console.log(`  ${linhaDoResultado(r)}`);
+  }
   const falhas = resumo.resultados.filter((r) => r.efeito === 'falhou' || r.efeito === 'adiado');
   if (falhas.length) {
     console.log(`\nATENÇÃO — ${falhas.length} sem desfecho (falhou/adiado); rode de novo (as já feitas não se repetem):`);

@@ -10,7 +10,7 @@ test('padrão = SIMULAÇÃO: sem --aplicar nada age; janela de 26/11 21h UTC at�
   assert.equal(a.desde.toISOString(), '2026-11-26T21:00:00.000Z');
   assert.equal(a.ate.toISOString(), AGORA.toISOString());
   assert.deepEqual(a.unidades, []);
-  assert.equal(a.paralelo, 3);
+  assert.equal(a.paralelo, 2);
   assert.equal(a.ignorarSaude, false);
 });
 

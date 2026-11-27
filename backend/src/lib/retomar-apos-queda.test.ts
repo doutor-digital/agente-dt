@@ -368,11 +368,12 @@ test('com --aplicar: reivindica UMA vez, planta o aviso e volta as mensagens da 
   assert.deepEqual(w.agendados, ['t3', 't2', 't1']);
 });
 
-test('a reivindicação já era de outro (já retomada) → fecha, não reinjeta de novo', async () => {
+test('a reivindicação já era de outro (já retomada) e a conversa AINDA termina na queda → TAREFA, nunca silêncio', async () => {
   const { w, deps } = mundo({ vez: 'perdeu' });
   const r = await retomarConversa(deps, candidata(), true);
-  assert.deepEqual([r.acao, r.motivo], ['fechar', 'ja_retomada_antes']);
+  assert.deepEqual([r.acao, r.motivo], ['tarefa', 'ja_retomada_antes_e_segue_sem_resposta']);
   assert.deepEqual([w.agendados, w.avisos], [[], []]);
+  assert.deepEqual(w.tarefas, ['t1']);
 });
 
 test('o banco não confirmou a reivindicação → ADIADO: não reinjeta (resposta em dobro é pior que atraso)', async () => {
@@ -382,12 +383,29 @@ test('o banco não confirmou a reivindicação → ADIADO: não reinjeta (respos
   assert.deepEqual([w.agendados, w.avisos], [[], []]);
 });
 
-test('burst cheio ou falha ao agendar → TAREFA para a recepção (a reivindicação fica gasta)', async () => {
+test('NADA voltou (burst cheio, falha ao agendar) → TAREFA e a vez é DEVOLVIDA (a próxima rodada pode tentar)', async () => {
   const { w, deps } = mundo({ agendarResultado: () => 'tarefa:burst_cheio' });
+  const liberadas: string[] = [];
+  deps.liberarReivindicacao = async (id) => void liberadas.push(id);
   const r = await retomarConversa(deps, candidata(), true);
   assert.equal(r.acao, 'tarefa');
   assert.match(r.motivo, /^falha_ao_retomar:/);
   assert.deepEqual(w.tarefas, ['t1']);
+  assert.deepEqual(liberadas, ['conv1']);
+});
+
+test('PARTE voltou e parte falhou → a vez fica gasta, a tarefa avisa, e o turno que partiu é esperado e conferido pela execução', async () => {
+  const { w, deps } = mundo({ agendarResultado: (t) => (t.traceId === 't1' ? 'tarefa:burst_cheio' : 'retomado') });
+  const liberadas: string[] = [];
+  deps.liberarReivindicacao = async (id) => void liberadas.push(id);
+  const esperadas: string[][] = [];
+  deps.esperarTurno = async (ids) => (esperadas.push(ids), true);
+  const resumo = await executar(deps, [candidata({ pedidos: [pedido('t1', 0), pedido('t2', 0.1)], tracesDaQueda: ['t1', 't2'] })], { aplicar: true, paralelo: 1 });
+  assert.equal(resumo.resultados[0]!.acao, 'tarefa');
+  assert.deepEqual(liberadas, []);
+  assert.deepEqual(esperadas, [['t2']]);
+  assert.match(resumo.resultados[0]!.detalhe ?? '', /parte das mensagens voltou/);
+  assert.deepEqual(w.tarefas, ['t2']);
 });
 
 test('a tarefa que o Kommo recusa é FALHOU (aparece no relatório, não some)', async () => {
@@ -444,6 +462,25 @@ test('executar --aplicar: se a IA voltar a mandar a frase de queda, PARA — as 
   assert.deepEqual(w.reivindicados, ['a']);
 });
 
+test('executar --aplicar: a conversa em que a queda voltou tem a vez DEVOLVIDA (senão a próxima rodada a fecharia em silêncio)', async () => {
+  const { deps } = mundo();
+  const liberadas: string[] = [];
+  deps.liberarReivindicacao = async (id) => void liberadas.push(id);
+  deps.respondeuComQueda = async () => true;
+  await executar(deps, [candidata({ conversaId: 'a' }), candidata({ conversaId: 'b' })], { aplicar: true, paralelo: 1 });
+  assert.deepEqual(liberadas, ['a']);
+});
+
+test('executar --aplicar: turno que não termina no prazo INTERROMPE (não dá para saber o que ele vai dizer) e não segue para as próximas', async () => {
+  const { w, deps } = mundo();
+  deps.esperarTurno = async () => false;
+  const resumo = await executar(deps, ['a', 'b', 'c'].map((id) => candidata({ conversaId: id })), { aplicar: true, paralelo: 1 });
+  assert.equal(resumo.interrompida, true);
+  assert.equal(resumo.resultados.length, 1);
+  assert.match(resumo.resultados[0]!.detalhe ?? '', /não terminou/);
+  assert.deepEqual(w.reivindicados, ['a']);
+});
+
 test('executar --aplicar: espera o turno terminar de cada conversa retomada', async () => {
   const { deps } = mundo();
   const esperadas: string[][] = [];
@@ -452,7 +489,7 @@ test('executar --aplicar: espera o turno terminar de cada conversa retomada', as
     return true;
   };
   await executar(deps, [candidata({ conversaId: 'a', pedidos: [pedido('t1', 0), pedido('t2', 0.1)] })], { aplicar: true, paralelo: 1 });
-  assert.deepEqual(esperadas, [['t1', 't2']]);
+  assert.deepEqual(esperadas.map((e) => [...e].sort()), [['t1', 't2']]);
 });
 
 test('resumir: conta por ação e motivo', () => {
