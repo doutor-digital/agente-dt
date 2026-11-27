@@ -393,7 +393,7 @@ export function impedimentoDoIndice(
     return 'a agenda da franquia está desligada (spine_enabled) e a carga do índice de telefones só roda com ela ligada — sem índice o cadastro no 1º contato nunca confere duplicado, então não cria';
   }
   if (status?.resultado === 'cortado' && !indiceFresco(status, agora)) {
-    return `a última carga do índice de telefones foi CORTADA pelo teto (a base da franquia é maior que ${MAX_PAGINAS_PACIENTES} páginas de pacientes ou uma janela de leads passou de ${MAX_PAGINAS_POR_JANELA}) e não há índice inteiro — o cadastro no 1º contato não cria até alguém ajustar os tetos`;
+    return 'a última carga do índice de telefones foi CORTADA pelo teto (de páginas de pacientes, de páginas de uma janela de leads ou de chamadas por carga) e não há índice inteiro — o cadastro no 1º contato não cria até alguém ajustar os tetos; o motivo exato está em franquia_indice_status.erro';
   }
   return null;
 }

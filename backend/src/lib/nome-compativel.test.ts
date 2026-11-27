@@ -23,3 +23,11 @@ test('sem nome, provisório ou curto demais: nunca casa (nem consigo mesmo)', ()
   assert.equal(nomesCompativeis('A. Silva', 'A. Souza'), false);
   assert.equal(primeiroNomeNormalizado('123 456'), null);
 });
+
+test('tratamento e parentesco não são nome: "Dona Maria" × "Dona Ana" NÃO casam, e "Dona Maria" casa com "Maria"', () => {
+  assert.equal(nomesCompativeis('Dona Maria', 'Dona Ana'), false);
+  assert.equal(nomesCompativeis('Dr. João Souza', 'Dra. Joana Souza'), false);
+  assert.equal(nomesCompativeis('Mãe', 'Mãe da Ana'), false, 'só parentesco: não há nome para comparar');
+  assert.equal(nomesCompativeis('Dona Maria', 'Maria da Silva'), true);
+  assert.equal(primeiroNomeNormalizado('Sra. Ana'), 'ana');
+});

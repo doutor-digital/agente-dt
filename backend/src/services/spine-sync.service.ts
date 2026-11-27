@@ -563,10 +563,12 @@ async function vincularAoQueJaExiste(
     : ' — NÃO vinculado ao cartão (o primeiro nome é outro ou não deu para conferir; o telefone sozinho não prova a pessoa)';
   const motivo = `${ehPaciente ? PREFIXO_PACIENTE_EXISTENTE : PREFIXO_LEAD_EXISTENTE} (${ehPaciente ? 'idClient' : 'idLead'} ${achado.id}, achado pelo telefone ${onde}): não criei lead${sufixo}`;
   const idDoLead = adotar ? { spineIdLead: achado.id } : {};
+  let idVinculado: number | null = adotar ? achado.id : null;
   try {
     const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdLead: true, spineIdClient: true } });
     // vínculo que já sabe o lead/paciente (a Sofia achou, marcou ou convertida) não é trocado nem renomeado: o que está nele é desse paciente
     const jaSabe = !!(atual?.spineIdLead || atual?.spineIdClient);
+    if (jaSabe) idVinculado = atual?.spineIdLead ?? null; // o que ficou gravado, não o que quase foi
     await prisma.spineLeadLink.upsert({
       where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
       create: { unitId: unit.id, kommoLeadId, motivo, status: 'ok', ...idDoLead },
@@ -575,7 +577,7 @@ async function vincularAoQueJaExiste(
   } catch (err) {
     logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui gravar o vínculo com o que já existe na franquia');
   }
-  return { motivo, spineIdLead: adotar ? achado.id : null };
+  return { motivo, spineIdLead: idVinculado };
 }
 
 /**
@@ -650,12 +652,6 @@ export async function syncLeadToSpine(
   if (opcoes.soLead && !pc && estadoCasamentoJornada(unit.slug) !== 'ligado') {
     return { ok: false, motivo: MOTIVO_SEM_CASAMENTO };
   }
-  // 1º contato: se o índice de telefones desta unidade não vai chegar (agenda desligada, carga cortada), cada mensagem leria o Kommo para
-  // acabar em "não deu para conferir" e zero lead. Avisa (WARN, uma vez por período) e para ANTES de tocar no Kommo.
-  if (pc) {
-    const impedimento = await (opcoes.deps?.impedimentoDoIndice ?? conferirImpedimentoDoIndice)(unit);
-    if (impedimento) return { ok: false, motivo: `índice de telefones da franquia indisponível: ${impedimento}` };
-  }
   // Conta com duas cidades e o token de uma só (Petrópolis × Caxias): cartão de outra cidade ou sem cidade não entra.
   const trava = await travaDaUnidadeDeAtendimento(unit, kommoLeadId);
   if (trava) return { ok: false, motivo: trava.motivo };
@@ -664,6 +660,14 @@ export async function syncLeadToSpine(
   const cartao = await conferirCartaoDestaUnidade(unit, kommoLeadId);
   if (!cartao.ok) return { ok: false, motivo: cartao.motivo };
   unit = cartao.unit;
+
+  // 1º contato: se o índice de telefones DESTA franquia (a da unidade do cartão, já resolvida acima) não vai chegar (agenda desligada, carga
+  // cortada), cada mensagem leria o Kommo para acabar em "não deu para conferir" e zero lead. Avisa (WARN, uma vez por período) e para ANTES de
+  // ler o contato no Kommo (`prepararLead`).
+  if (pc) {
+    const impedimento = await (opcoes.deps?.impedimentoDoIndice ?? conferirImpedimentoDoIndice)(unit);
+    if (impedimento) return { ok: false, motivo: `índice de telefones da franquia indisponível: ${impedimento}` };
+  }
 
   const preparo = await prepararLead(unit, kommoLeadId, pc);
   if (preparo.etapa === 'ja-enviado') {

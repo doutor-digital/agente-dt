@@ -10,7 +10,7 @@ import { apagarDoCache } from '../lib/cache-agenda.js';
 import { conferirOrigemIaSofia } from '../lib/franquia-origem-ia.js';
 import { contarPorTipoDoVinculo, tipoDoVinculo } from '../services/paciente-existente.js';
 import { lerImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
-import { modoPrimeiroContato } from '../lib/cadastro-todo-lead.js';
+import { estadoPrimeiroContato } from '../lib/cadastro-todo-lead.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -684,7 +684,7 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
   }
 
   // O índice de telefones (a busca de duplicado do cadastro no 1º contato): sem ele o lead não é criado, e nada falha — só não sai.
-  if (unit.spineToken && modoPrimeiroContato(unit.slug).vale) {
+  if (unit.spineToken && estadoPrimeiroContato(unit.slug) !== 'desligado') {
     const impedimento = await lerImpedimentoDoIndice(unit);
     pecas.push({
       id: 'indice-telefones',
@@ -769,7 +769,8 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   }
 
   res.json({
-    links: links.map((l) => ({ ...l, tipo: tipoDoVinculo(l.motivo) })),
+    // `tipo` só faz sentido para o que deu certo; o motivo de um "falhou"/"ignorado" é o erro, não de onde veio o cadastro
+    links: links.map((l) => ({ ...l, tipo: l.status === 'ok' ? tipoDoVinculo(l.motivo) : null })),
     total: links.length,
     // `hoje` = criados por nós hoje (como sempre foi o sentido); os que já existiam vão à parte
     hoje: hojePorTipo.criado,

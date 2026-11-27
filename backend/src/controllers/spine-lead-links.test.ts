@@ -64,6 +64,12 @@ test('lead-links: o que já existia na franquia NÃO conta como "enviado por nó
   assert.deepEqual(r.links.map((l: { tipo: string }) => l.tipo), ['criado', 'lead-ja-existia', 'lead-ja-existia', 'paciente-ja-existia']);
 });
 
+test('lead-links: o que FALHOU/foi ignorado não ganha "tipo" (o motivo dele é o erro, não de onde veio o cadastro)', async () => {
+  links = [link(1, { status: 'falhou', motivo: 'a franquia devolveu 500' }), link(2, { status: 'ignorado', motivo: 'falta o sobrenome' })];
+  const r = await chamar(listLeadLinksHandler);
+  assert.deepEqual(r.links.map((l: { tipo: unknown }) => l.tipo), [null, null]);
+});
+
 test('lead-links: o lead que NÓS criamos e sumiu da franquia continua aparecendo como "faltando"', async () => {
   links = [link(1, { spineIdLead: 100 }), link(2, { spineIdLead: 101 })];
   leadsLa = [100];
@@ -87,6 +93,16 @@ test('prontidão: agenda ligada e índice sem problema = item ok; unidade fora d
   assert.equal(ok.ok, true);
   _semearParaTeste([]);
   assert.equal((await chamar(prontidaoHandler)).pecas.find((p: { id: string }) => p.id === 'indice-telefones'), undefined);
+});
+
+test('prontidão: as DUAS chaves em "só no papel" também mostram o item (o índice tem de estar pronto no dia de ligar)', async () => {
+  _semearParaTeste([
+    { slug: 'doutor-hernia-bebedouro', automacao: 'cadastro-lead-primeiro-contato', estado: 'seco' },
+    { slug: 'doutor-hernia-bebedouro', automacao: 'cadastro-todo-lead', estado: 'seco' },
+  ]);
+  unidade = { ...unidade, spineEnabled: false };
+  const peca = (await chamar(prontidaoHandler)).pecas.find((p: { id: string }) => p.id === 'indice-telefones');
+  assert.equal(peca?.ok, false);
 });
 
 test('prontidão: carga do índice CORTADA pelo teto aparece como problema', async () => {

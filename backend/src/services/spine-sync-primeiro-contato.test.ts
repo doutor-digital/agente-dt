@@ -234,10 +234,11 @@ test('lead achado com nome PROVISÓRIO no cartão (sem nome do paciente): não d
   assert.equal((vinculos[0] as { create: Record<string, unknown> }).create.spineIdLead, undefined);
 });
 
-test('o vínculo que já sabe o lead/paciente NÃO é reescrito pelo 1º contato (nem motivo, nem status, nem id)', async () => {
+test('o vínculo que já sabe o lead/paciente NÃO é reescrito pelo 1º contato (nem motivo, nem status, nem id) — e o resultado diz o id que FICOU, não o que quase foi', async () => {
   vinculoAtual = { spineIdLead: 99, spineIdClient: null };
-  await syncLeadToSpine(unidade(), 63, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } })));
+  const r = await syncLeadToSpine(unidade(), 63, PC(deps({ achado: { tipo: 'achou', origem: 'lead', id: 4321, por: 'indice' } })));
   assert.deepEqual((vinculos[0] as { update: unknown }).update, {});
+  assert.equal(r.spineIdLead, 99);
 });
 
 test('SECRETÁRIA CADASTROU PRIMEIRO (paciente): NÃO cria, e o id do paciente fica só no MOTIVO (telefone não prova que é a mesma pessoa)', async () => {

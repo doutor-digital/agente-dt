@@ -602,7 +602,8 @@ export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
   // 1º contato (chave de 27/11), em "só no papel" ou ligada: já pede a carga do índice de telefones da franquia (em segundo plano), para
   // que o primeiro lead depois de ligar não encontre o índice vazio e espere. Barato quando não é hora (uma leitura do status).
   const comFranquia = unit as unknown as Partial<Unit>;
-  if (modoPrimeiroContato(unit.slug).vale && comFranquia.spineToken && comFranquia.spineEnabled) {
+  // (a chave de 27/11 em seco OU ligada: o aquecimento vale mesmo quando o seco da triagem é quem decide, para o índice já existir no dia de ligar)
+  if (estadoPrimeiroContato(unit.slug) !== 'desligado' && comFranquia.spineToken && comFranquia.spineEnabled) {
     try { agendarIndice(comFranquia as Unit); } catch { /* nunca lança */ }
   }
   const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);

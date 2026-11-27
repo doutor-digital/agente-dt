@@ -8,6 +8,15 @@
  */
 import { ehNomeProvisorio } from './nome-provisorio.js';
 
+/**
+ * Tratamento e parentesco não são nome: "Dona Maria" e "Dona Ana" não são a mesma pessoa. Pulados antes de escolher o primeiro nome.
+ */
+const NAO_SAO_NOME = new Set([
+  'dona', 'seu', 'sr', 'sra', 'srta', 'senhor', 'senhora', 'dr', 'dra', 'doutor', 'doutora', 'prof', 'profa', 'professor', 'professora',
+  'mae', 'mamae', 'pai', 'papai', 'vo', 'vovo', 'vovoh', 'tia', 'tio', 'filha', 'filho', 'irma', 'irmao', 'esposa', 'marido', 'avo',
+  'sogra', 'sogro', 'prima', 'primo', 'sobrinha', 'sobrinho', 'neta', 'neto', 'paciente',
+]);
+
 /** Primeiro nome em minúsculas e sem acento; `null` se não há nome utilizável para comparar. */
 export function primeiroNomeNormalizado(nome: string | null | undefined): string | null {
   const bruto = String(nome ?? '').trim();
@@ -18,7 +27,8 @@ export function primeiroNomeNormalizado(nome: string | null | undefined): string
     .toLowerCase()
     .split(/\s+/)
     .map((p) => p.replace(/[^a-z]/g, ''))
-    .find((p) => p.length > 0);
+    .filter((p) => p.length > 0)
+    .find((p) => !NAO_SAO_NOME.has(p));
   // uma letra solta ("A. Silva") não identifica ninguém
   return primeiro && primeiro.length >= 2 ? primeiro : null;
 }
