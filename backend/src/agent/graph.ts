@@ -58,7 +58,7 @@ import {
   travaDoHorario,
 } from './horario-oferecido.js';
 import { empurraHorario, pacienteEncerrou, semEmpurrarHorario } from './paciente-encerrou.js';
-import type { AdiamentoDoTurno } from './adiamento-propoe-dia.js';
+import { guardadoDoTurno, TITULO_DA_PROPOSTA } from './adiamento-propoe-dia.js';
 import { falaDoPacienteNoTurno, instrucaoSemObjecao, objecaoInventada, semASonda } from './objecao-inventada.js';
 import { adiouConfirmacao, confirmacaoAdiadaEstado, travarAgendamentoAdiado, type TurnoDaConfirmacao } from './confirmacao-adiada.js';
 
@@ -755,7 +755,8 @@ export async function buildAgentGraph(
     // O prompt a carrega (junto com o resto, em paralelo) e a deixa aqui, para o guardrail ler a MESMA coisa sem consultar de novo.
     const ofertaDoTurno: { valor?: OfertaVigente | null } = {};
     // Chave `adiamento-propoe-dia`: o prompt classifica o adiamento (modelo leve + schema) e o deixa aqui; o corte do empurrão de horário lê o MESMO resultado.
-    const adiamentoDoTurno: { valor?: AdiamentoDoTurno | null } = {};
+    // UMA classificação por turno (por `traceId`): o agente roda este nó a cada volta de ferramenta e todas reaproveitam a 1ª.
+    const adiamentoDoTurno = guardadoDoTurno(recorder.traceId);
 
     let systemMessage: SystemMessage;
     // O prompt deste turno em texto: a guarda do nome do profissional (lá embaixo) só deixa sair
@@ -1695,6 +1696,11 @@ export async function buildAgentGraph(
         });
         textoFinal = semEmpurrao;
         response.content = semEmpurrao;
+      }
+      // Chave `adiamento-propoe-dia`: a proposta de dia e horários SAIU neste turno (o bloco foi injetado e a Sofia consultou a agenda). Fica gravado no
+      // rastro: é o marcador de "UMA proposta só" (lido por `propostaJaFeita`), em vez de adivinhar por regex sobre o texto das falas.
+      if (adiamentoDoTurno.valor && ferramentasDoTurno(nonSystemMessages).includes('consultar_horarios')) {
+        await recorder.step({ kind: 'THINKING', title: TITULO_DA_PROPOSTA, payload: { motivo: adiamentoDoTurno.valor.motivo, dataCitada: adiamentoDoTurno.valor.dataCitada } });
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de

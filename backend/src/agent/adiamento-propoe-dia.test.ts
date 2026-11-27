@@ -12,109 +12,90 @@ import type { Fala } from './repeticao.js';
 import {
   SCHEMA_DA_FALA,
   TIPOS_DE_FALA,
+  TITULO_DA_PROPOSTA,
+  bloqueiaProposta,
   classificarComModelo,
   decidirAdiamento,
-  propostaDeAdiamentoJaFeita,
-  temDespedidaClara,
+  guardadoDoTurno,
   renderPacienteAdiou,
+  temDespedidaClara,
+  temEscolhaDeHorario,
+  temRecusaClara,
   valeClassificar,
   type ClassificacaoDaFala,
   type DependenciasDoAdiamento,
 } from './adiamento-propoe-dia.js';
+import {
+  ADIAMENTOS_COM_MOTIVO,
+  ADIOU_SEM_MOTIVO,
+  DESPEDIDAS_COM_MOTIVO,
+  DESPEDIDAS_PURAS,
+  ESCOLHAS_DE_HORARIO,
+  FALAS_COMUNS,
+  RECUSAS,
+  RECUSAS_COM_MOTIVO,
+} from './adiamento-propoe-dia.corpus.js';
 
 const p = (texto: string): Fala => ({ papel: 'paciente', texto });
 const ia = (texto: string): Fala => ({ papel: 'ia', texto });
 const OFERTA = ia('A consulta é R$ 350. Tenho segunda às 8h ou terça às 14h. Qual fica melhor?');
-const UNIDADE = { slug: 'doutor-hernia-araguaina', spineEnabled: true, spineToken: 'tok' } as Pick<Unit, 'slug' | 'spineEnabled' | 'spineToken'>;
+const UNIDADE = { id: 'u-arag', slug: 'doutor-hernia-araguaina', spineEnabled: true, spineToken: 'tok' } as Pick<Unit, 'id' | 'slug' | 'spineEnabled' | 'spineToken'>;
 
 after(() => _semearParaTeste([]));
 
-/** Um classificador falso que devolve `tipo` e conta as chamadas (e guarda o que recebeu). */
-function falso(tipo: ClassificacaoDaFala['tipo'] | null, extra: Partial<ClassificacaoDaFala> = {}) {
+/** Um classificador falso que devolve `tipo` e conta as chamadas; `marcador` diz se a proposta JÁ saiu antes (marcador gravado). */
+function falso(tipo: ClassificacaoDaFala['tipo'] | null, extra: Partial<ClassificacaoDaFala> = {}, marcador = false) {
   const chamadas: Array<{ falaDoPaciente: string; ultimaFalaDaIa: string[] }> = [];
   const deps: DependenciasDoAdiamento = {
     async classificar(entrada) {
       chamadas.push(entrada);
       return tipo === null ? null : { tipo, ...extra };
     },
+    async propostaJaFeita() {
+      return marcador;
+    },
   };
   return { deps, chamadas };
 }
 const ligar = (slug = UNIDADE.slug) => _semearParaTeste([{ slug, automacao: 'adiamento-propoe-dia', estado: 'ligado' }]);
-const decidir = (falas: Fala[], tipo: ClassificacaoDaFala['tipo'] | null, over: Record<string, unknown> = {}, extra: Partial<ClassificacaoDaFala> = {}) => {
-  const f = falso(tipo, extra);
+const decidir = (falas: Fala[], tipo: ClassificacaoDaFala['tipo'] | null, over: Record<string, unknown> = {}, extra: Partial<ClassificacaoDaFala> = {}, marcador = false) => {
+  const f = falso(tipo, extra, marcador);
   ligar(String((over.unit as { slug?: string } | undefined)?.slug ?? UNIDADE.slug));
-  return decidirAdiamento({ unit: UNIDADE, falas, temConsultaOuTratamento: false, ...over } as never, f.deps).then((r) => ({ r, chamadas: f.chamadas }));
+  return decidirAdiamento({ unit: UNIDADE, leadId: 1, falas, temConsultaOuTratamento: false, ...over } as never, f.deps).then((r) => ({ r, chamadas: f.chamadas }));
 };
 
-// ── frases da 1ª e 2ª reprovação: o pré-filtro deixa passar (o modelo decide) e só "adiou_com_motivo" propõe ─────────────────────────────
+// ── despedida, recusa, escolha de horário, adiamento: o veto em código, o pré-filtro e o modelo ─────────────────────────────────────
 
-const DESPEDIDAS_COM_MOTIVO = [
-  'Obrigada! Vou conversar com meu esposo e te retorno. Boa noite',
-  'Muito obrigada pela atenção, vou ver com minha filha e qualquer coisa te chamo. Tchau',
-  'Obrigado, só mês que vem. Tchau tchau',
-  'ok, obrigada. Quando eu receber eu te chamo, até mais',
-  'Vou falar com meu marido, obrigada, fica com Deus',
-  'Vou conversar com meu esposo e te retorno. Boa noite 🙏',
-  'Vou falar com meu marido e te aviso. Boa noite!! 😊',
-  'Vou ver com meu marido e te falo, bjs',
-  'Vou ver com meu marido e te falo. Beijos',
-  'Vou falar com meu esposo, até amanhã',
-  'vou falar com meu marido, até já',
-  'só recebo dia 8, bom final de semana',
-  'Vou falar com meu marido e te retorno. Tenha uma ótima noite',
-  'vou conversar com minha esposa, grato',
-  'vou falar com meu marido, obg',
-  'Vou falar com meu marido. Amém, Deus abençoe 🙏',
-  'Vou conversar com meu marido e te retorno, gratidão',
-  'Vou falar com meu marido e retorno. Bom dia',
-  'Só recebo dia 8. Abraço',
-  'vou falar com meu esposo, boa noite e obrigada 🙏🏻',
-];
-const ESCOLHAS_DE_HORARIO = [
-  'Pode ser segunda às 8h, só recebo dia 5 mas pago no dia',
-  'segunda tá ótimo, só recebo dia 5 mas pago no dia',
-  'Segunda de manhã, só recebo dia 5',
-  'Dia 9 às 8 eu consigo, só recebo dia 8',
-  'a de segunda serve, vou falar com meu marido',
-  'Pode marcar terça, só recebo dia 5 mas pago no dia',
-  'pode ser a das 14, só recebo dia 5',
-];
-const ADIAMENTOS_COM_MOTIVO = [
-  'Só recebo dia 8',
-  'vou falar com o meu marido',
-  'vou conversar com a minha mãe',
-  'depois que eu receber eu te falo',
-  'não tenho condições agora, só mês que vem',
-  'vou ver com meu esposo',
-  'preciso falar com meu marido primeiro',
-  'Vou consultar meu marido',
-  'deixa eu falar com meu esposo',
-  'vou esperar o pagamento',
-  'quando cair o salário eu marco',
-  'só depois do dia 10',
-  'semana que vem eu vejo',
-  'tô sem dinheiro agora, só dia 5',
-  'esse mês tá apertado',
-  'vou ver com meu esposo e te dou retorno',
-  'Estou viajando',
-  'vou viajar, volto dia 15',
-];
-const SEM_MOTIVO_OU_RECUSA = ['não quero', 'agora não', 'vou pensar', 'ok', 'Obrigada', 'não tenho dinheiro', 'só recebo dia 8?'];
-
-test('despedida COM motivo (20 frases): o veto em código corta antes do modelo, e mesmo que o modelo errasse ("adiou_com_motivo") NÃO se propõe (corte de 21/10)', async () => {
+test('despedida COM motivo (31 frases, 2 reprovações + 3ª): o veto em código corta ANTES do modelo; mesmo que o modelo errasse, não se propõe', async () => {
   for (const f of DESPEDIDAS_COM_MOTIVO) {
     assert.equal(temDespedidaClara(f), true, f);
-    // o modelo ERRARIA e diria adiou_com_motivo: o veto em código impede a proposta e nem paga a chamada
     const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo');
     assert.equal(r, null, f);
     assert.equal(chamadas.length, 0, `${f}: sem chamada`);
-    // e o modelo, quando chamado sem o veto, diz "despedida": também não propõe
-    assert.equal((await decidir([OFERTA, p(f)], 'despedida')).r, null, f);
   }
   // "boa noite" ABRINDO a fala é cumprimento: não veta, o modelo decide
   assert.equal(temDespedidaClara('Boa noite, só recebo dia 8'), false);
   assert.ok((await decidir([OFERTA, p('Boa noite, só recebo dia 8')], 'adiou_com_motivo')).r);
+});
+
+test('despedida pura (bjo, xau, fui, falou, inté, 🙏, brigada…): sem sinal de adiamento, o modelo nem é chamado', async () => {
+  for (const f of DESPEDIDAS_PURAS) {
+    assert.equal(valeClassificar(f), false, f);
+    const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo');
+    assert.equal(r, null, f);
+    assert.equal(chamadas.length, 0, f);
+  }
+});
+
+test('recusa (clara, também com motivo junto): veto em código — "não quero mais", "desisti", "já resolvi com outro médico", "já fechei" NUNCA viram proposta', async () => {
+  for (const f of [...RECUSAS, ...RECUSAS_COM_MOTIVO]) {
+    if (f === 'vou fazer com outro médico') continue; // sem sinal de adiamento: nem chega
+    const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo');
+    assert.equal(r, null, f);
+    assert.equal(chamadas.length, 0, `${f}: sem chamada`);
+  }
+  for (const f of ['não quero mais', 'desisti', 'já resolvi com outro médico', 'já fechei com outra clínica', 'não tenho interesse', 'vou em outra clínica', 'não quero']) assert.equal(temRecusaClara(f), true, f);
+  assert.equal(temRecusaClara('vou falar com meu marido'), false);
 });
 
 test('duas mensagens no turno: "+ Boa noite 🙏" e "+ obg" são despedida (veto); "+ 👍" não; o modelo recebe o turno INTEIRO e a última fala da IA', async () => {
@@ -125,88 +106,99 @@ test('duas mensagens no turno: "+ Boa noite 🙏" e "+ obg" são despedida (veto
   assert.deepEqual(dois.chamadas[0].ultimaFalaDaIa, [OFERTA.texto], 'e a última fala da IA');
 });
 
-test('escolha de horário (7 frases): "escolheu_horario" NUNCA propõe', async () => {
+test('escolha de horário (9 frases): veto em código, e "escolheu_horario" do modelo também NUNCA propõe; os 20 adiamentos NÃO são vetados', async () => {
   for (const f of ESCOLHAS_DE_HORARIO) {
-    const { r, chamadas } = await decidir([OFERTA, p(f)], 'escolheu_horario');
+    assert.equal(temEscolhaDeHorario(f), true, f);
+    const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo');
     assert.equal(r, null, f);
+    assert.equal(chamadas.length, 0, `${f}: sem chamada`);
+    assert.equal((await decidir([OFERTA, p(f)], 'escolheu_horario')).r, null, f);
+  }
+  for (const f of ADIAMENTOS_COM_MOTIVO) assert.equal(temEscolhaDeHorario(f), false, `${f}: adiamento puro não é escolha de horário`);
+});
+
+test('adiamento com motivo (20 frases, incl. "ver com meu chefe", "plantão", "esperar o pagamento"): o pré-filtro deixa passar e "adiou_com_motivo" propõe com o motivo e a data', async () => {
+  for (const f of ADIAMENTOS_COM_MOTIVO) {
+    assert.equal(valeClassificar(f), true, `${f}: o pré-filtro tem de deixar passar`);
+    assert.equal(temDespedidaClara(f) || temRecusaClara(f), false, `${f}: nenhum veto`);
+    const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo', {}, { motivo: 'receber o salário', data_citada: 'dia 8' });
+    assert.deepEqual(r, { motivo: 'receber o salário', dataCitada: 'dia 8' }, f);
     assert.equal(chamadas.length, 1, f);
   }
 });
 
-test('adiamento com motivo (18 frases): "adiou_com_motivo" propõe, com o motivo e a data que o modelo extraiu', async () => {
-  for (const f of ADIAMENTOS_COM_MOTIVO) {
-    const { r } = await decidir([OFERTA, p(f)], 'adiou_com_motivo', {}, { motivo: 'receber o salário', data_citada: 'dia 8' });
-    assert.deepEqual(r, { motivo: 'receber o salário', dataCitada: 'dia 8' }, f);
-  }
-});
-
-test('recusa, "vou pensar", "ok", "só recebo dia 8?": o modelo diz recusa/adiou_sem_motivo/outro → nada muda (corte do main)', async () => {
-  const esperado: Record<string, ClassificacaoDaFala['tipo']> = { 'não quero': 'recusa', 'agora não': 'adiou_sem_motivo', 'vou pensar': 'adiou_sem_motivo', ok: 'outro', Obrigada: 'despedida', 'não tenho dinheiro': 'recusa', 'só recebo dia 8?': 'outro' };
-  for (const f of SEM_MOTIVO_OU_RECUSA) assert.equal((await decidir([OFERTA, p(f)], esperado[f] ?? 'outro')).r, null, f);
-});
-
-test('na dúvida ou em falha: "outro", null, tipo fora do schema → nada (comportamento do main)', async () => {
+test('"vou pensar"/"te aviso" sem motivo, recusa e "outro" segundo o modelo: nada muda (corte do main); falha e dúvida também', async () => {
+  for (const f of ADIOU_SEM_MOTIVO) assert.equal((await decidir([OFERTA, p(f)], 'adiou_sem_motivo')).r, null, f);
   assert.equal((await decidir([OFERTA, p('vou falar com meu marido')], 'outro')).r, null);
+  assert.equal((await decidir([OFERTA, p('vou falar com meu marido')], 'recusa')).r, null);
   assert.equal((await decidir([OFERTA, p('vou falar com meu marido')], null)).r, null, 'falha/prazo/schema inválido');
 });
 
-// ── pré-filtro: sem sinal na fala, o modelo nem é chamado ─────────────────────────────────────────────────────────────────────────
-
-test('pré-filtro: fala sem sinal de adiamento ou despedida não paga a chamada', async () => {
-  for (const f of ['quero marcar segunda', 'qual o endereço?', 'sim', 'Maria da Silva Souza', 'dói na lombar há 2 anos', 'quanto custa?', '']) {
-    assert.equal(valeClassificar(f), false, f);
-    const { r, chamadas } = await decidir([OFERTA, p(f)], 'adiou_com_motivo');
-    assert.equal(r, null, f);
-    assert.equal(chamadas.length, 0, `${f}: sem chamada`);
-  }
-  for (const f of [...DESPEDIDAS_COM_MOTIVO, ...ESCOLHAS_DE_HORARIO, ...ADIAMENTOS_COM_MOTIVO]) assert.equal(valeClassificar(f), true, f);
-  for (const f of ESCOLHAS_DE_HORARIO) assert.equal(temDespedidaClara(f), false, `${f}: escolha de horário não é despedida`);
-  for (const f of ADIAMENTOS_COM_MOTIVO) assert.equal(temDespedidaClara(f), false, `${f}: adiamento puro não é despedida`);
+test('pré-filtro: 51 falas comuns do paciente (bom dia, obrigada, ok, preço, endereço, dor…) NÃO chamam o modelo', async () => {
+  assert.ok(FALAS_COMUNS.length >= 50);
+  const chamam = FALAS_COMUNS.filter((f) => valeClassificar(f));
+  assert.deepEqual(chamam, [], `chamariam o modelo: ${chamam.join(' | ')}`);
+  for (const f of ['bom dia', 'boa tarde', 'obrigada', 'ok', '']) assert.equal((await decidir([OFERTA, p(f)], 'adiou_com_motivo')).chamadas.length, 0, f);
   assert.equal(valeClassificar('x'.repeat(401)), false, 'texto longo demais não é adiamento');
 });
 
-// ── uma proposta só, em código ────────────────────────────────────────────────────────────────────────────────────────────────────
+// ── uma proposta só: MARCADOR gravado, não regex sobre o texto ────────────────────────────────────────────────────────────────
 
-test('UMA proposta só: o 2º adiamento depois de uma proposta (1 fala, 2 bolhas, "às 7", "7 da manhã", 3º adiamento) volta ao corte do main, sem chamar o modelo', async () => {
-  const A1 = [OFERTA, p('Só recebo dia 8')];
-  const casos: Array<[string, Fala[]]> = [
-    ['numa fala', [...A1, ia('Combinado! Já deixo pra quarta 09/12? Tenho 7h ou 13h.'), p('vou falar com meu marido primeiro e depois te falo')]],
-    ['em DUAS bolhas', [...A1, ia('Combinado! Já deixo pra quarta 09/12, depois que você receber?'), ia('Tenho 7h ou 13h.'), p('vou falar com meu marido primeiro')]],
-    ['"às 7 ou às 13 horas"', [...A1, ia('Combinado! Já deixo pra quarta 09/12? Tenho às 7 ou às 13 horas.'), p('vou falar com meu marido primeiro')]],
-    ['"7 da manhã ou 1 da tarde"', [...A1, ia('Combinado! Já deixo pra quarta 09/12? Tenho 7 da manhã ou 1 da tarde.'), p('vou falar com meu marido primeiro')]],
-    ['3º adiamento', [...A1, ia('Tenho 7h ou 13h na quarta'), p('mês que vem'), ia('Combinado, te procuro'), p('só recebo dia 10')]],
-  ];
-  for (const [rotulo, falas] of casos) {
-    assert.equal(propostaDeAdiamentoJaFeita(falas), true, rotulo);
-    const { r, chamadas } = await decidir(falas, 'adiou_com_motivo');
-    assert.equal(r, null, rotulo);
-    assert.equal(chamadas.length, 0, `${rotulo}: nem chama o modelo`);
+test('UMA proposta só: com o marcador da proposta no rastro, o 2º adiamento volta ao corte do main sem chamar o modelo — também "vou esperar o pagamento", "ver com meu chefe", "plantão"', async () => {
+  for (const f of ['vou falar com meu marido primeiro e depois te falo', 'vou esperar o pagamento', 'vou ver com meu chefe', 'esse mês estou de plantão', 'só recebo dia 10', 'mês que vem']) {
+    const { r, chamadas } = await decidir([OFERTA, p('Só recebo dia 8'), ia('Combinado! Já deixo pra quarta 09/12, depois que você receber? Tenho às 7 ou às 13 horas.'), p(f)], 'adiou_com_motivo', {}, {}, true);
+    assert.equal(r, null, f);
+    assert.equal(chamadas.length, 0, `${f}: nem chama o modelo`);
   }
-  // sem proposta antes (o 1º adiamento foi despedida, a IA só combinou a volta): o 2º ainda pode receber a proposta
-  const semProposta = [OFERTA, p('Só recebo dia 8. Tchau'), ia('Combinado, te procuro dia 08/12'), p('só recebo dia 8 mesmo')];
-  assert.equal(propostaDeAdiamentoJaFeita(semProposta), false);
-  assert.ok((await decidir(semProposta, 'adiou_com_motivo')).r);
-  // a oferta NORMAL de horários do começo não conta como proposta de adiamento
-  assert.equal(propostaDeAdiamentoJaFeita([OFERTA, p('só recebo dia 5')]), false);
-  // conversa comum com "amanhã"/"marido" e horário da IA NÃO é adiamento anterior: a proposta ainda pode acontecer
-  const comum = [p('tem vaga amanhã?'), ia('Tenho 8h ou 14h'), p('meu marido me indicou, qual o valor?'), ia('A consulta é R$ 350. Tenho 8h ou 14h.'), p('só recebo dia 8')];
-  assert.equal(propostaDeAdiamentoJaFeita(comum), false);
-  assert.ok((await decidir(comum, 'adiou_com_motivo')).r);
+  // sem o marcador (a proposta nunca saiu: o 1º foi despedida, a IA só combinou a volta): o 2º adiamento ainda pode receber a proposta
+  assert.ok((await decidir([OFERTA, p('Só recebo dia 8. Tchau'), ia('Combinado, te procuro dia 08/12'), p('só recebo dia 8 mesmo')], 'adiou_com_motivo', {}, {}, false)).r);
+});
+
+test('o marcador: o título gravado no rastro é constante, e a leitura falha = "já propôs" (não propõe)', async () => {
+  assert.match(TITULO_DA_PROPOSTA, /Adiamento: a proposta de dia e horários saiu/);
+  const { dependenciasPadrao } = await import('./adiamento-propoe-dia.js');
+  const { prisma } = await import('../lib/prisma.js');
+  const antes = (prisma as unknown as { executionStep?: unknown }).executionStep;
+  Object.defineProperty(prisma, 'executionStep', { value: { findFirst: async () => { throw new Error('banco fora'); } }, configurable: true });
+  assert.equal(await dependenciasPadrao.propostaJaFeita('u', 1), true, 'falha de leitura = não propõe');
+  let filtro: unknown;
+  Object.defineProperty(prisma, 'executionStep', { value: { findFirst: async (a: unknown) => ((filtro = a), null) }, configurable: true });
+  assert.equal(await dependenciasPadrao.propostaJaFeita('u-arag', 7), false);
+  assert.deepEqual((filtro as { where: unknown }).where, { title: TITULO_DA_PROPOSTA, trace: { unitId: 'u-arag', leadId: '7' } });
+  Object.defineProperty(prisma, 'executionStep', { value: antes, configurable: true });
+});
+
+test('UMA classificação por turno: o guardado é o mesmo para o mesmo traceId (todas as voltas do agente reusam a 1ª)', () => {
+  const a = guardadoDoTurno('trace-1');
+  a.pronto = true;
+  a.valor = { motivo: 'x', dataCitada: null };
+  assert.equal(guardadoDoTurno('trace-1'), a);
+  assert.notEqual(guardadoDoTurno('trace-2'), a);
+  assert.equal(guardadoDoTurno('trace-2').pronto, undefined);
+});
+
+test('falha ao ler consulta/etapa/franquia = "TEM consulta" (não propõe); consulta de pé ou tratamento também', () => {
+  const sem = 'Não há nenhum agendamento futuro marcado.';
+  assert.equal(bloqueiaProposta({ blocoDaConsulta: sem, jaAgendadoOuPaciente: false, leituraFalhou: false }), false);
+  assert.equal(bloqueiaProposta({ blocoDaConsulta: sem, jaAgendadoOuPaciente: false, leituraFalhou: true }), true, 'falhou a leitura');
+  assert.equal(bloqueiaProposta({ blocoDaConsulta: sem, jaAgendadoOuPaciente: true, leituraFalhou: false }), true, 'tratamento/agendado');
+  assert.equal(bloqueiaProposta({ blocoDaConsulta: 'Próximo agendamento: Avaliação em **segunda**', jaAgendadoOuPaciente: false, leituraFalhou: false }), true, 'consulta de pé');
 });
 
 // ── cortes em código ──────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('só em unidade COM agenda (maraba-resgate: sem agenda a Sofia inventaria horário), sem consulta de pé, com a chave ligada', async () => {
-  const sem = { slug: 'maraba-resgate', spineEnabled: false, spineToken: null };
+test('só em unidade COM agenda (maraba-resgate: sem agenda a Sofia inventaria horário), lead conhecido, sem consulta de pé, com a chave ligada', async () => {
+  const sem = { id: 'u-m', slug: 'maraba-resgate', spineEnabled: false, spineToken: null };
   const a = falso('adiou_com_motivo');
   _semearParaTeste([
     { slug: 'maraba-resgate', automacao: 'adiamento-propoe-dia', estado: 'ligado' },
     { slug: 'x', automacao: 'adiamento-propoe-dia', estado: 'ligado' },
   ]);
-  assert.equal(await decidirAdiamento({ unit: sem, falas: [OFERTA, p('só recebo dia 8')], temConsultaOuTratamento: false } as never, a.deps), null);
+  const base = { leadId: 1, falas: [OFERTA, p('só recebo dia 8')], temConsultaOuTratamento: false };
+  assert.equal(await decidirAdiamento({ unit: sem, ...base } as never, a.deps), null);
   assert.equal(a.chamadas.length, 0);
-  const semToken = { slug: 'x', spineEnabled: true, spineToken: null };
-  assert.equal(await decidirAdiamento({ unit: semToken, falas: [OFERTA, p('só recebo dia 8')], temConsultaOuTratamento: false } as never, a.deps), null);
+  assert.equal(await decidirAdiamento({ unit: { id: 'u-x', slug: 'x', spineEnabled: true, spineToken: null }, ...base } as never, a.deps), null, 'sem token');
+  assert.equal(await decidirAdiamento({ unit: { id: 'u-x', slug: 'x', spineEnabled: true, spineToken: 't' }, ...base, leadId: undefined } as never, a.deps), null, 'sem lead não dá para checar o marcador');
   const { r, chamadas } = await decidir([OFERTA, p('só recebo dia 8')], 'adiou_com_motivo', { temConsultaOuTratamento: true });
   assert.equal(r, null, 'consulta de pé ou em tratamento');
   assert.equal(chamadas.length, 0);
@@ -217,11 +209,11 @@ test('só em unidade COM agenda (maraba-resgate: sem agenda a Sofia inventaria h
   // chave desligada (padrão): nada, nem chamada
   const f = falso('adiou_com_motivo');
   _semearParaTeste([]);
-  assert.equal(await decidirAdiamento({ unit: UNIDADE, falas: [OFERTA, p('só recebo dia 8')], temConsultaOuTratamento: false } as never, f.deps), null);
+  assert.equal(await decidirAdiamento({ unit: UNIDADE, ...base } as never, f.deps), null);
   assert.equal(f.chamadas.length, 0);
   // ligada pela tela: propõe
   _semearParaTeste([{ slug: UNIDADE.slug, automacao: 'adiamento-propoe-dia', estado: 'ligado' }]);
-  assert.ok(await decidirAdiamento({ unit: UNIDADE, falas: [OFERTA, p('só recebo dia 8')], temConsultaOuTratamento: false } as never, f.deps));
+  assert.ok(await decidirAdiamento({ unit: UNIDADE, ...base } as never, f.deps));
   _semearParaTeste([]);
 });
 
@@ -250,14 +242,32 @@ test('contrato: o schema tem exatamente os 6 tipos e o modelo é chamado via wit
   assert.deepEqual(ok, { tipo: 'adiou_com_motivo', motivo: 'falar com o marido' });
   assert.equal(recebido.schema, SCHEMA_DA_FALA, 'o schema EXPORTADO é o que vai ao modelo');
   assert.equal(recebido.opcoes?.name, 'classificar_fala');
+  assert.equal(recebido.opcoes?.method, 'functionCalling');
+  assert.equal(recebido.opcoes?.includeRaw, true, 'includeRaw: o uso de tokens vem junto, para a conta');
   assert.match(recebido.mensagens![1].content, /Tenho 8h ou 14h[\s\S]*vou falar com meu marido/);
   assert.match(recebido.mensagens![0].content, /NA DÚVIDA, "outro"/);
+  // com includeRaw o LangChain devolve { raw, parsed }: valida o `parsed` e reporta o uso (a conta de uso, `llm_calls`)
+  const usos: Array<{ promptTokens: number; completionTokens: number; status: string }> = [];
+  const comRaw = await classificarComModelo(
+    modelo({ raw: { usage_metadata: { input_tokens: 120, output_tokens: 15 } }, parsed: { tipo: 'despedida' } }),
+    { falaDoPaciente: 'obrigada', ultimaFalaDaIa: [] },
+    5000,
+    (u) => usos.push(u),
+  );
+  assert.deepEqual(comRaw, { tipo: 'despedida' });
+  assert.equal(usos.length, 1);
+  assert.equal(usos[0].promptTokens, 120);
+  assert.equal(usos[0].completionTokens, 15);
+  assert.equal(usos[0].status, 'success');
+  assert.equal(await classificarComModelo(modelo({ raw: {}, parsed: { tipo: 'x' } }), { falaDoPaciente: 'x', ultimaFalaDaIa: [] }), null, 'parsed fora do schema');
   // saída fora do schema → null (nunca propõe)
   assert.equal(await classificarComModelo(modelo({ tipo: 'qualquer-coisa' }), { falaDoPaciente: 'x', ultimaFalaDaIa: [] }), null);
   assert.equal(await classificarComModelo(modelo(undefined), { falaDoPaciente: 'x', ultimaFalaDaIa: [] }), null);
   // sem resposta no prazo → rejeita (a dependência padrão engole e devolve null)
   const mudo = { withStructuredOutput: () => ({ invoke: () => new Promise(() => undefined) }) };
-  await assert.rejects(classificarComModelo(mudo, { falaDoPaciente: 'x', ultimaFalaDaIa: [] }, 20), /sem resposta/);
+  const usosErro: string[] = [];
+  await assert.rejects(classificarComModelo(mudo, { falaDoPaciente: 'x', ultimaFalaDaIa: [] }, 20, (u) => usosErro.push(u.status)), /sem resposta/);
+  assert.deepEqual(usosErro, ['cancelled'], 'o prazo estourado também entra na conta, como cancelado');
 });
 
 // ── o prompt ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────

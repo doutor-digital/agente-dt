@@ -28,8 +28,7 @@ import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from 
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
-import { decidirAdiamento, renderPacienteAdiou, type AdiamentoDoTurno } from './adiamento-propoe-dia.js';
-import { promptTemConsulta } from './reserva-sem-marcar.js';
+import { bloqueiaProposta, decidirAdiamento, renderPacienteAdiou, type AdiamentoDoTurno, type AdiamentoGuardado } from './adiamento-propoe-dia.js';
 import { renderPerguntaDoPaciente } from './pergunta-do-paciente.js';
 import { renderFalaDePaciente } from './fala-de-paciente.js';
 import { consumirNaoEntregueDetalhe, renderEntregaFalha } from './entrega-falha.js';
@@ -2954,7 +2953,7 @@ export async function composeSystemPromptForUnit(input: {
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
-  adiamentoSaida?: { valor?: AdiamentoDoTurno | null };
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2974,7 +2973,7 @@ export async function composeSystemPromptPartsForUnit(input: {
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
-  adiamentoSaida?: { valor?: AdiamentoDoTurno | null };
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2994,7 +2993,7 @@ async function loadComposeInput(input: {
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
   /** Onde deixar o adiamento classificado (chave `adiamento-propoe-dia`): o grafo o lê de volta para não cortar o horário que a Sofia vai propor. */
-  adiamentoSaida?: { valor?: AdiamentoDoTurno | null };
+  adiamentoSaida?: AdiamentoGuardado;
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -3027,10 +3026,22 @@ async function loadComposeInput(input: {
 
   // Chave `adiamento-propoe-dia`: o modelo leve começa AGORA, em paralelo com o resto do prompt; a trava "tem consulta de pé / em tratamento" chega
   // depois (`resolverConsulta`). Só o turno do grafo pede (passa `adiamentoSaida`): régua de follow-up, prévias e avaliações nunca pagam a chamada.
+  // UMA classificação por turno: o agente roda o prompt a cada volta de ferramenta; a 1ª decide e as demais reusam (`pronto`).
   let resolverConsulta: (tem: boolean) => void = () => undefined;
-  const adiamentoP: Promise<AdiamentoDoTurno | null> = input.adiamentoSaida
-    ? decidirAdiamento({ unit: input.unit, falas: input.historico, temConsultaOuTratamento: new Promise<boolean>((r) => (resolverConsulta = r)) })
-    : Promise.resolve(null);
+  const reaproveita = !!input.adiamentoSaida?.pronto;
+  const adiamentoP: Promise<AdiamentoDoTurno | null> = reaproveita
+    ? Promise.resolve(input.adiamentoSaida?.valor ?? null)
+    : input.adiamentoSaida
+      ? decidirAdiamento({
+          unit: input.unit,
+          leadId: input.leadId,
+          falas: input.historico,
+          traceId: input.adiamentoSaida.traceId ?? null,
+          temConsultaOuTratamento: new Promise<boolean>((r) => (resolverConsulta = r)),
+        })
+      : Promise.resolve(null);
+  // Falha ao ler a consulta, a etapa ou a franquia = "TEM consulta" (não propõe): nunca se propõe horário novo no escuro.
+  let leituraFalhou = false;
 
   const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades, ofertaDaCampanha] = await Promise.all([
     prisma.messageTemplate.findMany({
@@ -3075,6 +3086,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'consultaDoLead falhou — sem bloco de consulta no prompt',
           );
+          leituraFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -3084,6 +3096,7 @@ async function loadComposeInput(input: {
             { err, leadId: input.leadId },
             'estadoEtapaDoLead falhou — sem bloco de etapa no prompt',
           );
+          leituraFalhou = true;
           return null;
         })
       : Promise.resolve(null),
@@ -3115,7 +3128,10 @@ async function loadComposeInput(input: {
   // tratar a pessoa como desconhecida. Caso Wilson, 15/09/2026.
   const etapaFinal =
     !estadoEtapa?.jaAgendadoOuPaciente && telefone && input.leadId
-      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => estadoEtapa)
+      ? await estadoEtapaDoLead(input.unit, input.leadId, telefone).catch(() => {
+          leituraFalhou = true;
+          return estadoEtapa;
+        })
       : estadoEtapa;
 
   // O cartão diz que a pessoa já agendou ou é paciente, mas a consulta não foi a Sofia que marcou —
@@ -3130,17 +3146,26 @@ async function loadComposeInput(input: {
   const pacienteFranquia =
     input.leadId && input.unit.spineEnabled && perguntarAFranquia
       ? await pacienteNaFranquia(input.unit, input.leadId, [etapaFinal?.tituloDoCartao, contato?.contactName], telefone)
-          .catch(() => null)
+          .catch(() => {
+            leituraFalhou = true;
+            return null;
+          })
       : null;
 
   // Chave `adiamento-propoe-dia`: o paciente adiou COM motivo? (modelo leve + schema; só com agenda, sem consulta de pé nem tratamento, e
   // só com sinal de adiamento na fala). Falha ou dúvida = null = o comportamento de sempre. (O modelo já correu em paralelo, lá em cima.)
-  const temConsultaOuTratamento =
-    promptTemConsulta(renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(input.unit), input.agora), pacienteFranquia)) ||
-    !!etapaFinal?.jaAgendadoOuPaciente;
+  const temConsultaOuTratamento = bloqueiaProposta({
+    blocoDaConsulta: renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(input.unit), input.agora), pacienteFranquia),
+    jaAgendadoOuPaciente: etapaFinal?.jaAgendadoOuPaciente,
+    leituraFalhou,
+  });
   resolverConsulta(temConsultaOuTratamento);
   const adiamento = await adiamentoP;
-  if (input.adiamentoSaida) input.adiamentoSaida.valor = adiamento;
+  if (input.adiamentoSaida && !reaproveita) {
+    input.adiamentoSaida.valor = adiamento;
+    // "pronto" só quando a leitura foi limpa: com falha, a próxima volta tenta de novo (e, falhando de novo, também não propõe)
+    input.adiamentoSaida.pronto = !leituraFalhou;
+  }
 
   return {
     ...input,
