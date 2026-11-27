@@ -43,7 +43,7 @@ A auditoria contou 15 em 7 arquivos pelo código que estava no servidor. Em `ori
 
 Mudança de comportamento esperada em produção após o deploy (todas na direção do que o código já dizia): o aviso de agendamento perdido passa a sair 90 min depois da oferta e não 4h30; o preenchimento de campos passa a pegar conversas de 6 h a 72 h e não de 9 h a 75 h; o monitor de erro passa a ver 30 min de verdade (e por isso ganhou o olhar da rede inteira, ver `taxa-erro-worker.ts`).
 
-**Transição no deploy do dedup** (`message_claims`): as marcas gravadas antes do deploy têm `expires_at` em hora local (3 h atrás do UTC) e, lidas como UTC, parecem vencidas: uma mensagem reentregue nos primeiros minutos (TTL padrão de 10 min; reentrega do Kommo de 2 h) pode ser processada de novo uma vez. Convém publicar fora do pico; não precisa de migração, a tabela se renova em minutos.
+**Transição no deploy do dedup** (`message_claims`): as marcas gravadas antes do deploy têm `expires_at` em hora local (3 h atrás do UTC) e, lidas como UTC, parecem vencidas: uma mensagem reentregue enquanto durar o TTL de cada marca antiga (10 min no padrão, até 2 h na reentrega do Kommo, e mais nos escopos de TTL longo) pode ser processada de novo uma vez. Convém publicar fora do pico; não precisa de migração: a exposição acaba sozinha quando o TTL da última marca antiga passa (até 2 h para a reentrega do Kommo).
 
 ### O monitor de taxa de erro depois do conserto
 

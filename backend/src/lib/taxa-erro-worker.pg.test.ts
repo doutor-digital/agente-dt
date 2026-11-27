@@ -143,6 +143,7 @@ test('a causa lida em SQL e a lida em JS concordam em cada mensagem (inclusive c
     '503 Service Unavailable',
     'Request timed out.',
     'fetch failed',
+    'Connection error.',
     'ECONNRESET',
     'messages: text too long (512 tokens max)',
     'pedido 401 do cliente 503 não encontrado',
@@ -172,4 +173,23 @@ test('«todas falhando» ignora cancelled: 8 erros + 40 canceladas = 8 chamadas,
   assert.equal(a.recentesTotal, 8);
   assert.equal(a.recentesErro, 8);
   assert.equal(W.pioroDemais(a).alarme, true);
+});
+
+test('unidade que erra no provedor principal E no plano B: os erros dela SOMAM (80 de 81), e isso não é queda da rede', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
+  await prisma.llmCall.deleteMany({});
+  const a = await prisma.unit.create({ data: { slug: 'u-dois-provedores-a', name: 'a' } });
+  const b = await prisma.unit.create({ data: { slug: 'u-dois-provedores-b', name: 'b' } });
+  for (let i = 0; i < 40; i++) await chamada(a.id, 3, 'error', 'x', 'anthropic');
+  for (let i = 0; i < 40; i++) await chamada(a.id, 3, 'error', 'x', 'openai');
+  await chamada(b.id, 3, 'error', 'x', 'anthropic');
+  // erro sem unidade (copiloto, juiz) fica de fora da conta de «pior unidade»
+  await prisma.llmCall.create({ data: { unitId: null, provider: 'openai', model: 'm', status: 'error', errorMessage: 'x', createdAt: minutosAtras(3) } });
+  const amostras = await W._internos.medirRede();
+  const rede = amostras.find((x) => x.escopo === 'rede')!;
+  assert.equal(rede.erros, 82);
+  assert.equal(rede.unidadesComErro, 2);
+  assert.equal(rede.maiorUnidade, 80, 'por unidade, somando os dois provedores (antes: 40, por par provedor×unidade)');
+  assert.equal(amostras.find((x) => x.escopo === 'anthropic')!.maiorUnidade, 40, 'no escopo de um provedor vale o par');
+  assert.equal(W.quedaGeral(amostras).alarme, false, 'a unidade A sozinha (80 de 82 erros) não é «a rede toda fora»');
 });

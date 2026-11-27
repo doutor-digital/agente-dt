@@ -136,6 +136,7 @@ test('causa: lê crédito, chave, limite e indisponibilidade pela mensagem do pr
   assert.equal(classificarCausa('Error code: 402 - balance exhausted'), 'credito');
   assert.equal(classificarCausa('529 overloaded_error'), 'indisponivel');
   assert.equal(classificarCausa('fetch failed'), 'indisponivel');
+  assert.equal(classificarCausa('Connection error.'), 'indisponivel'); // o erro de rede do SDK da Anthropic/OpenAI
   assert.equal(classificarCausa('Unexpected token < in JSON'), 'outra');
   assert.equal(classificarCausa(null), 'outra');
 });
