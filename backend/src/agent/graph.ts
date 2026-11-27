@@ -1209,7 +1209,9 @@ export async function buildAgentGraph(
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
       // Quem adiou COM motivo (classificado no prompt) e a Sofia vai propor dia e dois horários: não é "encerrou" — nem o corte nem o bloqueio da trava do
       // horário valem; a trava do horário inventado RODA neste turno. Todo o resto segue o corte de 21/10, como no main.
-      const encerrou = adiamentoDoTurno.valor && tools.some((t) => t.name === 'consultar_horarios') ? null : pacienteEncerrou(falas);
+      // (despedida clara do main — "agradeceu" — nunca é desfeita pelo modelo: o classificador só desfaz "vai_se_organizar" ou nada.)
+      const encerrouNoMain = pacienteEncerrou(falas);
+      const encerrou = adiamentoDoTurno.valor && encerrouNoMain !== 'agradeceu' && tools.some((t) => t.name === 'consultar_horarios') ? null : encerrouNoMain;
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
         const travaHorario = travaDoHorario({

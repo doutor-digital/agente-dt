@@ -61,6 +61,21 @@ const SINAL_DE_ADIAMENTO =
 /** Sinal de DESPEDIDA (o modelo é quem separa despedida de adiamento: "obrigada, vou falar com meu marido, boa noite"). */
 const SINAL_DE_DESPEDIDA = /obrigad|brigad|\bobg\b|valeu|\bvlw\b|agrade[çc]|gratid|grat[oa]\b|tchau|at[ée]\s|abra[çc]|beij|\bbjs?\b|deus|aben[çc]|boa\s+(?:noite|tarde)|bom\s+(?:dia|descanso)|bom\s+fim|[óo]tim[oa]\s+(?:noite|tarde|dia|semana)|fica\s+com|amém|amem/i;
 
+/**
+ * Despedida CLARA (rede de segurança em código, só para NÃO propor): agradecimento, tchau, abraço, beijo, grato, Deus abençoe, "até mais", ou
+ * "boa noite/tarde/dia" FECHANDO a fala. É um veto, nunca um gatilho: se ele acerta, a Sofia não propõe horário (o corte de 21/10, sem custo de
+ * chamada); se erra, só deixa de propor, e o comportamento é o do main. Quem decide propor é o modelo; este veto só pode tirar a proposta.
+ */
+const DESPEDIDA_CLARA = /obrigad|\bobg\b|valeu|\bvlw\b|agrade[çc]|gratid|\bgrat[oa]\b|tchau|at[ée]\s+(?:mais|logo|breve|amanh[ãa]|j[áa]|a\s+pr[óo]xima|l[áa])|abra[çc]|beij|\bbjs?\b|deus|aben[çc]|am[ée]m|fica\s+com|[óo]tim[oa]\s+(?:noite|tarde|dia|semana)|bom\s+(?:fim|final)\s+de\s+semana/i;
+const DESPEDIDA_NO_FIM = /(?:boa\s+(?:noite|tarde)|bom\s+(?:dia|descanso))$/i;
+
+/** A fala tem despedida clara (em qualquer lugar, ou "boa noite/tarde/dia" no fim, ignorando emoji e pontuação finais)? */
+export function temDespedidaClara(texto: string): boolean {
+  if (DESPEDIDA_CLARA.test(texto)) return true;
+  const fim = texto.replace(/[^\p{L}\p{N}\s]+$/u, '').replace(/[\s\p{Extended_Pictographic}\p{P}]+$/u, '').trim();
+  return DESPEDIDA_NO_FIM.test(fim);
+}
+
 /** A fala vale a chamada do modelo? Sem sinal nenhum (ex.: "quero marcar segunda", "qual o endereço?"), não se paga a chamada. */
 export function valeClassificar(falaDoPaciente: string): boolean {
   const t = falaDoPaciente.trim();
@@ -83,6 +98,13 @@ export function turnoEUltimaProposta(falas: Fala[]): { paciente: string; ia: str
   return { paciente, ia, inicioDoTurno: i + 1 };
 }
 
+/**
+ * O adiamento EXPLÍCITO que a proposta responde (mais estreito que o pré-filtro, que é largo de propósito): "tem vaga amanhã?" ou "meu marido me
+ * indicou" NÃO contam, senão a proposta "já feita" nunca aconteceria e o corte voltaria sem necessidade.
+ */
+const ADIAMENTO_EXPLICITO =
+  /\b(?:vou|preciso|deixa\s+eu|tenho\s+que)\b[^.!?\n]{0,30}(?:marido|espos[oa]|filh[oa]|\bm[ãa]e\b|fam[íi]lia|pensar|organizar)|\b(?:s[óo]\s+recebo|recebo\s+(?:dia|s[óo])|quando\s+(?:eu\s+)?receber|depois\s+que\s+(?:eu\s+)?receber|sal[áa]rio)|(?:m[êe]s|semana)\s+que\s+vem|depois\s+do\s+dia\s+\d|a\s+partir\s+d|\bviaj|sem\s+dinheiro|apertad|\bs[óo]\s+(?:no\s+)?dia\s+\d/i;
+
 /** Horário citado numa fala da IA: "7h", "13:30", "13 horas", "às 7", "7 da manhã", "meio-dia". */
 const HORARIO_NA_FALA = /\b\d{1,2}\s*(?:h\b|h\d{2}|:\d{2}|horas?\b)|\b[àa]s\s+\d{1,2}\b|\b\d{1,2}\s+da\s+(?:manh[ãa]|tarde|noite)|meio[\s-]?dia/i;
 
@@ -102,7 +124,7 @@ export function propostaDeAdiamentoJaFeita(falas: Fala[]): boolean {
     let n = m + 1;
     const bolhas: string[] = [];
     while (n < passado.length && passado[n].papel === 'ia') bolhas.push(passado[n++].texto);
-    if (bolhas.length > 0 && SINAL_DE_ADIAMENTO.test(turno) && HORARIO_NA_FALA.test(bolhas.join('\n'))) return true;
+    if (bolhas.length > 0 && ADIAMENTO_EXPLICITO.test(turno) && HORARIO_NA_FALA.test(bolhas.join('\n'))) return true;
     k = m;
   }
   return false;
@@ -184,14 +206,12 @@ export const dependenciasPadrao: DependenciasDoAdiamento = {
 export interface PedidoDeAdiamento {
   unit: Pick<Unit, 'slug' | 'spineEnabled' | 'spineToken'> & Partial<Unit>;
   falas: Fala[] | undefined;
-  /** Já tem consulta de pé, ou é paciente em tratamento: nunca se propõe horário novo. */
-  temConsultaOuTratamento: boolean;
-  /** Só para teste: ignora a chave e usa isto. */
-  ligada?: boolean;
+  /** Já tem consulta de pé, ou é paciente em tratamento: nunca se propõe horário novo. Pode chegar depois (promessa): o modelo já corre em paralelo com o resto do prompt. */
+  temConsultaOuTratamento: boolean | Promise<boolean>;
 }
 
 const limpo = (t: string | null | undefined): string | null => {
-  const s = String(t ?? '').replace(/[\r\n<>]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80);
+  const s = String(t ?? '').replace(/[\r\n<>"“”`;{}[\]]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 60);
   return s || null;
 };
 
@@ -203,15 +223,17 @@ const limpo = (t: string | null | undefined): string | null => {
 export async function decidirAdiamento(pedido: PedidoDeAdiamento, deps: DependenciasDoAdiamento = dependenciasPadrao): Promise<AdiamentoDoTurno | null> {
   const { unit, falas } = pedido;
   if (!falas?.length) return null;
-  const ligada = pedido.ligada ?? automacaoLigada(unit.slug, ID_ADIAMENTO, process.env.ADIAMENTO_PROPOE_DIA_SLUGS);
-  if (!ligada) return null;
+  if (!automacaoLigada(unit.slug, ID_ADIAMENTO, process.env.ADIAMENTO_PROPOE_DIA_SLUGS)) return null;
   // sem agenda (consultar_horarios não existe) a Sofia inventaria horário: nada de proposta
   if (!unit.spineEnabled || !unit.spineToken) return null;
-  if (pedido.temConsultaOuTratamento) return null;
+  if (pedido.temConsultaOuTratamento === true) return null;
   const { paciente, ia } = turnoEUltimaProposta(falas);
   if (!valeClassificar(paciente)) return null;
+  // despedida clara: nada a propor, e sem custo de chamada (o veto só tira a proposta, nunca a cria)
+  if (temDespedidaClara(paciente)) return null;
   if (propostaDeAdiamentoJaFeita(falas)) return null;
-  const c = await deps.classificar({ falaDoPaciente: paciente, ultimaFalaDaIa: ia }, unit as Unit);
+  const [c, temConsulta] = await Promise.all([deps.classificar({ falaDoPaciente: paciente, ultimaFalaDaIa: ia }, unit as Unit), Promise.resolve(pedido.temConsultaOuTratamento)]);
+  if (temConsulta) return null;
   if (!c || c.tipo !== 'adiou_com_motivo') return null;
   return { motivo: limpo(c.motivo), dataCitada: limpo(c.data_citada) };
 }

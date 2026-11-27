@@ -692,7 +692,7 @@ function renderPipelineIntents(unit: Unit): string {
     return `  - Cliente ${label} → chame mover_etapa({ statusId: ${statusId} })`;
   });
   return xmlBlock('pipeline_intents', `- Mova o lead automaticamente conforme detectar essas intenções:\n${lines.join('\n')}
-- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents, { propoeDia: automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) })}`);
+- A movimentação é silenciosa. NÃO mencione na resposta ao cliente.${renderEsperaRules(intents, { propoeDia: !!unit.spineEnabled && !!unit.spineToken && automacaoLigada(unit.slug, 'adiamento-propoe-dia', process.env.ADIAMENTO_PROPOE_DIA_SLUGS) })}`);
 }
 
 /**
@@ -716,7 +716,8 @@ export function renderEsperaRules(intents: Record<string, number>, opcoes: { pro
     ? `3. Responda ao adiamento: se ESTE turno trouxer o bloco <paciente_adiou>, siga-o (propor UM dia com DOIS horários reais de consultar_horarios; só marcar
      se ele escolher). Sem esse bloco — despedida, recusa, "vou pensar" ou "te aviso" sem motivo nem data, horário já escolhido — NÃO proponha horário:
      combine a volta, "combinado, te procuro no dia DD/MM para marcarmos sua consulta com o nosso especialista". Sem pressão e sem insistir. Nunca
-     prometa HORA de retorno. Só então chame mover_etapa.`
+     prometa HORA de retorno. Só então chame mover_etapa (EM ESPERA, com a data). Se ele escolher um horário e você marcar com agendar_consulta, vale a regra
+     de "agendou" acima: o cartão sai de EM ESPERA como em qualquer marcação.`
     : `3. Responda combinando a volta — "combinado, te procuro no dia DD/MM para marcarmos sua
      consulta com o nosso especialista" — sem pressão e sem insistir. Só então chame mover_etapa.`;
   const regra4 = opcoes.propoeDia
@@ -3024,6 +3025,13 @@ async function loadComposeInput(input: {
         })
     : Promise.resolve(null);
 
+  // Chave `adiamento-propoe-dia`: o modelo leve começa AGORA, em paralelo com o resto do prompt; a trava "tem consulta de pé / em tratamento" chega
+  // depois (`resolverConsulta`). Só o turno do grafo pede (passa `adiamentoSaida`): régua de follow-up, prévias e avaliações nunca pagam a chamada.
+  let resolverConsulta: (tem: boolean) => void = () => undefined;
+  const adiamentoP: Promise<AdiamentoDoTurno | null> = input.adiamentoSaida
+    ? decidirAdiamento({ unit: input.unit, falas: input.historico, temConsultaOuTratamento: new Promise<boolean>((r) => (resolverConsulta = r)) })
+    : Promise.resolve(null);
+
   const [templates, flagged, knowledge, actions, globalActions, leadFieldRules, leadMemory, consulta, estadoEtapa, lessons, contato, outraSofia, redeDeUnidades, ofertaDaCampanha] = await Promise.all([
     prisma.messageTemplate.findMany({
       where: { unitId: input.unit.id },
@@ -3126,12 +3134,12 @@ async function loadComposeInput(input: {
       : null;
 
   // Chave `adiamento-propoe-dia`: o paciente adiou COM motivo? (modelo leve + schema; só com agenda, sem consulta de pé nem tratamento, e
-  // só com sinal de adiamento na fala). Falha ou dúvida = null = o comportamento de sempre.
+  // só com sinal de adiamento na fala). Falha ou dúvida = null = o comportamento de sempre. (O modelo já correu em paralelo, lá em cima.)
   const temConsultaOuTratamento =
     promptTemConsulta(renderConsultaMarcada(consulta, agoraLocalISO(fusoDaUnidade(input.unit), input.agora), pacienteFranquia)) ||
     !!etapaFinal?.jaAgendadoOuPaciente;
-  // Só o turno do grafo pede (passa `adiamentoSaida`): régua de follow-up, prévias e avaliações nunca pagam a chamada.
-  const adiamento = input.adiamentoSaida ? await decidirAdiamento({ unit: input.unit, falas: input.historico, temConsultaOuTratamento }) : null;
+  resolverConsulta(temConsultaOuTratamento);
+  const adiamento = await adiamentoP;
   if (input.adiamentoSaida) input.adiamentoSaida.valor = adiamento;
 
   return {
