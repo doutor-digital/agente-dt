@@ -131,8 +131,8 @@ export async function alvos(unit: Unit, agora: Date = new Date()): Promise<Alvo[
      JOIN messages m ON m.conversation_id = c.id
      WHERE c.unit_id = $1
      GROUP BY c.lead_id
-     HAVING max(m.created_at) < $4::timestamptz - ($2 || ' hours')::interval
-        AND max(m.created_at) > $4::timestamptz - ($3 || ' hours')::interval
+     HAVING max(m.created_at) < ($4::timestamptz at time zone 'utc') - ($2 || ' hours')::interval
+        AND max(m.created_at) > ($4::timestamptz at time zone 'utc') - ($3 || ' hours')::interval
      ORDER BY max(m.created_at) DESC
      LIMIT 300`,
     unit.id,

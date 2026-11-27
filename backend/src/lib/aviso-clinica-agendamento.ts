@@ -46,6 +46,7 @@ import { diaDaSemana } from './feriados.js';
 import { fusoDaUnidade, partesNoFuso } from './fuso.js';
 import { ehLeadDoChatwoot } from './chatwoot-lead.js';
 import { avaliarNome } from '../services/spine-sync.service.js';
+import { agoraUtcSql } from './sql-tempo.js';
 
 export const ID_DA_AUTOMACAO = 'aviso-clinica-agendamento';
 
@@ -349,7 +350,7 @@ export const marcadorNoBanco: Marcador = {
        WHERE t.unit_id = ${unitId} AND t.lead_id = ${leadId}
          AND starts_with(t.id, ${prefixoDoId})
          AND s.payload->>'estado' <> 'pendente'
-         AND t.created_at > now() - (${String(Math.round(janelaMs / 1000))} || ' seconds')::interval`;
+         AND t.created_at > ${agoraUtcSql} - (${String(Math.round(janelaMs / 1000))} || ' seconds')::interval`;
     return Number(linhas[0]?.n ?? 0) > 0;
   },
   async concluir(id, estado) {
@@ -364,7 +365,7 @@ export const marcadorNoBanco: Marcador = {
         JOIN execution_traces t ON t.id = s.trace_id
        WHERE starts_with(t.id, ${prefixoDoId})
          AND s.payload->>'estado' = 'pendente'
-         AND t.created_at > now() - (${String(Math.round(idadeMaxMs / 1000))} || ' seconds')::interval
+         AND t.created_at > ${agoraUtcSql} - (${String(Math.round(idadeMaxMs / 1000))} || ' seconds')::interval
        ORDER BY t.created_at
        LIMIT 50`;
     return linhas.filter((l) => l.unitId).map((l) => ({ id: l.id, unitId: l.unitId, leadId: l.leadId, payload: l.payload ?? {} }));
