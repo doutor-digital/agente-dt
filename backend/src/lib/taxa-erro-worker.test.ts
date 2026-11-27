@@ -118,7 +118,6 @@ const linhaDaRede = (o: Partial<LinhaDaRede>): LinhaDaRede => ({
   erros_chave: 0,
   erros_limite: 0,
   erros_indisponivel: 0,
-  erros_outra: 0,
   ...o,
 });
 
@@ -180,8 +179,18 @@ test('queda geral: UMA unidade com a chave quebrada num provedor NÃO é queda g
   assert.equal(v.alarme, false);
 });
 
-test('queda geral: madrugada com 6 chamadas na REDE, todas por crédito, de 1 unidade só, ainda alarma', () => {
-  assert.equal(quedaGeral([rede({ total: 6, erros: 6, unidadesComErro: 1, causas: { credito: 6 } })]).alarme, true);
+test('queda geral: UMA unidade só (mesmo com crédito ou chave) NÃO é a rede toda: cada unidade pode ter a própria chave', () => {
+  assert.equal(quedaGeral([rede({ total: 6, erros: 6, unidadesComErro: 1, causas: { credito: 6 } })]).alarme, false);
+  assert.equal(quedaGeral([rede({ total: 30, erros: 30, unidadesComErro: 1, causas: { autenticacao: 30 } })]).alarme, false);
+});
+
+test('queda geral: a causa «outra» conta: 39 erros sem causa + 1 de crédito NÃO viram «saldo esgotado»', () => {
+  const amostras = montarRede([linhaDaRede({ rede: 1, total: 40, erros: 40, unidades: 5, erros_credito: 1 })]);
+  assert.equal(amostras[0].causas.outra, 39);
+  const v = quedaGeral(amostras);
+  assert.equal(v.alarme, true);
+  assert.equal(v.causa, 'outra');
+  assert.doesNotMatch(v.motivo, /saldo de crédito/);
 });
 
 test('queda geral: NÃO alarma com amostra minúscula, com 89% de erro, ou com uma conversa quebrada só', () => {

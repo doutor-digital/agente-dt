@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { protegerContainer } from './pg-descartavel.js';
 
 const BACKEND = fileURLToPath(new URL('../../', import.meta.url));
 const temDocker = process.env.SEM_DOCKER !== '1' && spawnSync('docker', ['version'], { stdio: 'ignore' }).status === 0;
@@ -31,6 +32,7 @@ before(async () => {
       ['run', '-d', '--rm', '--name', nome, '-e', 'POSTGRES_PASSWORD=x', '-p', '127.0.0.1::5432', 'postgres:16-alpine', '-c', 'timezone=America/Sao_Paulo'],
       { stdio: 'ignore' },
     );
+    protegerContainer(nome);
     const porta = execFileSync('docker', ['port', nome, '5432/tcp']).toString().trim().split('\n')[0].split(':').pop();
     for (let i = 0; ; i++) {
       const r = spawnSync('docker', ['exec', nome, 'psql', '-U', 'postgres', '-tAc', 'select 1'], { stdio: 'ignore' });
@@ -125,4 +127,26 @@ test('dedup: chave que venceu há 1 h pode ser reivindicada de novo (e não só 
   const viva = randomUUID();
   await prisma.messageClaim.create({ data: { key: `fuso:${viva}`, expiresAt: new Date(Date.now() + 3_600_000) } });
   assert.equal(await reivindicarComCerteza('fuso', viva), 'perdeu');
+});
+
+test('dedup pelo caminho REAL (INSERT cru): a mesma mensagem reivindicada 2x ganha uma vez só, e a limpeza não apaga marca viva', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
+  const { claimMessageId, clearDedupCache, limparClaimsVencidos } = await import('./dedup-cache.js');
+  const msg = randomUUID();
+  assert.equal(await claimMessageId('real', msg), true);
+  clearDedupCache(); // sem a memória do processo: só o banco decide (outra réplica, ou depois de um reinício)
+  assert.equal(await claimMessageId('real', msg), false, 'marca nascida vencida deixaria a Sofia responder 2x');
+  // o vencimento gravado é daqui a ~TTL (UTC), não 3 h antes
+  const [m] = await prisma.$queryRawUnsafe<Array<{ min: number }>>(
+    `select extract(epoch from (expires_at - (now() at time zone 'utc')))::int / 60 as min from message_claims where key = $1`,
+    `real:${msg}`,
+  );
+  assert.ok(m.min > 0, `vencimento ${m.min} min à frente`);
+  // reentrega de 2 h (TTL_REENTREGA_KOMMO_MS): a limpeza do JS não pode apagá-la
+  const { TTL_REENTREGA_KOMMO_MS } = await import('./dedup-cache.js');
+  const longa = randomUUID();
+  assert.equal(await claimMessageId('real', longa, TTL_REENTREGA_KOMMO_MS), true);
+  await limparClaimsVencidos();
+  clearDedupCache();
+  assert.equal(await claimMessageId('real', longa, TTL_REENTREGA_KOMMO_MS), false, 'a marca de 2 h tem de sobreviver à limpeza');
 });

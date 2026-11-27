@@ -27,7 +27,7 @@ Opções avaliadas:
 | C. `ALTER DATABASE agente_dt SET timezone='UTC'` | Mesmo que B para todos os clientes (n8n, `psql`, `pg_dump`) | Pior que B: alcança clientes que não são do agente. Relatórios que filtram por data local mudam sem aviso. **Não aplicar sem medir as 372 colunas** |
 | D. Migrar colunas para `timestamptz` | Resolve na raiz | 372 colunas em 131 tabelas, reescrita de tabela (`llm_calls` 6,7 GB). Decisão de planejamento, não de PR de conserto |
 
-Regra daqui para frente: SQL cru que compara coluna `timestamp` do agente_dt com "agora" usa `AGORA_UTC` / `agoraUtcSql` de `backend/src/lib/sql-tempo.ts`. Há uma trava (`sql-tempo.test.ts`) que reprova `now() -`, `now() +` ou `< now()` em qualquer arquivo novo, com 4 exceções justificadas.
+Regra daqui para frente: SQL cru que compara coluna `timestamp` do agente_dt com "agora" usa `AGORA_UTC` / `agoraUtcSql` de `backend/src/lib/sql-tempo.ts`. Há uma trava (`sql-tempo.test.ts`) que reprova `now() -`, `now() +` ou `< now()` em qualquer arquivo novo, com 2 exceções justificadas (`worker-lease.ts` e `meta-eventos.ts`).
 
 ## 3. O que foi corrigido (14 ocorrências em 5 arquivos)
 
@@ -39,7 +39,7 @@ A auditoria contou 15 em 7 arquivos pelo código que estava no servidor. Em `ori
 | `lib/agendamento-perdido-worker.ts` | 3 | carência de 90 min virava 4h30 (aviso de agendamento perdido atrasado 3 h) e a janela de 24 h virava 27 h | `fuso-janelas.pg.test.ts` |
 | `lib/aviso-clinica-agendamento.ts` | 2 | "houve aviso recente" olhava 3 h a mais (podia calar um aviso novo da recepção); pendentes velhas voltavam | idem |
 | `lib/preenche-campos-worker.ts` | 2 (`$4::timestamptz - ...`) | "esfriou há 6 h" era 9 h; janela de 72 h era 75 h | idem |
-| `lib/dedup-cache.ts` | 1 (`<= NOW()`) | chave vencida só podia ser reivindicada 3 h depois (a limpeza em segundo plano usa o relógio do JS e mascarava na maioria dos casos) | idem |
+| `lib/dedup-cache.ts` | 1 (`<= NOW()`) + o INSERT que gravava `expires_at` em hora local | no `main` a marca vencida só podia ser reivindicada 3 h depois e a limpeza apagava marcas 3 h antes do vencimento (reentrega de 2 h virava ~10 min) | idem (`claimMessageId` 2x pelo INSERT cru) |
 
 Mudança de comportamento esperada em produção após o deploy (todas na direção do que o código já dizia): o aviso de agendamento perdido passa a sair 90 min depois da oferta e não 4h30; o preenchimento de campos passa a pegar conversas de 6 h a 72 h e não de 9 h a 75 h; o monitor de erro passa a ver 30 min de verdade (e por isso ganhou o olhar da rede inteira, ver `taxa-erro-worker.ts`).
 
@@ -48,7 +48,7 @@ Mudança de comportamento esperada em produção após o deploy (todas na direç
 Consertar a janela deixou o monitor mais fiel e mais cego ao mesmo tempo, então ele foi recalibrado junto (`lib/taxa-erro-worker.ts`):
 
 - **Por unidade**: janela de 30 min de verdade e mínimo de 20 chamadas, como antes. Como a janela antiga trazia ~8x mais chamadas, uma unidade pequena com a chave quebrada deixou de alcançar o mínimo; por isso entrou a regra «TODAS as chamadas falhando, com pelo menos 8» (`TAXA_ERRO_MINIMO_TUDO_FALHANDO`). A sensibilidade para taxas parciais em unidade com pouco volume é menor que a antiga, que era um efeito do bug.
-- **Da rede (queda geral)**: 90% ou mais das chamadas falhando nos últimos 10 min, na rede toda ou num provedor, com pelo menos 5 chamadas, sem o mínimo por unidade. Para não acusar «todas as unidades» por uma só, um provedor isolado precisa de erro em 2 unidades ou mais; a rede inteira aceita 1 unidade só se a causa for de conta (crédito, chave). Só a queda da rede inteira cala os avisos por unidade.
+- **Da rede (queda geral)**: 90% ou mais das chamadas falhando nos últimos 10 min, na rede toda ou num provedor, com pelo menos 5 chamadas, sem o mínimo por unidade, **e erro em 2 unidades ou mais** (sem exceção para crédito ou chave: cada unidade pode ter a própria chave, `Unit.anthropicApiKey`, e uma acabando não é «a rede toda fora»; uma unidade só com tudo falhando é coberta pela regra por unidade). Só a queda da rede inteira cala os avisos por unidade. Chamadas `cancelled` (prazo estourado) ficam fora de todos os totais.
 - **Causa**: lida da mensagem de erro (`lib/causa-erro-ia.ts`, a mesma regra em JS e em SQL, conferida contra um Postgres de verdade): crédito («credit balance», «no credits»), chave (401/403), limite (429) e indisponibilidade (5xx, timeout). Códigos só valem em contexto de status, para um «512 tokens» não virar «provedor fora do ar».
 - A varredura da rede roda a cada 2 min (`TAXA_ERRO_REDE_SWEEP_MS`); a por unidade continua a cada 10.
 - Limite que continua: o aviso sai pelo `opsAlert` (relay dentro da VPS). O alerta de fora do servidor é o PR do vigia externo.
@@ -60,7 +60,7 @@ Contagem no repositório: 83 `@default(now())` no schema, 82 `DEFAULT CURRENT_TI
 | Tabela.coluna | Quem grava | Hora gravada | Quem lê / compara | Risco | Ação sugerida |
 |---|---|---|---|---|---|
 | `message_claims.created_at` | `dedup-cache.ts` (INSERT omite a coluna) | **local** (default do banco) | ninguém compara; só a limpeza usa `expires_at` | Baixo (coluna só informativa); mistura com linhas do Prisma | Gravar `AGORA_UTC` no INSERT, ou ignorar |
-| `message_claims.expires_at` | Prisma (UTC) e INSERT cru (UTC, JS `Date`) | UTC | `<= NOW()` (corrigido neste PR) | Era médio, agora resolvido | nenhuma |
+| `message_claims.expires_at` | Prisma (UTC) e INSERT cru de `dedup-cache.ts` | Prisma: UTC. INSERT cru: **hora LOCAL** (o `Date` chega como `timestamptz` e o `timestamp` guarda a hora da sessão); corrigido neste PR com `(… ::timestamptz at time zone 'utc')` | `<= NOW()` (corrigido neste PR para `agoraUtcSql`) | Era médio: no `main` a limpeza (`limparClaimsVencidos`, relógio do JS) apagava marcas até 3 h antes do vencimento e o prazo de reentrega de 2 h virava ~10 min; trocar só o `NOW()` sem corrigir o INSERT faria toda marca nascer vencida (mesma mensagem reivindicada 2x). Os dois lados foram corrigidos juntos | nenhuma |
 | `worker_leases.expires_at`, `updated_at` | `worker-lease.ts`, tudo por `now()` do banco | **local** | `worker-lease.ts` contra `now()` | Nenhum hoje: os dois lados são local e se compensam. **Quebra se o fuso da conexão ou do banco mudar** (opção B/C): cada deploy vê leases "vencidos" | Manter como está; é o motivo de não mudar o fuso da conexão sem migrar esta tabela junto |
 | `franquia_telefones.atualizado_em` | `franquia-indice-telefones.ts` (`now()`) | **local** | ninguém lê hoje (`criado_na_franquia` é UTC e é o que importa) | Baixo; é a mistura que a auditoria temia: `criado_na_franquia` UTC e `atualizado_em` local na mesma linha | Gravar `AGORA_UTC` na próxima mexida no arquivo |
 | `disparo_ondas.atualizado_em` | `lib/disparo/onda.ts:209` (`NOW()` na retomada) | **local** | `disparo/chatwoot/onda.ts:118` compara `atualizadoEm < Date.now()-X` (UTC), mas só para ondas em `montando`; a retomada deixa a onda `aprovada` | Baixo hoje; o dia em que a retomada passar por `montando` a onda parece 3 h mais velha e é cancelada como "interrompida" | Gravar `AGORA_UTC` |

@@ -14,12 +14,16 @@ import { AGORA_UTC } from './sql-tempo.js';
  *  - worker-lease.ts: `expires_at` e `updated_at` são gravados pelo PRÓPRIO `now()` do banco e lidos contra `now()`:
  *    os dois lados estão em hora local, se compensam (e a linha vive 90 s).
  *  - meta-eventos.ts: consulta o banco do rastreio (capi_descartes), não o agente_dt, e a janela é de 90 dias.
- *  - estrutura-campos.ts: gera DDL de tabelas novas do usuário, com `timestamptz` (aí `now()` puro está certo).
+ * (`sistemas-estrutura.ts` e `estrutura-campos.ts` tinham exceção na 1ª versão; só citam `now()` em texto de ajuda e em DDL de `timestamptz`, e o regex
+ * atual já não os acusa, então a exceção saiu.)
  */
 const RAIZ = fileURLToPath(new URL('..', import.meta.url));
-const EXCECOES = new Set(['lib/worker-lease.ts', 'mcp-remoto/meta-eventos.ts', 'mcp-remoto/estrutura-campos.ts', 'mcp-remoto/sistemas-estrutura.ts']);
-// now() que NÃO é Date.now()/performance.now(), seguido de +/- (aritmética de janela) ou numa comparação
-const PADRAO = /(?<![.\w])now\(\)\s*[-+]|[<>]=?\s*now\(\)|\$\d+::timestamptz\s*[-+]/i;
+const EXCECOES = new Set(['lib/worker-lease.ts', 'mcp-remoto/meta-eventos.ts']);
+// Relógio do banco (now(), current_timestamp, localtimestamp, current_date) em aritmética de janela (+/-) ou comparação, de qualquer
+// lado: `created_at > now() - ...`, `now() > col`, `col <= CURRENT_TIMESTAMP`, `$1::timestamptz - ...`. `now() at time zone 'utc'` passa, e atribuição (`SET col = now()`) não é comparação: os escritores de hora local estão
+// documentados em docs/fuso-agente-dt.md, seção 4.
+const RELOGIO = String.raw`(?<![.\w])(?:now\(\)|current_timestamp|localtimestamp|current_date)`;
+const PADRAO = new RegExp(`${RELOGIO}(?!\\s+at\\s+time\\s+zone)\\s*[-+<>]|[<>]=?\\s*${RELOGIO}|\\$\\d+::timestamptz\\s*[-+]`, 'i');
 
 function arquivos(dir: string): string[] {
   return readdirSync(dir).flatMap((n) => {
@@ -28,6 +32,11 @@ function arquivos(dir: string): string[] {
     return p.endsWith('.ts') && !p.endsWith('.test.ts') ? [p] : [];
   });
 }
+
+test('a trava pega as formas que o primeiro regex deixava passar', () => {
+  for (const ruim of ['where x > now() - interval', 'where now() > col', 'and col <= CURRENT_TIMESTAMP', 'now() < col', 'where d > current_date', 'x < localtimestamp']) assert.ok(PADRAO.test(ruim), ruim);
+  for (const boa of ["now() at time zone 'utc'", 'default now()', 'Date.now() - t', 'performance.now() - t0', "(now() at time zone 'utc') - interval '1 minute'"]) assert.ok(!PADRAO.test(boa), boa);
+});
 
 test('AGORA_UTC é um timestamp UTC, independente do fuso da sessão', () => {
   assert.equal(AGORA_UTC, "(now() at time zone 'utc')");

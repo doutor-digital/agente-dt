@@ -84,17 +84,18 @@ interface Amostra {
   baseErro: number;
 }
 
+/** `cancelled` (quem chamou desistiu) não é do provedor: fica fora do total, senão dilui a taxa e atrapalha a regra «todas falhando». */
 async function medir(): Promise<Amostra[]> {
   return prisma.$queryRawUnsafe<Amostra[]>(
     `
     select u.slug,
            u.id as "unitId",
-           count(*) filter (where c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval)::int
+           count(*) filter (where c.status <> 'cancelled' and c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval)::int
              as "recentesTotal",
            count(*) filter (where c.created_at > ${AGORA_UTC} - ($1 || ' minutes')::interval
                               and c.status = 'error')::int
              as "recentesErro",
-           count(*) filter (where c.created_at <= ${AGORA_UTC} - ($1 || ' minutes')::interval)::int
+           count(*) filter (where c.status <> 'cancelled' and c.created_at <= ${AGORA_UTC} - ($1 || ' minutes')::interval)::int
              as "baseTotal",
            count(*) filter (where c.created_at <= ${AGORA_UTC} - ($1 || ' minutes')::interval
                               and c.status = 'error')::int
@@ -182,21 +183,18 @@ function causaDominante(causas: AmostraDaRede['causas']): Causa {
 
 /**
  * Queda geral = 90% (ou mais) das chamadas falhando na janela curta, SEM exigir o mínimo por unidade. O mínimo da
- * rede é pequeno de propósito (de madrugada são ~20 chamadas por 10 min). A salvaguarda contra falso alarme:
- *  - o erro aparece em 2 unidades ou mais; OU
- *  - o escopo é a REDE INTEIRA e a causa é de CONTA (crédito, chave): se 90% de tudo o que a rede fez foi recusado por
- *    crédito ou chave, não é uma conversa esquisita, mesmo que de madrugada só uma unidade tenha falado.
- * Um PROVEDOR isolado exige 2 unidades sempre: uma unidade com a chave dela quebrada, fazendo 5 chamadas seguidas, não é
- * «todas as unidades estão afetadas».
+ * rede é pequeno de propósito (de madrugada são ~20 chamadas por 10 min). A salvaguarda contra falso alarme é UMA só: o erro
+ * tem de aparecer em 2 unidades ou mais, na rede ou no provedor. Nem crédito nem chave abrem exceção: cada unidade pode ter a
+ * PRÓPRIA chave (`Unit.anthropicApiKey`), então a chave de uma acabando não é «a rede toda fora». Uma unidade só com tudo falhando
+ * é coberta pela regra por unidade («todas as chamadas falhando», `pioroDemais`).
  */
 export function quedaGeral(amostras: AmostraDaRede[]): VeredictoDaRede {
   const candidatas: VeredictoDaRede[] = [];
   for (const a of amostras) {
     const taxa = a.total > 0 ? a.erros / a.total : 0;
     if (a.total < REDE_MINIMO || taxa < REDE_TAXA) continue;
+    if (a.unidadesComErro < 2) continue;
     const causa = causaDominante(a.causas);
-    const decisiva = causa === 'credito' || causa === 'autenticacao';
-    if (a.unidadesComErro < 2 && !(a.escopo === 'rede' && decisiva)) continue;
     candidatas.push({
       alarme: true,
       escopo: a.escopo,
@@ -225,7 +223,6 @@ export interface LinhaDaRede {
   erros_chave: number;
   erros_limite: number;
   erros_indisponivel: number;
-  erros_outra: number;
 }
 
 /**
@@ -267,6 +264,9 @@ export function montarRede(linhas: LinhaDaRede[]): AmostraDaRede[] {
       ['indisponivel', Number(l.erros_indisponivel)],
     ];
     for (const [c, n] of pares) if (n > 0) causas[c] = n;
+    // o que nenhuma regra reconhece também é uma causa: 39 erros «outra» + 1 de crédito não são «crédito esgotado»
+    const outra = Number(l.erros) - pares.reduce((t, [, n]) => t + n, 0);
+    if (outra > 0) causas.outra = outra;
     return { escopo: l.rede ? 'rede' : (l.provider ?? '?'), total: Number(l.total), erros: Number(l.erros), unidadesComErro: Number(l.unidades), causas };
   };
   const soma = linhas.find((l) => Number(l.rede) === 1);

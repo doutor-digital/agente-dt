@@ -80,11 +80,13 @@ function limparSeVencido(agora: number): void {
 
 /** O INSERT atômico: `true` = esta chamada gravou a chave (primeira vez, ou a anterior já tinha vencido). Lança se o banco falhar. */
 async function inserirReivindicacao(key: string, agora: number, ttlMs: number): Promise<boolean> {
+  // O parâmetro Date chega ao banco como `timestamptz` e, gravado direto num `timestamp`, vira hora LOCAL da sessão (America/Sao_Paulo):
+  // o vencimento nasceria 3 h no passado. `at time zone 'utc'` grava o mesmo relógio UTC que o Prisma e que `agoraUtcSql` leem.
   const vencimento = new Date(agora + ttlMs);
   // ON CONFLICT: o banco resolve a corrida. Quem inseriu (ou assumiu uma chave vencida), processa.
   const inseridas = await prisma.$executeRaw`
     INSERT INTO "message_claims" ("key", "expires_at")
-    VALUES (${key}, ${vencimento})
+    VALUES (${key}, (${vencimento}::timestamptz at time zone 'utc'))
     ON CONFLICT ("key") DO UPDATE
       SET "expires_at" = EXCLUDED."expires_at"
       WHERE "message_claims"."expires_at" <= ${agoraUtcSql}

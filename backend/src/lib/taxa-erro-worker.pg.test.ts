@@ -11,6 +11,7 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { protegerContainer } from './pg-descartavel.js';
 
 const BACKEND = fileURLToPath(new URL('../../', import.meta.url));
 const temDocker = process.env.SEM_DOCKER !== '1' && spawnSync('docker', ['version'], { stdio: 'ignore' }).status === 0;
@@ -31,6 +32,7 @@ before(async () => {
       ['run', '-d', '--rm', '--name', nome, '-e', 'POSTGRES_PASSWORD=x', '-p', '127.0.0.1::5432', 'postgres:16-alpine', '-c', 'timezone=America/Sao_Paulo'],
       { stdio: 'ignore' },
     );
+    protegerContainer(nome);
     const porta = execFileSync('docker', ['port', nome, '5432/tcp']).toString().trim().split('\n')[0].split(':').pop();
     for (let i = 0; ; i++) {
       const r = spawnSync('docker', ['exec', nome, 'psql', '-U', 'postgres', '-tAc', 'select 1'], { stdio: 'ignore' });
@@ -157,4 +159,15 @@ test('a causa lida em SQL e a lida em JS concordam em cada mensagem (inclusive c
     assert.equal(sql, classificarCausa(r.msg), `SQL e JS discordam em: ${JSON.stringify(r.msg)}`);
     assert.equal([r.c, r.a, r.l, r.i].filter(Boolean).length <= 1, true, 'as condições do SQL são exclusivas');
   }
+});
+
+test('«todas falhando» ignora cancelled: 8 erros + 40 canceladas = 8 chamadas, 8 erros (não 48)', { skip: PULAR }, async (ctx) => {
+  if (indisponivel) return ctx.skip(indisponivel);
+  const u = await prisma.unit.create({ data: { slug: 'u-cancel', name: 'u-cancel' } });
+  for (let i = 0; i < 8; i++) await chamada(u.id, 5, 'error', 'x');
+  await prisma.llmCall.createMany({ data: Array.from({ length: 40 }, () => ({ unitId: u.id, provider: 'anthropic', model: 'm', status: 'cancelled', createdAt: minutosAtras(5) })) });
+  const [a] = (await W._internos.medir()).filter((x) => x.slug === 'u-cancel');
+  assert.equal(a.recentesTotal, 8);
+  assert.equal(a.recentesErro, 8);
+  assert.equal(W.pioroDemais(a).alarme, true);
 });
