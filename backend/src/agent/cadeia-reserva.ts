@@ -58,6 +58,23 @@ export function rotuloDoProvedor(passo: Pick<PassoDaCadeia, 'provider' | 'origem
   return passo.origemChave === 'reserva-global' ? `${passo.provider}-reserva` : passo.provider;
 }
 
+/**
+ * Saldo é da CHAVE (da conta), não do provedor: a Anthropic da Taubaté sem crédito não pode tirar do ar a
+ * Anthropic da Salto, que tem a sua. Por isso o circuito de saldo vive numa chave própria:
+ *  - chave da unidade  -> "anthropic:<id da unidade>"
+ *  - chave do ambiente (OpenAI compartilhada) -> "openai:ambiente"
+ *  - chave reserva global -> "google:reserva"
+ * O circuito de INFRA (provedor fora do ar) segue por provedor, como sempre.
+ */
+export function chaveDeSaldo(provider: Provedor, origemChave: OrigemDaChave, unitId: string): string {
+  return `${provider}:${origemChave === 'unidade' ? unitId : origemChave === 'ambiente' ? 'ambiente' : 'reserva'}`;
+}
+
+/** De onde vem a chave do PRINCIPAL: a OpenAI sem chave própria usa a do ambiente; os demais sempre a da unidade. */
+export function origemDoPrincipal(provider: Provedor, unit: Pick<UnitCreds, 'openaiApiKey'>): OrigemDaChave {
+  return provider === 'openai' && !unit.openaiApiKey ? 'ambiente' : 'unidade';
+}
+
 export interface MontarCadeiaArgs {
   unit: UnitCreds;
   /** Provedor EFETIVO da chamada principal (já considera chave ausente). */
@@ -154,6 +171,8 @@ export interface PercorrerCadeiaArgs<T> {
    * saldo). Desligada = o plano B de hoje, que nunca consultou o circuito.
    */
   comCircuito: boolean;
+  /** Unidade da conversa: escopo do circuito de saldo das chaves que são DELA. */
+  unitId: string;
   /** Relógio injetável. */
   agora?: () => number;
 }
@@ -177,7 +196,8 @@ export async function percorrerCadeia<T>(
   for (const passo of args.passos) {
     const base = { provider: passo.provider, modelName: passo.modelName, origemChave: passo.origemChave };
 
-    if (args.comCircuito && circuitoAberto(passo.provider)) {
+    const saldoKey = chaveDeSaldo(passo.provider, passo.origemChave, args.unitId);
+    if (args.comCircuito && (circuitoAberto(passo.provider) || circuitoAberto(saldoKey))) {
       tentativas.push({ ...base, resultado: 'circuito-aberto', ms: 0 });
       continue;
     }
@@ -185,7 +205,10 @@ export async function percorrerCadeia<T>(
     const t0 = agora();
     try {
       const resposta = await withTimeout(args.chamar(passo), passo.timeoutMs);
-      if (args.comCircuito) registrarSucesso(passo.provider);
+      if (args.comCircuito) {
+        registrarSucesso(passo.provider);
+        registrarSucesso(saldoKey);
+      }
       tentativas.push({ ...base, resultado: 'respondeu', ms: agora() - t0 });
       return { resposta, passo, tentativas };
     } catch (err) {
@@ -194,7 +217,7 @@ export async function percorrerCadeia<T>(
       let resultado: ResultadoDaTentativa = 'erro';
       if (ehErroDeSaldoOuCota(err)) {
         resultado = 'saldo';
-        if (args.comCircuito) abrirCircuito(passo.provider);
+        if (args.comCircuito) abrirCircuito(saldoKey);
       } else if (ehFalhaDeInfra(err)) {
         resultado = err instanceof Error && err.name === 'LlmTimeoutError' ? 'timeout' : 'erro';
         if (args.comCircuito) registrarFalha(passo.provider);

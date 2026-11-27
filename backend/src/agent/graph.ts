@@ -90,6 +90,8 @@ import {
   reservasGlobais,
   cadeiaCompletaLigada,
   rotuloDoProvedor,
+  chaveDeSaldo,
+  origemDoPrincipal,
   resumoDasTentativas,
   CadeiaEsgotadaError,
 } from './cadeia-reserva.js';
@@ -906,10 +908,12 @@ export async function buildAgentGraph(
     let planoBEmUso: PlanoBEmUso | null = null;
     // Chave reserva GLOBAL no ambiente liga a cadeia completa (saldo abre o circuito, reservas passam por ele). Sem ela, é o plano B de hoje.
     const cadeiaViva = cadeiaCompletaLigada(reservasGlobais());
+    // Saldo é da chave: o circuito de saldo do principal é desta unidade (ou do ambiente), não do provedor inteiro.
+    const saldoDoPrincipal = chaveDeSaldo(provider as Provedor, origemDoPrincipal(provider as Provedor, unit), unit.id);
     try {
       // Provedor comprovadamente fora não ganha mais 35 segundos de espera por
       // mensagem: pula direto pro plano B, e volta sozinho quando se recuperar.
-      if (circuitoAberto(provider as Provedor)) {
+      if (circuitoAberto(provider as Provedor) || circuitoAberto(saldoDoPrincipal)) {
         throw new LlmTimeoutError(0);
       }
       let modeloReserva: typeof model | null = null;
@@ -969,7 +973,7 @@ export async function buildAgentGraph(
       if (cadeiaViva && ehErroDeSaldoOuCota(err)) {
         // Saldo/cota não passa com o tempo (26/11: 15 h sem resposta): corta o provedor já e deixa as próximas mensagens irem
         // direto pro reserva, sem pagar uma chamada morta cada uma. Só com a cadeia completa ligada (chave reserva global).
-        abrirCircuito(provider as Provedor);
+        abrirCircuito(saldoDoPrincipal);
         logger.error({ provider, unit: unit.slug, erro: erroPrincipal.slice(0, 300) }, 'provedor de IA sem saldo/cota — circuito aberto, indo pro reserva');
         await recorder.step({
           kind: 'ERROR',
@@ -999,6 +1003,7 @@ export async function buildAgentGraph(
           const vencedora = await percorrerCadeia({
             passos: passosDeReserva,
             comCircuito: cadeiaViva,
+            unitId: unit.id,
             chamar: async (passo) => {
               const modeloB = createChatModel(
                 { ...unit, ...passo.credenciais, llmProvider: passo.provider },

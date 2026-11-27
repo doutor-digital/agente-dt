@@ -10,6 +10,8 @@ import {
   rotuloDoProvedor,
   resumoDasTentativas,
   CadeiaEsgotadaError,
+  chaveDeSaldo,
+  origemDoPrincipal,
   type PassoDaCadeia,
   type ReservasGlobais,
 } from './cadeia-reserva.js';
@@ -160,6 +162,7 @@ test('tenta na ordem e devolve o primeiro que responde, com o histórico', async
   const r = await percorrerCadeia({
     passos: [passo('openai'), passo('google'), passo('anthropic')],
     comCircuito: true,
+    unitId: 'u1',
     chamar: async (p) => {
       chamados.push(p.provider);
       if (p.provider === 'openai') throw erroSaldo();
@@ -178,6 +181,7 @@ test('erro de saldo pula NA HORA (sem esperar o teto) e abre o circuito daquele 
   const r = await percorrerCadeia({
     passos: [passo('openai', { timeoutMs: 5_000 }), passo('google', { timeoutMs: 5_000 })],
     comCircuito: true,
+    unitId: 'u1',
     chamar: async (p) => {
       if (p.provider === 'openai') throw erroSaldo();
       return 'ok';
@@ -185,16 +189,17 @@ test('erro de saldo pula NA HORA (sem esperar o teto) e abre o circuito daquele 
   });
   assert.ok(Date.now() - t0 < 500, 'não pode ter esperado o teto de 5 s');
   assert.equal(r.passo.provider, 'google');
-  assert.equal(circuitoAberto('openai'), true);
-  assert.equal(circuitoAberto('google'), false);
+  assert.equal(circuitoAberto('openai:u1'), true);
+  assert.equal(circuitoAberto('google:u1'), false);
 });
 
 test('na mensagem seguinte o provedor sem saldo nem é chamado (circuito aberto)', async () => {
-  abrirCircuito('openai');
+  abrirCircuito('openai:u1');
   const chamados: string[] = [];
   const r = await percorrerCadeia({
     passos: [passo('openai'), passo('google')],
     comCircuito: true,
+    unitId: 'u1',
     chamar: async (p) => {
       chamados.push(p.provider);
       return 'ok';
@@ -210,6 +215,7 @@ test('timeout do passo vai para o próximo e conta como falha de infra (três se
     const r = await percorrerCadeia({
       passos: [passo('openai', { timeoutMs: 20 }), passo('google')],
       comCircuito: true,
+      unitId: 'u1',
       chamar: async (p) => (p.provider === 'openai' ? lenta() : 'ok'),
     });
     assert.equal(r.tentativas[0].resultado, 'timeout');
@@ -223,6 +229,7 @@ test('erro que não é saldo nem infra (ex.: pedido inválido) segue pro próxim
   const r = await percorrerCadeia({
     passos: [passo('openai'), passo('google')],
     comCircuito: true,
+    unitId: 'u1',
     chamar: async (p) => {
       if (p.provider === 'openai') throw Object.assign(new Error('400 bad request'), { status: 400 });
       return 'ok';
@@ -233,10 +240,10 @@ test('erro que não é saldo nem infra (ex.: pedido inválido) segue pro próxim
 });
 
 test('sucesso fecha o circuito do reserva', async () => {
-  abrirCircuito('google', Date.now() - 200_000); // já venceu: a sonda passa
-  const r = await percorrerCadeia({ passos: [passo('google')], comCircuito: true, chamar: async () => 'ok' });
+  abrirCircuito('google:u1', Date.now() - 200_000); // já venceu: a sonda passa
+  const r = await percorrerCadeia({ passos: [passo('google')], comCircuito: true, unitId: 'u1', chamar: async () => 'ok' });
   assert.equal(r.passo.provider, 'google');
-  assert.equal(circuitoAberto('google'), false);
+  assert.equal(circuitoAberto('google:u1'), false);
 });
 
 test('todos falham: lança CadeiaEsgotadaError com todas as tentativas e o último erro', async () => {
@@ -244,6 +251,7 @@ test('todos falham: lança CadeiaEsgotadaError com todas as tentativas e o últi
     percorrerCadeia({
       passos: [passo('openai'), passo('google')],
       comCircuito: true,
+      unitId: 'u1',
       chamar: async () => {
         throw erroSaldo();
       },
@@ -258,12 +266,13 @@ test('todos falham: lança CadeiaEsgotadaError com todas as tentativas e o últi
 });
 
 test('sem circuito (cadeia desligada = plano B de hoje): nunca consulta nem mexe no circuito', async () => {
-  abrirCircuito('openai'); // aberto, mas o plano B de hoje nunca olhou pra isso
+  abrirCircuito('openai:u1'); // aberto, mas o plano B de hoje nunca olhou pra isso
   const chamados: string[] = [];
   await assert.rejects(
     percorrerCadeia({
       passos: [passo('openai')],
       comCircuito: false,
+      unitId: 'u1',
       chamar: async (p) => {
         chamados.push(p.provider);
         throw erroSaldo();
@@ -275,14 +284,14 @@ test('sem circuito (cadeia desligada = plano B de hoje): nunca consulta nem mexe
 
   resetarCircuitos();
   await assert.rejects(
-    percorrerCadeia({ passos: [passo('google')], comCircuito: false, chamar: async () => { throw erroSaldo(); } }),
+    percorrerCadeia({ passos: [passo('google')], comCircuito: false, unitId: 'u1', chamar: async () => { throw erroSaldo(); } }),
     CadeiaEsgotadaError,
   );
-  assert.equal(circuitoAberto('google'), false, 'saldo no plano B de hoje não abre circuito');
+  assert.equal(circuitoAberto('google:u1'), false, 'saldo no plano B de hoje não abre circuito');
 });
 
 test('cadeia vazia lança CadeiaEsgotadaError (quem chama decide o fallback)', async () => {
-  await assert.rejects(percorrerCadeia({ passos: [], comCircuito: true, chamar: async () => 'x' }), CadeiaEsgotadaError);
+  await assert.rejects(percorrerCadeia({ passos: [], comCircuito: true, unitId: 'u1', chamar: async () => 'x' }), CadeiaEsgotadaError);
 });
 
 test('a reescrita do bastidor leva a chave reserva global (senão o createChatModel cairia no OpenAI)', () => {
@@ -307,6 +316,7 @@ test('graph.ts: o plano B sai da cadeia; saldo abre o circuito só com a chave r
   const src = readFileSync(new URL('./graph.ts', import.meta.url), 'utf8').replace(/\s+/g, '');
   assert.ok(src.includes('constcadeiaViva=cadeiaCompletaLigada(reservasGlobais());'));
   assert.ok(src.includes('if(cadeiaViva&&ehErroDeSaldoOuCota(err)){'));
+  assert.ok(src.includes('abrirCircuito(saldoDoPrincipal);'), 'saldo do principal tem de abrir o circuito DA CHAVE, não do provedor');
   assert.ok(src.includes('percorrerCadeia({passos:passosDeReserva,comCircuito:cadeiaViva,'));
   assert.ok(!src.includes('escolherPlanoB('), 'o grafo voltou a escolher um plano B só, fora da cadeia');
   assert.ok(!/planoB:passosDeReserva\[0\],/.test(src), 'o rastro não pode levar o passo inteiro (tem a chave reserva)');
@@ -317,4 +327,42 @@ test('abrirCircuito corta na hora e volta sozinho depois do descanso', () => {
   abrirCircuito('anthropic', agora, 1000);
   assert.equal(circuitoAberto('anthropic', agora + 999), true);
   assert.equal(circuitoAberto('anthropic', agora + 1000), false);
+});
+
+test('saldo é da CHAVE: a conta sem saldo de uma unidade não corta o provedor das outras', async () => {
+  const sempreSaldo = async () => {
+    throw erroSaldo();
+  };
+  await assert.rejects(
+    percorrerCadeia({ passos: [passo('anthropic')], comCircuito: true, unitId: 'taubate', chamar: sempreSaldo }),
+    CadeiaEsgotadaError,
+  );
+  assert.equal(circuitoAberto(chaveDeSaldo('anthropic', 'unidade', 'taubate')), true);
+
+  // outra unidade, com a chave Anthropic DELA: não pode ser pulada
+  const r = await percorrerCadeia({ passos: [passo('anthropic')], comCircuito: true, unitId: 'salto', chamar: async () => 'ok' });
+  assert.equal(r.tentativas[0].resultado, 'respondeu');
+  // nem o circuito de infra do provedor foi tocado
+  assert.equal(circuitoAberto('anthropic'), false);
+});
+
+test('chave compartilhada (ambiente / reserva global) corta para todos que a usam', async () => {
+  await assert.rejects(
+    percorrerCadeia({ passos: [passo('openai', { origemChave: 'ambiente' })], comCircuito: true, unitId: 'a', chamar: async () => { throw erroSaldo(); } }),
+    CadeiaEsgotadaError,
+  );
+  const r = await percorrerCadeia({
+    passos: [passo('openai', { origemChave: 'ambiente' }), passo('google', { origemChave: 'reserva-global' })],
+    comCircuito: true,
+    unitId: 'b',
+    chamar: async () => 'ok',
+  });
+  assert.deepEqual(r.tentativas.map((t) => t.resultado), ['circuito-aberto', 'respondeu']);
+  assert.equal(chaveDeSaldo('google', 'reserva-global', 'b'), 'google:reserva');
+});
+
+test('origem da chave do principal: OpenAI sem chave própria usa a do ambiente', () => {
+  assert.equal(origemDoPrincipal('openai', { openaiApiKey: null }), 'ambiente');
+  assert.equal(origemDoPrincipal('openai', { openaiApiKey: 'o' }), 'unidade');
+  assert.equal(origemDoPrincipal('anthropic', { openaiApiKey: null }), 'unidade');
 });

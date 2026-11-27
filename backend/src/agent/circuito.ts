@@ -40,9 +40,10 @@ interface Estado {
   abertoAte: number;
 }
 
-const estados = new Map<Provedor, Estado>();
+/** Chave = o provedor (infra) ou "provedor:escopo" (saldo, que é por chave/conta — ver `chaveDeSaldo`). */
+const estados = new Map<string, Estado>();
 
-function estadoDe(p: Provedor): Estado {
+function estadoDe(p: string): Estado {
   let e = estados.get(p);
   if (!e) {
     e = { falhasSeguidas: 0, abertoAte: 0 };
@@ -55,7 +56,7 @@ function estadoDe(p: Provedor): Estado {
  * Decide se vale tentar este provedor agora.
  * Quando o descanso termina, deixa passar UMA tentativa para sondar.
  */
-export function circuitoAberto(p: Provedor, agora = Date.now()): boolean {
+export function circuitoAberto(p: string, agora = Date.now()): boolean {
   const e = estadoDe(p);
   if (e.abertoAte === 0) return false;
   if (agora >= e.abertoAte) {
@@ -67,7 +68,7 @@ export function circuitoAberto(p: Provedor, agora = Date.now()): boolean {
 }
 
 /** Provedor respondeu: fecha o circuito e zera o histórico. */
-export function registrarSucesso(p: Provedor): void {
+export function registrarSucesso(p: string): void {
   const e = estadoDe(p);
   e.falhasSeguidas = 0;
   e.abertoAte = 0;
@@ -77,7 +78,7 @@ export function registrarSucesso(p: Provedor): void {
  * Provedor falhou por infraestrutura. Devolve true quando esta falha foi a que
  * abriu o circuito — quem chamou pode querer registrar isso.
  */
-export function registrarFalha(p: Provedor, agora = Date.now()): boolean {
+export function registrarFalha(p: string, agora = Date.now()): boolean {
   const e = estadoDe(p);
   e.falhasSeguidas++;
   if (e.falhasSeguidas >= FALHAS_PARA_ABRIR && e.abertoAte <= agora) {
@@ -94,7 +95,7 @@ export function registrarFalha(p: Provedor, agora = Date.now()): boolean {
  * O descanso é maior que o de infra (que sonda por um timeout caro); aqui a sonda é barata, mas
  * não precisa ser a cada minuto.
  */
-export function abrirCircuito(p: Provedor, agora = Date.now(), descansoMs = DESCANSO_SALDO_MS): void {
+export function abrirCircuito(p: string, agora = Date.now(), descansoMs = DESCANSO_SALDO_MS): void {
   const e = estadoDe(p);
   e.abertoAte = agora + descansoMs;
 }
