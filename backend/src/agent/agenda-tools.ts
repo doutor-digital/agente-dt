@@ -30,7 +30,7 @@ import { comQuemVaiSerAtendido } from '../lib/nome-do-profissional.js';
 import { travaDaAgendaDaIa } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
-import { pacienteQueJaExiste } from '../services/paciente-existente.js';
+import { leadParaConverter, pacienteQueJaExiste } from '../services/paciente-existente.js';
 import { avisoRecente, marcarAviso } from '../lib/aviso-dedupe.js';
 import { PARA_SEMPRE_MS } from '../lib/conflito-paciente.js';
 import { carimbarQuenteAoAgendar, decidirPagamentoAntecipado, valorDoCampo } from './carimbos-do-agendamento.js';
@@ -787,9 +787,18 @@ export function buildCadastrarPaciente({ unit, recorder, kommo, avisoSemKommo }:
       // quando a unidade tiver essa origem configurada.
       const origem = SpineService.origemDaSofia(fresca);
 
-      if (vinculo?.spineIdLead) {
+      // O lead que o vínculo guarda como SEU (criado por nós para este cartão). O lead que o 1º contato apenas ACHOU pelo telefone nunca está
+      // em `spineIdLead`: o nome do cartão vem do perfil do WhatsApp, e a filha que escreve do aparelho da mãe chega com o nome da mãe. Esse
+      // só é convertido aqui, na hora de agendar, se o nome que o paciente DEU para a consulta bate (nome e sobrenome) com o do lead achado;
+      // senão cria o paciente novo, como sempre foi.
+      const { id: idLeadParaConverter, achadoDescartado } = leadParaConverter(vinculo, args.nome);
+      if (achadoDescartado) {
+        logger.info({ unit: fresca.slug, idLeadAchado: achadoDescartado, leadId: args.leadId }, 'agenda-tools: lead achado pelo telefone NÃO convertido — o nome da consulta não bate com o do lead (ou o lead está sem nome): paciente novo');
+      }
+
+      if (idLeadParaConverter) {
         const c = await SpineService.convertLead(fresca, {
-          idLead: vinculo.spineIdLead,
+          idLead: idLeadParaConverter,
           name: args.nome.trim(),
           idSource: origem,
           whatsapp: fone,
@@ -799,7 +808,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo, avisoSemKommo }:
           via = 'convert';
         } else {
           logger.warn(
-            { unit: fresca.slug, idLead: vinculo.spineIdLead, erro: c.error },
+            { unit: fresca.slug, idLead: idLeadParaConverter, erro: c.error },
             'agenda-tools: conversão do lead falhou — caindo para cadastro novo',
           );
         }
@@ -810,7 +819,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo, avisoSemKommo }:
           name: args.nome.trim(),
           whatsapp: fone,
           idSource: origem,
-          idLead: vinculo?.spineIdLead ?? null,
+          idLead: idLeadParaConverter,
           addressCity: args.cidade?.trim().toUpperCase() ?? null,
           addressUf: SpineService.resolverUf(args.uf ?? null),
         });
@@ -829,7 +838,7 @@ export function buildCadastrarPaciente({ unit, recorder, kommo, avisoSemKommo }:
       await recorder.step({
         kind: 'TOOL_RESULT',
         title: `cadastrar_paciente "${args.nome}": ok via ${via} (idClient ${idClient}, origem ${SpineService.nomeDaOrigem(origem)})`,
-        payload: { nome: args.nome, telefone: fone, idClient, via, idLead: vinculo?.spineIdLead ?? null, idSource: origem },
+        payload: { nome: args.nome, telefone: fone, idClient, via, idLead: idLeadParaConverter, idSource: origem },
       });
       await guardarPaciente(fresca.id, args.leadId, idClient);
       return `Cadastrado. idClient ${idClient} — use este número em agendar_consulta.`;

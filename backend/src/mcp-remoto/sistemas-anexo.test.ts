@@ -11,6 +11,7 @@ import { baixarUrl, dominiosPermitidos, DOMINIOS_PADRAO, hostPermitido, ipPrivad
 import { CofreDeArquivos, ErroDeCofre } from './cofre-arquivos.js';
 import { criarContextoSistemas, type ContaSistemas } from './sistemas.js';
 import { nomeLimpo, registrarAnexosSistemas, type DepsAnexo } from './sistemas-anexo.js';
+import { nomeConfere } from './sistemas-documento.js';
 
 // ── amostras ──────────────────────────────────────────────────────────────────────────────────────────
 const PDF = Buffer.from('%PDF-1.7\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n');
@@ -26,7 +27,7 @@ const MIN = 60_000;
 
 // ── o servidor do sistema, de mentira ─────────────────────────────────────────────────────────────────
 interface Chamada { metodo: string; caminho: string; corpo: any; quem?: string }
-function servidor(o: { lancamento?: Record<string, unknown> | null; anexo?: (corpo: any) => unknown } = {}) {
+function servidor(o: { lancamento?: Record<string, unknown> | null; anexo?: (corpo: any) => unknown; conferir?: (corpo: any) => unknown; documento?: (corpo: any) => unknown } = {}) {
   const chamadas: Chamada[] = [];
   const lanc = o.lancamento === undefined ? { id: LANC, unidade: 'rioverde', data: '2026-11-03', tipo: 'entrada', categoria: 'consulta', valor: 150, forma: 'pix', status: 'aguardando' } : o.lancamento;
   const conta: ContaSistemas = {
@@ -38,6 +39,16 @@ function servidor(o: { lancamento?: Record<string, unknown> | null; anexo?: (cor
         if (caminho === '/admin/v1/consulta') return { colunas: [], linhas: lanc ? [lanc] : [], cortado: false };
         if (caminho === '/admin/v1/anexo') {
           const r = o.anexo ? o.anexo(op?.corpo) : { ok: true, doc_id: 'doc-1', caminho: 'rioverde/2026-11/x-recibo.pdf', paginas: 1, previas: 1, ia_status: 'aguardando' };
+          if (r instanceof Error) throw r;
+          return r;
+        }
+        if (caminho === '/admin/v1/documento/conferir') {
+          const r = o.conferir ? o.conferir(op?.corpo) : { ok: true, alvo: { colaborador: 'Colaboradora Exemplo da Silva', unidade: 'Parauapebas' } };
+          if (r instanceof Error) throw r;
+          return r;
+        }
+        if (caminho === '/admin/v1/documento') {
+          const r = o.documento ? o.documento(op?.corpo) : { ok: true, caminho: 'rh-docs/colaboradores/c-123/aviso.pdf' };
           if (r instanceof Error) throw r;
           return r;
         }
@@ -289,6 +300,139 @@ test('anexar_url com o downloader de verdade: domínio fora da lista e IP escrit
       assert.ok(a.srv.anexos().length === 0, url);
     }
   } finally { a.limpar(); }
+});
+
+// ── passo 3 com destino na pasta do colaborador (PDF assinado da ClickSign) ──────────────────────────
+const CLICKSIGN = 'clicksign-content-production.s3.amazonaws.com';
+const URL_ASSINADO = `https://${CLICKSIGN}/2026/11/25/x/Aviso_ferias%20-%20Clicksign.pdf?X-Amz-Expires=300&X-Amz-Signature=SEGREDOabc`;
+
+test('anexar_url rh_colaborador: confere o colaborador ANTES de baixar, entrega na rota do documento com a origem; auditoria sem o endereço', async () => {
+  const srv = servidor();
+  const b = baixa(PDF, { host: CLICKSIGN, nome: 'Aviso_ferias - Clicksign.pdf' });
+  const a = ambiente(srv, { baixar: b.baixar as any });
+  try {
+    const k = await cliente(a);
+    const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Aviso de férias assinado', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.equal(r.erro, false, r.texto);
+    const ordem = srv.chamadas.map((c) => c.caminho);
+    assert.deepEqual(ordem, ['/admin/v1/documento/conferir', '/admin/v1/documento'], 'confere antes, entrega depois; nada de /anexo nem de consulta de lançamento');
+    const [conf, doc] = srv.chamadas;
+    assert.equal(conf!.corpo.destino, 'rh_colaborador'); assert.equal(conf!.corpo.id, 'c-123'); assert.equal(conf!.corpo.conteudo_b64, undefined, 'conferir não leva o arquivo');
+    assert.equal(doc!.corpo.destino, 'rh_colaborador'); assert.equal(doc!.corpo.id, 'c-123'); assert.equal(doc!.corpo.tipo_documento, 'Aviso de férias assinado');
+    assert.equal(doc!.corpo.origem, `url:${CLICKSIGN}`);
+    assert.match(doc!.corpo.nome, /\.pdf$/); assert.ok(!/\.pdf\.pdf$/.test(doc!.corpo.nome));
+    assert.ok(Buffer.from(doc!.corpo.conteudo_b64, 'base64').equals(PDF));
+    assert.equal(r.json.anexado, true);
+    assert.equal(r.json.destino.tipo, 'rh_colaborador'); assert.equal(r.json.destino.quemE.colaborador, 'Colaboradora Exemplo da Silva');
+    assert.match(r.json.proximoPasso, /pasta do colaborador/);
+    const aud = a.auditoria.find((x) => x.ferramenta === 'sistemas_anexar_url')!;
+    assert.deepEqual(aud.argumentos, { sistema: undefined, tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Aviso de férias assinado', host: CLICKSIGN });
+    assert.ok(!JSON.stringify(a.auditoria).includes('Silva'), 'o nome do colaborador não vai para a auditoria');
+    assert.ok(!JSON.stringify(a.auditoria).includes('SEGREDOabc'), 'a assinatura do link não vai para a auditoria');
+  } finally { a.limpar(); }
+});
+
+test('anexar_url rh_colaborador: colaborador que o servidor não confirma, id inválido ou sem tipo_documento → nada é baixado nem gravado', async () => {
+  const b = baixa(PDF, { host: CLICKSIGN });
+  const srv = servidor({ conferir: () => new ErroSistemas('colaborador não encontrado', 404) as any });
+  const a = ambiente(srv, { baixar: b.baixar as any });
+  try {
+    const k = await cliente(a);
+    const r1 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'nao-existe', tipo_documento: 'Advertência assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.ok(r1.erro, r1.texto);
+    const r2 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: "x'; drop table rh_docs; --", tipo_documento: 'Advertência assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.ok(r2.erro && /id do colaborador/.test(r2.texto), r2.texto);
+    const r3 = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', url: URL_ASSINADO });
+    assert.ok(r3.erro && /tipo_documento/.test(r3.texto), r3.texto);
+    assert.equal(b.chamadas.length, 0, 'nada baixado');
+    assert.equal(srv.chamadas.filter((c) => c.caminho === '/admin/v1/documento').length, 0, 'nada gravado');
+  } finally { a.limpar(); }
+  // resposta fora do contrato (sem alvo) também para antes do download
+  const b2 = baixa(PDF, { host: CLICKSIGN });
+  const a2 = ambiente(servidor({ conferir: () => ({ ok: true }) }), { baixar: b2.baixar as any });
+  try {
+    const k2 = await cliente(a2);
+    const r = await k2.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.ok(r.erro && /não confirmou o colaborador/.test(r.texto), r.texto);
+    assert.equal(b2.chamadas.length, 0);
+  } finally { a2.limpar(); }
+});
+
+test('anexar_url rh_colaborador: página HTML (ou zip) não vale e nada é gravado', async () => {
+  for (const [corpo, ct] of [[HTML, 'text/html'], [Buffer.from('PK\u0003\u0004zip-qualquer'), 'application/zip']] as const) {
+    const srv = servidor();
+    const a = ambiente(srv, { baixar: baixa(corpo, { host: CLICKSIGN, ct }).baixar as any });
+    try {
+      const k = await cliente(a);
+      const r = await k.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata assinada', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+      assert.ok(r.erro, r.texto);
+      assert.equal(srv.chamadas.filter((c) => c.caminho === '/admin/v1/documento').length, 0, ct);
+    } finally { a.limpar(); }
+  }
+});
+
+test('anexar_url rh_colaborador: o NOME informado tem que bater com o cadastro do id ANTES de baixar (id errado não grava na pasta de outra pessoa)', async () => {
+  const b = baixa(PDF, { host: CLICKSIGN });
+  const srv = servidor();
+  const a = ambiente(srv, { baixar: b.baixar as any });
+  try {
+    const k = await cliente(a);
+    const base = { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Advertência assinada', url: URL_ASSINADO };
+    const outro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora Costa' });
+    assert.ok(outro.erro && /não bate com o cadastro do id c-123/.test(outro.texto), outro.texto);
+    assert.ok(!/Exemplo|Costa/.test(outro.texto), 'o erro não traz nome nenhum');
+    assert.ok(!/Exemplo|Costa|Silva/.test(JSON.stringify(a.auditoria)), 'nem a auditoria (que guarda o texto do erro)');
+    const repetido = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora Colaboradora' });
+    assert.ok(repetido.erro && /nome E sobrenome/.test(repetido.texto), repetido.texto);
+    const soPrimeiro = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'Colaboradora' });
+    assert.ok(soPrimeiro.erro && /nome E sobrenome/.test(soPrimeiro.texto), soPrimeiro.texto);
+    const semNome = await k.chamar('sistemas_anexar_url', base);
+    assert.ok(semNome.erro && /nome_colaborador/.test(semNome.texto), semNome.texto);
+    assert.equal(b.chamadas.length, 0, 'nada baixado');
+    assert.equal(srv.chamadas.filter((c) => c.caminho === '/admin/v1/documento').length, 0, 'nada gravado');
+    // acento, caixa e "da" não atrapalham; campos de lançamento vazios não derrubam a chamada
+    const ok = await k.chamar('sistemas_anexar_url', { ...base, nome_colaborador: 'COLABORADORA da silvá', lancamento: '', tipo: '' });
+    assert.equal(ok.erro, false, ok.texto);
+  } finally { a.limpar(); }
+  // servidor que não diz o nome: não grava
+  const b2 = baixa(PDF, { host: CLICKSIGN });
+  const a2 = ambiente(servidor({ conferir: () => ({ ok: true, alvo: { unidade: 'Parauapebas' } }) }), { baixar: b2.baixar as any });
+  try {
+    const k2 = await cliente(a2);
+    const r = await k2.chamar('sistemas_anexar_url', { tabela: 'rh_colaborador', id: 'c-123', tipo_documento: 'Ata', nome_colaborador: 'Colaboradora Silva', url: URL_ASSINADO });
+    assert.ok(r.erro && /não disse o nome/.test(r.texto), r.texto);
+    assert.equal(b2.chamadas.length, 0);
+  } finally { a2.limpar(); }
+});
+
+test('nomeConfere: 1º nome igual e cada palavra inteira no cadastro', () => {
+  const cad = ['maria', 'heloisa', 'sabino', 'costa'];
+  assert.ok(nomeConfere(['maria', 'costa'], cad));
+  assert.ok(nomeConfere(['maria', 'heloisa', 'sabino'], cad));
+  for (const inf of [['maria'], ['maria', 'maria'], ['heloisa', 'costa'], ['maria', 'silva'], ['mar', 'costa'], ['maria', 'cost']]) assert.ok(!nomeConfere(inf, cad), inf.join(' '));
+  // ligações não contam dos dois lados: "Maria dos Santos" confere com "Maria Santos"
+  assert.ok(nomeConfere(['maria', 'santos'], ['maria', 'santos']));
+  assert.ok(!nomeConfere(['maria', 'costa'], []));
+});
+
+test('anexar_url caixa_lanc/fin_lanc continuam exigindo lancamento e tipo', async () => {
+  const b = baixa(PDF);
+  const a = ambiente(servidor(), { baixar: b.baixar as any });
+  try {
+    const k = await cliente(a);
+    const r1 = await k.chamar('sistemas_anexar_url', { tabela: 'caixa_lanc', lancamento: LANC, url: 'https://recibo.infinitepay.io/abc' });
+    assert.ok(r1.erro && /precisa de tipo/.test(r1.texto), r1.texto);
+    const r2 = await k.chamar('sistemas_anexar_url', { tabela: 'fin_lanc', tipo: 'recibo', url: 'https://recibo.infinitepay.io/abc' });
+    assert.ok(r2.erro && /uuid/.test(r2.texto), r2.texto);
+    assert.equal(b.chamadas.length, 0);
+  } finally { a.limpar(); }
+});
+
+test('lista padrão: libera SÓ o balde dos PDFs assinados da ClickSign, não o S3 inteiro', () => {
+  assert.ok(hostPermitido(CLICKSIGN, DOMINIOS_PADRAO));
+  for (const h of ['s3.amazonaws.com', 'outro-balde.s3.amazonaws.com', 'clicksign-content-production.s3.amazonaws.com.evil.com', 'x.clicksign-content-production.s3.amazonaws.com', 'amazonaws.com', 'clicksign.com']) {
+    assert.ok(!hostPermitido(h, DOMINIOS_PADRAO), h);
+  }
 });
 
 // ── o downloader: SSRF ────────────────────────────────────────────────────────────────────────────────

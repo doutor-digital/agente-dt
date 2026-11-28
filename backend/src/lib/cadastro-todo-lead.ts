@@ -50,7 +50,7 @@ import { estadoEtapaDoLead } from '../services/lead-stage.service.js';
 import { avaliarPelaIa, type DecisaoDaIa, type UnidadeDaIa } from './cadastro-triagem-ia.js';
 import { anuncioPelaFrase, esperarOrigem } from './origem-texto-pronto.js';
 import { agendarIndice } from './franquia-indice-telefones.js';
-import { PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
+import { PREFIXO_LEAD_EXISTENTE, PREFIXO_PACIENTE_EXISTENTE } from '../services/paciente-existente.js';
 import type { Unit } from '@prisma/client';
 
 export const ID_AUTOMACAO = 'cadastro-todo-lead';
@@ -85,14 +85,24 @@ export function estadoCadastroTodoLead(slug: string, raw: string | undefined = p
 }
 
 /**
- * A regra do 1º contato manda neste lead? Ligada: sempre. Em "só no papel": só se a chave da triagem NÃO está ligada (senão a decisão
- * que grava é a da triagem, e simular a outra regra pareceria que ela decide). `escreve` = pode criar de verdade.
+ * A regra do 1º contato manda neste lead? Ligada: sempre. Em "só no papel": só se a chave da triagem está DESLIGADA — com a triagem ligada a
+ * decisão que grava é a dela, e com a triagem também em "só no papel" ela segue lendo e registrando o seu seco (a IA lê a conversa, "cadastraria
+ * pela IA"...) como antes da chave nova: o seco do 1º contato não toma o lugar dele. `escreve` = pode criar de verdade.
  */
 export function modoPrimeiroContato(slug: string): { vale: boolean; escreve: boolean } {
   const novo = estadoPrimeiroContato(slug);
   if (novo === 'ligado') return { vale: true, escreve: true };
-  if (novo === 'seco' && estadoDaTriagem(slug) !== 'ligado') return { vale: true, escreve: false };
+  if (novo === 'seco' && estadoDaTriagem(slug) === 'desligado') return { vale: true, escreve: false };
   return { vale: false, escreve: false };
+}
+
+/**
+ * O cadastro no 1º contato roda neste lead mesmo quando a IA foi pulada e a unidade não tem o grupo? É o `modoPrimeiroContato(...).vale`, mais o caso das
+ * DUAS chaves em "só no papel": aí o seco da triagem é quem registra (ver `modoPrimeiroContato`), mas precisa rodar para registrar.
+ * Chave nova em "só no papel" com a triagem LIGADA continua de fora (a triagem ligada não roda sem o grupo).
+ */
+export function primeiroContatoRodaSemGrupo(slug: string): boolean {
+  return modoPrimeiroContato(slug).vale || (estadoPrimeiroContato(slug) === 'seco' && estadoDaTriagem(slug) === 'seco');
 }
 
 /**
@@ -218,9 +228,8 @@ export const depsPadrao: DepsDoCadastro = {
     // Vínculo só com `spineIdClient` (carga de implantação, widget "só cadastrar", Sofia ao cadastrar paciente) é gente que
     // JÁ está na franquia como paciente: criar um lead por cima duplica.
     if (l?.spineIdLead || l?.spineIdClient) return 'na-franquia';
-    // O 1º contato achou o telefone como PACIENTE e só anotou o motivo (telefone não prova que é a mesma pessoa, então não grava o idClient):
-    // está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
-    if (l?.status === 'ok' && (l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE)) return 'na-franquia';
+    // O 1º contato achou o telefone como PACIENTE ou como LEAD e só anotou o motivo (telefone não prova que é a mesma pessoa, então nunca grava o id): está resolvido — sem isto cada mensagem do paciente antigo refaria a leitura do Kommo e a busca na franquia.
+    if (l?.status === 'ok' && ((l.motivo ?? '').startsWith(PREFIXO_PACIENTE_EXISTENTE) || (l.motivo ?? '').startsWith(PREFIXO_LEAD_EXISTENTE))) return 'na-franquia';
     if (l && (l.status === 'ignorado' || l.status === 'falhou') && Date.now() - l.updatedAt.getTime() < ESPERA_ENTRE_TENTATIVAS_MS) {
       return 'tentou-ha-pouco';
     }
@@ -601,7 +610,8 @@ export async function cadastrarLeadDoTurno<U extends UnidadeMinima>(
   // 1º contato (chave de 27/11), em "só no papel" ou ligada: já pede a carga do índice de telefones da franquia (em segundo plano), para
   // que o primeiro lead depois de ligar não encontre o índice vazio e espere. Barato quando não é hora (uma leitura do status).
   const comFranquia = unit as unknown as Partial<Unit>;
-  if (modoPrimeiroContato(unit.slug).vale && comFranquia.spineToken && comFranquia.spineEnabled) {
+  // (a chave de 27/11 em seco OU ligada: o aquecimento vale mesmo quando o seco da triagem é quem decide, para o índice já existir no dia de ligar)
+  if (estadoPrimeiroContato(unit.slug) !== 'desligado' && comFranquia.spineToken && comFranquia.spineEnabled) {
     try { agendarIndice(comFranquia as Unit); } catch { /* nunca lança */ }
   }
   const decisao = await decidirCadastroDoLead({ unit, leadId, legado: deveCriarNaFranquia({ ferramentas: entrada.ferramentas }) }, deps);

@@ -750,10 +750,12 @@ function Esteira({
   form: Form;
 }) {
   const temToken = status?.hasToken ?? false;
-  const c: Record<string, number> = hist?.contagem ?? {};
-  const enviados = c.ok ?? 0;
-  const falharam = c.falhou ?? 0;
-  const esperando = c.ignorado ?? 0;
+  const c = hist?.contagem;
+  const jaExistiam = (hist?.contagem.jaExistiam?.lead ?? 0) + (hist?.contagem.jaExistiam?.paciente ?? 0);
+  // "ok" inclui quem a franquia já tinha (o telefone já era lead/paciente lá): esses não foram enviados por nós
+  const enviados = Math.max(0, (c?.ok ?? 0) - jaExistiam);
+  const falharam = c?.falhou ?? 0;
+  const esperando = c?.ignorado ?? 0;
   const pacientes = (hist?.links ?? []).filter((l) => l.spineIdClient).length;
 
   const passos: {
@@ -1294,7 +1296,9 @@ function Previa({ unitId, onEnviado }: { unitId: string; onEnviado: () => Promis
         <div className="mt-5 rounded-lg border border-amber-500/25 bg-amber-500/5 p-4">
           <p className="text-sm text-amber-300">
             {r.etapa === 'ja-enviado'
-              ? `Este lead já está na franquia com o id ${r.spineIdLead}. Não seria enviado de novo.`
+              ? r.spineIdLead
+                ? `Este lead já está na franquia com o id ${r.spineIdLead}. Não seria enviado de novo.`
+                : 'O telefone deste lead já estava na franquia (achado no 1º contato). Não seria enviado de novo.'
               : 'Não seria enviado agora.'}
           </p>
           {r.motivo && <p className="mt-1 text-xs leading-relaxed text-zinc-400">{r.motivo}</p>}
@@ -1380,6 +1384,11 @@ const MOTIVO_PACIENTE: Record<string, { titulo: string; explica: string }> = {
     titulo: 'Sem telefone',
     explica:
       'A franquia exige WhatsApp ou e-mail. Sem nenhum dos dois, a recepção fica com um nome sem como ligar.',
+  },
+  'ja-existe': {
+    titulo: 'O telefone já é de um paciente lá',
+    explica:
+      'A franquia já tem um paciente com este telefone. Nada seria cadastrado por aqui — a consulta se marca no cadastro dele.',
   },
   'ja-cadastrado': {
     titulo: 'Já é paciente lá',
@@ -1696,7 +1705,16 @@ function Historico({
       </div>
 
       <div className="mt-5 grid gap-3 sm:grid-cols-3">
-        <Tile label="Enviados hoje" valor={hist.hoje} cor="text-emerald-400" />
+        <Tile
+          label="Enviados hoje"
+          valor={hist.hoje}
+          cor="text-emerald-400"
+          hint={
+            hist.hojeJaExistiam && hist.hojeJaExistiam.lead + hist.hojeJaExistiam.paciente > 0
+              ? `+ ${hist.hojeJaExistiam.lead + hist.hojeJaExistiam.paciente} já estavam na franquia (${hist.hojeJaExistiam.lead} lead, ${hist.hojeJaExistiam.paciente} paciente) — não foram enviados por nós`
+              : undefined
+          }
+        />
         <Tile
           label="Falharam"
           valor={hist.contagem.falhou}

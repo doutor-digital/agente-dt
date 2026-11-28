@@ -15,9 +15,73 @@
 import type { Unit } from '@prisma/client';
 import type { KommoClient } from './kommo.service.js';
 import type { Estado } from '../lib/automacoes-estado.js';
+import { nomesCompletosCompativeis } from '../lib/nome-compativel.js';
 
 /** Começo do `motivo` que o espelhamento grava no vínculo quando CASOU com paciente que já existia (quem lê o vínculo compara com isto). */
 export const PREFIXO_PACIENTE_EXISTENTE = 'paciente já existe na franquia';
+/** Idem, para o telefone que já era LEAD na franquia (o 1º contato não cria o segundo cadastro). */
+export const PREFIXO_LEAD_EXISTENTE = 'lead já existe na franquia';
+
+/**
+ * O motivo que o 1º contato grava quando o telefone já era LEAD na franquia. O id e o NOME do lead achado ficam aqui (e não em
+ * `spine_id_lead`): só quem agenda, comparando o nome que o paciente deu com este, pode converter o lead achado em paciente.
+ */
+export function motivoDeLeadJaExistente(a: { id: number; nome: string | null; onde: string }): string {
+  return `${PREFIXO_LEAD_EXISTENTE} (idLead ${a.id}, nome ${a.nome ? JSON.stringify(a.nome) : 'desconhecido'}, achado pelo telefone ${a.onde}): não criei lead — o lead NÃO foi vinculado ao cartão (telefone sozinho não prova a pessoa; quem agenda confere o nome)`;
+}
+
+/** O lead achado pelo telefone que o motivo guarda (ver `motivoDeLeadJaExistente`), ou `null` se o motivo é de outro tipo. */
+export function leadAchadoNoMotivo(motivo: string | null | undefined): { id: number; nome: string | null } | null {
+  const m = String(motivo ?? '');
+  if (!m.startsWith(PREFIXO_LEAD_EXISTENTE)) return null;
+  const id = /\(idLead (\d+)/.exec(m);
+  if (!id) return null;
+  const n = /, nome ("(?:[^"\\]|\\.)*")/.exec(m);
+  let nome: string | null = null;
+  if (n) {
+    try { nome = String(JSON.parse(n[1]!)).trim() || null; } catch { nome = null; }
+  }
+  return { id: Number(id[1]), nome };
+}
+
+/**
+ * Que lead da franquia a consulta pode converter em paciente? (decidido na HORA DE AGENDAR, com o nome que o paciente DEU)
+ *  - o lead que o vínculo guarda como SEU (`spineIdLead` sem o motivo de "lead já existe": criado por nós para este cartão);
+ *  - o lead que o 1º contato apenas ACHOU pelo telefone (só no motivo): só se o nome da consulta bate com o dele, nome e sobrenome. O nome
+ *    do cartão nunca serve de prova (vem do perfil do WhatsApp, que é o da mãe quando a filha escreve do aparelho dela).
+ * Nenhum dos dois: `id` nulo — cria-se o paciente novo, como sempre. `achadoDescartado` diz o lead que ficou de fora, para o log.
+ */
+export function leadParaConverter(
+  vinculo: { spineIdLead?: number | null; motivo?: string | null } | null | undefined,
+  nomeDaConsulta: string | null | undefined,
+): { id: number | null; achadoDescartado: number | null } {
+  const achado = leadAchadoNoMotivo(vinculo?.motivo);
+  // `spineIdLead` com o motivo de "lead já existe" é lead ACHADO que a versão anterior do 1º contato adotou pelo primeiro nome: vale a mesma regra
+  if (!achado) return { id: vinculo?.spineIdLead ?? null, achadoDescartado: null };
+  const id = vinculo?.spineIdLead ?? achado.id;
+  return nomesCompletosCompativeis(nomeDaConsulta, achado.nome)
+    ? { id, achadoDescartado: null }
+    : { id: null, achadoDescartado: id };
+}
+
+/**
+ * De onde veio um vínculo "ok": criado por NÓS, o telefone já era lead lá, ou já era paciente lá. Quem conta "enviados por nós" (tela da
+ * franquia, conferência dos 7 dias) não pode somar os que já existiam: eles nunca foram enviados, e a conferência os daria como "faltando".
+ */
+export type TipoDoVinculo = 'criado' | 'lead-ja-existia' | 'paciente-ja-existia';
+export function tipoDoVinculo(motivo: string | null | undefined): TipoDoVinculo {
+  const m = motivo ?? '';
+  if (m.startsWith(PREFIXO_PACIENTE_EXISTENTE)) return 'paciente-ja-existia';
+  if (m.startsWith(PREFIXO_LEAD_EXISTENTE)) return 'lead-ja-existia';
+  return 'criado';
+}
+
+/** Quantos vínculos de cada tipo (ver `TipoDoVinculo`). */
+export function contarPorTipoDoVinculo(motivos: ReadonlyArray<string | null | undefined>): Record<TipoDoVinculo, number> {
+  const out: Record<TipoDoVinculo, number> = { criado: 0, 'lead-ja-existia': 0, 'paciente-ja-existia': 0 };
+  for (const m of motivos) out[tipoDoVinculo(m)]++;
+  return out;
+}
 
 export type PacienteExistente =
   | { tipo: 'achou'; idClient: number; por: 'idClient' | 'telefone' | 'nome' }

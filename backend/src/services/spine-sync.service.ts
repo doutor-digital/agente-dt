@@ -9,12 +9,12 @@ import { conferirCartaoDestaUnidade } from '../lib/crm-compartilhado.js';
 import { CAMPO_ID_CLIENT, ID_AUTOMACAO as AUTOMACAO_1610, estadoCasamentoJornada } from '../lib/casamento-jornada.js';
 import { registrarSimulacao } from '../lib/so-no-papel.js';
 import { MOTIVO_SEM_CASAMENTO, criaPacienteJuntoComOLead } from '../lib/cadastro-todo-lead.js';
-import { decidirCadastro, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE } from './paciente-existente.js';
+import { decidirCadastro, motivoDeLeadJaExistente, pacienteQueJaExiste, PREFIXO_PACIENTE_EXISTENTE, tipoDoVinculo } from './paciente-existente.js';
 import { nomeProvisorioDoLead } from '../lib/nome-provisorio.js';
-import { lembrarLeadCriado, verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
+import { DIAS_DE_LEADS_RECENTES, franquiaDe, lembrarLeadCriado, verificarJaCadastrado, type DepsJaCadastrado, type JaCadastrado } from '../lib/franquia-ja-cadastrado.js';
 import { conferirOrigemIaSofia, type ConferenciaDaOrigem } from '../lib/franquia-origem-ia.js';
 import { chaveDaFranquia, espacarCriacao } from '../lib/franquia-espacamento.js';
-import { chaveDoTelefone } from '../lib/franquia-indice-telefones.js';
+import { chaveDoTelefone, conferirImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
 
 /**
  * Campos do Kommo que o espelho lê — POR NOME, porque cada conta tem ids
@@ -73,7 +73,23 @@ const PALAVRAS_DE_CONVERSA = new Set([
   // 'sem' e 'tempo' ficam FORA de propósito: são genéricas demais e barrariam título que hoje passa.
   'ocupado', 'ocupada', 'trabalhando', 'indisponivel', 'ausente',
   'loja', 'empresa', 'comercial', 'vendas', 'suporte', 'teste', 'fly', 'link', 'status',
+  // papel, não nome: "Paciente", "Pai", "Filha" — o perfil do WhatsApp de quem escreve pelo aparelho de outra pessoa (visto em Rio Verde, 27/11/2026)
+  'paciente', 'pacientes', 'pai', 'mae', 'mamae', 'papai', 'esposa', 'esposo', 'marido', 'avo', 'vovo', 'amigo', 'amiga',
+  'vizinho', 'vizinha', 'patroa', 'patrao', 'namorado', 'namorada', 'genro', 'cunhada', 'cunhado', 'sogra', 'sogro',
+  'tia', 'tio', 'madrinha', 'padrinho',
+  // frase, não nome: "AMANHÃ FALAMOS", "PACIENTE BRASILEIRO FALANDO", "Vendo Avon"
+  'amanha', 'hoje', 'ontem', 'falamos', 'falando', 'falar', 'falei', 'vendo', 'compro', 'vendemos', 'vende', 'ligar', 'ligo',
+  'aguardo', 'aguardando', 'retorno', 'retornando', 'avon', 'revenda', 'revendedor', 'revendedora',
+  // recado de status e frase religiosa: "Deus é fiel" cai no verbo "é" e em "deus" (regras próprias — "João de Deus" e "Maria Fiel Souza" são nomes)
+  'amem', 'aleluia', 'abencoado', 'abencoada', 'bencao', 'louvado', 'oracao', 'gratidao', 'disponivel', 'online', 'offline',
+  'mensagem', 'mensagens', 'recado', 'viajando',
 ]);
+
+/** Parentesco que também é sobrenome ou apelido ("Carlos Souza Filho", "Neto Silva"): só barra quando é a ÚNICA palavra de nome. */
+// 'filha' aqui (e não na lista de conversa): "Ana Souza Filha" e "Maria das Dores Silva Filha" são nomes; "Filha" sozinha não (sênior, 27/11).
+const PARENTESCO_QUE_E_SOBRENOME = new Set(['filho', 'filha', 'neto', 'sobrinho', 'primo', 'irmao', 'irma']);
+const PARTICULAS_ANTES_DE_DEUS = new Set(['de', 'do', 'dos']);
+const PEDACO_DE_EMAIL = /@|gmail|hotmail|outlook|yahoo|icloud|\.com\b|\.net\b/;
 
 function semAcento(s: string): string {
   return s
@@ -117,11 +133,28 @@ export function avaliarNome(
     return { ok: false, motivo: `"${nome}" é pergunta do paciente, não nome` };
   }
 
+  if (PEDACO_DE_EMAIL.test(semAcento(nome))) {
+    return { ok: false, motivo: `"${nome}" é e-mail (ou pedaço dele), não nome` };
+  }
+
   const palavras = nome.split(/\s+/).filter(Boolean);
-  for (const p of palavras) {
-    const chave = semAcento(p).replace(/[^a-z]/g, '');
+  const chaves = palavras.map((p) => semAcento(p).replace(/[^a-z]/g, ''));
+  for (let i = 0; i < palavras.length; i++) {
+    const p = palavras[i]!;
+    const chave = chaves[i]!;
     if (PALAVRAS_DE_CONVERSA.has(chave)) {
       return { ok: false, motivo: `"${nome}" é mensagem do paciente, não nome (achei "${p}")` };
+    }
+    // "é" com acento é o verbo ("Deus é fiel"); sem acento é a partícula "e" ("Maria e José"), que segue valendo
+    if (p.toLowerCase() === 'é') return { ok: false, motivo: `"${nome}" é frase (tem o verbo "é"), não nome` };
+    if (chave === 'deus' && !PARTICULAS_ANTES_DE_DEUS.has(chaves[i - 1] ?? '')) {
+      return { ok: false, motivo: `"${nome}" é frase religiosa ou recado, não nome (achei "${p}")` };
+    }
+    if (PARENTESCO_QUE_E_SOBRENOME.has(chave)) {
+      const outras = chaves.filter((c, j) => j !== i && c.length >= 2 && !PARTICULAS.has(c));
+      if (outras.length < 1) {
+        return { ok: false, motivo: `"${nome}" é parentesco, não nome (achei "${p}")` };
+      }
     }
   }
 
@@ -367,6 +400,11 @@ export async function prepararLead(unit: Unit, kommoLeadId: number, primeiroCont
   if (jaTem?.status === 'ok' && jaTem.spineIdLead) {
     return { ok: false, etapa: 'ja-enviado', spineIdLead: jaTem.spineIdLead };
   }
+  // O telefone já era lead ou paciente na franquia (achado no 1º contato; só o motivo foi gravado, nenhum id): está RESOLVIDO. Sem isto o botão
+  // "Enviar" do painel e o agendamento criariam um lead duplicado por cima do que a recepção já cadastrou.
+  if (jaTem?.status === 'ok' && tipoDoVinculo(jaTem.motivo) !== 'criado') {
+    return { ok: false, etapa: 'ja-enviado', motivo: `o telefone já estava na franquia (achado no 1º contato): ${jaTem.motivo ?? ''}` };
+  }
 
   return montarPayload(unit, kommoLeadId, primeiroContato);
 }
@@ -383,7 +421,7 @@ export interface PayloadDoPaciente {
 export interface PreparoPaciente {
   ok: boolean;
   motivo?: string;
-  etapa?: 'desligado' | 'sem-lead' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
+  etapa?: 'desligado' | 'sem-lead' | 'ja-existe' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
   payload?: PayloadDoPaciente;
   spineIdClient?: number;
 }
@@ -399,7 +437,17 @@ export async function prepararPaciente(
   if (vinculo?.spineIdClient) {
     return { ok: false, etapa: 'ja-cadastrado', spineIdClient: vinculo.spineIdClient };
   }
-  if (!vinculo?.spineIdLead) {
+  const tipo = vinculo?.status === 'ok' ? tipoDoVinculo(vinculo.motivo) : 'criado';
+  // paciente achado pelo telefone (só o motivo): a franquia já tem o paciente. Se o vínculo tem um lead NOSSO, o motivo foi reescrito por outro caminho e vale o lead.
+  if (tipo === 'paciente-ja-existia' && !vinculo?.spineIdLead) {
+    return {
+      ok: false,
+      etapa: 'ja-existe',
+      motivo: `o telefone já é de um paciente da franquia (${vinculo?.motivo ?? ''}) — nada a cadastrar por aqui; a consulta se marca no cadastro dele`,
+    };
+  }
+  // Lead que o 1º contato apenas ACHOU pelo telefone (só o motivo): o paciente pode nascer por este botão, mas SEM converter aquele lead (abaixo).
+  if (!vinculo?.spineIdLead && tipo !== 'lead-ja-existia') {
     return {
       ok: false,
       etapa: 'sem-lead',
@@ -417,6 +465,10 @@ export async function prepararPaciente(
     };
   }
 
+  // O lead que vira paciente é só o criado por NÓS para este cartão. O achado pelo telefone nunca: aqui o nome é o do cartão (vem do perfil do
+  // WhatsApp, que é o da mãe quando a filha escreve do aparelho dela) — não prova pessoa; quem prova é o nome dado na consulta (`leadParaConverter`).
+  const idLead = tipo === 'lead-ja-existia' ? null : (vinculo?.spineIdLead ?? null);
+
   const partes = base.name.trim().split(/\s+/).filter((x) => x.length >= 2);
   if (partes.length < 2) {
     return {
@@ -427,7 +479,7 @@ export async function prepararPaciente(
         name: base.name,
         whatsapp: base.whatsapp ? SpineService.normalizarWhatsapp(base.whatsapp) : null,
         idSource: base.idSource,
-        idLead: vinculo.spineIdLead,
+        idLead,
         addressCity: base.addressCity,
         addressUf: base.addressUf,
       },
@@ -450,7 +502,7 @@ export async function prepararPaciente(
       name: base.name,
       whatsapp: fone,
       idSource: base.idSource,
-      idLead: vinculo.spineIdLead,
+      idLead,
       addressCity: base.addressCity,
       addressUf: base.addressUf,
     },
@@ -503,30 +555,118 @@ export interface DepsDoPrimeiroContato {
   jaCadastrado?: DepsJaCadastrado;
   origem?: (unit: Unit) => Promise<ConferenciaDaOrigem>;
   espacar?: typeof espacarCriacao;
+  /** O nome do lead que a franquia já tem (para decidir se é a mesma pessoa do cartão). `null` = não deu para saber. */
+  nomeDoLead?: (unit: Unit, achado: Extract<JaCadastrado, { tipo: 'achou' }>) => Promise<string | null>;
+  /** Por que o índice de telefones da unidade não vai chegar (`null` = tudo bem). */
+  impedimentoDoIndice?: (unit: Unit) => Promise<string | null>;
+}
+
+const DIA_MS = 86_400_000;
+const diaIso = (ms: number) => new Date(ms).toISOString().slice(0, 10);
+
+/**
+ * O nome com que o lead já está na franquia. Fora o que NÓS acabamos de criar (o nome vem de memória), a franquia só devolve nome na busca
+ * por janela de datas: usa o dia em que o cadastro nasceu (do índice) com folga, ou os últimos dias (cadastros recentes). Não achou/erro = `null`.
+ */
+async function nomeDoLeadNaFranquia(unit: Unit, achado: Extract<JaCadastrado, { tipo: 'achou' }>): Promise<string | null> {
+  if (achado.nome) return achado.nome;
+  const agora = Date.now();
+  const nasceu = achado.criado?.getTime();
+  const janela = nasceu
+    ? { initialDate: diaIso(nasceu - DIA_MS), endDate: diaIso(nasceu + 2 * DIA_MS) }
+    : { initialDate: diaIso(agora - (DIAS_DE_LEADS_RECENTES + 1) * DIA_MS), endDate: diaIso(agora + DIA_MS) };
+  let nomes = await leadsDaJanela(unit, janela); // lança se a franquia não respondeu
+  if (!nomes.has(achado.id)) {
+    // a leitura guardada pode ser anterior ao cadastro deste lead: relê UMA vez, sem cache, antes de dar o nome como desconhecido
+    janelasLidas.delete(chaveDaJanela(unit, janela));
+    nomes = await leadsDaJanela(unit, janela);
+  }
+  return nomes.get(achado.id) ?? null;
+}
+
+/** A busca por janela guardada POR FRANQUIA (5 min; 2 min se falhou): vários achados na mesma rajada/dia dividem uma leitura só, e uma franquia lenta não vira uma chamada por mensagem. */
+const VALIDADE_DA_JANELA_MS = 5 * 60_000;
+const VALIDADE_DA_JANELA_COM_FALHA_MS = 2 * 60_000;
+const janelasLidas = new Map<string, { em: number; falhou: boolean; valor: Promise<Map<number, string | null>> }>();
+const chaveDaJanela = (unit: Unit, janela: { initialDate: string; endDate: string }) => `${franquiaDe(unit)}|${janela.initialDate}|${janela.endDate}`;
+
+function leadsDaJanela(unit: Unit, janela: { initialDate: string; endDate: string }): Promise<Map<number, string | null>> {
+  const chave = chaveDaJanela(unit, janela);
+  const agora = Date.now();
+  const g = janelasLidas.get(chave);
+  if (g && agora - g.em < (g.falhou ? VALIDADE_DA_JANELA_COM_FALHA_MS : VALIDADE_DA_JANELA_MS)) return g.valor;
+  const entrada = {
+    em: agora,
+    falhou: false,
+    valor: SpineService.searchLeads(unit, janela).then((r) => {
+      if (!r.ok || !r.data) throw new Error(r.error ?? 'a franquia não respondeu');
+      return new Map(r.data.leads.map((l) => [l.idLead, l.name] as [number, string | null]));
+    }),
+  };
+  if (janelasLidas.size > 200) janelasLidas.clear();
+  janelasLidas.set(chave, entrada);
+  // a falha fica guardada pouco (a franquia fora não vira uma leitura por mensagem) e chega a quem chama como erro
+  entrada.valor.catch(() => { entrada.falhou = true; entrada.em = Date.now(); });
+  return entrada.valor;
+}
+
+/** Só teste. */
+export function _limparJanelasParaTeste(): void {
+  janelasLidas.clear();
 }
 
 /** Telefones (por franquia) com um cadastro em andamento: dois cartões do mesmo número não criam em paralelo. */
 const telefonesEmCriacao = new Set<string>();
 
-/** Grava no vínculo que o telefone já estava na franquia — e o porquê. Só o id de LEAD vai para a coluna do vínculo (ver o motivo abaixo). */
-async function vincularAoQueJaExiste(unit: Unit, kommoLeadId: number, achado: Extract<JaCadastrado, { tipo: 'achou' }>): Promise<string> {
+/**
+ * Grava no vínculo que o telefone já estava na franquia — e o porquê — e dá o vínculo por RESOLVIDO (status "ok"): sem isso um vínculo
+ * antigo "ignorado"/"falhou" volta a consultar o Kommo e a franquia a cada 10 minutos para sempre.
+ *
+ * NENHUM id de cadastro ACHADO vai para o vínculo (`spine_id_lead`/`spine_id_client`), nunca. O nome do cartão no 1º contato vem do PERFIL do
+ * WhatsApp, e a filha que escreve do aparelho da mãe chega com o nome da mãe — então "o nome bate" não prova pessoa. O id de lead gravado
+ * é o que a agenda converte em paciente (`agenda-tools`: convertLead), e o lead da mãe virar paciente com o nome da filha não tem desfazer.
+ * O id e o nome do lead achado ficam só no MOTIVO; quem agenda compara o nome que o paciente DEU para a consulta com o do lead e, só se
+ * bater (nome e sobrenome), converte aquele lead; senão cria o paciente novo, como sempre.
+ */
+async function vincularAoQueJaExiste(
+  unit: Unit,
+  kommoLeadId: number,
+  achado: Extract<JaCadastrado, { tipo: 'achou' }>,
+  deps: DepsDoPrimeiroContato = {},
+): Promise<{ motivo: string; retentar?: boolean }> {
   const ehPaciente = achado.origem === 'paciente';
-  const motivo = `${ehPaciente ? PREFIXO_PACIENTE_EXISTENTE : 'lead já existe na franquia'} (${ehPaciente ? 'idClient' : 'idLead'} ${achado.id}, achado pelo telefone ${achado.por === 'indice' ? 'no índice' : 'entre os cadastros recentes'}): não criei lead`;
-  // Paciente: só o motivo. Telefone sozinho não prova que é a mesma pessoa (a mãe e a filha dividem o WhatsApp), e o id de paciente
-  // gravado no vínculo é o que a agenda usa para marcar a consulta — gravar o da mãe no cartão da filha seria para sempre.
-  // Lead: o id vai (é o que a conversão em paciente usa, e o paciente nasce com o nome que a Sofia levar na conversão).
-  const idDoLead = ehPaciente ? {} : { spineIdLead: achado.id };
+  const onde = achado.por === 'indice' ? 'no índice' : 'entre os cadastros recentes';
+  let motivo: string;
+  if (ehPaciente) {
+    motivo = `${PREFIXO_PACIENTE_EXISTENTE} (idClient ${achado.id}, achado pelo telefone ${onde}): não criei lead`;
+  } else {
+    // o nome do lead achado fica no motivo para a hora de agendar; sem ele (franquia fora, fora da janela) o lead achado nunca é convertido
+    let nome: string | null;
+    try {
+      nome = await (deps.nomeDoLead ?? nomeDoLeadNaFranquia)(unit, achado);
+    } catch (err) {
+      // a franquia não respondeu: NÃO grava "nome desconhecido" para sempre (o vínculo ficaria resolvido sem o nome) — a próxima mensagem tenta de novo
+      logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui ler o nome do lead que já existe na franquia — nada gravado, tento na próxima mensagem');
+      return { motivo: 'não consegui ler o nome do lead que já existe na franquia', retentar: true };
+    }
+    if (!nome) {
+      logger.warn({ kommoLeadId, unit: unit.slug, idLeadAchado: achado.id }, 'spine-sync: AVISO — não li o nome do lead que já existe na franquia: ele nunca será convertido em paciente na hora de agendar (cria-se paciente novo)');
+    }
+    motivo = motivoDeLeadJaExistente({ id: achado.id, nome, onde });
+  }
   try {
-    const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdLead: true } });
+    const atual = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } }, select: { spineIdLead: true, spineIdClient: true } });
+    // vínculo que já sabe o lead/paciente (a Sofia achou, marcou ou convertida) não é renomeado: o que está nele é desse paciente
+    const jaSabe = !!(atual?.spineIdLead || atual?.spineIdClient);
     await prisma.spineLeadLink.upsert({
       where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId } },
-      create: { unitId: unit.id, kommoLeadId, motivo, ...idDoLead },
-      update: { motivo, ...(atual?.spineIdLead ? {} : { ...idDoLead, ...(ehPaciente ? {} : { status: 'ok' }) }) },
+      create: { unitId: unit.id, kommoLeadId, motivo, status: 'ok' },
+      update: jaSabe ? {} : { motivo, status: 'ok' },
     });
   } catch (err) {
     logger.warn({ err: String(err), kommoLeadId, unit: unit.slug }, 'spine-sync: não consegui gravar o vínculo com o que já existe na franquia');
   }
-  return motivo;
+  return { motivo };
 }
 
 /**
@@ -565,9 +705,10 @@ async function antesDeCriarNoPrimeiroContato(
     }
     if (achado.tipo === 'achou') {
       soltar();
-      const motivo = await vincularAoQueJaExiste(unit, kommoLeadId, achado);
-      logger.info({ kommoLeadId, unit: unit.slug, origem: achado.origem, id: achado.id, por: achado.por }, 'spine-sync: o telefone já estava na franquia — não criei lead');
-      return { resultado: { ok: true, motivo, jaExistia: true, ...(achado.origem === 'lead' ? { spineIdLead: achado.id } : {}) }, soltar: null };
+      const { motivo, retentar } = await vincularAoQueJaExiste(unit, kommoLeadId, achado, deps);
+      if (retentar) return { resultado: { ok: false, motivo, retentar: true }, soltar: null };
+      logger.info({ kommoLeadId, unit: unit.slug, origem: achado.origem, id: achado.id, por: achado.por }, 'spine-sync: o telefone já estava na franquia — não criei lead (nenhum id vinculado ao cartão)');
+      return { resultado: { ok: true, motivo, jaExistia: true }, soltar: null };
     }
     return { resultado: null, soltar };
   } catch (err) {
@@ -609,6 +750,14 @@ export async function syncLeadToSpine(
   const cartao = await conferirCartaoDestaUnidade(unit, kommoLeadId);
   if (!cartao.ok) return { ok: false, motivo: cartao.motivo };
   unit = cartao.unit;
+
+  // 1º contato: se o índice de telefones DESTA franquia (a da unidade do cartão, já resolvida acima) não vai chegar (agenda desligada, carga
+  // cortada), cada mensagem leria o Kommo para acabar em "não deu para conferir" e zero lead. Avisa (WARN, uma vez por período) e para ANTES de
+  // ler o contato no Kommo (`prepararLead`).
+  if (pc) {
+    const impedimento = await (opcoes.deps?.impedimentoDoIndice ?? conferirImpedimentoDoIndice)(unit);
+    if (impedimento) return { ok: false, motivo: `índice de telefones da franquia indisponível: ${impedimento}` };
+  }
 
   const preparo = await prepararLead(unit, kommoLeadId, pc);
   if (preparo.etapa === 'ja-enviado') {
@@ -686,8 +835,8 @@ export async function syncLeadToSpine(
     }
 
     await registrar(unit.id, kommoLeadId, 'ok', null, r.data.idLead, preparo.payload.name);
-  // 1º contato: um 2º cartão do mesmo número, minutos depois, tem de achar este lead (o índice e o cache dos recentes ainda não o têm)
-  if (pc) lembrarLeadCriado(unit.id, preparo.payload.whatsapp, r.data.idLead);
+    // 1º contato: um 2º cartão do mesmo número, minutos depois, tem de achar este lead (o índice e o cache dos recentes ainda não o têm)
+    if (pc) lembrarLeadCriado(unit, preparo.payload.whatsapp, r.data.idLead, preparo.payload.name);
 
     if (criaPacienteJuntoComOLead(unit.spineSyncPatients, opcoes.soLead)) {
       const partes = preparo.payload.name.trim().split(/\s+/).filter((x) => x.length >= 2);

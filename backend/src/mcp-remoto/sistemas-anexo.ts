@@ -24,7 +24,15 @@ import { CofreDeArquivos, ErroDeCofre, detectarTipo, type TipoDeArquivo } from '
 import { executar } from './ferramenta.js';
 import { resolverSistema, type ContextoSistemas, type QuemSistemas, type Saida } from './sistemas.js';
 import { classificarErroDaEntrega, nomeLimpo, type ResultadoDaEntrega } from './sistemas-entrega.js';
-import { anexarEnvioDocumento, DESTINO_DOCUMENTO, registrarDocumentosSistemas } from './sistemas-documento.js';
+import {
+  ACEITOS_DOCUMENTO_RH,
+  anexarEnvioDocumento,
+  conferirColaborador,
+  DESTINO_DOCUMENTO,
+  DOCUMENTO_MAX_BYTES,
+  entregarDocumentoBaixado,
+  registrarDocumentosSistemas,
+} from './sistemas-documento.js';
 
 export const TIPOS_ANEXO = ['comprovante', 'nota_fiscal', 'recibo'] as const;
 type TipoAnexo = (typeof TIPOS_ANEXO)[number];
@@ -158,7 +166,10 @@ function auditarAnexo(auditar: Auditar): Auditar {
       } catch {
         host = '(inválida)';
       }
-      argumentos = { sistema: a.sistema, tabela: a.tabela, lancamento: a.lancamento, tipo: a.tipo, host };
+      argumentos =
+        a.tabela === 'rh_colaborador'
+          ? { sistema: a.sistema, tabela: a.tabela, id: a.id, tipo_documento: a.tipo_documento, host }
+          : { sistema: a.sistema, tabela: a.tabela, lancamento: a.lancamento, tipo: a.tipo, host };
     }
     auditar({ ...r, argumentos });
   };
@@ -175,6 +186,9 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
   const SISTEMA = z.string().optional().describe('qual sistema (slug); pode omitir se só há um ligado');
   const TABELA = z.enum(TABELAS).describe('caixa_lanc = lançamento do Caixa da unidade (cria o documento com prévia para a conferência); fin_lanc = lançamento do Financeiro (guarda o arquivo e preenche a coluna anexo)');
   const TIPO = z.enum(TIPOS_ANEXO);
+  const TABELA_URL = z
+    .enum(['caixa_lanc', 'fin_lanc', 'rh_colaborador'])
+    .describe('caixa_lanc ou fin_lanc = comprovante de um lançamento (lancamento + tipo); rh_colaborador = documento na pasta do colaborador no RH (id + tipo_documento)');
   const LANC = z.string().min(36).max(36).describe('id (uuid) do lançamento, o de sistemas_consultar');
 
   server.registerTool(
@@ -275,17 +289,49 @@ export function registrarAnexosSistemas(server: McpServer, ctx: ContextoSistemas
   server.registerTool(
     'sistemas_anexar_url',
     {
-      title: 'Sistema novo (Caixa/Financeiro): anexar a um lançamento o arquivo de um endereço',
+      title: 'Sistema novo (Caixa/Financeiro/RH): anexar o arquivo de um endereço a um lançamento ou à pasta de um colaborador',
       description:
-        'O SERVIDOR baixa o comprovante de um endereço e o anexa ao lançamento (caixa_lanc ou fin_lanc) como sistemas_anexar_envio — para quando o seu ambiente não alcança o site. ' +
-        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro, e 25 segundos. ` +
-        'O endereço tem que levar DIRETO a um PDF, JPG ou PNG. Uma PÁGINA (HTML) não vale: o servidor não tem navegador para imprimir a página em PDF; nesse caso peça à pessoa o PDF ou um print e use sistemas_preparar_anexo. ' +
-        'Grava direto (sem prévia de confirmação): confira o lançamento com a pessoa antes.',
-      inputSchema: { sistema: SISTEMA, tabela: TABELA, lancamento: LANC, tipo: TIPO, url: z.string().url().max(2000).describe('endereço https do arquivo') },
+        'O SERVIDOR baixa o arquivo de um endereço e o anexa, como sistemas_anexar_envio — para quando o seu ambiente não alcança o site. Destinos (tabela): ' +
+        '"caixa_lanc" ou "fin_lanc" (comprovante de um lançamento: lancamento + tipo) ou "rh_colaborador" (documento na PASTA DO COLABORADOR no RH: id do colaborador em rh_docs, col="colaboradores", + tipo_documento em texto livre, ex.: "Advertência assinada", + nome_colaborador com nome e sobrenome que a pessoa confirmou; ' +
+        'o servidor confere o colaborador e o NOME ANTES de baixar: nome que não bate com o cadastro do id = nada gravado; a resposta diz QUEM é em destino.quemE). ' +
+        `Só domínios da lista: ${deps.dominios.join(', ')} (outro só o João libera, no servidor). Só https, sem redirecionar para fora da lista, sem rede interna, até ${ANEXO_MAX_BYTES / 1024 / 1024} MB no Caixa, ${DOCUMENTO_MAX_BYTES / 1024 / 1024} MB na pasta do colaborador e ${ANEXO_FIN_MAX_BYTES / 1024 / 1024} MB no Financeiro, e 25 segundos. ` +
+        'O endereço tem que levar DIRETO ao arquivo: PDF, JPG ou PNG (na pasta do colaborador também DOCX e XLSX). Uma PÁGINA (HTML) não vale: o servidor não tem navegador para imprimir a página em PDF; nesse caso peça à pessoa o arquivo e use sistemas_preparar_anexo ou sistemas_preparar_documento. ' +
+        'ClickSign: use o endereço "signed" de list_envelope_documents (o PDF assinado, nunca o "ziped"); ele VENCE EM 5 MINUTOS, então chame esta ferramenta logo depois de listar. ' +
+        'Grava direto (sem prévia de confirmação): confira o destino com a pessoa antes.',
+      inputSchema: {
+        sistema: SISTEMA,
+        tabela: TABELA_URL,
+        // folgados no schema ("" não derruba a chamada de rh_colaborador); caixa_lanc/fin_lanc conferem no código
+        lancamento: z.string().max(64).optional().describe('caixa_lanc e fin_lanc: id (uuid) do lançamento, o de sistemas_consultar'),
+        tipo: z.union([TIPO, z.literal('')]).optional().describe('caixa_lanc e fin_lanc: comprovante, nota_fiscal ou recibo'),
+        id: z.string().max(64).optional().describe('rh_colaborador: o id do colaborador (rh_docs, col="colaboradores"; de sistemas_consultar)'),
+        tipo_documento: z.string().max(80).optional().describe('rh_colaborador: o tipo do documento, texto livre (ex.: "Ata de reunião assinada", "Advertência assinada", "Aviso de férias assinado")'),
+        nome_colaborador: z.string().max(120).optional().describe('rh_colaborador: nome E sobrenome do colaborador, como a pessoa confirmou; o servidor confere com o cadastro do id ANTES de baixar e recusa se não bater'),
+        url: z.string().url().max(2000).describe('endereço https do arquivo'),
+      },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     (args) =>
       executar('sistemas_anexar_url', args, auditar, async () => {
+        if (args.tabela === 'rh_colaborador') {
+          // o colaborador é conferido ANTES do download (id que não existe não gasta rede)
+          const { d, quemE } = await conferirColaborador(ctx, quem, args.sistema, args.id, args.tipo_documento, enviadoNome, args.nome_colaborador);
+          const b = await baixar(args.url, { dominios: deps.dominios, maxBytes: DOCUMENTO_MAX_BYTES, ...deps.download });
+          const tipo = detectarTipo(b.bytes);
+          if (!tipo || !ACEITOS_DOCUMENTO_RH.includes(tipo)) {
+            const html = b.contentType.includes('html') || /^\s*</.test(b.bytes.subarray(0, 64).toString('utf8'));
+            throw new ErroDeEntrada(
+              html
+                ? `o endereço (${b.host}) devolveu uma PÁGINA da web, não um arquivo. O servidor não tem navegador para imprimir a página em PDF. Peça o arquivo e use sistemas_preparar_documento.`
+                : `o endereço (${b.host}) não devolveu PDF, JPG, PNG, DOCX nem XLSX (conteúdo: ${b.contentType || 'desconhecido'}).`,
+            );
+          }
+          const sugerido = nomeLimpo(b.nomeSugerido).replace(/\.(pdf|jpe?g|png|docx|xlsx)$/i, '');
+          const nome = `${(sugerido || 'documento').slice(0, 90)}.${tipo}`;
+          const r = await entregarDocumentoBaixado(ctx, quem, d, enviadoNome, { nome, bytes: b.bytes }, `url:${b.host}`);
+          return { ...r, destino: { tipo: 'rh_colaborador', tipoDoDocumento: d.tipoDocumento, quemE }, origem: `baixado de ${b.host}`, tamanhoBaixado: b.bytes.length };
+        }
+        if (!args.tipo) throw new ErroDeEntrada(`${args.tabela} precisa de tipo: ${TIPOS_ANEXO.join(', ')}`);
         const id = lancamentoValido(args.lancamento);
         const { slug } = await conferirLancamento(ctx, quem, args.sistema, args.tabela, id);
         // o teto é o da tabela (fin_lanc: 6 MB), como no link de envio

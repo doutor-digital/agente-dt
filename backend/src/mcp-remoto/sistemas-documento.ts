@@ -47,7 +47,7 @@ export interface DepsDocumento {
   enviadoNome: string;
 }
 
-interface DestinoGuardado {
+export interface DestinoGuardado {
   sistema: string;
   alvo: DestinoDoc;
   id: string;
@@ -107,11 +107,12 @@ async function entregar(
   d: DestinoGuardado,
   enviadoNome: string,
   arquivo: { nome: string; bytes: Buffer },
+  origem = 'envio',
 ): Promise<ResultadoDaEntrega<Saida>> {
   const c = resolverSistema(ctx, d.sistema);
   try {
     const r = (await c.fonte.chamar('POST', '/admin/v1/documento', {
-      corpo: { ...corpoDoDestino(d, quem, enviadoNome, arquivo.nome), conteudo_b64: arquivo.bytes.toString('base64'), origem: 'envio' },
+      corpo: { ...corpoDoDestino(d, quem, enviadoNome, arquivo.nome), conteudo_b64: arquivo.bytes.toString('base64'), origem },
       quem: quem.nome,
       timeoutMs: 120_000,
     })) as Saida;
@@ -169,6 +170,105 @@ export async function anexarEnvioDocumento(ctx: ContextoSistemas, quem: QuemSist
     anexado: true,
     ...out.resposta,
     arquivoApagadoDoCofre: true,
+    registro: 'Fica no registro do sistema (sistemas_log e admin_log) com o e-mail de quem pediu.',
+    proximoPasso: ONDE_APARECE[d.alvo],
+  };
+}
+
+/** Formatos aceitos na pasta do colaborador (os mesmos do link de envio do RH). */
+export const ACEITOS_DOCUMENTO_RH: readonly TipoDeArquivo[] = ACEITOS_RH;
+
+/**
+ * `sistemas_anexar_url` com destino `rh_colaborador` (pedido de 27/11: atas, advertências e avisos assinados na ClickSign direto na pasta de cada colaborador).
+ * PASSO A: o servidor confere o colaborador e diz QUEM é, ANTES de qualquer download (registro que não existe não gasta rede nem o link, que vence em minutos).
+ */
+export async function conferirColaborador(
+  ctx: ContextoSistemas,
+  quem: QuemSistemas,
+  sistema: string | undefined,
+  idBruto: unknown,
+  tipoBruto: unknown,
+  enviadoNome: string,
+  nomeBruto?: unknown,
+): Promise<{ d: DestinoGuardado; quemE: Record<string, unknown> }> {
+  const id = typeof idBruto === 'string' ? idBruto.trim() : '';
+  const tipoDocumento = typeof tipoBruto === 'string' ? tipoBruto.trim() : '';
+  const nomeInformado = typeof nomeBruto === 'string' ? nomeBruto.trim() : '';
+  if (!ID.test(id)) throw new ErroDeEntrada('rh_colaborador precisa do id do colaborador (rh_docs, col="colaboradores"; ache com sistemas_consultar)');
+  if (tipoDocumento.length < 2) throw new ErroDeEntrada('diga o tipo do documento em tipo_documento (ex.: "Advertência assinada", "Ata de reunião", "Aviso de férias assinado")');
+  // a gravação é DIRETA: o nome que a pessoa confirmou é conferido com o do id ANTES de baixar (id errado = advertência na pasta de outra pessoa)
+  const palavrasInformadas = palavrasDoNome(nomeInformado);
+  if (new Set(palavrasInformadas).size < 2) {
+    throw new ErroDeEntrada('rh_colaborador precisa de nome_colaborador com nome E sobrenome do colaborador (como a pessoa confirmou): ele é conferido com o cadastro do id antes de gravar');
+  }
+  const c = resolverSistema(ctx, sistema);
+  const d: DestinoGuardado = { sistema: c.slug, alvo: 'rh_colaborador', id, tratRef: '', tipoDocumento, validade: '', assinar: false };
+  const nome = nomeParaCurl(tipoDocumento).replace(/\./g, '-') || 'documento';
+  const conf = (await c.fonte.chamar('POST', '/admin/v1/documento/conferir', { corpo: corpoDoDestino(d, quem, enviadoNome, nome), quem: quem.nome })) as Saida;
+  if (!conf || conf.ok !== true || !conf.alvo || typeof conf.alvo !== 'object' || Array.isArray(conf.alvo)) {
+    throw new ErroDeEntrada('o servidor não confirmou o colaborador (resposta fora do contrato): nada foi baixado. Avise o João; pode ser versão antiga do servidor do sistema.');
+  }
+  const quemE = conf.alvo as Record<string, unknown>;
+  const doCadastro = typeof quemE.colaborador === 'string' ? quemE.colaborador : '';
+  if (!nomeConfere(palavrasInformadas, palavrasDoNome(doCadastro))) {
+    throw new ErroDeEntrada(
+      doCadastro
+        ? // SEM nomes na mensagem: o texto do erro vai para a auditoria do conector (e o modelo não copia o nome do cadastro para tentar de novo)
+          `o nome informado em nome_colaborador não bate com o cadastro do id ${id}: nada foi baixado nem gravado. Confira o id com sistemas_consultar e o nome com a pessoa.`
+        : 'o servidor não disse o nome do colaborador desse id: sem conferir o nome, não gravo. Nada foi baixado.',
+    );
+  }
+  return { d, quemE };
+}
+
+/** ligações que não contam na conferência do nome */
+const LIGACOES = new Set(['da', 'de', 'do', 'das', 'dos', 'e']);
+
+/** palavras do nome, sem acento, sem caixa e sem as ligações (da, de, do, das, dos, e) */
+function palavrasDoNome(nome: string): string[] {
+  return nome
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .split(/[^a-z]+/)
+    .filter((p) => p.length > 0 && !LIGACOES.has(p));
+}
+
+/**
+ * o 1º nome é IGUAL, há pelo menos 2 palavras DIFERENTES ("Maria Maria" não vale como nome e sobrenome) e cada palavra informada
+ * existe INTEIRA no nome do cadastro ("Maria Silva" não confere com "Maria Costa")
+ */
+export function nomeConfere(informado: readonly string[], cadastro: readonly string[]): boolean {
+  if (new Set(informado).size < 2 || cadastro.length === 0 || informado[0] !== cadastro[0]) return false;
+  return informado.every((p) => cadastro.includes(p));
+}
+
+/** PASSO B: entrega os bytes BAIXADOS (sem cofre) pela mesma rota de `sistemas_anexar_envio`; `origem` = "url:<domínio>". */
+export async function entregarDocumentoBaixado(
+  ctx: ContextoSistemas,
+  quem: QuemSistemas,
+  d: DestinoGuardado,
+  enviadoNome: string,
+  arquivo: { nome: string; bytes: Buffer },
+  origem: string,
+): Promise<Record<string, unknown>> {
+  const out = await entregar(ctx, quem, d, enviadoNome, arquivo, origem);
+  if (!out.resposta) {
+    const texto = out.erro?.message ?? 'erro desconhecido';
+    throw new ErroDeEntrada(
+      out.definitivo
+        ? `o servidor do sistema recusou o documento: ${texto}`
+        : out.desatualizado
+          ? 'o servidor do sistema respondeu 404: está DESATUALIZADO (ainda sem a rota /admin/v1/documento) ou o colaborador sumiu. Nada foi gravado; avise o João.'
+          : out.naoGravou
+            ? `o servidor do sistema não aceitou agora (${texto}). Nada foi gravado: pegue um endereço novo do arquivo (o da ClickSign vence em 5 minutos) e tente de novo.`
+            : `NÃO sei se o documento foi gravado (${texto}). Confira com sistemas_consultar (a pasta do colaborador) e com sistemas_log ANTES de repetir.`,
+    );
+  }
+  return {
+    sistema: d.sistema,
+    anexado: true,
+    ...out.resposta,
     registro: 'Fica no registro do sistema (sistemas_log e admin_log) com o e-mail de quem pediu.',
     proximoPasso: ONDE_APARECE[d.alvo],
   };

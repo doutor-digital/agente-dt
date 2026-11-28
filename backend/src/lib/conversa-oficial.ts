@@ -21,6 +21,7 @@ import { transcribeAudio } from '../services/transcription.service.js';
 import { neutralizarMarcasDoSistema } from './comprovante-pix.js';
 import { anexoLegivel } from './comprovante-lido.js';
 import { ehFalaAutomaticaDoLite } from './fala-automatica.js';
+import { ehFalhaEstrutural } from './falha-de-audio.js';
 
 /** Mensagem mais nova que isto é o turno atual, que já chegou pelo webhook. */
 export const JANELA_DO_TURNO_MS = 3 * 60_000;
@@ -198,7 +199,8 @@ export async function blocoDaConversaOficial(args: {
   esperarImagem?: boolean;
   /** Fotos/PDFs que o webhook já trouxe e leu neste turno (aparecem também na rota oficial): não contam como a mídia do aviso. */
   midiaJaLidaNoWebhook?: number;
-  saida?: { msgs: MensagemOficial[] | null };
+  /** `transcritos`: os ids dos áudios do paciente que ESTE turno transcreveu (para saber se o áudio do turno foi lido). */
+  saida?: { msgs: MensagemOficial[] | null; transcritos?: Set<string>; falhaEstrutural?: boolean };
   /** Testes: leitura da rota oficial, espera e o histórico local trocáveis. */
   ler?: () => Promise<MensagemOficial[]>;
   dormir?: (ms: number) => Promise<void>;
@@ -250,19 +252,27 @@ export async function blocoDaConversaOficial(args: {
   if (!selecionados.length && !perdidos.length) return '';
 
   const itens: ItemOficial[] = [];
+  // ids que a transcrição RESPONDEU (mesmo vazia = "sem fala"): só quem falhou ou nem foi tentado conta como "não lido"
+  const transcritosOuSemFala = new Set<string>();
   for (const m of [...perdidos, ...selecionados]) {
     let transcricao: string | null = null;
     if (ehAudioPronto(m)) {
       transcricao = await (args.transcrever ?? ((link: string) => transcribeAudio(unit, link)))(m.anexo!.link!)
-        .then((t) => t.text || null)
+        .then((t) => {
+          transcritosOuSemFala.add(m.id);
+          return t.text || null;
+        })
         .catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: áudio antigo não transcrito');
+          // saldo/chave recusada: vai continuar falhando; o webhook passa a conversa para a equipe (lib/falha-de-audio.ts)
+          if (args.saida && ehFalhaEstrutural(err)) args.saida.falhaEstrutural = true;
           return null;
         });
     }
     itens.push({ ...m, transcricao });
   }
 
+  if (args.saida) args.saida.transcritos = transcritosOuSemFala;
   const daEquipe = itens.filter((m) => m.autor === 'equipe').length;
   await recorder.step({
     kind: 'THINKING',

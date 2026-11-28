@@ -25,6 +25,7 @@ import { listEnabledLessons } from '../services/lessons.service.js';
 import { renderFaltaParaAgendar } from './falta-para-agendar.js';
 import { ehClinicaParaSinalDeAlerta, renderSinalDeAlerta, travaDaRegraDeSinalDeAlerta, travaDoProntoSocorro, travarProntoSocorroPorLinha } from './sinal-de-alerta.js';
 import { analisarRepeticao, pararDePedirNome, renderRepeticao, type Fala } from './repeticao.js';
+import { jaRespondidas, perguntaJaRespondidaLigada, renderJaRespondido, rotulosRespondidos } from './pergunta-respondida.js';
 import { renderPrecoDasSessoes, renderPrecoInsistido } from './preco-insistido.js';
 import { renderRajada, textoSemResposta } from './rajada.js';
 import { renderPacienteEncerrou } from './paciente-encerrou.js';
@@ -2150,12 +2151,20 @@ function renderSoCumprimento(userMessage?: string): string {
  * vezes, mesma pergunta sem resposta, áudio não ouvido — repeticao.ts) e paciente insistindo no preço
  * (preco-insistido.ts). Sem histórico (playground, régua), nada.
  */
-function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedirNome: boolean; blocos: string[] } {
-  if (!historico || historico.length === 0) return { semPedirNome: false, blocos: [] };
+function blocosDoHistorico(
+  unit: Unit,
+  historico: Fala[] | undefined,
+  fatos?: Record<string, unknown> | null,
+): { semPedirNome: boolean; jaRespondidos: string[]; blocos: string[] } {
+  if (!historico || historico.length === 0) return { semPedirNome: false, jaRespondidos: [], blocos: [] };
   const repeticao = analisarRepeticao(historico);
   const blocos: string[] = [];
   const rep = renderRepeticao(repeticao);
   if (rep) blocos.push(rep);
+  // O que ele JÁ respondeu (tempo da dor, cidade, rotina): a Sofia não pergunta de novo (pergunta-respondida.ts).
+  const respondidas = perguntaJaRespondidaLigada(unit.slug) ? jaRespondidas(historico, fatos) : [];
+  const jaDito = renderJaRespondido(respondidas);
+  if (jaDito) blocos.push(jaDito);
   // Agradeceu/se despediu/vai se organizar: resposta curta, sem horário (paciente-encerrou.ts).
   const encerrou = renderPacienteEncerrou(historico, {
     perguntarMotivo: automacaoLigada(unit.slug, 'encerramento-pergunta-motivo', process.env.ENCERRAMENTO_PERGUNTA_MOTIVO_SLUGS),
@@ -2190,7 +2199,7 @@ function blocosDoHistorico(unit: Unit, historico: Fala[] | undefined): { semPedi
   if (pergunta) blocos.push(pergunta);
   const emTratamento = clinica ? renderFalaDePaciente(historico) : '';
   if (emTratamento) blocos.push(emTratamento);
-  return { semPedirNome: pararDePedirNome(repeticao), blocos };
+  return { semPedirNome: pararDePedirNome(repeticao), jaRespondidos: rotulosRespondidos(respondidas), blocos };
 }
 
 /**
@@ -2638,7 +2647,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico);
+  const doHistorico = blocosDoHistorico(unit, input.historico, leadMemory?.facts as Record<string, unknown> | null | undefined);
 
   if (unit.singlePromptMode) {
     const single: string[] = [];
@@ -2725,7 +2734,7 @@ export function composeSystemPrompt(input: ComposeInput): string {
   // própria IA grava; sem isso ela sabe o que já foi dito e não o que falta.
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
-    { semPedirNome: doHistorico.semPedirNome, ...jeitoDaConversa(unit) },
+    { semPedirNome: doHistorico.semPedirNome, jaRespondidos: doHistorico.jaRespondidos, ...jeitoDaConversa(unit) },
   );
   if (lessonsBlock) blocks.push(lessonsBlock);
   const memoryBlock = renderLeadMemory(leadMemory, fusoDaUnidade(unit), agoraLocalISO(fusoDaUnidade(unit), input.agora));
@@ -2819,7 +2828,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   } = input;
 
   const customBase = escolherBase(unit, agentConfigPrompt);
-  const doHistorico = blocosDoHistorico(unit, input.historico);
+  const doHistorico = blocosDoHistorico(unit, input.historico, leadMemory?.facts as Record<string, unknown> | null | undefined);
 
   // Estes três mudam POR UNIDADE, não por paciente: o calendário vira uma vez
   // por dia (renderCalendario recebe a data sem hora, de propósito), o endereço
@@ -2851,7 +2860,7 @@ export function composeSystemPromptParts(input: ComposeInput): {
   if (outraSofiaBlock) dynamic.push(outraSofiaBlock);
   const faltaBlock = renderFaltaParaAgendar(
     (leadMemory?.facts as Record<string, unknown> | null) ?? null,
-    { semPedirNome: doHistorico.semPedirNome, ...jeitoDaConversa(unit) },
+    { semPedirNome: doHistorico.semPedirNome, jaRespondidos: doHistorico.jaRespondidos, ...jeitoDaConversa(unit) },
   );
   if (faltaBlock) dynamic.push(faltaBlock);
   // Se a resposta anterior não chegou, ela precisa saber ANTES de responder:
@@ -2979,6 +2988,8 @@ export async function composeSystemPromptForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar os fatos do cartão carregados: o grafo os lê de volta para a trava de pergunta repetida (pergunta-respondida.ts), sem consultar duas vezes. */
+  fatosSaida?: { valor?: Record<string, unknown> | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -2997,6 +3008,8 @@ export async function composeSystemPromptPartsForUnit(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar os fatos do cartão carregados: o grafo os lê de volta para a trava de pergunta repetida (pergunta-respondida.ts), sem consultar duas vezes. */
+  fatosSaida?: { valor?: Record<string, unknown> | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -3015,6 +3028,8 @@ async function loadComposeInput(input: {
   historico?: Fala[];
   /** Onde deixar a oferta que foi carregada: o grafo a lê de volta para o guardrail de preço, sem consultar duas vezes. */
   ofertaSaida?: { valor?: OfertaVigente | null };
+  /** Onde deixar os fatos do cartão carregados: o grafo os lê de volta para a trava de pergunta repetida (pergunta-respondida.ts), sem consultar duas vezes. */
+  fatosSaida?: { valor?: Record<string, unknown> | null };
   /** Regras a mais SÓ nesta montagem, sem gravar: a prévia da página `/aprendizados/:slug` (aprendizados.controller.ts). */
   aprendizadosExtras?: string[];
   /** O instante do turno (a hora que o bloco `<agora>` mostra, nas unidades com `hora-no-turno` ligada). Padrão: agora. */
@@ -3119,6 +3134,7 @@ async function loadComposeInput(input: {
     ofertaDoLeadP,
   ]);
   if (input.ofertaSaida) input.ofertaSaida.valor = ofertaDaCampanha;
+  if (input.fatosSaida) input.fatosSaida.valor = (leadMemory?.facts as Record<string, unknown> | null | undefined) ?? null;
 
   const telefone = contato?.phone ?? null;
 

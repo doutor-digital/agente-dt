@@ -17,6 +17,7 @@ import {
   depsPadrao,
   estadoCadastroTodoLead,
   modoPrimeiroContato,
+  primeiroContatoRodaSemGrupo,
   type DepsDoCadastro,
 } from './cadastro-todo-lead.js';
 
@@ -184,4 +185,41 @@ test('paciente que o 1º contato já achou (só o motivo no vínculo, sem idClie
   assert.equal(await depsPadrao.situacaoNaFranquia('u-bebedouro', 70), 'na-franquia');
   vinculo({ motivo: 'o telefone é de 2 pacientes da franquia (1, 2): não criei lead — a SDR escolhe no widget' });
   assert.notEqual(await depsPadrao.situacaoNaFranquia('u-bebedouro', 71), 'na-franquia', 'conflito não é resolvido: a equipe ainda decide');
+});
+
+test('lead que o 1º contato achou pelo telefone e NÃO vinculou (outro primeiro nome): também fica RESOLVIDO — nada de reler o Kommo a cada mensagem', async () => {
+  const vinculo = (o: Record<string, unknown>) => Object.defineProperty(prisma, 'spineLeadLink', { value: { findUnique: async () => ({ spineIdLead: null, spineIdClient: null, status: 'ok', updatedAt: new Date(0), motivo: null, ...o }) }, configurable: true });
+  vinculo({ motivo: 'lead já existe na franquia (idLead 4321, achado pelo telefone no índice): não criei lead — NÃO vinculado ao cartão (o primeiro nome é outro ou não deu para conferir; o telefone sozinho não prova a pessoa)' });
+  assert.equal(await depsPadrao.situacaoNaFranquia('u-bebedouro', 72), 'na-franquia');
+});
+
+test('as DUAS chaves em "só no papel": o seco da TRIAGEM segue lendo e registrando (o do 1º contato não toma o lugar dele)', async () => {
+  ligar('seco', 'seco');
+  assert.equal(modoPrimeiroContato(BEBEDOURO.slug).vale, false);
+  const d = deps({ casamento: true });
+  const r = await decidirCadastroDoLead({ unit: BEBEDOURO, leadId: 20, legado: SEM_AGENDAR }, d);
+  assert.deepEqual(r, SEM_AGENDAR, 'seco não decide nada');
+  assert.ok(d.chamadas.includes('ia'), 'a IA da triagem leu a conversa, como antes da chave nova');
+  assert.ok(simulacoes.length >= 1);
+  assert.ok(simulacoes.every((s) => s.automacao === 'cadastro-todo-lead'), 'registrado na lista da triagem');
+});
+
+test('só a chave nova em "só no papel" (triagem desligada): ela registra o seco do 1º contato', async () => {
+  ligar('seco', null);
+  assert.deepEqual(modoPrimeiroContato(BEBEDOURO.slug), { vale: true, escreve: false });
+});
+
+test('IA pulada e sem grupo (webhook): roda com a chave nova ligada ou com as DUAS em seco; NÃO roda com a nova em seco por cima da triagem ligada nem desligada', () => {
+  ligar('ligado');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true);
+  ligar('seco', 'seco');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true, 'o seco não some com as duas chaves em seco');
+  ligar('seco', null);
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), true);
+  ligar('seco', 'ligado');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false, 'triagem ligada sem grupo não roda: não alarga');
+  ligar(null, 'seco');
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false);
+  ligar(null, null);
+  assert.equal(primeiroContatoRodaSemGrupo(BEBEDOURO.slug), false);
 });

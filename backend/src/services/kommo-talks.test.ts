@@ -114,6 +114,29 @@ test('Lite: o aviso chega antes do arquivo — espera, relê e transcreve o áud
   assert.ok(c.passos.some((p) => /carregou no Kommo depois de 10 s/.test(p.title)));
 });
 
+test('6ª rodada: transcrição VAZIA ("sem fala") conta como lida em saida.transcritos; falha ESTRUTURAL marca saida.falhaEstrutural', async () => {
+  const s = Math.floor(Date.now() / 1000);
+  const comLink = normalizar([voz('v', s - 2)]);
+  const mudo = cenario({ leituras: [comLink] });
+  const saidaMudo: { msgs: any; transcritos?: Set<string>; falhaEstrutural?: boolean } = { msgs: null };
+  await blocoDaConversaOficial({ ...mudo.args, transcrever: async () => ({ text: '' }), humanMessage: AVISO, nenhumAudioNoWebhook: true, saida: saidaMudo });
+  assert.equal(saidaMudo.transcritos?.size, 1, 'a transcrição respondeu (vazia): é "sem fala", não "não lido"');
+  assert.equal(saidaMudo.falhaEstrutural, undefined);
+
+  const { FalhaDeTranscricao } = await import('../lib/falha-de-audio.js');
+  const falha = cenario({ leituras: [comLink] });
+  const saidaFalha: { msgs: any; transcritos?: Set<string>; falhaEstrutural?: boolean } = { msgs: null };
+  await blocoDaConversaOficial({
+    ...falha.args,
+    transcrever: async () => { throw new FalhaDeTranscricao('sem saldo', true, true); },
+    humanMessage: AVISO,
+    nenhumAudioNoWebhook: true,
+    saida: saidaFalha,
+  });
+  assert.equal(saidaFalha.transcritos?.size, 0, 'falhou: não lido');
+  assert.equal(saidaFalha.falhaEstrutural, true);
+});
+
 test('Lite: o áudio não carrega a tempo — espera as 3 vezes, segue sem e registra o motivo', async () => {
   const s = Math.floor(Date.now() / 1000);
   const semLink = normalizar([voz('v', s - 2, null)]);
