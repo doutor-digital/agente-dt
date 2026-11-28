@@ -67,6 +67,7 @@ import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { temMidiaSemArquivo } from '../lib/conversa-oficial.js';
+import { audioDoTurnoFoiTranscrito, contarFalhaDoLite, esquecerFalhasDoLite, idsDeAudioNaoLido, liteAudioSemLeitura, midiaNaoLidaLigada } from '../agent/midia-nao-lida.js';
 import { avisarComprovanteComIaPausada, avisarComprovanteDoLiteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno, type ComprovanteComIaPausada } from '../lib/anexos-do-turno.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
@@ -2003,7 +2004,7 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     // A conversa como o WhatsApp a vê (rota oficial): resposta da equipe e mensagem
     // do paciente que o webhook não trouxe. Só entra quando existe algo novo desde
     // a última fala da Sofia, e uma falha aqui nunca segura o atendimento.
-    const conversaLida: { msgs: MensagemOficial[] | null } = { msgs: porta.msgs };
+    const conversaLida: { msgs: MensagemOficial[] | null; transcritos?: Set<string>; falhaEstrutural?: boolean } = { msgs: porta.msgs };
     const blocoOficial = isChatMessage
       ? await blocoDaConversaOficial({
           unit,
@@ -2027,7 +2028,44 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
     const anexosDaRotaOficial = isChatMessage
       ? await lerAnexosDoTurno(unit, leadId, conversaLida.msgs, recorder, temMidiaSemArquivo(humanMessage) ? {} : { soEntregar: true })
       : { texto: '', paraEntregar: [] as string[], msgs: conversaLida.msgs };
-    const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa].filter(Boolean).join('\n\n');
+    // WhatsApp Lite: o aviso de ÁUDIO chegou, o arquivo não carregou a tempo (ou não deu para transcrever) e nada o leu. Sem isto o modelo só
+    // vê «Você recebeu uma mensagem de mídia (ID…)» e responde como se nada tivesse chegado; com o MESMO recado do áudio que falha aqui
+    // (e a frase fixa do grafo, agent/midia-nao-lida.ts) o paciente recebe o pedido para escrever, e o 2º áudio seguido sem ouvir segue
+    // para a equipe. O áudio que carregar depois entra no turno seguinte, já transcrito (conversa-oficial.ts).
+    // A MESMA regra do áudio que falha no webhook (acima): falha NOSSA (saldo/chave), unidade que não ouve áudio ou a 2ª falha seguida vão
+    // para a EQUIPE (instrução de passar, tarefa para ouvir) e nunca pedem para o paciente escrever; só a 1ª falha passageira pede.
+    let marcaDeAudioLite = '';
+    if (
+      midiaNaoLidaLigada(unit.slug) &&
+      liteAudioSemLeitura({
+        humanMessage,
+        transcritos: conversaLida.transcritos ?? new Set<string>(),
+        leituraNoWebhook: audios.length > 0,
+        msgs: conversaLida.msgs,
+      })
+    ) {
+      // cada áudio não lido conta UMA vez, pelo id (o mesmo áudio em 2 turnos seguidos não é a "2ª falha")
+      const falhasSeguidas = contarFalhaDoLite(chaveDoAudio, idsDeAudioNaoLido(conversaLida.msgs, conversaLida.transcritos ?? new Set<string>()), registrarFalhaDeAudio);
+      const estrutural = conversaLida.falhaEstrutural === true;
+      const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural, falhasSeguidas });
+      const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : estrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida (WhatsApp Lite)`;
+      marcaDeAudioLite = `${AUDIO_NAO_OUVIDO}\n\n${instrucaoAudioNaoTranscrito(paraEquipe)}`;
+      if (paraEquipe) void avisarEquipeDoAudio(unit, leadId, motivo);
+      await recorder.step({
+        kind: 'THINKING',
+        title: paraEquipe ? `Áudio do Lite não ouvido → equipe (${motivo})` : 'Áudio do Lite não ouvido → pedir pra escrever',
+        payload: { estrutural, falhasSeguidas, paraEquipe },
+      });
+    } else if (
+      // dentro da chave: com ela desligada nada muda na contagem do webhook. Zera só quando o áudio DESTE turno (e não um antigo) foi transcrito.
+      midiaNaoLidaLigada(unit.slug) &&
+      audios.length === 0 &&
+      audioDoTurnoFoiTranscrito(conversaLida.msgs, conversaLida.transcritos ?? new Set<string>())
+    ) {
+      limparFalhasDeAudio(chaveDoAudio);
+      esquecerFalhasDoLite(chaveDoAudio);
+    }
+    const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa, marcaDeAudioLite].filter(Boolean).join('\n\n');
 
     const result = await comTurnoEmAndamento(() => graph.invoke(
       {

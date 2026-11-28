@@ -19,6 +19,8 @@
  * exato deixaria a lista mentindo que falta algo que já existe.
  */
 
+import { canonizarFatos } from '../services/fatos-canonicos.js';
+
 export type Fatos = Record<string, unknown>;
 
 /**
@@ -38,6 +40,114 @@ interface Item {
   rotulo: string;
   chaves: string[];
   comoPedir: string;
+  /** Quando o item não se resolve só com "tem valor numa das chaves" (a cidade, que precisa ser cidade de verdade). */
+  confere?: (fatos: Fatos) => boolean;
+}
+
+/**
+ * A cidade conta quando o fato é uma cidade, ou quando o paciente confirmou que consegue vir à unidade.
+ *
+ * `localizacao` NÃO é chave de cidade: em produção a IA a usa para ONDE DÓI ("lombar", "lado direito"), e a lista
+ * dava a cidade por sabida — a Sofia oferecia horário a quem mora em outro estado sem nunca ter perguntado onde a
+ * pessoa mora (relatório de 27/11/2026, §2 causa 2). Por isso, mesmo o `cidade` que veio de apelido (fatos-canonicos.ts
+ * grava `localizacao` como `cidade`) só vale se o texto não for uma parte do corpo.
+ */
+const CHAVES_CIDADE = ['cidade', 'municipio', 'cidade_paciente', 'mora_em'];
+const CHAVES_VEM_A_UNIDADE = ['consegue_vir', 'pode_vir', 'consegue_ir', 'vem_a_unidade'];
+/**
+ * Palavras de corpo que NUNCA são nome de cidade: com uma delas o valor em MINÚSCULA é lido como dor ("lombar crônica", "dor no
+ * pescoço com formigamento"). Singular, sem acento; o plural entra por `singular()`.
+ */
+const CORPO_FORTE = new Set([
+  'lombar', 'lombalgia', 'cervical', 'cervicalgia', 'toracico', 'toracica', 'dorsal', 'sacro', 'sacroiliaca', 'coluna', 'costas', 'lombo',
+  'pescoco', 'nuca', 'ciatico', 'ciatica', 'nervo', 'perna', 'coxa', 'panturrilha', 'calcanhar', 'tornozelo', 'joelho', 'quadril', 'quadris', 'bacia',
+  'pelve', 'gluteo', 'nadega', 'coccix', 'virilha', 'ombro', 'cotovelo', 'punho', 'mao', 'antebraco', 'dedo', 'cabeca', 'peito', 'barriga',
+  'abdomen', 'costela', 'vertebra', 'hernia', 'disco', 'protrusao', 'abaulamento', 'escoliose', 'artrose', 'tendao', 'musculo', 'articulacao',
+  'trapezio', 'escapula', 'omoplata', 'cintura', 'tronco', 'pe',
+]);
+/**
+ * Palavras de corpo/lado que também aparecem em nome de cidade ("Braço do Norte", "Alta Floresta", "Dores do Indaiá", "Baixa Grande"):
+ * só contam quando o valor INTEIRO é feito de corpo/lado/ligação ("Lado direito", "dores nas costas"), nunca como sinal isolado.
+ */
+const CORPO_FRACO = new Set([
+  'braco', 'lado', 'direito', 'direita', 'esquerdo', 'esquerda', 'regiao', 'dor', 'baixa', 'baixo', 'alta', 'alto', 'parte', 'meio', 'inferior',
+  'superior', 'toda', 'todo', 'ambos', 'ambas', 'cima', 'embaixo', 'frente', 'tras', 'junto',
+]);
+/**
+ * Palavras de ligação e de frase de dor ("dor na lombar que desce pra perna"). Valem SÓ para dizer que o valor inteiro é frase de dor
+ * (`every`); nunca para dizer que há palavra de corpo — senão "canaã dos carajás" e "rio de janeiro", em minúscula, deixariam de ser cidade.
+ */
+const LIGACAO = new Set([
+  'de', 'do', 'da', 'dos', 'das', 'e', 'na', 'no', 'nas', 'nos', 'a', 'o', 'as', 'os', 'que', 'doi', 'pra', 'para', 'com', 'sem', 'desce', 'sobe',
+  'ate', 'mais', 'muito', 'forte', 'fraca', 'fraco', 'cronica', 'cronico', 'aguda', 'agudo', 'constante', 'intensa', 'leve', 'em', 'um', 'uma',
+]);
+
+/** "ombros" → "ombro", "pes" → "pe", "lombares" → "lombar", "dores" → "dor": o plural não esconde a parte do corpo. */
+function singular(w: string): string {
+  if (w.length > 3 && w.endsWith('es') && (CORPO_FORTE.has(w.slice(0, -2)) || CORPO_FRACO.has(w.slice(0, -2)))) return w.slice(0, -2);
+  if (w.length > 2 && w.endsWith('s') && (CORPO_FORTE.has(w.slice(0, -1)) || CORPO_FRACO.has(w.slice(0, -1)))) return w.slice(0, -1);
+  return w;
+}
+const ehCorpoForte = (w: string) => CORPO_FORTE.has(singular(w));
+const ehCorpoOuLigacao = (w: string) => CORPO_FORTE.has(singular(w)) || CORPO_FRACO.has(singular(w)) || LIGACAO.has(w);
+
+/** "consegue vir": só afirmação CLARA conta. Qualquer palavra fora desta lista (não, nunca, talvez, mas, longe, que…) derruba. */
+const PALAVRAS_DE_SIM = new Set(['sim', 's', 'true', '1', 'consegue', 'consigo', 'pode', 'posso', 'ok', 'claro', 'certeza', 'tranquilo', 'certo', 'positivo']);
+const PALAVRAS_NEUTRAS = new Set(['com', 'isso', 'vir', 'ir', 'e', 'tambem', 'la', 'ai', 'aqui', 'da', 'para', 'pra', 'a', 'unidade', 'clinica', 'sempre', 'ate']);
+function afirmaClaramente(valor: unknown): boolean {
+  const palavras = String(valor ?? '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+  return palavras.length > 0 && palavras.every((w) => PALAVRAS_DE_SIM.has(w) || PALAVRAS_NEUTRAS.has(w)) && palavras.some((w) => PALAVRAS_DE_SIM.has(w));
+}
+
+/**
+ * Cidade de verdade, não onde dói. Recusa o valor feito SÓ de corpo/lado/ligação ("lombar", "Ombros", "Lombar (L4-L5)", "hérnia de disco",
+ * "Lado direito"), a frase comprida, e o que tem palavra de corpo FORTE escrita em minúscula (a IA grava a dor em minúscula; a cidade, com
+ * inicial maiúscula). Cidade com nome de corpo fraco ("Braço do Norte", "Alta Floresta", "Dores do Indaiá") passa, em maiúscula ou não.
+ */
+/**
+ * "Não sei a cidade" escrito como valor: negação ("não informado", "sem cidade"), placeholder ("não especificada", "desconhecida", "n/a",
+ * "?", "-") e lugar sem nome ("fora de Marabá", "interior…", "outra cidade"). Medido em 30 dias de fatos reais, passavam como cidade.
+ */
+const SEM_CIDADE =
+  /^(?:nao|sem|nenhum|nenhuma|indefinid\w*|n\/?a|na)(?:\s|$|\/)|\b(?:informad[oa]s?|especificad[oa]s?|desconhecid[oa]s?|nao\s+sei)\b|^fora(?:\s|$)|^interior(?:\s|$)|^outr[oa]s?\s+(?:cidade|local|lugar|estado|regiao)|^[^a-z]*$/;
+function semCidadeDeFato(v: string): boolean {
+  const n = v.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+  return SEM_CIDADE.test(n);
+}
+
+export function pareceCidade(valor: unknown): boolean {
+  const v = String(valor ?? '')
+    .replace(/\([^)]*\)/g, ' ')
+    .trim();
+  if (v.length < 2 || v.length > 60 || !/\p{L}/u.test(v)) return false;
+  if (semCidadeDeFato(v)) return false;
+  const palavras = v
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .split(/[^a-z]+/)
+    .filter((w) => w.length > 1 || w === 'e' || w === 'a' || w === 'o');
+  if (palavras.length === 0) return false;
+  // frase, não cidade (os conectores não contam: "São José do Rio Preto" tem 4 palavras de nome)
+  if (palavras.filter((w) => !['de', 'do', 'da', 'dos', 'das', 'e'].includes(w)).length >= 6) return false;
+  if (palavras.every(ehCorpoOuLigacao)) return false;
+  if (palavras.some(ehCorpoForte) && /^\p{Ll}/u.test(v)) return false;
+  return true;
+}
+
+/**
+ * Os fatos passam por `canonizarFatos` ANTES de olhar a cidade: um cartão antigo com `localizacao: 'Imperatriz'` (o apelido que a
+ * escrita troca por `cidade`) continua valendo; `localizacao: 'lombar'` continua não valendo (`pareceCidade`).
+ */
+export function cidadeConhecida(fatos: Fatos): boolean {
+  const f = canonizarFatos(fatos);
+  if (CHAVES_CIDADE.some((k) => pareceCidade(f[k]))) return true;
+  return CHAVES_VEM_A_UNIDADE.some((k) => afirmaClaramente(f[k]));
 }
 
 const CHECKLIST: Item[] = [
@@ -48,7 +158,12 @@ const CHECKLIST: Item[] = [
     comoPedir: 'pergunte onde dói',
   },
   { rotulo: 'tempo de dor', chaves: ['tempo_dor', 'tempo_de_dor'], comoPedir: 'pergunte há quanto tempo' },
-  { rotulo: 'cidade', chaves: ['cidade', 'localizacao'], comoPedir: 'confirme a cidade dele' },
+  {
+    rotulo: 'cidade',
+    chaves: [...CHAVES_CIDADE, ...CHAVES_VEM_A_UNIDADE],
+    comoPedir: 'pergunte em qual cidade ele mora, antes de oferecer qualquer horário',
+    confere: cidadeConhecida,
+  },
   {
     rotulo: 'horário escolhido',
     chaves: ['preferencia_horario', 'horario_preferido', 'horario_escolhido'],
@@ -83,6 +198,8 @@ export function renderFaltaParaAgendar(
     nomeNaHoraDeMarcar?: boolean;
     /** Chave `conduzir-direto`: a queixa basta — "há quanto tempo" sai da lista. */
     conduzirDireto?: boolean;
+    /** Rótulos que o paciente já respondeu NA CONVERSA mesmo sem o fato gravado (pergunta-respondida.ts): saem da lista. */
+    jaRespondidos?: readonly string[];
   } = {},
 ): string {
   const f = fatos ?? {};
@@ -94,7 +211,8 @@ export function renderFaltaParaAgendar(
   // Nome na hora de marcar, a não ser que ele já tenha sido pedido 2 vezes sem resposta (semPedirNome, repeticao.ts): aí não
   // se pede mais, nem junto do horário.
   const pedirNomeNoHorario = Boolean(opcoes.nomeNaHoraDeMarcar && !opcoes.semPedirNome && !temAlgum(f, ['nome']));
-  const faltando = CHECKLIST.filter((i) => !temAlgum(f, i.chaves))
+  const faltando = CHECKLIST.filter((i) => !(i.confere ? i.confere(f) : temAlgum(f, i.chaves)))
+    .filter((i) => !opcoes.jaRespondidos?.includes(i.rotulo))
     .filter((i) => !((opcoes.semPedirNome || opcoes.nomeNaHoraDeMarcar) && i.rotulo === 'nome'))
     .filter((i) => !(opcoes.conduzirDireto && i.rotulo === 'tempo de dor'))
     .map((i) =>

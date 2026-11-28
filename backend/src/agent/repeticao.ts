@@ -81,7 +81,7 @@ function temasDe(pergunta: string): Set<string> {
   return new Set(TEMAS.filter(([, re]) => re.test(pergunta)).map(([t]) => t));
 }
 
-function perguntasDe(texto: string): string[] {
+export function perguntasDe(texto: string): string[] {
   return texto
     .split(/(?<=[?!.])\s+|\n+/)
     .map((f) => f.trim())

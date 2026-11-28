@@ -1102,6 +1102,32 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/conversa-direta.ts',
   },
   {
+    id: 'pergunta-ja-respondida',
+    chave: 'PERGUNTA_JA_RESPONDIDA_SLUGS',
+    nome: 'Sofia não pergunta de novo o que o paciente já respondeu',
+    oQueFaz:
+      'Se o paciente já disse há quanto tempo dói, em que cidade mora ou como a dor atrapalha a rotina (na conversa ou no cartão), a Sofia não pergunta isso de novo: o prompt ganha um aviso com o que ele disse, a lista «o que falta para agendar» tira o item, e, se a resposta do modelo repetir a pergunta mesmo assim, ela é refeita UMA vez sem ela. Antes só o pedido de nome tinha essa trava (relatório de 27/11/2026: 2 a 3 repetições na mesma conversa).',
+    pegadinha:
+      'NASCE DESLIGADA: ligue uma unidade por vez (piloto sugerido: Araguaína e Imperatriz) e confira nas execuções os passos «🔁 Perguntou de novo o que ele já respondeu». Só conta resposta com evidência (frase do paciente ou fato do cartão); na dúvida a Sofia ainda pergunta. Cidade dita como «moro em casa», «no centro» ou «não moro aqui» não conta. (A regra da lista «o que falta para agendar» de que «localização» do cartão é onde dói, e não a cidade, NÃO depende desta chave: vale na rede toda.) A refeita custa uma chamada a mais do modelo, só no turno em que a repetição aconteceu. Não mexe em preço, sinal, confirmação de consulta nem na régua. Não tem «só no papel».',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/pergunta-respondida.ts',
+  },
+  {
+    id: 'midia-nao-lida-pede-escrever',
+    chave: 'MIDIA_NAO_LIDA_PEDE_ESCREVER_SLUGS',
+    nome: 'Áudio, foto ou arquivo que a Sofia não leu: ela pede para escrever',
+    oQueFaz:
+      'Quando o paciente manda só um áudio, foto ou arquivo e o servidor não conseguiu lê-lo, a Sofia responde na hora, com gentileza, que não conseguiu abrir e pede para ele escrever («Não consegui abrir seu áudio aqui 🙏 Pode me escrever o que você queria falar?»); se já havia horários na mesa, repete 2 deles na mesma mensagem. Só troca a resposta do modelo quando ela não diz isso (silêncio, despedida ou resposta como se tivesse ouvido). Antes a conversa podia morrer ali (relatório de 27/11/2026).',
+    pegadinha:
+      'NASCE DESLIGADA: ligue uma unidade por vez (piloto sugerido: Araguaína e Imperatriz) e confira nas execuções o passo «📎 Mídia que ninguém leu». Não age quando o turno já passou a conversa para a equipe (áudio não ouvido 2x, unidade que não ouve áudio) nem quando o paciente escreveu algo junto da mídia. No WhatsApp Lite só vale para ÁUDIO que a rota oficial já lista e ninguém transcreveu (foto, figurinha e reação seguem como antes); lá, falha nossa (saldo/chave), unidade que não ouve áudio ou a 2ª falha seguida (cada áudio conta uma vez, pelo id) NÃO pedem para escrever: o recado ao modelo manda passar para a equipe (pausar_ia) e abre a tarefa «ouvir o áudio»; só a 1ª falha passageira pede para escrever. Um áudio do turno transcrito zera a contagem (só com a chave ligada). Não repete a mesma frase duas vezes seguidas; se o paciente mandar outra foto/arquivo logo depois, a resposta do modelo sai sem conferência (só o áudio tem a passagem para a equipe). Se a mídia for lida depois (o Lite carrega o arquivo tarde), o turno seguinte já a recebe transcrita e a Sofia responde ao conteúdo, sem pedir de novo. Não tem «só no papel».',
+    risco: 'manda-mensagem',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/midia-nao-lida.ts',
+  },
+  {
     id: 'cache-agenda',
     chave: 'CACHE_AGENDA_SLUGS',
     nome: 'Cache curto dos horários da agenda',
