@@ -531,6 +531,19 @@ test('chave Pix fixa: "Quero o Pix" (o botão, frase inteira) depois da oferta g
   assert.deepEqual((g.where as unknown as { OR: unknown[] }).OR[0], { pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, 'só quem recebeu a oferta de fato (ou disse "Pago no dia")');
 });
 
+test('8ª rodada: aceite pela RESPOSTA (a chave saiu) NÃO troca um "na clínica" escolhido — só o "Quero o Pix" explícito troca', async () => {
+  const u = { id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ };
+  agendadoPara = `${DIA}T09:00`;
+  // pela resposta: só a partir do marcador da oferta (quem disse "Pago no dia" e perguntou "qual a chave?" segue na clínica, a régua não cobra)
+  assert.equal(await gravarAceiteDoPix(u, 1, { deNaClinica: false }), true);
+  const pelaResposta = conversaGravou[conversaGravou.length - 1] as unknown as { where: { OR: unknown[] } };
+  assert.deepEqual(pelaResposta.where.OR, [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }]);
+  // pelo botão/fala "Quero o Pix" (padrão): troca também o na_clinica (mudou de ideia)
+  assert.equal(await gravarAceiteDoPix(u, 1), true);
+  const peloBotao = conversaGravou[conversaGravou.length - 1] as unknown as { where: { OR: unknown[] } };
+  assert.deepEqual(peloBotao.where.OR, [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }]);
+});
+
 test('o aviso de agendamento diz o que ELE escolheu, não o padrão da ferramenta', () => {
   // `formaPagamento` do aviso é a forma DITA agora (formaDitaAgora) com a chave ligada; sem escolha, null → o aviso não afirma "na clínica"
   assert.equal(formaParaOCarimbo({ pixDepois: true, formaDitaAgora: undefined, formaFinal: 'na_clinica', escolhaSalva: null }).formaPagamento, undefined);

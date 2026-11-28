@@ -192,6 +192,12 @@ export async function gravarAceiteDoPix(
      * dia e a hora da consulta. Falha dele NÃO desfaz o aceite: quem chama abre nota/tarefa. Sem ele, só a conversa é gravada.
      */
     carimbar?: (quando: { data: string; hora: string }) => Promise<unknown>;
+    /**
+     * Troca também a partir de `na_clinica`? Sim (padrão) só para o "Quero o Pix" EXPLÍCITO (ele disse "Pago no dia" e mudou de ideia). Quando o
+     * gatilho é a chave Pix na RESPOSTA da Sofia, NÃO: quem escolheu pagar na clínica e pergunta "aceita pix aí na hora? qual a chave?" não escolheu o
+     * antecipado — virar `pix_antecipado` faria a régua cobrar "você ESCOLHEU pagar por Pix" (o erro de 11/09; sênior, 8ª rodada do #520).
+     */
+    deNaClinica?: boolean;
   } = {},
 ): Promise<boolean> {
   if (!leadId || !Number.isInteger(Number(leadId))) return false;
@@ -199,9 +205,12 @@ export async function gravarAceiteDoPix(
     const vinculo = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId: Number(leadId) } }, select: { agendadoPara: true } });
     const quando = (vinculo?.agendadoPara ?? '').slice(0, 16);
     if (!quando || quando < agoraLocalISO(fusoDaUnidade(unit))) return false;
-    // vale a partir do marcador da oferta OU de um `na_clinica` (ele disse "Pago no dia" e depois mudou de ideia: "Quero o Pix"), com a consulta de pé
+    // vale a partir do marcador da oferta; e de um `na_clinica` SÓ no "Quero o Pix" explícito (ele disse "Pago no dia" e mudou de ideia), com a consulta de pé
+    const origens = opcoes.deNaClinica === false
+      ? [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }]
+      : [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }];
     const r = await prisma.conversation.updateMany({
-      where: { unitId: unit.id, leadId: String(leadId), OR: [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }] },
+      where: { unitId: unit.id, leadId: String(leadId), OR: origens },
       data: { pagamentoEscolhido: 'pix_antecipado' },
     });
     if (r.count === 0) return false;

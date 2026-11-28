@@ -731,12 +731,26 @@ export async function buildAgentGraph(
     confirmacao.adiou = confirmacaoAdiadaEstado(unit.slug) === 'desligado' ? null : adiouConfirmacao(falaDoPacienteNoTurno(falas));
     // Unidade com chave Pix FIXA (sem sinal, com chave cadastrada e os dois preços): é onde o aceite do Pix grava `pix_antecipado` e carimba o cartão.
     const aceiteDeChaveFixa = !sinalDaUnidade(unit) && !!unit.pixKey?.trim() && !!precosDaConsulta(unit);
-    const registrarAceiteDoPix = () => {
+    const registrarAceiteDoPix = (origem: 'botao' | 'resposta') => {
       if (!state.leadId) return;
       const leadNum = Number(state.leadId);
       void gravarAceiteDoPix(unit, state.leadId, {
         carimbar: kommoClient ? (q) => carimbarAceiteDoPix({ unit, kommo: kommoClient as never, leadId: leadNum, data: q.data, hora: q.hora }) : undefined,
-      });
+        // pela RESPOSTA (a chave saiu) nunca troca um "na clínica" escolhido — só o "Quero o Pix" explícito troca (sênior, 8ª rodada do #520)
+        deNaClinica: origem === 'botao',
+      })
+        .then((gravou) => {
+          // passo no rastro para medir o piloto: aceites pelo botão × pela resposta
+          if (gravou) {
+            return recorder.step({
+              kind: 'KOMMO_ACTION',
+              title: `💳 Aceite do Pix antecipado (${origem === 'botao' ? 'pelo botão/fala "Quero o Pix"' : 'pela resposta: a chave Pix saiu'})`,
+              payload: { leadId: leadNum, origem },
+            });
+          }
+          return undefined;
+        })
+        .catch(() => undefined);
     };
     // Chave `pix-depois-de-marcar`: a resposta à oferta do antecipado/sinal ("Pago no dia", "Quero o Pix") vira escolha gravada — ANTES de chamar o modelo, para
     // não se perder se ele estiver fora. Só vale com o marcador da oferta na conversa e a consulta ainda de pé (lib em pix-depois-de-marcar.ts).
@@ -744,7 +758,7 @@ export async function buildAgentGraph(
       const falaDele = falaDoPacienteNoTurno(falas);
       if (recusouOSinal(falaDele)) void gravarRecusaDoSinal(unit, state.leadId);
       // com sinal, "Quero o Pix" é o link (gerar_sinal_pix troca o marcador); com chave Pix fixa, o aceite grava `pix_antecipado`
-      else if (aceiteDeChaveFixa && aceitouOPix(falaDele)) registrarAceiteDoPix();
+      else if (aceiteDeChaveFixa && aceitouOPix(falaDele)) registrarAceiteDoPix('botao');
     }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
@@ -1782,7 +1796,7 @@ export async function buildAgentGraph(
           chavePix: unit.pixKey,
         })
       ) {
-        registrarAceiteDoPix();
+        registrarAceiteDoPix('resposta');
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de
