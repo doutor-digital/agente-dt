@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cartaoTemConsulta } from './agendamento-perdido-worker.js';
+import { cartaoTemConsulta, respostaOfereceHorario, HORARIO_NA_RESPOSTA_FONTE } from './agendamento-perdido-worker.js';
 
 const comData = (segundos: unknown, nome = '◷ Data da Consulta') => ({
   custom_fields_values: [{ field_id: 1, field_name: nome, values: [{ value: segundos }] }],
@@ -150,4 +150,48 @@ test('quemAvisar: a recepção usa a MESMA decisão do filtro, sempre — até c
   assert.deepEqual(quemAvisar({ ...base, filtro: 'ligado', jaAvisado: true, c: { pacienteRespondeu: true, adiou: false } }), { paraVigia: false, paraClinica: true, pularia: null });
   // chave desligada (ou oferta já avisada): nada para a recepção
   assert.equal(quemAvisar({ ...base, avisaClinica: false, filtro: 'ligado', c: { pacienteRespondeu: true, adiou: false } }).paraClinica, false);
+});
+
+// ── o aviso só vale se a IA OFERECEU horário de verdade (28/11/2026) ─────────────────────────────
+
+test('Porto 30288526: consultou a agenda mas só perguntou da dor — NÃO ofereceu horário', () => {
+  // resposta real do passo "IA respondeu" (trace cmwzx1y871aphrw01eao0jibe)
+  assert.equal(respostaOfereceHorario('Que bom que você quer cuidar da sua coluna! 😊 Antes de marcar, me conta rápido: onde é a dor e há quanto tempo você sente isso?'), false);
+  // 08:05 do mesmo lead: pergunta o período, ainda sem horário
+  assert.equal(respostaOfereceHorario('Oi, Rubens! Pra te ajudar a marcar sua consulta, você prefere um horário de manhã ou de tarde? Assim eu já olho o que está livre pra esse período 🙏'), false);
+});
+
+test('ofertas reais, nos formatos que a Sofia usa, contam', () => {
+  // Canaã 31395380 (a oferta foi de verdade; o handoff é que a tira do aviso)
+  assert.equal(respostaOfereceHorario('Tenho segunda-feira (30/11) às 08:30 ou às 13:30. Qual fica melhor pra você?\n\n[[botoes: Seg 08:30 | Seg 13:30]]'), true);
+  assert.equal(respostaOfereceHorario('Tenho hoje às 16h30 ou 18h. Qual prefere?'), true);
+  assert.equal(respostaOfereceHorario('segunda 30/11 às 09h ou 14h'), true);
+  assert.equal(respostaOfereceHorario('Consigo às 9 horas ou às 15 horas'), true);
+  assert.equal(respostaOfereceHorario('Seg 09H'), true);
+  assert.equal(respostaOfereceHorario('Seg 9:00'), true);
+  // outras formas de escrever a hora (revisão: sumir com a oferta real é o erro oposto ao alarme falso)
+  assert.equal(respostaOfereceHorario('Tenho segunda às 9hrs ou 14hrs'), true);
+  assert.equal(respostaOfereceHorario('às 9hs ou às 15 hrs'), true);
+  assert.equal(respostaOfereceHorario('9 da manhã ou 3 da tarde'), true);
+  assert.equal(respostaOfereceHorario('Consigo ao meio-dia ou às 15'), true);
+  assert.equal(respostaOfereceHorario('Tenho às 8 ou às 10, qual prefere?'), true);
+});
+
+test('textos com número que não é horário não contam', () => {
+  assert.equal(respostaOfereceHorario('A consulta está R$ 250,00 no dia, ou R$ 200,00 pagando antes.'), false);
+  assert.equal(respostaOfereceHorario('Sente isso há 25 dias? Chegue 15 minutos antes.'), false);
+  assert.equal(respostaOfereceHorario('Dói há 3 anos e piorou hoje'), false);
+  assert.equal(respostaOfereceHorario('Atendemos de segunda a sexta, dia 30/11'), false);
+  assert.equal(respostaOfereceHorario('Fica para às 30/11 então'), false);
+  // duração não é horário
+  assert.equal(respostaOfereceHorario('Você sente essa dor há mais de 2 horas por dia?'), false);
+  assert.equal(respostaOfereceHorario('Hoje estamos com a agenda cheia, mas sei que isso incomoda'), false);
+  assert.equal(respostaOfereceHorario(''), false);
+  assert.equal(respostaOfereceHorario(null), false);
+  assert.equal(respostaOfereceHorario(undefined), false);
+});
+
+test('a fonte da regex só usa sintaxe que o JS e o POSIX ARE do Postgres entendem igual', () => {
+  // \b é backspace no Postgres e \m/\M não existem no JS: o mesmo texto vai para o SQL (`~*`) e para este teste
+  assert.doesNotMatch(HORARIO_NA_RESPOSTA_FONTE, /\\[bmMyY<>]/);
 });

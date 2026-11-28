@@ -1098,6 +1098,23 @@ function revisaoSeca(raw: string | undefined = process.env.FRANQUIA_REVISAO_SECO
   return /^(1|true|sim)$/i.test((raw ?? '').trim());
 }
 
+/** A revisão pelo histórico desta unidade está em "só no papel" (tela ou FRANQUIA_REVISAO_SECO)? A MESMA pergunta de `revisarPeloHistorico`. */
+function revisaoEmSeco(slug: string): boolean {
+  return estadoDaAutomacao(slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) === 'seco' || revisaoSeca();
+}
+
+/**
+ * Esta unidade tem a revisão ESCREVENDO no cartão (a que manda AGENDADO sem consulta para CONFERIR NA FRANQUIA)? Só então AGENDADO sem
+ * consulta é desmentido. Mesma condição do sincronizador: o sync da unidade ligado (em "só no papel" ele registra e não escreve), o
+ * move carregando os funis (`estadoDoMove` ≠ desligado) e não em seco, a revisão ligada e não em seco (tela ou FRANQUIA_REVISAO_SECO).
+ */
+export function revisaoEscreveNoCartao(slug: string): boolean {
+  if (estadoDaAutomacao(slug, 'franquia-sync', process.env.FRANQUIA_SYNC_SLUGS) !== 'ligado') return false;
+  if (estadoDoMove(slug) !== 'ligado') return false;
+  if (!automacaoLigada(slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS)) return false;
+  return !revisaoEmSeco(slug);
+}
+
 type Historico = NonNullable<Awaited<ReturnType<typeof historicoDoPaciente>>>;
 
 interface PacienteDoCartao {
@@ -2258,7 +2275,7 @@ function notaConferir(nome: string): string {
 async function revisarPeloHistorico(ctxBase: CtxSync): Promise<void> {
   // A tela pode pôr ESTA unidade em seco sem mexer na variável global — por isso a pergunta vem
   // antes de montar o ctx, que é quem carrega o `seco` pro resto da revisão.
-  const secoDaRevisao = estadoDaAutomacao(ctxBase.unit.slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) === 'seco' || revisaoSeca();
+  const secoDaRevisao = revisaoEmSeco(ctxBase.unit.slug);
   // o sincronizador inteiro em "Só no papel" segura a revisão também — senão ela gravaria com o resto em seco
   const seco = secoDaRevisao || ctxBase.seco === true;
   const ctx: CtxSync = { ...ctxBase, seco, automacaoDoSeco: secoDaRevisao ? 'franquia-revisao' : ctxBase.automacaoDoSeco };

@@ -5,6 +5,7 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import { z } from 'zod';
 import type { LeadFieldRule, Unit } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
+import { depsDeProducao, recusaDeAgendadoSemConsulta } from '../lib/agendado-so-depois-de-marcar.js';
 import type { KommoClient, KommoFieldType } from '../services/kommo.service.js';
 import type { TraceRecorder } from './trace-recorder.js';
 import { getRecentMessagesByLead } from '../services/conversations.service.js';
@@ -532,6 +533,18 @@ export function buildTools({
       // 16/10: a Sofia não tira o cartão do funil TRATAMENTO (chave casamento-jornada)
       const recusa = await recusarSaidaDoTratamento(leadId, { tipo: 'etapa', statusId, pipelineId });
       if (recusa) return recusa;
+
+      // AGENDADO só com consulta marcada: sem ela a franquia desmente o cartão em minutos (→ CONFERIR NA FRANQUIA) e a Sofia fica calada
+      // no meio da negociação (Salto 27/11, lead 5478545). Ver `agendado-so-depois-de-marcar.ts`.
+      const semConsulta = await recusaDeAgendadoSemConsulta({ unit, leadId, statusId }, depsDeProducao(kommo, recorder.traceId));
+      if (semConsulta) {
+        await recorder.step({
+          kind: 'TOOL_RESULT',
+          title: `Recusado: mover para AGENDADO antes de marcar — ${semConsulta.motivo}`,
+          payload: { leadId, statusId },
+        });
+        return semConsulta.texto;
+      }
 
       try {
         await kommo.moveStage({ leadId, statusId, pipelineId });
