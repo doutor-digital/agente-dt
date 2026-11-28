@@ -35,6 +35,12 @@ import { AGORA_UTC } from './sql-tempo.js';
  * handoff tem motivo registrado, dá pra separar: só entra na conta quem foi
  * embora sem desfecho.
  *
+ * 28/11/2026 (dois alarmes falsos no Telegram do João, medidos em 7 dias: 180 avisos):
+ *  - só OFERTA de verdade conta: `consultar_horarios` com a resposta da IA trazendo um horário (`respostaOfereceHorario`). Consultar a
+ *    agenda e perguntar da dor (Porto, lead 30288526) não é oferecer;
+ *  - handoff certo não é venda perdida: depois da oferta a IA transferiu por SINAL DE ALERTA (Canaã, lead 31395380, fraqueza na perna)
+ *    ou a equipe assumiu (IA pausada por humano / pausa-equipe). Sem chave: é erro do aviso, não preferência de unidade.
+ *
  * Até 20/10/2026 isso estava só neste comentário: o SQL não separava nada. Com a
  * chave "agendamento-perdido-filtro" (`motivoParaNaoAvisar`) o vigia deixa de
  * avisar quem adiou com retomada marcada, quem nunca respondeu à oferta, e não
@@ -108,6 +114,22 @@ export function cartaoTemConsulta(
   const oferta = ofereceuEm.getTime();
   if (segundos === null || !Number.isFinite(oferta)) return false;
   return segundos * 1000 >= oferta - folgaMs;
+}
+
+/**
+ * A resposta da IA TRAZ um horário? ("às 08:30", "9h", "10 horas"). É o que separa OFERECER horário de só CONSULTAR a agenda.
+ *
+ * 28/11/2026, Porto, lead 30288526: o paciente disse "Quero agendar uma consulta!", a IA chamou `consultar_horarios` (o passo gravado) e
+ * respondeu "onde é a dor e há quanto tempo?" — não ofereceu nada. O aviso do Telegram disse "a IA ofereceu horário (01:35)". Em 7 dias,
+ * 180 avisos; só o texto da resposta diz se houve oferta.
+ *
+ * A MESMA fonte vai para o SQL (`~*` com este texto) e para o teste (`RegExp`, flag `i`): só usa o que o POSIX ARE do Postgres e o JS
+ * entendem igual — sem `\b` (no Postgres é backspace) nem `\m`/`\M` (só no Postgres).
+ */
+export const HORARIO_NA_RESPOSTA_FONTE = '(^|[^0-9:])(([01]?[0-9]|2[0-3]):[0-5][0-9]|([01]?[0-9]|2[0-3]) ?h([^a-zà-ú]|$)|[0-9]{1,2} horas)';
+
+export function respostaOfereceHorario(texto: string | null | undefined): boolean {
+  return !!texto && new RegExp(HORARIO_NA_RESPOSTA_FONTE, 'i').test(texto);
 }
 
 /** A mensagem do Telegram: quem, de qual unidade, quando a IA ofereceu, e o link pra abrir o cartão. */
@@ -246,6 +268,17 @@ async function candidatos(): Promise<Candidato[]> {
          and s.title ilike '%consultar_horarios%'
          -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
          and s.title not ilike '%bloqueado%'
+         -- Oferta de VERDADE: consultar a agenda não é oferecer. Só conta se a resposta da IA, no mesmo turno e depois da consulta,
+         -- traz um horário ("às 08:30", "9h"). Porto 28/11: consultou, perguntou da dor e o aviso disse "ofereceu horário".
+         and exists (
+               select 1
+                 from execution_steps r
+                where r.trace_id = s.trace_id
+                  and r.kind = 'THINKING'
+                  and r.title like 'IA respondeu%'
+                  and r.sequence > s.sequence
+                  and (r.payload->>'text') ~* $3
+             )
          and not exists (
                select 1
                  from execution_steps s2
@@ -284,9 +317,26 @@ async function candidatos(): Promise<Candidato[]> {
                 and s3.created_at > o."ofereceuEm"
            ) as "adiou"
       from ofertas o
+     -- O handoff certo não é venda perdida (Canaã 28/11, lead 31395380: fraqueza na perna → a IA passou para a equipe com o aviso urgente,
+     -- e o vigia avisou "agendamento perdido"). Depois da oferta: transferiu por SINAL DE ALERTA, ou a equipe/um atendente assumiu
+     -- (IA pausada por humano, resposta descartada pela pausa-equipe). Vale com ou sem a chave do filtro: é erro do aviso, não preferência.
+     where not exists (
+             select 1
+               from execution_steps s4
+               join execution_traces t4 on t4.id = s4.trace_id
+               join units u4            on u4.id = t4.unit_id
+              where t4.lead_id = o."leadId"
+                and (u4.kommo_subdomain = o."sub" or u4.id = o."unitId")
+                and s4.created_at > o."ofereceuEm"
+                and (   (s4.title like 'Decisão: pausar IA%' and s4.title like '%SINAL DE ALERTA')
+                     or s4.title like 'Sinal de alerta avisado%'
+                     or s4.title like 'IA pausada por humano%'
+                     or s4.title like '⏸ Resposta descartada antes de enviar%')
+           )
     `,
     String(JANELA_HORAS),
     String(CARENCIA_MIN),
+    HORARIO_NA_RESPOSTA_FONTE,
   );
   // O driver devolve timestamp; normaliza aqui pra quem consome não ter de adivinhar.
   return linhas.map((l) => ({ ...l, ofereceuEm: new Date(l.ofereceuEm), pacienteRespondeu: Boolean(l.pacienteRespondeu), adiou: Boolean(l.adiou) }));
