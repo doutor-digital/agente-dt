@@ -24,7 +24,7 @@ import { createKommoClient, type KommoClient, type KommoPipeline } from '../serv
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
-import { SpineService } from '../services/spine.service.js';
+import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
@@ -37,6 +37,7 @@ import {
   prefixoDoToque,
   textoAlertaSemJanela,
   textoConfirmacaoD1,
+  RESPOSTA_OFERTA_SOFIA,
   type Toque,
 } from './confirmacao-d1.js';
 
@@ -48,6 +49,10 @@ import { avisoRecente, marcarAviso } from './aviso-dedupe.js';
 import { PAUSA_POR } from '../agent/teto-mensal.js';
 import type { Unit } from '@prisma/client';
 import { automacaoLigada } from './automacoes-estado.js';
+import { clinicaAtendendoAgora } from './cutucada-apos-equipe.js';
+import { registrarSimulacao } from './so-no-papel.js';
+import { canalDaManha, estadoDaManha, decidirManha, talvezDentroDaJanela, textoConfirmacaoManha, MAX_ENVIOS_POR_HORA, ID_CONFIRMACAO_MANHA } from './confirmacao-manha.js';
+import { oferecerNovoHorario } from './remarcar-oferta.js';
 import { vesperaDoServidorDesligada } from './lembrete-chaves.js';
 import {
   confirmacaoDaUnidade,
@@ -147,6 +152,12 @@ export function botsDeConfirmacao(unit: Pick<Unit, 'pipelineIntents'>): { d1: nu
   return { d1: num(i.confirmacao_salesbot_id), d2: num(i.reforco_salesbot_id) };
 }
 
+/** Modelo aprovado da MANHÃ da consulta ("é hoje"), à parte: o da véspera diz "amanhã" e não serve. Sem ele, fora da janela de 24 h a manhã não manda nada. */
+export function botDaManha(unit: Pick<Unit, 'pipelineIntents'>): number | null {
+  const v = ((unit.pipelineIntents ?? {}) as Record<string, unknown>).manha_salesbot_id;
+  return typeof v === 'number' && v > 0 ? v : null;
+}
+
 interface Envio {
   unit: Unit;
   kommo: KommoClient;
@@ -163,13 +174,15 @@ interface Envio {
   daUnidade?: ConfirmacaoDaUnidade | null;
   /** Hora local do envio, para o {saudacao} do texto da unidade. */
   horaLocal?: number;
+  /** Chamada logo ANTES de qualquer chamada de envio ao canal (chat, texto ou modelo): quem chama sabe se a exceção veio antes ou depois. */
+  aoEnviar?: () => void;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
 async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'template' | 'tarefa' | 'nada'> {
   const { unit, kommo, leadId, consulta, toque, chave } = e;
   const bots = botsDeConfirmacao(unit);
-  const botTemplate = toque === 'd1' ? bots.d1 : bots.d2;
+  const botTemplate = toque === 'd0' ? botDaManha(unit) : toque === 'd1' ? bots.d1 : bots.d2;
 
   /**
    * Grava a marca no instante em que o canal aceitou a mensagem.
@@ -191,7 +204,8 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   const oficiais = e.oficiais !== undefined ? e.oficiais : await mensagensOficiais(kommo, leadId, 15).catch(() => null);
   // WhatsApp Lite (QR code, ex.: Petrópolis): não existe a janela de 24 h — o texto chega sempre. Sem esta chave, o
   // paciente que marcou há 3 dias e não escreveu desde então virava TAREFA de ligação em vez de receber a mensagem.
-  const aberta = e.daUnidade?.semJanela ? true : oficiais ? janelaAberta(oficiais) : true;
+  // Manhã da consulta (d0): conversa que não deu para ler = janela FECHADA. Texto livre fora da janela o Kommo aceita e marca "Erro" em silêncio.
+  const aberta = e.daUnidade?.semJanela ? true : oficiais ? janelaAberta(oficiais) : toque !== 'd0';
 
   // Arma o tratador da resposta: sem isto, o "1" ou o toque no botão do paciente chega como texto
   // solto no agente, que não sabe que perguntou nada.
@@ -205,6 +219,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   if (!aberta) {
     if (botTemplate) {
+      e.aoEnviar?.();
       const r = await kommo.triggerSalesbot(botTemplate, leadId);
       if (r.ok) {
         await marcar();
@@ -234,8 +249,20 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   // O nome vem do título do cartão, que a Sofia grava com o nome que o paciente disse. O do contato é o perfil
   // do WhatsApp ("Space Conv. Hookah", "Leily Espaço Diva" — Canaã, 19/10/2026): sem nome no título, vai "Oi!".
-  const modeloDaUnidade = e.daUnidade?.texto ?? null;
-  const texto = modeloDaUnidade
+  const modeloDaUnidade = toque === 'd0' ? null : (e.daUnidade?.texto ?? null);
+  const textoDaManha = (comBotoes: boolean) =>
+    textoConfirmacaoManha({
+      nome: primeiroNomeDoPaciente(e.titulo, null),
+      quando: consulta.quando,
+      especialista: consulta.especialista,
+      endereco: unit.clinicAddress,
+      horaDoEnvio: e.horaLocal ?? 9,
+      oferece: oferecerNovoHorario(unit.slug) === 'ligado',
+      comBotoes,
+    });
+  const texto = toque === 'd0'
+    ? textoDaManha(false)
+    : modeloDaUnidade
     ? textoDaUnidade(modeloDaUnidade, {
         quando: consulta.quando,
         nome: primeiroNomeDoPaciente(e.titulo, null),
@@ -257,21 +284,29 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   // Pelo chat direto ele não é cortado; o `sendChatReply` em modo bypass corta em 240 caracteres (3 bolhas no texto de Petrópolis).
   let via: 'chat_botoes' | 'texto' = 'texto';
   let foiPeloChat = false;
+  let enviado = texto;
   const ctx = await contextoDeChatDoLead(unit.id, leadId).catch(() => null);
   if (ctx) {
+    const textoDoChat =
+      toque === 'd0'
+        ? textoDaManha(true)
+        : modeloDaUnidade
+          ? texto
+          : texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊');
     try {
+      e.aoEnviar?.();
       await enviarMensagemDeChat(unit, {
         chatId: ctx.chatId,
         recipientId: ctx.authorId,
         talkId: ctx.talkId,
         contactId: ctx.contactId,
         accountId: ctx.accountId,
-        texto: modeloDaUnidade
-          ? texto
-          : texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊'),
+        texto: textoDoChat,
         ...(modeloDaUnidade ? {} : { botoes: BOTOES_D1 }),
       });
       foiPeloChat = true;
+      // só a manhã guarda o texto enviado; a véspera e o reforço guardam o de sempre (com a unidade desligada, nada muda)
+      if (toque === 'd0') enviado = textoDoChat;
       if (!modeloDaUnidade) via = 'chat_botoes';
     } catch (err) {
       logger.warn({ unit: unit.slug, leadId, err: String(err) }, 'confirmação: chat direto falhou, indo pelo caminho de texto');
@@ -280,6 +315,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   if (!foiPeloChat) {
     // `sendChatReply` cai para NOTA no cartão quando o chat recusa — e nota o paciente não lê.
     // Tratar isso como enviado faria o dedupe calar a próxima tentativa até depois da consulta.
+    e.aoEnviar?.();
     const r = await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
     if (r.via === 'lead_note') {
       logger.warn({ unit: unit.slug, leadId, toque }, 'confirmação: virou nota interna, o paciente NÃO recebeu');
@@ -300,7 +336,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   await marcar();
   await armar();
   if (conv) {
-    await addMessage({ conversationId: conv.id, role: 'assistant', content: texto, meta: { origem: `confirmacao_${toque}`, via } });
+    await addMessage({ conversationId: conv.id, role: 'assistant', content: enviado, meta: { origem: `confirmacao_${toque}`, via } });
   }
   return via;
 }
@@ -521,6 +557,198 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
   logger.info({ unit: unit.slug, dia, ...conta, vesperaDoKommo, candidatos: links.length }, 'confirmação de presença: varredura concluída');
 }
 
+/**
+ * A pergunta da MANHÃ da consulta (toque `d0`, chave `confirmacao-manha`). Roda a cada 15 min (`varrerManha`), não uma vez por dia
+ * como a véspera: a consulta das 14h é perguntada entre 9h e 12h30, a das 18h entre 13h e 16h30. Consulta antes das 9h30 não tem
+ * margem (a clínica abre às 8h e a pergunta precisa de 1 h 30 de folga): fica só com a véspera.
+ * Decisão em `confirmacao-manha.ts` (pura); aqui só se juntam os fatos. Caminho de envio e tratador da resposta são os da véspera.
+ */
+/** Mensagens novas da manhã já mandadas na hora cheia (relógio da unidade), por unidade: o teto de `MAX_ENVIOS_POR_HORA` vale por hora. */
+/** Depois de uma tentativa que não chegou ao paciente, a manhã espera 1 h para tentar de novo naquele cartão. */
+const TENTATIVA_D0_MS = 60 * 60_000;
+/** O que já está resolvido HOJE (perguntada, confirmada, pediu para remarcar): `unidade:lead:horário` → dia. Poupa reler franquia e Kommo a cada 15 min. */
+/** Quantas vezes a manhã falhou ANTES de enviar, por cartão e consulta: a 1ª falha repete na varredura seguinte, a 2ª espera 1 h. */
+const falhasAntesDoEnvio = new Map<string, number>();
+const resolvidasDoDia = new Map<string, string>();
+const enviosDaHora = new Map<string, { hora: string; n: number }>();
+
+async function lembrarManhaUnidade(unit: Unit): Promise<void> {
+  const estado = estadoDaManha(unit.slug);
+  if (estado === 'desligado' || !unit.spineEnabled || !unit.spineToken) return;
+  const quais = lembretesDoServidor(unit);
+  // Véspera e lembrete do dia pelo robô do Kommo: a pergunta da manhã já sai de lá; as duas juntas dariam duas perguntas ao paciente.
+  if (quais.vespera === 'robo-kommo') return;
+  const agora = new Date();
+  if (!clinicaAtendendoAgora(unit, agora)) return;
+  const tz = unit.spineTimezone || 'America/Sao_Paulo';
+  const agoraLocalISO = SpineService.instanteNoFuso(agora, tz).slice(0, 16);
+  const hora = Number(agoraLocalISO.slice(11, 13));
+
+  const links = await prisma.spineLeadLink.findMany({
+    where: { unitId: unit.id, ...SO_CARTAO_DO_KOMMO, spineIdSchedule: { not: null }, agendadoPara: { startsWith: agoraLocalISO.slice(0, 10) } },
+  });
+  if (!links.length) return;
+
+  const kommo = createKommoClient(unit);
+  const conta: Record<string, number> = { enviados: 0, seco: 0 };
+  const soma = (k: string) => (conta[k] = (conta[k] ?? 0) + 1);
+  let pipes: KommoPipeline[] | null = null;
+  // O teto é por HORA (a varredura é de 15 em 15 min): quatro varreduras não podem somar quatro rajadas
+  const horaCheia = agoraLocalISO.slice(0, 13);
+  const gasto = enviosDaHora.get(unit.id);
+  const jaEnviadosNestaHora = gasto?.hora === horaCheia ? gasto.n : 0;
+
+  for (const link of links) {
+    if (jaEnviadosNestaHora + conta.enviados >= MAX_ENVIOS_POR_HORA) {
+      soma('adiados_pelo_teto');
+      continue;
+    }
+    // pelo horário gravado no vínculo, já se vê quem não está perto da janela: poupa a chamada à franquia (uma por consulta de hoje, a cada varredura)
+    if (!talvezDentroDaJanela(link.agendadoPara, agoraLocalISO)) {
+      soma('fora_da_janela');
+      continue;
+    }
+    const diaDeHoje = agoraLocalISO.slice(0, 10);
+    if (resolvidasDoDia.size > 5000) resolvidasDoDia.clear();
+    const chaveResolvida = `${unit.id}:${link.kommoLeadId}:${(link.agendadoPara ?? '').slice(0, 16)}`;
+    if (resolvidasDoDia.get(chaveResolvida) === diaDeHoje) {
+      soma('resolvida_no_dia');
+      continue;
+    }
+    try {
+      const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
+      // sem `quando` verificado agora, ou fora da janela: sai antes de qualquer chamada ao Kommo
+      if (!consulta?.quando || consulta.estado !== 'confirmada') {
+        soma('consulta_nao_confirmada');
+        continue;
+      }
+      const quando = consulta.quando;
+      const chave = chaveDaConfirmacao('d0', quando);
+      const perguntouHoje = await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS);
+      const chaveTentativa = `confirmacao_d0_t:${quando.slice(0, 16)}`;
+      const tentouHaPouco = await avisoRecente(unit.id, link.kommoLeadId, chaveTentativa, TENTATIVA_D0_MS);
+      const previa = decidirManha({
+        estado, vespera: quais.vespera, clinicaAtendendo: true, consulta, agoraLocal: agoraLocalISO, perguntouHoje, tentouHaPouco,
+        etapaSemVespera: false, desistiu: false, confirmadaNaFranquia: null, confirmouNoWhatsapp: false, pediuParaRemarcar: false,
+      });
+      if (previa.acao === 'pular') {
+        soma(previa.motivo);
+        if (previa.motivo === 'ja_perguntou') resolvidasDoDia.set(chaveResolvida, diaDeHoje);
+        continue;
+      }
+
+      // Pergunta nova a um paciente só sai com TUDO lido: cartão, etapas e conversa. Falha de leitura = pula e a próxima varredura tenta de novo
+      // (sem isto, um soluço do Kommo perguntaria «você consegue vir?» a quem está em «Cancelado» ou escreveu «não vou poder»).
+      const lead = await kommo.getLead(link.kommoLeadId).catch(() => null);
+      if (!pipes?.length) pipes = await kommo.listPipelines().catch(() => null);
+      const oficiais = await mensagensOficiais(kommo, link.kommoLeadId, 40).catch(() => null);
+      if (!lead || !pipes?.length || !oficiais) {
+        soma('leitura_falhou');
+        continue;
+      }
+      const pipe = lead.status_id ? (pipes.find((p) => p.id === lead.pipeline_id) ?? pipes.find((p) => p.statuses?.some((st) => st.id === lead.status_id))) : undefined;
+      const etapa = lead.status_id ? (pipe?.statuses?.find((st) => st.id === lead.status_id)?.name ?? null) : null;
+      const conv = await prisma.conversation.findFirst({
+        where: { unitId: unit.id, leadId: String(link.kommoLeadId) },
+        orderBy: { lastMessageAt: 'desc' },
+        select: { id: true, confirmacaoD1Resposta: true },
+      });
+      // a resposta guardada na conversa é da ÚLTIMA pergunta; só vale se essa pergunta foi sobre ESTA consulta (chave com o horário)
+      const perguntouEstaConsulta =
+        (await avisoRecente(unit.id, link.kommoLeadId, chaveDaConfirmacao('d1', quando), POR_CONSULTA_MS)) ||
+        (await avisoRecente(unit.id, link.kommoLeadId, chaveDaConfirmacao('d2', quando), POR_CONSULTA_MS));
+      const marcadaEm = consulta.mudou ? new Date() : link.updatedAt;
+      const decisao = decidirManha({
+        estado,
+        vespera: quais.vespera,
+        clinicaAtendendo: true,
+        consulta,
+        agoraLocal: agoraLocalISO,
+        perguntouHoje,
+        tentouHaPouco,
+        etapaSemVespera: !!lead.status_id && etapaSemVespera({ statusId: lead.status_id, nome: etapa }) !== null,
+        desistiu: !!desistenciaEscrita(oficiais, marcadaEm),
+        confirmadaNaFranquia: jaConfirmou({ idStatus: consulta.idStatus, oficiais }),
+        confirmouNoWhatsapp: perguntouEstaConsulta && conv?.confirmacaoD1Resposta === 'confirmou',
+        pediuParaRemarcar: perguntouEstaConsulta && (conv?.confirmacaoD1Resposta === 'remarcar' || conv?.confirmacaoD1Resposta === RESPOSTA_OFERTA_SOFIA),
+      });
+      if (decisao.acao === 'pular') {
+        soma(decisao.motivo);
+        // terminais do dia: não se relê. «ja_confirmou» só quando é o CONFIRMADO da franquia (a regra das 12 h do «Agendamento confirmado» passa).
+        const terminal =
+          decisao.motivo === 'confirmou_no_whatsapp' ||
+          decisao.motivo === 'pediu_para_remarcar' ||
+          (decisao.motivo === 'ja_confirmou' && consulta.idStatus === SPINE_STATUS.CONFIRMADO);
+        if (terminal) resolvidasDoDia.set(chaveResolvida, diaDeHoje);
+        continue;
+      }
+      if (estado === 'seco') {
+        // As MESMAS checagens do envio real: janela de 24 h e modelo aprovado. Sem elas o seco prometeria envios que a unidade não faz.
+        const canal = canalDaManha(janelaAberta(oficiais), botDaManha(unit));
+        const preview = textoConfirmacaoManha({
+          nome: primeiroNomeDoPaciente(lead.name ?? null, null), quando, especialista: consulta.especialista,
+          endereco: unit.clinicAddress, horaDoEnvio: hora, oferece: oferecerNovoHorario(unit.slug) === 'ligado', comBotoes: true,
+        });
+        if (canal === 'sem_modelo') {
+          soma('seco_nao_mandaria_sem_modelo');
+          registrarSimulacao(unit, ID_CONFIRMACAO_MANHA, {
+            leadId: link.kommoLeadId, acao: 'pularia', alvo: 'mensagem', deEtapa: etapa,
+            motivo: 'fora da janela de 24 h e a unidade não tem o modelo da manhã (manha_salesbot_id): não mandaria nada',
+          });
+        } else {
+          soma(canal === 'texto' ? 'seco_mandaria_texto' : 'seco_mandaria_modelo');
+          registrarSimulacao(unit, ID_CONFIRMACAO_MANHA, {
+            leadId: link.kommoLeadId, acao: 'mandaria', alvo: 'mensagem', deEtapa: etapa,
+            valor: canal === 'texto' ? preview : `modelo aprovado da manhã (Salesbot ${botDaManha(unit)}) — fora da janela de 24 h`,
+          });
+        }
+        continue;
+      }
+      // A marca de tentativa vai ANTES do envio: se algo lançar exceção depois de a mensagem sair, a varredura de 15 min não reenvia.
+      await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa);
+      let via: Awaited<ReturnType<typeof pedirConfirmacao>>;
+      let enviou = false;
+      try {
+        via = await pedirConfirmacao({
+          unit,
+          kommo,
+          leadId: link.kommoLeadId,
+          consulta: consulta as ConsultaReconciliada & { quando: string },
+          toque: 'd0',
+          chave,
+          titulo: lead.name ?? null,
+          oficiais,
+          horaLocal: hora,
+          aoEnviar: () => { enviou = true; },
+        });
+      } catch (err) {
+        // Exceção ANTES de qualquer chamada de envio (`enviou` só vira true logo antes dela): a tentativa não conta uma vez, senão uma consulta das
+        // 10h perderia a janela por um soluço. Se a MESMA falha se repete, a marca fica e a tentativa seguinte é só 1 h depois, não a cada 15 min.
+        // Exceção a partir do envio: a marca fica e nada é reenviado.
+        if (!enviou) {
+          const chaveFalha = `${chaveTentativa}:${unit.id}:${link.kommoLeadId}`;
+          if (falhasAntesDoEnvio.size > 2000) falhasAntesDoEnvio.clear();
+          const falhas = (falhasAntesDoEnvio.get(chaveFalha) ?? 0) + 1;
+          falhasAntesDoEnvio.set(chaveFalha, falhas);
+          if (falhas === 1) await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa, new Date(0));
+        }
+        throw err;
+      }
+      soma(via);
+      // «nada» = nota interna, modelo que falhou ou janela fechada sem modelo: a marca de «perguntei» não foi gravada, mas a de tentativa sim —
+      // no máximo 4 tentativas até a consulta, em vez de uma a cada 15 min.
+      if (via !== 'nada') {
+        conta.enviados++;
+        enviosDaHora.set(unit.id, { hora: horaCheia, n: jaEnviadosNestaHora + conta.enviados });
+      }
+    } catch (err) {
+      soma('erros');
+      logger.warn({ unit: unit.slug, kommoLeadId: link.kommoLeadId, err: String(err) }, 'confirmação da manhã: falha no lead');
+    }
+  }
+  logger.info({ unit: unit.slug, estado, candidatos: links.length, ...conta }, 'confirmação da manhã: varredura concluída');
+}
+
 async function varrer(): Promise<void> {
   if (rodando) return;
   rodando = true;
@@ -542,14 +770,42 @@ async function varrer(): Promise<void> {
   }
 }
 
+/**
+ * A manhã tem a sua varredura, a cada 15 min: a janela de uma consulta das 10h é de 8h a 8h30 (a clínica abre às 8h), e uma varredura de
+ * hora em hora a acertaria ao acaso. É barata: unidade com a chave desligada sai antes de ler qualquer coisa.
+ */
+const SWEEP_MANHA_MS = 15 * 60_000;
+let timerManha: NodeJS.Timeout | null = null;
+let rodandoManha = false;
+
+async function varrerManha(): Promise<void> {
+  if (rodandoManha) return;
+  rodandoManha = true;
+  try {
+    const unidades = (await prisma.unit.findMany({ where: { spineEnabled: true } })).filter((u) => !emPausa(u) || u.pausaPor === PAUSA_POR);
+    for (const unit of unidades) {
+      await lembrarManhaUnidade(unit).catch((err) => {
+        logger.warn({ err: String(err), unit: unit.slug }, 'confirmação da manhã: erro na unidade (ignorado)');
+      });
+    }
+  } catch (err) {
+    logger.warn({ err: String(err) }, 'confirmação da manhã: varredura falhou');
+  } finally {
+    rodandoManha = false;
+  }
+}
+
 export function startReminderWorker(): void {
   if (timer) return;
   timer = setInterval(() => void varrer(), SWEEP_MS);
+  timerManha = setInterval(() => void varrerManha(), SWEEP_MANHA_MS);
   void varrer();
-  logger.info('confirmação de presença: worker iniciado (D-2 reforço + D-1 véspera)');
+  logger.info('confirmação de presença: worker iniciado (D-2 reforço + D-1 véspera + manhã da consulta)');
 }
 
 export function stopReminderWorker(): void {
   if (timer) clearInterval(timer);
   timer = null;
+  if (timerManha) clearInterval(timerManha);
+  timerManha = null;
 }

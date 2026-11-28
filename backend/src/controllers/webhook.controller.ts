@@ -61,6 +61,7 @@ import { trackPendingReply, confirmDelivery } from '../lib/stale-reply-monitor.j
 import { comTurnoAvulso, scheduleAgentRun, temPendentes } from '../lib/agent-coalescer.js';
 import { ehEncerramentoRepetido } from '../lib/encerramento.js';
 import { janelaDaResposta, podeSerRespostaD1, tratarRespostaD1 } from '../lib/confirmacao-d1.js';
+import { faltasLigadas } from '../lib/confirmacao-manha.js';
 import { podeSerBotaoDoLembrete, tratarBotaoDoLembrete } from '../lib/resposta-ao-lembrete.js';
 import { podeSerDuvidaDoLembrete, tratarDuvidaDoLembrete } from '../lib/duvida-no-lembrete.js';
 import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
@@ -863,7 +864,7 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
     // então o 200 sai ANTES dele — o mesmo padrão do caminho da IA, que responde e segue
     // processando. Foi a reentrega do "1" que fez a Sofia mandar "Não entendi…" 23 min depois
     // (Açailândia, 06/10/2026).
-    if (podeSerRespostaD1(conv, ctx.humanMessage, undefined, janelaDaResposta(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage) || podeSerDuvidaDoLembrete(unit.slug, ctx.humanMessage)) {
+    if (podeSerRespostaD1(conv, ctx.humanMessage, undefined, janelaDaResposta(unit.slug), faltasLigadas(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage) || podeSerDuvidaDoLembrete(unit.slug, ctx.humanMessage)) {
       res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug });
     }
     const respostaD1 = await tratarRespostaD1({
@@ -915,7 +916,8 @@ export async function handleKommoWebhook(req: Request, res: Response): Promise<v
       if (!res.headersSent) res.status(200).json({ ok: true, traceId: trace.id, unit: unit.slug, skipped: 'lembrete_kommo' });
       return;
     }
-    if (respostaD1) {
+    // `remarcar_sofia` (chave remarcar-oferta ligada): o pedido de remarcar segue para a Sofia, que oferece 2 horários reais.
+    if (respostaD1 && respostaD1 !== 'remarcar_sofia') {
       await recorder.step({
         kind: 'COMPLETED',
         title:
@@ -1132,7 +1134,7 @@ export async function retomarTurnoPerdido(t: TurnoPerdido, unit: Unit, deps: Dep
   const conv = await deps.conversa(unit.id, String(leadId));
   // Resposta à confirmação de véspera e toque no botão do lembrete têm tratador em código no webhook (idempotente). Aqui
   // não os rodo de novo: "sim"/"1" pode ser resposta a um lembrete OU conversa solta, e quem decide é a recepção.
-  if (conv && (podeSerRespostaD1(conv, ctx.humanMessage, t.criadoEm, janelaDaResposta(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage))) {
+  if (conv && (podeSerRespostaD1(conv, ctx.humanMessage, t.criadoEm, janelaDaResposta(unit.slug), faltasLigadas(unit.slug)) || podeSerBotaoDoLembrete(unit.slug, ctx.humanMessage))) {
     return 'tarefa:pode_ser_resposta_a_lembrete';
   }
   if (conv) {

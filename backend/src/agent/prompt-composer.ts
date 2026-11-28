@@ -66,6 +66,7 @@ import { descreverExpediente, dentroDoExpediente, lerExpediente } from '../lib/e
 import { capturaUnificada } from './captura-unificada.js';
 import { ehSoCumprimento } from '../lib/pediu-para-parar.js';
 import { automacaoLigada } from '../lib/automacoes-estado.js';
+import { blocoOfertaDeRemarcar, oferecerNovoHorario } from '../lib/remarcar-oferta.js';
 import { jeitoDaConversa, renderConversaDireta, type JeitoDaConversa } from './conversa-direta.js';
 import { sorrisoColoridoLigado } from '../lib/carinha-antiga.js';
 import {
@@ -989,7 +990,7 @@ CANCELAR E REMARCAR:
   com confirmado=true se ele disser que quer mesmo cancelar.
 - Se ele hesitar ou disser que só quer mudar o dia, NÃO cancele — remarque.
 - Depois de cancelar, pergunte se quer remarcar. Consulta desmarcada e paciente
-  sem próximo passo é paciente perdido.
+  sem próximo passo é paciente perdido.${oferecerNovoHorario(unit.slug) === 'ligado' ? blocoOfertaDeRemarcar() : ''}
 
 QUANDO A CONSULTA FOR MARCADA COM SUCESSO, mande EXATAMENTE este formato — é o
 momento em que o paciente vai reler pra conferir, então precisa ser blocado e
