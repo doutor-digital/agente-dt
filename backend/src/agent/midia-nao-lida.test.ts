@@ -239,3 +239,13 @@ test('nit: cada áudio não lido conta UMA vez, pelo id (o mesmo áudio em 2 tur
   n = 0;
   assert.equal(contarFalhaDoLite('c1', ['a1'], registrar), 1); // depois de zerar, conta de novo
 });
+
+test('rajada: DOIS áudios novos no MESMO turno contam como UMA falha (como o webhook), não vão para a equipe no 1º turno', () => {
+  let n = 0;
+  const registrar = () => ++n;
+  esquecerFalhasDoLite('c2');
+  assert.equal(contarFalhaDoLite('c2', ['b1', 'b2'], registrar), 1);
+  assert.equal(n, 1, 'registrar chamado uma vez só no turno');
+  assert.equal(contarFalhaDoLite('c2', ['b1', 'b2', 'b3'], registrar), 2); // turno seguinte, áudio novo: 2ª falha seguida
+  esquecerFalhasDoLite('c2');
+});

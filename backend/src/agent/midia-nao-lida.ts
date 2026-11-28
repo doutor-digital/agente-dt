@@ -77,11 +77,15 @@ const falhasDoLite = new Map<string, { ids: Set<string>; n: number }>();
  */
 export function contarFalhaDoLite(chave: string, ids: readonly string[], registrar: (chave: string) => number): number {
   const e = falhasDoLite.get(chave) ?? { ids: new Set<string>(), n: 0 };
+  // UMA falha por turno, como o webhook conta: dois áudios novos que não carregaram no MESMO turno (rajada com arquivo atrasado, o caso
+  // mais comum do Lite) não podem virar "2ª falha seguida" já no 1º turno (sênior, 7ª rodada do #519).
+  let novo = false;
   for (const id of ids) {
     if (e.ids.has(id)) continue;
     e.ids.add(id);
-    e.n = registrar(chave);
+    novo = true;
   }
+  if (novo) e.n = registrar(chave);
   if (e.ids.size > 50) e.ids = new Set([...e.ids].slice(-20));
   falhasDoLite.set(chave, e);
   return e.n;
