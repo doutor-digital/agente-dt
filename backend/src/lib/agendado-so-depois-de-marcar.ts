@@ -102,10 +102,10 @@ export async function recusaDeAgendadoSemConsulta(
 ): Promise<{ texto: string; motivo: string } | null> {
   const { unit, leadId, statusId } = args;
   if (!unit?.spineEnabled) return null;
-  if (!(await deps.franquiaDesmenteOCartao(unit.slug))) return null;
   const agendado = etapaAgendadoDaUnidade(unit);
   if (!agendado || statusId !== agendado) return null;
   try {
+    if (!(await deps.franquiaDesmenteOCartao(unit.slug))) return null;
     if (await deps.marcouNesteTurno()) return null;
     if (await deps.marcouPelaSofia(unit.id, leadId)) return null;
     const cartao = await deps.lerCartao(leadId);

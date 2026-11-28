@@ -119,7 +119,7 @@ export function cartaoTemConsulta(
 }
 
 /**
- * A resposta da IA TRAZ um horário? ("às 08:30", "9h", "10 horas"). É o que separa OFERECER horário de só CONSULTAR a agenda.
+ * A resposta da IA TRAZ um horário? ("às 08:30", "9h", "às 10 horas"). É o que separa OFERECER horário de só CONSULTAR a agenda.
  *
  * 28/11/2026, Porto, lead 30288526: o paciente disse "Quero agendar uma consulta!", a IA chamou `consultar_horarios` (o passo gravado) e
  * respondeu "onde é a dor e há quanto tempo?" — não ofereceu nada. O aviso do Telegram disse "a IA ofereceu horário (01:35)". Em 7 dias,
