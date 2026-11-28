@@ -16,7 +16,9 @@
  * consulta — nem o passo «Consulta marcada:» no rastro deste cartão (gravado só depois de a franquia aceitar), nem «◷ Data da Consulta»
  * com data de agora em diante no cartão — devolve RECUSADO à IA. Marcou depois? A próxima chamada passa.
  *
- * O QUE NÃO FAZ: não mexe em unidade sem franquia (lá AGENDADO é a única prova que existe), nem em outra etapa. Falha ABERTA: se não
+ * O QUE NÃO FAZ: só vale onde o ESCRITOR CONCORRENTE está de fato escrevendo — franquia ligada, `franquia-move` e `franquia-revisao` LIGADOS
+ * (em "só no papel" ou desligados ninguém desmente o cartão, e recusar tiraria da Sofia um movimento legítimo). Não mexe em unidade sem
+ * franquia (lá AGENDADO é a única prova que existe), nem em outra etapa. Falha ABERTA: se não
  * deu para ler o rastro ou o cartão, deixa mover como sempre foi — recusar por erro de leitura prenderia a Sofia em quem de fato marcou.
  */
 import type { Unit } from '@prisma/client';
@@ -24,6 +26,8 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import type { KommoLead } from '../services/kommo.service.js';
 import { aguardarMarcacaoDaIa } from './marcacao-da-ia-no-turno.js';
+import { automacaoLigada } from './automacoes-estado.js';
+import { estadoDoMove } from './franquia-move.js';
 
 /** Quanto tempo atrás o passo «Consulta marcada:» ainda vale como prova de que o cartão tem consulta (remarcação e ciclo longo cabem aqui). */
 const PROVA_DA_MARCACAO_DIAS = 45;
@@ -39,6 +43,8 @@ export function etapaAgendadoDaUnidade(unit: Pick<Unit, 'pipelineIntents'> | nul
 }
 
 export interface DepsAgendadoSoDepoisDeMarcar {
+  /** A franquia está MOVENDO cartão nesta unidade (move e revisão ligados, nenhum dos dois em seco)? Só aí AGENDADO sem consulta é desmentido. */
+  franquiaDesmenteOCartao: (slug: string) => boolean;
   /**
    * A marcação deu certo NESTE turno? As tools rodam em paralelo (ToolNode): o modelo pode pedir `agendar_consulta` e `mover_etapa` na
    * mesma rodada, e o passo «Consulta marcada:» só nasce quando a franquia responde — por isso espera a marcação em curso (com teto).
@@ -54,15 +60,23 @@ export interface DepsAgendadoSoDepoisDeMarcar {
   agora: () => Date;
 }
 
-export async function marcouPelaSofiaNoRastro(unitId: string, leadId: number): Promise<boolean> {
-  const n = await prisma.executionStep.count({
-    where: {
-      title: { startsWith: 'Consulta marcada:' },
-      createdAt: { gt: new Date(Date.now() - PROVA_DA_MARCACAO_DIAS * 86_400_000) },
-      trace: { unitId, leadId: String(leadId) },
-    },
-  });
-  return n > 0;
+/**
+ * O passo «Consulta marcada:» só prova consulta VIVA se a data marcada não passou (uma consulta de 20 dias atrás, cancelada ou faltada,
+ * não pode liberar o AGENDADO do paciente que voltou). A data vai no `payload.data` (AAAA-MM-DD, comparável como texto).
+ */
+export async function marcouPelaSofiaNoRastro(unitId: string, leadId: number, agora: Date = new Date()): Promise<boolean> {
+  const desde = new Date(agora.getTime() - PROVA_DA_MARCACAO_DIAS * 86_400_000);
+  const ontem = new Date(agora.getTime() - 86_400_000).toISOString().slice(0, 10);
+  const linhas = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    select count(*) as n
+      from execution_steps s
+      join execution_traces t on t.id = s.trace_id
+     where t.unit_id = ${unitId}
+       and t.lead_id = ${String(leadId)}
+       and s.title like 'Consulta marcada:%'
+       and s.created_at > ${desde}
+       and (s.payload->>'data') >= ${ontem}`;
+  return Number(linhas[0]?.n ?? 0) > 0;
 }
 
 export const TEXTO_RECUSA_AGENDADO =
@@ -80,6 +94,7 @@ export async function recusaDeAgendadoSemConsulta(
 ): Promise<{ texto: string; motivo: string } | null> {
   const { unit, leadId, statusId } = args;
   if (!unit?.spineEnabled) return null;
+  if (!deps.franquiaDesmenteOCartao(unit.slug)) return null;
   const agendado = etapaAgendadoDaUnidade(unit);
   if (!agendado || statusId !== agendado) return null;
   try {
@@ -98,6 +113,8 @@ export async function recusaDeAgendadoSemConsulta(
 /** As dependências de produção. `lerCartao` recebe o `kommo` do turno e `traceId` é o do turno (a marcação em curso é por turno). */
 export function depsDeProducao(kommo: { getLead(id: number): Promise<KommoLead> }, traceId: string): DepsAgendadoSoDepoisDeMarcar {
   return {
+    franquiaDesmenteOCartao: (slug) =>
+      automacaoLigada(slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) && estadoDoMove(slug) === 'ligado',
     marcouNesteTurno: () => aguardarMarcacaoDaIa(traceId),
     marcouPelaSofia: (unitId, leadId) => marcouPelaSofiaNoRastro(unitId, leadId),
     lerCartao: (leadId) => kommo.getLead(leadId),

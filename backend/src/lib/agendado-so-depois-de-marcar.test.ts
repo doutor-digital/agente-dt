@@ -13,6 +13,7 @@ function deps(over: Partial<DepsAgendadoSoDepoisDeMarcar> = {}): DepsAgendadoSoD
   const leituras: string[] = [];
   return {
     leituras,
+    franquiaDesmenteOCartao: () => true,
     marcouNesteTurno: async () => { leituras.push('turno'); return false; },
     marcouPelaSofia: async () => { leituras.push('rastro'); return false; },
     lerCartao: async () => { leituras.push('cartao'); return { custom_fields_values: [] }; },
@@ -79,4 +80,10 @@ test('a data de consulta lida usa "agora − 12 h" como corte: data de ciclo vel
   const d = deps({ cartaoTemConsulta: async (_l, desde) => { corte = desde; return false; } });
   await recusaDeAgendadoSemConsulta({ unit: salto, leadId: 1, statusId: AGENDADO }, d);
   assert.equal(corte!.getTime(), AGORA.getTime() - 12 * 3600_000);
+});
+
+test('onde a franquia NÃO está movendo cartão (move/revisão desligados ou em seco), ninguém desmente o AGENDADO: passa sem ler nada', async () => {
+  const d = deps({ franquiaDesmenteOCartao: () => false });
+  assert.equal(await recusaDeAgendadoSemConsulta({ unit: salto, leadId: 1, statusId: AGENDADO }, d), null);
+  assert.deepEqual(d.leituras, []);
 });

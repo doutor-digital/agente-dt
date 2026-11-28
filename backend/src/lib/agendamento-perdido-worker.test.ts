@@ -183,6 +183,8 @@ test('textos com número que não é horário não contam', () => {
   assert.equal(respostaOfereceHorario('Dói há 3 anos e piorou hoje'), false);
   assert.equal(respostaOfereceHorario('Atendemos de segunda a sexta, dia 30/11'), false);
   assert.equal(respostaOfereceHorario('Fica para às 30/11 então'), false);
+  // duração não é horário
+  assert.equal(respostaOfereceHorario('Você sente essa dor há mais de 2 horas por dia?'), false);
   assert.equal(respostaOfereceHorario('Hoje estamos com a agenda cheia, mas sei que isso incomoda'), false);
   assert.equal(respostaOfereceHorario(''), false);
   assert.equal(respostaOfereceHorario(null), false);
