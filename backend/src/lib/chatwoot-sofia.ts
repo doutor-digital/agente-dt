@@ -47,7 +47,7 @@ import { buildGerarSinalPix, pixDoSinalDoTurno, textoDoSinal } from '../agent/si
 import { fixarLeadDaConversa } from '../agent/graph.js';
 import { agendamentoDeuCerto } from '../agent/remarcacao.js';
 import { aplicarGuardrail } from '../agent/guardrail.js';
-import { sinalDaUnidade } from '../agent/prompt-composer.js';
+import { precosDaConsulta, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { unidadeSemAntecipado } from '../agent/pagamento-da-unidade.js';
 import { pixDepoisDeMarcar } from '../agent/pix-depois-de-marcar.js';
 import { travaDaAgendaDaIa } from './crm-compartilhado.js';
@@ -422,7 +422,8 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       if (sinal && forma === 'pix_antecipado') forma = 'sinal_pix';
       // Chave `pix-depois-de-marcar`: mesma regra da agenda do Kommo (agent/pix-depois-de-marcar.ts).
       const formaNaoDita = pixDepois && !forma;
-      if (formaNaoDita && !sinal) forma = 'na_clinica';
+      // (com chave Pix fixa e os dois preços há OFERTA do antecipado depois de marcar, então a forma fica sem dizer; sem isso, vale na clínica)
+      if (formaNaoDita && !sinal && !(unit.pixKey?.trim() && precosDaConsulta(unit))) forma = 'na_clinica';
       const pendencia = porQueNaoReservar({ ...a, formaPagamento: forma, semAntecipado, taxaObrigatoria, sinal, pixDepois });
       if (pendencia) return pendencia;
       const recusa = await conferirHorario(a.data, a.hora);

@@ -123,6 +123,7 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { carimbarAceiteDoPix } from './aceite-do-pix.js';
 import { aceitouOPix, gravarAceiteDoPix, gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
@@ -723,7 +724,12 @@ export async function buildAgentGraph(
       const falaDele = falaDoPacienteNoTurno(falas);
       if (recusouOSinal(falaDele)) void gravarRecusaDoSinal(unit, state.leadId);
       // com sinal, "Quero o Pix" é o link (gerar_sinal_pix troca o marcador); com chave Pix fixa, o aceite grava `pix_antecipado`
-      else if (!sinalDaUnidade(unit) && aceitouOPix(falaDele)) void gravarAceiteDoPix(unit, state.leadId);
+      else if (!sinalDaUnidade(unit) && unit.pixKey?.trim() && precosDaConsulta(unit) && aceitouOPix(falaDele)) {
+        const leadNum = Number(state.leadId);
+        void gravarAceiteDoPix(unit, state.leadId, {
+          carimbar: kommoClient ? (q) => carimbarAceiteDoPix({ unit, kommo: kommoClient as never, leadId: leadNum, data: q.data, hora: q.hora }) : undefined,
+        });
+      }
     }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;

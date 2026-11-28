@@ -12,8 +12,12 @@
  *    A escolha NÃO é gravada como "na clínica": o Pix do sinal segue podendo ser pedido, e a lista «agendados sem Pix» da recepção
  *    (`agendados-sem-pix-worker`, que só tira da lista quem tem `pagamento_escolhido = 'na_clinica'`) continua enxergando a pessoa.
  *    A régua de follow-up já pula os degraus «só Pix» em unidade com sinal (`degrauDoPixNaoSeAplica`), então ninguém é cobrado em duplicidade.
- *  - Unidade com antecipado por chave Pix fixa (sem sinal): não há o que oferecer depois; marca e vale "na clínica". Aqui a escolha é
- *    gravada como `na_clinica` — sem isso a régua AGENDADO (degraus «só Pix») cobraria Pix de quem nunca escolheu, que é o erro de 11/09.
+ *  - Unidade com antecipado por chave Pix FIXA (sem sinal; é o caso de hoje: nenhuma unidade tem sinal gerado): depois de marcar, a Sofia oferece UMA
+ *    vez o valor antecipado ("R$ 250 pelo Pix, com a chave, ou R$ 350 no dia", o preço não muda). Mesmo marcador `sinal_oferecido`, e a régua NÃO a
+ *    trata como escolha: só `pix_antecipado` recebe o degrau do Pix (`degrauDoPixNaoSeAplica`), senão o erro de 11/09 voltaria 5 minutos depois da oferta.
+ *    "Quero o Pix" grava `pix_antecipado` e CARIMBA o cartão como o main faz ao marcar com Pix ("¤ Pagamento antecipado = Sim" e o valor antecipado); "Pago no
+ *    dia" grava `na_clinica`. Sem chave Pix cadastrada ou sem os dois preços não há o que oferecer: marca, vale "na clínica" (gravado) e a promessa de
+ *    antecipado vira `resumir_lead_para_sdr`.
  *
  * Fora do alcance, de propósito: Boa Vista (taxa de reserva obrigatória), unidade sem antecipado (Timbó) e remarcação.
  */
@@ -162,17 +166,30 @@ export function aceitouOPix(textoDoPaciente: string | null | undefined): boolean
 export async function gravarAceiteDoPix(
   unit: Pick<Unit, 'id' | 'businessHoursTimezone' | 'spineTimezone'>,
   leadId: string | number | null | undefined,
+  opcoes: {
+    /**
+     * Carimba o CARTÃO depois de a conversa gravar (como o main faz ao marcar com Pix: "¤ Pagamento antecipado = Sim" + o valor antecipado). Recebe o
+     * dia e a hora da consulta. Falha dele NÃO desfaz o aceite: quem chama abre nota/tarefa. Sem ele, só a conversa é gravada.
+     */
+    carimbar?: (quando: { data: string; hora: string }) => Promise<unknown>;
+  } = {},
 ): Promise<boolean> {
   if (!leadId || !Number.isInteger(Number(leadId))) return false;
   try {
     const vinculo = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId: Number(leadId) } }, select: { agendadoPara: true } });
     const quando = (vinculo?.agendadoPara ?? '').slice(0, 16);
     if (!quando || quando < agoraLocalISO(fusoDaUnidade(unit))) return false;
+    // vale a partir do marcador da oferta OU de um `na_clinica` (ele disse "Pago no dia" e depois mudou de ideia: "Quero o Pix"), com a consulta de pé
     const r = await prisma.conversation.updateMany({
-      where: { unitId: unit.id, leadId: String(leadId), pagamentoEscolhido: OFERTA_DO_SINAL_FEITA },
+      where: { unitId: unit.id, leadId: String(leadId), OR: [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }] },
       data: { pagamentoEscolhido: 'pix_antecipado' },
     });
-    return r.count > 0;
+    if (r.count === 0) return false;
+    if (opcoes.carimbar) {
+      const [data, hora] = quando.split('T');
+      await opcoes.carimbar({ data, hora }).catch((err) => logger.warn({ err: String(err), unitId: unit.id, leadId }, 'pix-depois-de-marcar: o carimbo do aceite falhou'));
+    }
+    return true;
   } catch (err) {
     logger.warn({ err: String(err), unitId: unit.id, leadId }, 'pix-depois-de-marcar: não gravei o aceite do Pix');
     return false;

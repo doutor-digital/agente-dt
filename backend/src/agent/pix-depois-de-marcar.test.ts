@@ -528,10 +528,99 @@ test('chave Pix fixa: "Quero o Pix" (o botão, frase inteira) depois da oferta g
   assert.equal(await gravarAceiteDoPix(u, 1), true);
   const g = conversaGravou[conversaGravou.length - 1] as unknown as { data: { pagamentoEscolhido: string }; where: { pagamentoEscolhido: string } };
   assert.equal(g.data.pagamentoEscolhido, 'pix_antecipado');
-  assert.equal(g.where.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA, 'só quem recebeu a oferta de fato');
+  assert.deepEqual((g.where as unknown as { OR: unknown[] }).OR[0], { pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, 'só quem recebeu a oferta de fato (ou disse "Pago no dia")');
 });
 
 test('o aviso de agendamento diz o que ELE escolheu, não o padrão da ferramenta', () => {
   // `formaPagamento` do aviso é a forma DITA agora (formaDitaAgora) com a chave ligada; sem escolha, null → o aviso não afirma "na clínica"
   assert.equal(formaParaOCarimbo({ pixDepois: true, formaDitaAgora: undefined, formaFinal: 'na_clinica', escolhaSalva: null }).formaPagamento, undefined);
+});
+
+// ── 6ª rodada: régua, carimbo do cartão no aceite, regra global, "Pago no dia" → "Quero o Pix" ────────────────────────────────────
+
+test('RÉGUA: quem só recebeu a OFERTA (sinal_oferecido) NÃO recebe o degrau do Pix; só pix_antecipado/sinal_pix recebem; sem a chave nada muda', () => {
+  const degrau = { soPix: true };
+  const fixa = unidade({ sinalPixCentavos: null });
+  assert.equal(degrauDoPixNaoSeAplica(degrau, 'sinal_oferecido', fixa), true, 'oferta sem resposta: sem cobrança (o erro de 11/09)');
+  assert.equal(degrauDoPixNaoSeAplica(degrau, 'na_clinica', fixa), true);
+  assert.equal(degrauDoPixNaoSeAplica(degrau, 'pix_antecipado', fixa), false, 'escolheu o Pix: o degrau roda');
+  assert.equal(degrauDoPixNaoSeAplica(degrau, null, fixa), false, 'como sempre (chave desligada: nada muda)');
+  assert.equal(degrauDoPixNaoSeAplica({ soPix: false }, 'sinal_oferecido', fixa), false, 'degrau que não é só-Pix: indiferente');
+});
+
+function kommoFalso(valorAtual: string | null, falhaNoCampo = false) {
+  const chamadas: string[] = [];
+  const notas: string[] = [];
+  const k = {
+    getLead: async () => ({ id: 1, status_id: 1, custom_fields_values: valorAtual === null ? [] : [{ field_id: 777, values: [{ value: valorAtual }] }] }),
+    setLeadCustomFieldValue: async (_l: number, id: number, tipo: string, v: unknown) => {
+      chamadas.push(`${id}:${tipo}:${String(v)}`);
+      if (falhaNoCampo) throw new Error('kommo fora');
+    },
+    addLeadNote: async (_l: number, t: string) => (notas.push(t), { id: 1 }),
+    listLeadCustomFields: async () => ({ _embedded: { custom_fields: [{ id: 777, name: '¤ Pagamento antecipado', type: 'select', enums: [{ id: 1, value: 'Sim' }, { id: 2, value: 'Não' }] }] } }),
+    listPipelines: async () => [],
+  };
+  return { k, chamadas, notas };
+}
+
+test('ACEITE no cartão: "Quero o Pix" grava a conversa E carimba o cartão (Sim + valor antecipado); falha abre NOTA; Sim da equipe não é reescrito', async () => {
+  const ks = await import('../lib/kommo-schema.js');
+  const { carimbarAceiteDoPix } = await import('./aceite-do-pix.js');
+  const u = unidade({ sinalPixCentavos: null });
+  const quando = { data: DIA, hora: '09:00' };
+  // o aceite chama o carimbo DEPOIS de gravar a conversa
+  agendadoPara = `${DIA}T09:00`;
+  escolhaNaConversa = null;
+  let carimbou: unknown = null;
+  assert.equal(await gravarAceiteDoPix({ id: u.id, businessHoursTimezone: TZ, spineTimezone: TZ }, 1, { carimbar: async (q) => { carimbou = q; } }), true);
+  assert.deepEqual(carimbou, { data: DIA, hora: '09:00' });
+  // sem a oferta (nenhuma linha casa): nada de carimbo — o stub devolve count 1; checamos pelo where
+  const g = conversaGravou[conversaGravou.length - 1] as unknown as { data: { pagamentoEscolhido: string }; where: { OR: unknown[] } };
+  assert.equal(g.data.pagamentoEscolhido, 'pix_antecipado');
+  assert.deepEqual(g.where.OR, [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }], 'também de um "Pago no dia" anterior');
+  // o carimbo: campo existe, estava vazio → grava Sim
+  ks.limparCacheEsquema();
+  const a = kommoFalso(null);
+  const r1 = await carimbarAceiteDoPix({ unit: u, kommo: a.k as never, leadId: 1, ...quando });
+  assert.equal(r1, 'carimbado');
+  assert.deepEqual(a.chamadas, ['777:select:Sim']);
+  assert.equal(a.notas.length, 0);
+  // já tinha Sim (equipe): não reescreve
+  ks.limparCacheEsquema();
+  const b = kommoFalso('Sim');
+  assert.equal(await carimbarAceiteDoPix({ unit: u, kommo: b.k as never, leadId: 1, ...quando }), 'ja-estava');
+  assert.deepEqual(b.chamadas, []);
+  // o Kommo falha ao gravar: abre NOTA para a recepção
+  ks.limparCacheEsquema();
+  const c = kommoFalso(null, true);
+  assert.equal(await carimbarAceiteDoPix({ unit: u, kommo: c.k as never, leadId: 1, ...quando }), 'falhou');
+  assert.equal(c.notas.length, 1);
+  assert.match(c.notas[0], /aceitou o Pix antecipado[\s\S]*Pagamento antecipado" = Sim/);
+});
+
+test('o carimbo falhar NÃO desfaz o aceite gravado na conversa', async () => {
+  agendadoPara = `${DIA}T09:00`;
+  const r = await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1, { carimbar: async () => { throw new Error('boom'); } });
+  assert.equal(r, true);
+});
+
+test('REGRA GLOBAL: chave fixa com chave Pix e preços não diz mais "vale pagar na clínica" nos passos; sem chave Pix, diz', () => {
+  const fixa = unidade({ sinalPixCentavos: null });
+  ligar(fixa.slug);
+  const r = renderRulesGlobal(fixa);
+  assert.match(r, /marcar \(sem perguntar a forma de pagamento\) → oferta do valor antecipado pelo Pix \(com a chave\), uma vez, DEPOIS de marcar/);
+  assert.doesNotMatch(r, /vale pagar na clínica\)/);
+  const semChave = renderRulesGlobal(unidade({ sinalPixCentavos: null, pixKey: null }));
+  assert.match(semChave, /marcar \(sem perguntar a forma de pagamento: vale pagar na clínica\)/);
+});
+
+test('Pago no dia e depois "Quero o Pix" (chave fixa): o aceite troca o na_clinica da recusa por pix_antecipado, com a consulta de pé', async () => {
+  agendadoPara = `${DIA}T09:00`;
+  assert.equal(await gravarRecusaDoSinal({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), true);
+  assert.equal(await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), true);
+  const ult = conversaGravou.slice(-2) as unknown as Array<{ data: { pagamentoEscolhido: string } }>;
+  assert.deepEqual(ult.map((x) => x.data.pagamentoEscolhido), ['na_clinica', 'pix_antecipado']);
+  agendadoPara = null;
+  assert.equal(await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), false, 'sem consulta de pé: nada');
 });

@@ -506,7 +506,7 @@ export function renderRegraDeAudio(): string {
   );
 }
 
-export function renderRulesGlobal(unit?: FlagsDePagamento & { slug?: string | null; sourceProdutos?: string | null; systemPrompt?: string | null }): string {
+export function renderRulesGlobal(unit?: FlagsDePagamento & { slug?: string | null; pixKey?: string | null; sourceProdutos?: string | null; systemPrompt?: string | null }): string {
   // Unidade sem pagamento antecipado (Timbó): o passo "Pix" e os botões "Pix antecipado | Na clínica" não existem.
   const semAntecipado = unidadeSemAntecipado(unit);
   // Unidade com taxa de reserva (Boa Vista, decisão do João de 03/11/2026): o comprovante é conferido pela ferramenta e libera marcar.
@@ -537,7 +537,9 @@ export function renderRulesGlobal(unit?: FlagsDePagamento & { slug?: string | nu
       : pixDepois
         ? comSinal
           ? 'dia → horário → dados → marcar (sem perguntar a forma de pagamento) → oferta do sinal (Pix), uma vez, DEPOIS de marcar'
-          : 'dia → horário → dados → marcar (sem perguntar a forma de pagamento: vale pagar na clínica)'
+          : unit?.pixKey?.trim() && unit && precosDaConsulta({ ...unit, sourceProdutos: unit.sourceProdutos ?? null, systemPrompt: unit.systemPrompt ?? '' })
+            ? 'dia → horário → dados → marcar (sem perguntar a forma de pagamento) → oferta do valor antecipado pelo Pix (com a chave), uma vez, DEPOIS de marcar'
+            : 'dia → horário → dados → marcar (sem perguntar a forma de pagamento: vale pagar na clínica)'
         : comSinal
           ? 'dia → horário → dados → sinal (Pix)'
           : 'dia → horário → dados → Pix';
@@ -808,7 +810,6 @@ export function fraseDePrecoComSinal(s: SinalDaUnidade): string {
   return `R$ ${fmtBRL(s.noDia)} no dia, ou R$ ${fmtBRL(s.comSinal)} garantindo com sinal de R$ ${fmtBRL(s.sinal)} (R$ ${fmtBRL(s.sinal)} agora por Pix + R$ ${fmtBRL(s.restoNoDia)} no dia)`;
 }
 
-/** Chave `pix-depois-de-marcar` ligada numa unidade SEM sinal e com antecipado normal: marca sem perguntar e vale pagar na clínica. */
 /**
  * Como a confirmação trata o pagamento quando a chave está ligada (decisão do João de 27/11: tira só a pergunta de ANTES; o desconto continua):
  *  - 'sinal': unidade com sinal por Pix — a oferta do sinal vem DEPOIS de marcar (a ferramenta manda);
