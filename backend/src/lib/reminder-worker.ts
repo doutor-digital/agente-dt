@@ -24,7 +24,7 @@ import { createKommoClient, type KommoClient, type KommoPipeline } from '../serv
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { primeiroNomeDoPaciente } from './ponte-respostas.js';
 import { desistenciaEscrita, etapaSemVespera, textoTarefaDesistencia } from './vespera-segura.js';
-import { SpineService } from '../services/spine.service.js';
+import { SpineService, SPINE_STATUS } from '../services/spine.service.js';
 import { AgendaReconcileService, type ConsultaReconciliada } from '../services/agenda-reconcile.service.js';
 import { addMessage } from '../services/conversations.service.js';
 import { mensagensOficiais } from '../services/kommo-talks.service.js';
@@ -561,6 +561,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
 /** Mensagens novas da manhã já mandadas na hora cheia (relógio da unidade), por unidade: o teto de `MAX_ENVIOS_POR_HORA` vale por hora. */
 /** Depois de uma tentativa que não chegou ao paciente, a manhã espera 1 h para tentar de novo naquele cartão. */
 const TENTATIVA_D0_MS = 60 * 60_000;
+/** O que já está resolvido HOJE (perguntada, confirmada, pediu para remarcar): `unidade:lead:horário` → dia. Poupa reler franquia e Kommo a cada 15 min. */
+const resolvidasDoDia = new Map<string, string>();
 const enviosDaHora = new Map<string, { hora: string; n: number }>();
 
 async function lembrarManhaUnidade(unit: Unit): Promise<void> {
@@ -599,6 +601,13 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       soma('fora_da_janela');
       continue;
     }
+    const diaDeHoje = agoraLocalISO.slice(0, 10);
+    if (resolvidasDoDia.size > 5000) resolvidasDoDia.clear();
+    const chaveResolvida = `${unit.id}:${link.kommoLeadId}:${(link.agendadoPara ?? '').slice(0, 16)}`;
+    if (resolvidasDoDia.get(chaveResolvida) === diaDeHoje) {
+      soma('resolvida_no_dia');
+      continue;
+    }
     try {
       const consulta = await AgendaReconcileService.consultaDoLead(unit, link.kommoLeadId);
       // sem `quando` verificado agora, ou fora da janela: sai antes de qualquer chamada ao Kommo
@@ -617,6 +626,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       });
       if (previa.acao === 'pular') {
         soma(previa.motivo);
+        if (previa.motivo === 'ja_perguntou') resolvidasDoDia.set(chaveResolvida, diaDeHoje);
         continue;
       }
 
@@ -657,6 +667,12 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       });
       if (decisao.acao === 'pular') {
         soma(decisao.motivo);
+        // terminais do dia: não se relê. «ja_confirmou» só quando é o CONFIRMADO da franquia (a regra das 12 h do «Agendamento confirmado» passa).
+        const terminal =
+          decisao.motivo === 'confirmou_no_whatsapp' ||
+          decisao.motivo === 'pediu_para_remarcar' ||
+          (decisao.motivo === 'ja_confirmou' && consulta.idStatus === SPINE_STATUS.CONFIRMADO);
+        if (terminal) resolvidasDoDia.set(chaveResolvida, diaDeHoje);
         continue;
       }
       if (estado === 'seco') {
@@ -681,6 +697,8 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         }
         continue;
       }
+      // A marca de tentativa vai ANTES do envio: se algo lançar exceção depois de a mensagem sair, a varredura de 15 min não reenvia.
+      await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa).catch(() => undefined);
       const via = await pedirConfirmacao({
         unit,
         kommo,
@@ -693,9 +711,8 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         horaLocal: hora,
       });
       soma(via);
-      // «nada» = nota interna, modelo que falhou ou janela fechada sem modelo: a marca de «perguntei» NÃO foi gravada e a varredura de 15 min
-      // repetiria a tentativa até 14 vezes. A marca de tentativa espaça em 1 h (no máximo 4 tentativas até a consulta).
-      if (via === 'nada') await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa).catch(() => undefined);
+      // «nada» = nota interna, modelo que falhou ou janela fechada sem modelo: a marca de «perguntei» não foi gravada, mas a de tentativa sim —
+      // no máximo 4 tentativas até a consulta, em vez de uma a cada 15 min.
       if (via !== 'nada') {
         conta.enviados++;
         enviosDaHora.set(unit.id, { hora: horaCheia, n: jaEnviadosNestaHora + conta.enviados });

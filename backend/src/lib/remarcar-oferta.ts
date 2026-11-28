@@ -50,3 +50,26 @@ export function textoTarefaRemarcarComOferta(args: { slug: string; nome: string 
     'A Sofia deve ter oferecido 2 horários na conversa (confira). A consulta continua marcada até ele escolher: se ele não escolheu, ligue.'
   );
 }
+
+function normalizar(s: string): string {
+  return s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+const QUER_OUTRO_HORARIO = /\b(remarc|reagend)\w*|\boutr[oa] (dia|horario|data)\b|\b(mudar|trocar) (o |a )?(dia|horario|data)\b/;
+const SEM_INTERESSE = [
+  /\bnao (quero|preciso|vou querer|tenho (mais )?interesse)\b/,
+  /\bdesist(i|o|ir|imos|iu)\b/,
+  /\bja (resolvi|fiz|operei|consegui atendimento)\b/,
+  /\b(vou|fui|resolvi) (fazer|tratar|marcar|ver) (em|com) (outr[oa]|outro lugar)\b/,
+  /\bpode cancelar\b/,
+];
+
+/**
+ * O paciente disse que NÃO QUER MAIS («não quero mais, pode cancelar», «desisti», «já resolvi», «vou fazer em outra clínica»)? Então não há oferta de
+ * horário nem frase de espera: o caminho é o do main. Quem pede outro dia/horário na mesma frase («não posso, quero remarcar») NÃO é sem interesse.
+ */
+export function semInteresse(texto: string): boolean {
+  const s = normalizar(texto);
+  if (!s || QUER_OUTRO_HORARIO.test(s)) return false;
+  return SEM_INTERESSE.some((r) => r.test(s));
+}

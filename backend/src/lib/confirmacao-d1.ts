@@ -9,7 +9,7 @@ import { avisoRecente } from './aviso-dedupe.js';
 import { nomeApresentavel, saudacao, vocativo } from './nome-apresentavel.js';
 import { automacaoLigada } from './automacoes-estado.js';
 import { ID_CONFIRMACAO_DIA_UTIL } from './confirmacao-unidade.js';
-import { ID_REMARCAR_OFERTA, oferecerNovoHorario, textoTarefaRemarcarComOferta } from './remarcar-oferta.js';
+import { ID_REMARCAR_OFERTA, oferecerNovoHorario, semInteresse, textoTarefaRemarcarComOferta } from './remarcar-oferta.js';
 import { faltasLigadas } from './confirmacao-manha.js';
 import { registrarSimulacao } from './so-no-papel.js';
 
@@ -418,9 +418,27 @@ export function ehRepeticaoDaRespostaD1(args: {
   if (!conv.confirmacaoD1EnviadaEm || (ja !== 'confirmou' && ja !== 'remarcar' && !ofertaFeita)) return false;
   const cls = classificarRespostaD1(texto, args.comConsigo);
   if (ofertaFeita) {
-    // Reentrega do Kommo do MESMO pedido de remarcar não gera 2ª oferta. Mas «1»/«2» soltos são a ESCOLHA do horário, nunca repetição.
-    if (cls !== 'remarcar' || /^\d$/.test(normalizarResposta(texto))) return false;
-  } else if (cls !== ja) return false;
+    // Reentrega do Kommo do MESMO pedido que gerou a oferta não gera 2ª oferta. Só isso: no meio da negociação, o paciente que escreve «não»,
+    // «não dá», «não posso» (ou de novo o mesmo texto) está RESPONDENDO à Sofia e precisa de resposta. Conta como repetição quando o texto é
+    // igual ao pedido que gerou a oferta (o 1º «remarcar» depois da pergunta) E igual à mensagem imediatamente anterior do paciente.
+    // «1»/«2» soltos são a ESCOLHA do horário, nunca repetição.
+    const alvoOferta = normalizarResposta(texto);
+    if (cls !== 'remarcar' || !alvoOferta || /^\d$/.test(alvoOferta)) return false;
+    const desdeOferta = conv.confirmacaoD1EnviadaEm.getTime();
+    const doPeriodo = args.anteriores
+      .filter((m) => m.createdAt.getTime() >= desdeOferta)
+      .sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime());
+    const ultima = doPeriodo[0];
+    const pedido = [...doPeriodo].reverse().find((m) => classificarRespostaD1(m.content, args.comConsigo) === 'remarcar');
+    return (
+      !!ultima &&
+      !!pedido &&
+      agora.getTime() - ultima.createdAt.getTime() <= JANELA_REPETICAO_D1_MS &&
+      normalizarResposta(ultima.content) === alvoOferta &&
+      normalizarResposta(pedido.content) === alvoOferta
+    );
+  }
+  if (cls !== ja) return false;
   const alvo = normalizarResposta(texto);
   if (!alvo) return false;
   const desde = conv.confirmacaoD1EnviadaEm.getTime();
@@ -567,7 +585,9 @@ export async function tratarRespostaD1(args: {
   } else {
     const oferta = oferecerNovoHorario(unit.slug);
     // Sem consulta de pé (já passou, franquia sem resposta) não há o que remarcar: segue o caminho do main (resposta pronta + tarefa)
-    if (oferta === 'ligado' && consultaDePe) {
+    // «Não quero mais, pode cancelar» NÃO é pedido de remarcar: sem oferta e sem frase de espera, segue o caminho do main
+    const querOferta = consultaDePe && !semInteresse(texto);
+    if (oferta === 'ligado' && querOferta) {
       // Grava o estado ANTES de tudo: o Kommo reentrega o webhook e o paciente toca de novo, e sem a marca cada toque abriria outra tarefa.
       await prisma.conversation
         .update({ where: { id: conv.id }, data: { confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } })
@@ -579,7 +599,8 @@ export async function tratarRespostaD1(args: {
       // a frase pode falhar (Kommo fora): a tarefa abaixo abre DE QUALQUER JEITO — é a única rede de segurança
       const falou = await kommo
         .sendChatReply({ leadId, text: espera, chatId: null, talkId: null, contactId: null })
-        .then(() => true)
+        // `lead_note` = o Kommo recusou o chat e a frase virou NOTA interna: o paciente NÃO a recebeu, então não a guardo como dita
+        .then((r) => (r as { via?: string } | undefined)?.via !== 'lead_note')
         .catch((err) => {
           logger.warn({ err: String(err), unit: unit.slug, leadId }, 'confirmação D-1: a frase de espera falhou — a tarefa abre mesmo assim');
           return false;
@@ -597,7 +618,7 @@ export async function tratarRespostaD1(args: {
       logger.info({ unit: unit.slug, leadId }, 'confirmação D-1: paciente pediu para remarcar — a Sofia oferece 2 horários');
       return 'remarcar_sofia';
     }
-    if (oferta === 'seco') {
+    if (oferta === 'seco' && querOferta) {
       registrarSimulacao(unit, ID_REMARCAR_OFERTA, {
         leadId,
         acao: 'mandaria',

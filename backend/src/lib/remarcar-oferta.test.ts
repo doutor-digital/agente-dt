@@ -323,3 +323,58 @@ test('com as faltas ligadas: «Consigo sim» confirma; «não consigo» remarca;
   assert.equal(classificarRespostaD1('não consigo ir', true), 'remarcar');
   assert.equal(classificarRespostaD1('consigo chegar às 15h30?', true), null);
 });
+
+// ── 3ª rodada ─────────────────────────────────────────────────────────────────────────────────────────
+
+test('oferta_sofia: «não», «não dá», «não posso» no meio da negociação NÃO são engolidos como repetição', () => {
+  const conv = { confirmacaoD1EnviadaEm: new Date(Date.now() - 1800_000), confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA };
+  const m = (content: string, minAtras: number) => ({ content, createdAt: new Date(Date.now() - minAtras * 60_000) });
+  // o pedido que gerou a oferta foi «Preciso remarcar»; depois a Sofia ofereceu e ele respondeu outras coisas
+  const historico = [m('Preciso remarcar', 20), m('não dá', 10)];
+  for (const texto of ['não', 'não dá', 'não posso', 'não dá nesse dia']) {
+    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: historico }), false, texto);
+  }
+  // «não» primeiro, Sofia oferece, ele diz outra coisa e depois «não» de novo: o último texto igual NÃO é a mensagem imediatamente anterior
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 20), m('quinta?', 10)] }), false);
+  // reentrega do mesmo pedido, logo em seguida: repetição
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: [m('Preciso remarcar', 2)] }), true);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 2)] }), true, 'o próprio «não» que gerou a oferta, reentregue');
+});
+
+test('semInteresse: «não quero mais, pode cancelar», «desisti», «já resolvi»; quem pede outro horário NÃO', () => {
+  for (const t of ['Não quero mais, pode cancelar', 'desisti', 'Já resolvi', 'não tenho mais interesse', 'vou fazer em outra clínica', 'pode cancelar']) assert.equal(o.semInteresse(t), true, t);
+  for (const t of ['Preciso remarcar', 'não vou conseguir ir', 'quero desmarcar, tem outro dia?', 'não posso, quero remarcar', 'não dá', 'cancelar e marcar outro horário']) assert.equal(o.semInteresse(t), false, t);
+});
+
+test('«não quero mais, pode cancelar» com a oferta ligada: sem frase de espera e sem oferta — caminho do main (resposta pronta + tarefa)', async () => {
+  process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Não quero mais, pode cancelar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
+    assert.equal(r, 'remarcar');
+    assert.doesNotMatch(chamadas.respostas[0], /ver os horários/);
+    assert.match(chamadas.respostas[0], /pedir para a equipe/);
+    assert.equal(chamadas.tarefas.length, 1);
+  } finally { restaurar(); }
+});
+
+test('a frase de espera que virou NOTA interna (lead_note) não é guardada como dita ao paciente; a tarefa abre', async () => {
+  process.env.REMARCAR_OFERTA_SLUGS = 'doutor-hernia-olimpia';
+  const original = prisma.message.create;
+  let gravadas = 0;
+  (prisma.message as unknown as { create: unknown }).create = async () => { gravadas++; return {}; };
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    (kommo as unknown as { sendChatReply: unknown }).sendChatReply = async () => ({ via: 'lead_note' });
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
+    assert.equal(r, 'remarcar_sofia');
+    assert.equal(gravadas, 0);
+    assert.equal(chamadas.tarefas.length, 1);
+    const normal = kommoFalso();
+    await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo: normal.kommo, consultaDoLead: consultaDePe });
+    assert.equal(gravadas, 1, 'por chat normal a frase é guardada');
+  } finally {
+    (prisma.message as unknown as { create: unknown }).create = original;
+    restaurar();
+  }
+});
