@@ -1102,6 +1102,19 @@ export const AUTOMACOES: readonly Automacao[] = [
     arquivo: 'src/agent/conversa-direta.ts',
   },
   {
+    id: 'pix-depois-de-marcar',
+    chave: 'PIX_DEPOIS_DE_MARCAR_SLUGS',
+    nome: 'Sofia marca primeiro e oferece o Pix depois',
+    oQueFaz:
+      'A Sofia deixa de perguntar "Pix antecipado ou na clínica?" ANTES de marcar: com o dia confirmado ("consegue vir mesmo?") e o horário escolhido, ela marca. Depois de gravar, ela oferece UMA vez o desconto do Pix antecipado (o preço não muda): nas unidades com sinal por Pix, o sinal (e, se ele aceitar, gera o Pix); nas unidades com chave Pix fixa, o valor antecipado (e, se ele aceitar, manda a chave e carimba o cartão: ¤ Pagamento antecipado = Sim e o valor antecipado). Sem resposta, vale pagar na clínica e a régua do Pix NÃO é disparada.',
+    pegadinha:
+      'NASCE DESLIGADA. A confirmação do dia continua obrigatória (trava de 11/09: marcava no primeiro "ok" sem saber se o dia servia). Não muda nada em Boa Vista (taxa de reserva obrigatória) nem em unidade sem antecipado (Timbó), nem na remarcação. Hoje nenhuma unidade tem sinal gerado (sinal_pix_centavos vazio): o caminho que vale é o da chave Pix fixa, que precisa de chave Pix e dos dois preços cadastrados na unidade; sem eles só marca e fica "na clínica" (gravado) e, se o paciente perguntar do antecipado, a Sofia registra a promessa para a equipe (resumir_lead_para_sdr). A oferta fica registrada na conversa (sinal_oferecido): quem não responde NÃO é cobrado pela régua do Pix e continua na lista "agendados sem Pix"; "Pago no dia" tira da lista; "Quero o Pix" vale como escolha do Pix. Não tem "só no papel": é a regra da ferramenta agendar_consulta e do prompt. Piloto por unidade, medindo marcação E comparecimento.',
+    risco: 'comportamento',
+    temSeco: false,
+    quandoVazio: 'desligado',
+    arquivo: 'src/agent/pix-depois-de-marcar.ts',
+  },
+  {
     id: 'pergunta-ja-respondida',
     chave: 'PERGUNTA_JA_RESPONDIDA_SLUGS',
     nome: 'Sofia não pergunta de novo o que o paciente já respondeu',

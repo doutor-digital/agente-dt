@@ -45,7 +45,9 @@ export function degrauDoPixNaoSeAplica(
   unit: FlagsDePagamento & { sourceProdutos?: string | null; systemPrompt?: string | null },
 ): boolean {
   // Sinal por Pix (Sofia 2.0): o degrau do Pix manda a CHAVE FIXA da unidade; ali o Pix é um link gerado na conversa, então a escada antiga não roda.
-  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || unidadeSemAntecipado(unit) || sinalDaUnidade(unit) !== null);
+  // `sinal_oferecido` (chave `pix-depois-de-marcar`) é só a OFERTA feita: quem não respondeu NÃO escolheu Pix e não recebe o degrau (o erro de 11/09). Só
+  // `pix_antecipado` (e `sinal_pix`, numa unidade sem sinal hoje) o recebem.
+  return degrau.soPix === true && (pagamentoEscolhido === 'na_clinica' || pagamentoEscolhido === 'sinal_oferecido' || unidadeSemAntecipado(unit) || sinalDaUnidade(unit) !== null);
 }
 
 const JANELA_WHATSAPP_MIN = 23 * 60;

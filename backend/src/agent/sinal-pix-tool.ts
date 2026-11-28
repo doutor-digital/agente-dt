@@ -20,6 +20,8 @@ import { depsDoSinalPorVia } from '../lib/sinal-infinitepay.js';
 import { estadoDaAutomacao } from '../lib/automacoes-estado.js';
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fmtBRL, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
+import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { OFERTA_DO_SINAL_FEITA, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 
 interface ContextoDoSinal {
   unit: Unit;
@@ -128,6 +130,10 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
     description:
       'Gera o Pix do SINAL (Pix copia e cola de valor fixo no Asaas da clínica) para o paciente que escolheu garantir a vaga com sinal. ' +
       'Chame SÓ depois de agendar_consulta dar certo e de ele ter escolhido o sinal (formaPagamento=sinal_pix). ' +
+      // Chave `pix-depois-de-marcar`: a oferta vem depois de marcar. Desligada, a descrição é a de sempre, palavra por palavra.
+      (pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })
+        ? 'Também chame quando ele aceitar a oferta do sinal que você fez DEPOIS de marcar (nesse caso passe o leadId desta conversa). '
+        : '') +
       'O sistema manda o código ao paciente numa mensagem separada. Chamar de novo devolve o MESMO Pix (e o manda de novo): use quando ele ' +
       'disser que não recebeu o código. Nunca use a chave Pix da clínica.',
     schema: z.object({
@@ -179,6 +185,14 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       // o código exato vai numa mensagem à parte, depois da resposta (controller → lib/pix-do-sinal-envio.ts)
       if (r.tipo === 'link' && r.copiaECola) guardarPixDoTurno(recorder.traceId, r.url);
+      // Chave `pix-depois-de-marcar`: ele aceitou a oferta — o marcador `sinal_oferecido` — ou um `na_clinica` de uma recusa anterior ("Pago no dia" e depois "quero o Pix") — vira `sinal_pix`; o link existe, a pessoa continua na lista «agendados sem Pix».
+      if ((r.tipo === 'link' || r.tipo === 'ja-pago') && pixDepoisDeMarcar(fresca, { semAntecipado: unidadeSemAntecipado(fresca), taxaObrigatoria: !!fresca.spineBookingRequiresPayment })) {
+        try {
+          await prisma.conversation.updateMany({ where: { unitId: fresca.id, leadId: String(leadId), OR: [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }] }, data: { pagamentoEscolhido: 'sinal_pix' } });
+        } catch (err) {
+          logger.warn({ err: String(err), leadId }, 'sinal-pix: não troquei o marcador da oferta por sinal_pix');
+        }
+      }
 
       let tarefaAberta = false;
       if (r.tipo === 'falhou') {

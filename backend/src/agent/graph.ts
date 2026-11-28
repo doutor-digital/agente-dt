@@ -12,7 +12,7 @@ import { buildTools } from './tools.js';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import { TraceRecorder } from './trace-recorder.js';
 import { getActiveConfig } from './config.js';
-import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta } from './prompt-composer.js';
+import { composeSystemPromptForUnit, composeSystemPromptPartsForUnit, precosDaConsulta, sinalDaUnidade } from './prompt-composer.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { listEnabledLeadFieldRules } from '../services/lead-field-rules.service.js';
 import { createChatModel, invokeChatModel, LlmRecusaError } from '../services/openai.service.js';
@@ -133,6 +133,8 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
+import { carimbarAceiteDoPix } from './aceite-do-pix.js';
+import { aceitouOPix, gravarAceiteDoPix, gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal, aceitePelaResposta } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -727,6 +729,23 @@ export async function buildAgentGraph(
     const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
     confirmacao.adiou = confirmacaoAdiadaEstado(unit.slug) === 'desligado' ? null : adiouConfirmacao(falaDoPacienteNoTurno(falas));
+    // Unidade com chave Pix FIXA (sem sinal, com chave cadastrada e os dois preços): é onde o aceite do Pix grava `pix_antecipado` e carimba o cartão.
+    const aceiteDeChaveFixa = !sinalDaUnidade(unit) && !!unit.pixKey?.trim() && !!precosDaConsulta(unit);
+    const registrarAceiteDoPix = () => {
+      if (!state.leadId) return;
+      const leadNum = Number(state.leadId);
+      void gravarAceiteDoPix(unit, state.leadId, {
+        carimbar: kommoClient ? (q) => carimbarAceiteDoPix({ unit, kommo: kommoClient as never, leadId: leadNum, data: q.data, hora: q.hora }) : undefined,
+      });
+    };
+    // Chave `pix-depois-de-marcar`: a resposta à oferta do antecipado/sinal ("Pago no dia", "Quero o Pix") vira escolha gravada — ANTES de chamar o modelo, para
+    // não se perder se ele estiver fora. Só vale com o marcador da oferta na conversa e a consulta ainda de pé (lib em pix-depois-de-marcar.ts).
+    if (state.leadId && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })) {
+      const falaDele = falaDoPacienteNoTurno(falas);
+      if (recusouOSinal(falaDele)) void gravarRecusaDoSinal(unit, state.leadId);
+      // com sinal, "Quero o Pix" é o link (gerar_sinal_pix troca o marcador); com chave Pix fixa, o aceite grava `pix_antecipado`
+      else if (aceiteDeChaveFixa && aceitouOPix(falaDele)) registrarAceiteDoPix();
+    }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
@@ -1449,6 +1468,8 @@ export async function buildAgentGraph(
       // Consulta desmarcada no CRM e a resposta a trata como de pé (Balsas #28858838, 22/10): entra na mesma trava, com
       // uma instrução própria (a IA só marca se o paciente pediu horário NOVO) e, sem saída limpa, o recado fixo.
       const blocoDesmarcada = blocoDizDesmarcada(blocoConsulta);
+      // Chave `pix-depois-de-marcar`: a instrução da refeita não manda checar "como vai pagar" (a forma vem depois de marcar).
+      const pixDepois = pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !unidadeSemAntecipado(unit) && !!unit.spineBookingRequiresPayment });
       if (!promessa) promessa = afirmouComConsultaDesmarcada(textoFinal, { marcouAgora, bloco: blocoConsulta, promessa });
       const desmarcada = blocoDesmarcada && !marcouAgora && !!promessa;
       if (promessa) {
@@ -1462,7 +1483,7 @@ export async function buildAgentGraph(
             refeita = (await withTimeout(
               invokeChatModel({
                 model: modeloAtivo,
-                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit)) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit)))],
+                messages: [...finalMessages, response, new HumanMessage(desmarcada ? instrucaoDesmarcada(unidadeSemAntecipado(unit) || pixDepois) : instrucaoReservaSemMarcar(unidadeSemAntecipado(unit), pixDepois))],
                 unitId: unit.id,
                 traceId: recorder.traceId,
                 modelName,
@@ -1746,6 +1767,22 @@ export async function buildAgentGraph(
         });
         textoFinal = semEmpurrao;
         response.content = semEmpurrao;
+      }
+
+      // Chave `pix-depois-de-marcar` (chave Pix fixa): o aceite pelo que a Sofia ENVIA — a resposta final traz a chave Pix da unidade. Vale para o botão e
+      // para quem DIGITA ("pode ser no pix", "manda a chave", "pix"…; os botões estão mortos na rede). Não vale no turno que acabou de marcar (a confirmação
+      // pode citar a chave sem ele ter escolhido) nem sem o marcador da oferta (gravarAceiteDoPix confere). O link/código do sinal já é tratado por gerar_sinal_pix.
+      if (
+        state.leadId &&
+        aceitePelaResposta({
+          chaveLigada: pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment }),
+          chaveFixaComPrecos: aceiteDeChaveFixa,
+          ferramentasDoTurno: ferramentasDoTurno(nonSystemMessages),
+          resposta: textoFinal,
+          chavePix: unit.pixKey,
+        })
+      ) {
+        registrarAceiteDoPix();
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de

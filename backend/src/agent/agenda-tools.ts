@@ -20,6 +20,7 @@ import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
+import { FECHO_RECUSA_SEM_PAGAMENTO, formaParaOCarimbo, OFERTA_DO_SINAL_FEITA, orientacaoPixDepoisComChave, orientacaoPixDepoisComSinal, orientacaoPixDepoisSemSinal, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 import { buildGerarSinalPix, registrarLeadDoSinal } from './sinal-pix-tool.js';
 import { acompanharRemarcacao } from '../lib/sinal-pix.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
@@ -1270,10 +1271,13 @@ export function porQueNaoReservar(args: {
   taxaObrigatoria?: boolean;
   /** Sinal por Pix (Sofia 2.0): a pergunta é "sinal de R$ 50 agora ou tudo no dia", e a resposta chega como `pix_antecipado` (= o sinal, que a ferramenta traduz para `sinal_pix`) ou `na_clinica`. */
   sinal?: SinalDaUnidade | null;
+  /** Chave `pix-depois-de-marcar`: a forma de pagamento NÃO é pré-requisito (vem depois de marcar); a confirmação do dia continua. */
+  pixDepois?: boolean;
 }): string | null {
   if (args.remarcando) return null;
   const faltaDia = args.diaConfirmado !== true;
   const faltaPagamento =
+    !args.pixDepois &&
     !args.semAntecipado &&
     !args.taxaObrigatoria &&
     args.formaPagamento !== 'pix_antecipado' &&
@@ -1296,7 +1300,9 @@ export function porQueNaoReservar(args: {
   // Unidade que só recebe na clínica: sem `formaPagamento`, sem botões e sem pergunta de pagamento.
   const fecho = args.semAntecipado
     ? ' NÃO pergunte nada sobre pagamento: nesta clínica a consulta é paga no dia.'
-    : args.taxaObrigatoria
+    : args.pixDepois
+      ? FECHO_RECUSA_SEM_PAGAMENTO
+      : args.taxaObrigatoria
       ? ' NÃO pergunte forma de pagamento e NUNCA ofereça pagar na clínica: nesta unidade a taxa de reserva é obrigatória.'
       : args.sinal
         ? ` Se a pergunta for só a forma de pagamento, termine a mensagem com a linha [[botoes: Sinal de R$ ${fmtBRL(args.sinal.sinal)} | Pagar no dia]]. Formas: pix_antecipado (= o sinal) ou na_clinica (tudo no dia).`
@@ -1304,7 +1310,7 @@ export function porQueNaoReservar(args: {
   return (
     `Consulta NÃO marcada ainda. Antes de reservar falta: ${pendencias.map((p, i) => `${i + 1}) ${p}`).join('; ')}. ` +
     'Pergunte isso em UMA mensagem curta e chame agendar_consulta de novo com diaConfirmado=true' +
-    (args.semAntecipado || args.taxaObrigatoria ? '.' : ' e formaPagamento preenchido.') +
+    (args.semAntecipado || args.taxaObrigatoria || args.pixDepois ? '.' : ' e formaPagamento preenchido.') +
     fecho
   );
 }
@@ -1340,6 +1346,8 @@ export function orientacaoDePagamento(
   semAntecipado: boolean = unidadeSemAntecipado(unit),
   /** Sinal por Pix (Sofia 2.0): decidido uma vez por turno, como `semAntecipado`; padrão lê a unidade. */
   sinal: SinalDaUnidade | null = unit ? sinalDaUnidade(unit) : null,
+  /** Chave `pix-depois-de-marcar`: a forma não foi perguntada (`forma` ausente) — a oferta do sinal vem DEPOIS de marcar. */
+  pixDepois: boolean = false,
 ): string {
   // Unidade que só recebe no dia: qualquer forma (ou nenhuma, na remarcação) vira "paga na clínica". Nunca chave, nunca valor antecipado.
   if (semAntecipado) {
@@ -1348,6 +1356,14 @@ export function orientacaoDePagamento(
       'NÃO envie chave Pix, NÃO fale em pagar antes da consulta nem em desconto. ' +
       'Na mensagem de confirmação a forma de pagamento já vai DENTRO da linha ✨ Valor: não repita esta frase num parágrafo à parte.'
     );
+  }
+  // Chave `pix-depois-de-marcar`, forma não perguntada: com sinal, oferta única do sinal; sem sinal, só marca e vale pagar na clínica.
+  if (pixDepois && !forma) {
+    if (sinal) return orientacaoPixDepoisComSinal(sinal);
+    // sem sinal: com chave Pix fixa e os dois preços, a oferta do antecipado vem depois de marcar; sem isso, só marca e vale na clínica
+    const precos = unit ? precosDaConsulta(unit) : null;
+    const chave = unit?.pixKey?.trim();
+    return precos && chave ? orientacaoPixDepoisComChave(precos, chave, unit?.pixHolder?.trim()) : orientacaoPixDepoisSemSinal();
   }
   // Sofia 2.0: nesta unidade NUNCA a chave fixa nem "a equipe envia a chave": o Pix do sinal é o link de gerar_sinal_pix.
   if (sinal) {
@@ -1410,9 +1426,18 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
   const taxaObrigatoria = !semAntecipado && !!unit?.spineBookingRequiresPayment;
   // Sinal por Pix (Sofia 2.0): a pergunta vira "sinal de R$ 50 agora ou tudo no dia"; decidido aqui, uma vez por turno, como as duas acima.
   const sinal = sinalDaUnidade(unit);
+  // Chave `pix-depois-de-marcar`: a forma de pagamento deixa de ser pré-requisito (a confirmação do dia continua). Decidido aqui, uma vez
+  // por turno, como as três acima — a descrição, o esquema e a porta enxergam a mesma coisa.
+  const pixDepois = pixDepoisDeMarcar(unit, { semAntecipado, taxaObrigatoria });
   return new DynamicStructuredTool({
     name: 'agendar_consulta',
-    description: sinal
+    description: pixDepois
+      ? 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
+        'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
+        'nesse dia, e com o idClient obtido em buscar_paciente. Sem diaConfirmado=true a tool recusa. ' +
+        'NÃO pergunte a forma de pagamento antes de marcar: ela vem DEPOIS (a resposta desta tool diz o que fazer). ' +
+        'Se a tool recusar, NÃO tente outro horário por conta própria: explique ao paciente e ofereça consultar de novo.'
+      : sinal
       ? 'Marca a consulta no sistema da clínica. Só use DEPOIS de consultar_horarios, ' +
         'de o paciente escolher um horário da lista, de ele confirmar que CONSEGUE ir ' +
         `nesse dia e de escolher como garantir a consulta (sinal de R$ ${fmtBRL(sinal.sinal)} agora por Pix, ou pagar tudo no dia), ` +
@@ -1470,6 +1495,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
               .describe(
                 taxaObrigatoria
                   ? 'Nesta unidade a taxa de reserva é obrigatória: é sempre pix_antecipado (o sistema preenche). NÃO pergunte.'
+                  : pixDepois
+                    ? 'Deixe VAZIO. Só preencha se o paciente, POR CONTA PRÓPRIA e antes de você perguntar, disser que quer pagar antes por Pix (pix_antecipado) ou que paga no dia (na_clinica). NÃO pergunte antes de marcar.'
                   : sinal
                     ? `Como o paciente prefere garantir a consulta: pix_antecipado (= o SINAL de R$ ${fmtBRL(sinal.sinal)} agora por Pix; a consulta fica R$ ${fmtBRL(sinal.comSinal)}) ` +
                       `ou na_clinica (paga tudo no dia, R$ ${fmtBRL(sinal.noDia)}). Pergunte antes de marcar.`
@@ -1528,12 +1555,22 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
       // Sinal por Pix (Sofia 2.0): aqui "pix_antecipado" é o SINAL (R$ 50 agora, o resto no dia), não o Pix inteiro já pago. Por dentro vira
       // `sinal_pix`: o carimbo do cartão fica "Não" até o Asaas confirmar, a conversa guarda a escolha e a régua da chave fixa não roda.
       if (sinal && !args.remarcando && args.formaPagamento === 'pix_antecipado') args = { ...args, formaPagamento: 'sinal_pix' };
+      // Chave `pix-depois-de-marcar`, forma não dita pelo paciente: SEM sinal, vale pagar na clínica e isso fica gravado (senão a régua AGENDADO
+      // cobraria Pix de quem nunca escolheu). COM sinal, nada é gravado: a oferta vem depois de marcar e o Pix do sinal segue disponível.
+      // Um `na_clinica` que já está na conversa é de uma marcação ANTERIOR (a conversa não guarda quando foi gravado): não vale para esta e não bloqueia a
+      // oferta do sinal. A forma que conta é a DITA agora (capturada abaixo) ou, sem ela, o padrão da chave.
+      const formaDitaAgora = args.formaPagamento;
+      const formaNaoDita = pixDepois && !args.remarcando && !args.formaPagamento;
+      // Sem sinal: COM chave Pix fixa e os dois preços, a oferta do antecipado vem depois de marcar (e o marcador da oferta é gravado, como no sinal);
+      // SEM chave ou sem preços não há o que oferecer: vale na clínica, e isso fica gravado (senão a régua cobraria Pix de quem nunca escolheu).
+      const ofertaDoAntecipado = !sinal && !!unit.pixKey?.trim() && !!precosDaConsulta(unit);
+      if (formaNaoDita && !sinal && !ofertaDoAntecipado) args = { ...args, formaPagamento: 'na_clinica' };
 
-      const pendencia = porQueNaoReservar({ ...args, semAntecipado, taxaObrigatoria, sinal });
+      const pendencia = porQueNaoReservar({ ...args, semAntecipado, taxaObrigatoria, sinal, pixDepois });
       if (pendencia) {
         await recorder.step({
           kind: 'ERROR',
-          title: semAntecipado
+          title: semAntecipado || pixDepois
             ? 'agendar_consulta recusado — faltou confirmar o dia'
             : 'agendar_consulta recusado — faltou confirmar o dia ou a forma de pagamento',
           payload: { data: args.data, hora: args.hora, diaConfirmado: args.diaConfirmado ?? null, formaPagamento: args.formaPagamento ?? null },
@@ -1888,7 +1925,9 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           // "¤ Pagamento antecipado" sai do sinal real (forma escolhida / pagamento comprovado),
           // não mais "Sim" fixo — 06/10/2026, lead 28088906 pagava no dia e ficou Sim.
           const idPagamento = idDe(NOME_PAGAMENTO_ANTECIPADO);
-          const escolhaSalva = args.formaPagamento
+          // Chave `pix-depois-de-marcar` com sinal e a forma NÃO dita: a escolha guardada na conversa é de uma marcação ANTERIOR e não vale
+          // para esta (carimbaria "¤ Pagamento antecipado" com a decisão velha); ela é limpa mais abaixo.
+          const escolhaSalva = args.formaPagamento || formaNaoDita
             ? null
             : await prisma.conversation
                 .findFirst({ where: { unitId: fresca.id, leadId: String(args.leadId) }, select: { pagamentoEscolhido: true } })
@@ -1897,12 +1936,14 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           const pagamento = decidirPagamentoAntecipado({
             // Unidade sem antecipado: uma escolha `pix_antecipado` gravada na conversa ANTES da correção (#166) não vale mais.
             semAntecipado,
+            preservarSim: pixDepois,
             ehRetorno,
             // Chegou até aqui numa unidade com taxa de reserva = o grafo liberou pelo comprovante da taxa lido na conversa
             // (a conferência do dinheiro continua sendo da equipe, que ganha a tarefa no mesmo turno).
             pagamentoComprovado: Boolean(fresca.spineBookingRequiresPayment) && !args.remarcando,
-            formaPagamento: args.formaPagamento,
-            escolhaSalva,
+            // Só a forma DITA agora entra como `formaPagamento`. O `na_clinica` PADRÃO da chave (unidade sem sinal) entra como `escolhaSalva`: assim
+            // `preservarSim` mantém o "Sim" que a equipe pôs no cartão, em vez de carimbar "Não" por cima.
+            ...formaParaOCarimbo({ pixDepois, formaDitaAgora, formaFinal: args.formaPagamento, escolhaSalva }),
             valorAtual: leadAtual ? valorDoCampo(leadAtual, idPagamento) : undefined,
           });
 
@@ -2021,6 +2062,16 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
             data: { pagamentoEscolhido: args.formaPagamento },
           })
           .catch(() => undefined);
+      } else if (formaNaoDita && args.leadId) {
+        // Chave `pix-depois-de-marcar` com sinal: marca a OFERTA (prova de que ela saiu) e troca a escolha de uma marcação ANTERIOR (`sinal_pix`,
+        // `pix_antecipado` ou `na_clinica`), que não vale para esta. Aqui a forma NÃO foi dita agora, então qualquer escolha guardada é velha —
+        // inclusive um `na_clinica`: se ficasse, a troca do `gerar_sinal_pix` não casaria e a pessoa sumiria da lista «agendados sem Pix» (sênior, 28/11).
+        await prisma.conversation
+          .updateMany({
+            where: { unitId: fresca.id, leadId: String(args.leadId) },
+            data: { pagamentoEscolhido: OFERTA_DO_SINAL_FEITA },
+          })
+          .catch(() => undefined);
       }
 
       // Aviso no WhatsApp do João, nas unidades da lista. Nos primeiros dias de
@@ -2040,7 +2091,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
               dia: dataPorExtenso(args.data),
               hora: args.hora,
               especialista,
-              formaPagamento: args.formaPagamento,
+              // Chave `pix-depois-de-marcar`: o aviso diz o que ELE escolheu, não o padrão da ferramenta ("na clínica" que ninguém escolheu).
+              formaPagamento: pixDepois ? formaDitaAgora : args.formaPagamento,
               remarcando: args.remarcando,
             }),
             chaveDoAviso(fresca.slug, args.leadId, args.data, args.hora),
@@ -2060,7 +2112,7 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
         : `${especialista ? ` Atendimento com ${especialista}.` : ''} Confirme ao paciente com EXATAMENTE este dia da semana e data.`;
       // Quem escolheu o sinal chama gerar_sinal_pix em seguida, sem argumentos: o cartão é este.
       if (sinal && args.formaPagamento === 'sinal_pix' && args.leadId && !args.remarcando) registrarLeadDoSinal(recorder.traceId, args.leadId);
-      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${quemEQuando}${args.pagoPorComprovante && !args.remarcando ? '' : orientacaoDePagamento(args.formaPagamento, fresca, semAntecipado, sinal)}`;
+      return `Consulta marcada para ${dataPorExtenso(args.data)} às ${args.hora}.${quemEQuando}${args.pagoPorComprovante && !args.remarcando ? '' : orientacaoDePagamento(formaNaoDita ? undefined : args.formaPagamento, fresca, semAntecipado, sinal, formaNaoDita)}`;
     }),
   });
 }

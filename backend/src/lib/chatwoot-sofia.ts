@@ -47,8 +47,9 @@ import { buildGerarSinalPix, pixDoSinalDoTurno, textoDoSinal } from '../agent/si
 import { fixarLeadDaConversa } from '../agent/graph.js';
 import { agendamentoDeuCerto } from '../agent/remarcacao.js';
 import { aplicarGuardrail } from '../agent/guardrail.js';
-import { sinalDaUnidade } from '../agent/prompt-composer.js';
+import { precosDaConsulta, sinalDaUnidade } from '../agent/prompt-composer.js';
 import { unidadeSemAntecipado } from '../agent/pagamento-da-unidade.js';
+import { pixDepoisDeMarcar } from '../agent/pix-depois-de-marcar.js';
 import { travaDaAgendaDaIa } from './crm-compartilhado.js';
 import { dataLocalISO, dataPorExtenso, feriadoNacional } from './feriados.js';
 import { consultaMarcadaNoTurno, legendaDoCartao } from './cartao-de-chegada.js';
@@ -388,6 +389,7 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
     const semAntecipado = unidadeSemAntecipado(unit);
     const taxaObrigatoria = !semAntecipado && !!unit.spineBookingRequiresPayment;
     const sinal = sinalDaUnidade(unit);
+    const pixDepois = pixDepoisDeMarcar(unit, { semAntecipado, taxaObrigatoria });
     /** o horário existe na grade e está livre? devolve o texto de recusa, ou null */
     const conferirHorario = async (data: string, hora: string): Promise<string | null> => {
       const feriado = feriadoNacional(data);
@@ -418,13 +420,17 @@ export function montarFerramentas(p: PedidoDasFerramentas): DynamicStructuredToo
       if (semAntecipado) forma = 'na_clinica';
       if (taxaObrigatoria) forma = 'pix_antecipado';
       if (sinal && forma === 'pix_antecipado') forma = 'sinal_pix';
-      const pendencia = porQueNaoReservar({ ...a, formaPagamento: forma, semAntecipado, taxaObrigatoria, sinal });
+      // Chave `pix-depois-de-marcar`: mesma regra da agenda do Kommo (agent/pix-depois-de-marcar.ts).
+      const formaNaoDita = pixDepois && !forma;
+      // (com chave Pix fixa e os dois preços há OFERTA do antecipado depois de marcar, então a forma fica sem dizer; sem isso, vale na clínica)
+      if (formaNaoDita && !sinal && !(unit.pixKey?.trim() && precosDaConsulta(unit))) forma = 'na_clinica';
+      const pendencia = porQueNaoReservar({ ...a, formaPagamento: forma, semAntecipado, taxaObrigatoria, sinal, pixDepois });
       if (pendencia) return pendencia;
       const recusa = await conferirHorario(a.data, a.hora);
       if (recusa) return recusa;
       estado.agendou = { data: a.data, hora: a.hora };
       const quemEQuando = semAntecipado ? linhaProntaDaData(a.data, semAntecipado) : ' Confirme ao paciente com EXATAMENTE este dia da semana e data.';
-      return `Consulta marcada para ${dataPorExtenso(a.data)} às ${a.hora}.${quemEQuando}${orientacaoDePagamento(forma, unit, semAntecipado, sinal)}`;
+      return `Consulta marcada para ${dataPorExtenso(a.data)} às ${a.hora}.${quemEQuando}${orientacaoDePagamento(formaNaoDita ? undefined : forma, unit, semAntecipado, sinal, formaNaoDita)}`;
     };
 
     agenda.remarcar_consulta.func = async (a: { data: string; hora: string }) => {
