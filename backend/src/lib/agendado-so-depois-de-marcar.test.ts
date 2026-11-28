@@ -13,7 +13,7 @@ function deps(over: Partial<DepsAgendadoSoDepoisDeMarcar> = {}): DepsAgendadoSoD
   const leituras: string[] = [];
   return {
     leituras,
-    franquiaDesmenteOCartao: () => true,
+    franquiaDesmenteOCartao: async () => true,
     marcouNesteTurno: async () => { leituras.push('turno'); return false; },
     marcouPelaSofia: async () => { leituras.push('rastro'); return false; },
     lerCartao: async () => { leituras.push('cartao'); return { custom_fields_values: [] }; },
@@ -28,7 +28,7 @@ test('Salto 5478545: AGENDADO sem consulta marcada é recusado (antes seguia e o
   assert.ok(r);
   assert.equal(r.texto, TEXTO_RECUSA_AGENDADO);
   assert.match(r.texto, /RECUSADO/);
-  assert.match(r.texto, /agendar_consulta/);
+  assert.match(r.texto, /agendar_consulta/); // neutro: cita a ferramenta sem afirmar que o paciente não tem consulta
 });
 
 test('agendar_consulta e mover_etapa na MESMA rodada (tools em paralelo): espera a marcação do turno e deixa passar', async () => {
@@ -83,7 +83,51 @@ test('a data de consulta lida usa "agora − 12 h" como corte: data de ciclo vel
 });
 
 test('onde a franquia NÃO está movendo cartão (move/revisão desligados ou em seco), ninguém desmente o AGENDADO: passa sem ler nada', async () => {
-  const d = deps({ franquiaDesmenteOCartao: () => false });
+  const d = deps({ franquiaDesmenteOCartao: async () => false });
   assert.equal(await recusaDeAgendadoSemConsulta({ unit: salto, leadId: 1, statusId: AGENDADO }, d), null);
   assert.deepEqual(d.leituras, []);
+});
+
+// ── a MESMA condição do sincronizador (franquia-sync-worker.ts, revisarPeloHistorico / sincronizarUnidade) ──
+test('revisaoEscreveNoCartao: só quando sync, move e revisão estão LIGADOS e nada em "só no papel" (tela ou FRANQUIA_REVISAO_SECO)', async () => {
+  const { revisaoEscreveNoCartao } = await import('./franquia-sync-worker.js');
+  const { _semearParaTeste } = await import('./automacoes-estado.js');
+  const slug = 'u-revisao';
+  const estado = (sync: string, move: string, revisao: string) =>
+    _semearParaTeste([
+      { slug, automacao: 'franquia-sync', estado: sync as 'ligado' },
+      { slug, automacao: 'franquia-move', estado: move as 'ligado' },
+      { slug, automacao: 'franquia-revisao', estado: revisao as 'ligado' },
+    ]);
+  const antes = process.env.FRANQUIA_REVISAO_SECO;
+  try {
+    delete process.env.FRANQUIA_REVISAO_SECO;
+    estado('ligado', 'ligado', 'ligado');
+    assert.equal(revisaoEscreveNoCartao(slug), true);
+    estado('seco', 'ligado', 'ligado'); // sync "só no papel": ninguém escreve no cartão
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    estado('ligado', 'seco', 'ligado');
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    estado('ligado', 'desligado', 'ligado');
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    estado('ligado', 'ligado', 'seco');
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    estado('ligado', 'ligado', 'desligado');
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    estado('desligado', 'ligado', 'ligado');
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+    // a variável global de seco da revisão vale mesmo com tudo ligado na tela
+    estado('ligado', 'ligado', 'ligado');
+    process.env.FRANQUIA_REVISAO_SECO = '1';
+    assert.equal(revisaoEscreveNoCartao(slug), false);
+  } finally {
+    if (antes === undefined) delete process.env.FRANQUIA_REVISAO_SECO;
+    else process.env.FRANQUIA_REVISAO_SECO = antes;
+    _semearParaTeste([]);
+  }
+});
+
+test('o texto da recusa é neutro: não diz que o paciente "não tem consulta" nem manda oferecer horário de novo', () => {
+  assert.doesNotMatch(TEXTO_RECUSA_AGENDADO, /não tem consulta|ainda não tem consulta/i);
+  assert.match(TEXTO_RECUSA_AGENDADO, /NÃO ofereça horários de novo/);
 });

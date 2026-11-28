@@ -36,10 +36,12 @@ import { AGORA_UTC } from './sql-tempo.js';
  * embora sem desfecho.
  *
  * 28/11/2026 (dois alarmes falsos no Telegram do João, medidos em 7 dias: 180 avisos):
- *  - só OFERTA de verdade conta: `consultar_horarios` com a resposta da IA trazendo um horário (`respostaOfereceHorario`). Consultar a
- *    agenda e perguntar da dor (Porto, lead 30288526) não é oferecer;
+ *  - só OFERTA de verdade conta: uma resposta da IA que traz horário (`respostaOfereceHorario`), em QUALQUER turno do lead depois de ele
+ *    ter consultado a agenda (a Sofia costuma consultar num turno e oferecer no seguinte). Consultar a agenda e perguntar da dor (Porto,
+ *    lead 30288526) não é oferecer;
  *  - handoff certo não é venda perdida: depois da oferta a IA transferiu por SINAL DE ALERTA (Canaã, lead 31395380, fraqueza na perna)
- *    ou a equipe assumiu (IA pausada por humano / pausa-equipe). Sem chave: é erro do aviso, não preferência de unidade.
+ *    ou a EQUIPE assumiu (falou à mão, ou pausou o cartão). A passagem comum da PRÓPRIA Sofia (`pausar_ia`, handoff calado) continua
+ *    avisando — a venda pode ter ficado parada. Sem chave: é erro do aviso, não preferência de unidade.
  *
  * Até 20/10/2026 isso estava só neste comentário: o SQL não separava nada. Com a
  * chave "agendamento-perdido-filtro" (`motivoParaNaoAvisar`) o vigia deixa de
@@ -256,6 +258,9 @@ async function candidatos(): Promise<Candidato[]> {
   const linhas = await prisma.$queryRawUnsafe<Candidato[]>(
     `
     with ofertas as (
+      -- A OFERTA é a resposta da IA que traz horário (passo "IA respondeu"), em QUALQUER turno do lead depois de ele ter consultado a agenda
+      -- dentro da janela: a Sofia costuma consultar num turno e oferecer no seguinte ("30/11 às 09:00 ou 16:30" sem nova consulta).
+      -- Consultar a agenda não é oferecer: Porto 28/11 consultou, perguntou da dor e o aviso disse "ofereceu horário".
       select distinct on (t.lead_id)
              t.unit_id  as "unitId",
              u.slug     as "slug",
@@ -266,19 +271,20 @@ async function candidatos(): Promise<Candidato[]> {
         join execution_traces t on t.id = s.trace_id
         join units u            on u.id = t.unit_id
        where s.created_at > ${AGORA_UTC} - ($1 || ' hours')::interval
-         and s.title ilike '%consultar_horarios%'
-         -- "consultar_horarios bloqueado — IA pausada pela recepção" não é oferta: quem conversa é humano.
-         and s.title not ilike '%bloqueado%'
-         -- Oferta de VERDADE: consultar a agenda não é oferecer. Só conta se a resposta da IA, no mesmo turno e depois da consulta,
-         -- traz um horário ("às 08:30", "9h"). Porto 28/11: consultou, perguntou da dor e o aviso disse "ofereceu horário".
+         and s.kind = 'THINKING'
+         and s.title like 'IA respondeu%'
+         and (s.payload->>'text') ~* $3
+         -- "consultar_horarios bloqueado — IA pausada pela recepção" não é consulta: quem conversa é humano.
          and exists (
                select 1
-                 from execution_steps r
-                where r.trace_id = s.trace_id
-                  and r.kind = 'THINKING'
-                  and r.title like 'IA respondeu%'
-                  and r.sequence > s.sequence
-                  and (r.payload->>'text') ~* $3
+                 from execution_steps c
+                 join execution_traces tc on tc.id = c.trace_id
+                where tc.unit_id = t.unit_id
+                  and tc.lead_id = t.lead_id
+                  and c.title ilike '%consultar_horarios%'
+                  and c.title not ilike '%bloqueado%'
+                  and c.created_at <= s.created_at
+                  and c.created_at > ${AGORA_UTC} - ($1 || ' hours')::interval
              )
          and not exists (
                select 1
@@ -318,9 +324,14 @@ async function candidatos(): Promise<Candidato[]> {
                 and s3.created_at > o."ofereceuEm"
            ) as "adiou"
       from ofertas o
-     -- O handoff certo não é venda perdida (Canaã 28/11, lead 31395380: fraqueza na perna → a IA passou para a equipe com o aviso urgente,
-     -- e o vigia avisou "agendamento perdido"). Depois da oferta: transferiu por SINAL DE ALERTA, ou a equipe/um atendente assumiu
-     -- (IA pausada por humano, resposta descartada pela pausa-equipe). Vale com ou sem a chave do filtro: é erro do aviso, não preferência.
+     -- O handoff CERTO não é venda perdida. O aviso NÃO sai quando, depois da oferta:
+     --  (a) a Sofia transferiu por SINAL DE ALERTA (Canaã 28/11, lead 31395380: fraqueza na perna; o passo do pausar_ia pode ter sido gravado
+     --      segundos ANTES da resposta do mesmo turno, por isso a folga de 2 min);
+     --  (b) a EQUIPE assumiu: «⏸ A equipe falou com o paciente», resposta descartada porque alguém pausou, ou «IA pausada por humano» SEM
+     --      que a própria Sofia tenha passado o cartão antes — pausar_ia marca «Pausar IA» e a PRÓXIMA mensagem do paciente grava esse mesmo
+     --      «IA pausada por humano» (medido: 8 leads em 7 dias). A passagem comum da Sofia (pausar_ia, handoff calado) CONTINUA avisando:
+     --      a venda pode ter ficado parada.
+     -- Vale com ou sem a chave do filtro: é erro do aviso, não preferência de unidade.
      where not exists (
              select 1
                from execution_steps s4
@@ -328,11 +339,25 @@ async function candidatos(): Promise<Candidato[]> {
                join units u4            on u4.id = t4.unit_id
               where t4.lead_id = o."leadId"
                 and (u4.kommo_subdomain = o."sub" or u4.id = o."unitId")
-                and s4.created_at > o."ofereceuEm"
-                and (   (s4.title like 'Decisão: pausar IA%' and s4.title like '%SINAL DE ALERTA')
-                     or s4.title like 'Sinal de alerta avisado%'
-                     or s4.title like 'IA pausada por humano%'
-                     or s4.title like '⏸ Resposta descartada antes de enviar%')
+                and (
+                     (s4.created_at > o."ofereceuEm" - interval '2 minutes'
+                       and (   (s4.title like 'Decisão: pausar IA%' and s4.title like '%SINAL DE ALERTA')
+                            or s4.title like 'Sinal de alerta avisado%'))
+                  or (s4.created_at > o."ofereceuEm"
+                       and (   s4.title like '⏸ A equipe falou com o paciente%'
+                            or (s4.title like '⏸ Resposta descartada antes de enviar%' and s4.title not like '%a Sofia passou o atendimento%')
+                            or (s4.title like 'IA pausada por humano%'
+                                and not exists (
+                                      select 1
+                                        from execution_steps s5
+                                        join execution_traces t5 on t5.id = s5.trace_id
+                                        join units u5            on u5.id = t5.unit_id
+                                       where t5.lead_id = o."leadId"
+                                         and (u5.kommo_subdomain = o."sub" or u5.id = o."unitId")
+                                         and s5.title like 'Decisão: pausar IA%'
+                                         and s5.created_at > o."ofereceuEm" - interval '2 minutes'
+                                         and s5.created_at <= s4.created_at))))
+                )
            )
     `,
     String(JANELA_HORAS),

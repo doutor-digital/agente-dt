@@ -64,6 +64,14 @@ async function rastro(unitId: string, leadId: string, ha: Date, titulo: string, 
   await prisma.executionStep.create({ data: { traceId: t.id, sequence: 1, kind: 'TOOL_RESULT', title: titulo, payload: payload ?? undefined, createdAt: ha } });
 }
 
+/** Um turno da Sofia SEM consultar a agenda: só o passo «IA respondeu» (a oferta do turno seguinte à consulta). */
+async function turnoSoRespondendo(unitId: string, leadId: string, ha: Date, texto: string) {
+  const t = await prisma.executionTrace.create({
+    data: { id: randomUUID(), unitId, threadId: `t-${randomUUID()}`, leadId, input: {}, status: 'SUCCESS', createdAt: ha },
+  });
+  await prisma.executionStep.create({ data: { traceId: t.id, sequence: 1, kind: 'THINKING', title: 'IA respondeu (sem tool call)', payload: { text: texto }, createdAt: ha } });
+}
+
 /** Um turno da Sofia: consultou a agenda e RESPONDEU (`texto` é o que o passo «IA respondeu» grava). */
 async function turnoComConsulta(unitId: string, leadId: string, ha: Date, texto: string) {
   const t = await prisma.executionTrace.create({
@@ -90,17 +98,17 @@ test('agendamento perdido: a carência e a janela de 24 h são de verdade (e nã
   assert.deepEqual(leads, ['1001']);
 });
 
-test('agendamento perdido: só OFERTA de verdade e nunca depois de handoff por sinal de alerta ou pausa da equipe (28/11/2026)', { skip: PULAR }, async (ctx) => {
+test('agendamento perdido: só OFERTA de verdade, em qualquer turno; sem aviso depois de sinal de alerta ou da EQUIPE, COM aviso na passagem comum da Sofia (28/11/2026)', { skip: PULAR }, async (ctx) => {
   if (indisponivel) return ctx.skip(indisponivel);
   const { _internos } = await import('./agendamento-perdido-worker.js');
   const u = await prisma.unit.create({ data: { slug: 'u-perdido-2', name: 'u-perdido-2', kommoSubdomain: 'perdido2' } });
   const ofereceuHa = minutosAtras(_internos.CARENCIA_MIN + 60);
-  const depois = minutosAtras(_internos.CARENCIA_MIN + 30);
+  const depois = (min = 30) => minutosAtras(_internos.CARENCIA_MIN + 60 - min);
   const oferta = 'Tenho segunda-feira (30/11) às 08:30 ou às 13:30. Qual fica melhor pra você?';
   // um passo gravado DEPOIS da oferta (o tipo do passo não entra no filtro, só o título)
-  const passoDepois = (leadId: string, titulo: string) => rastro(u.id, leadId, depois, titulo);
+  const passoDepois = (leadId: string, titulo: string, min = 30) => rastro(u.id, leadId, depois(min), titulo);
 
-  // 3001: ofereceu horário e sumiu -> AVISA (o caso de sempre)
+  // 3001: consultou e ofereceu no mesmo turno e sumiu -> AVISA (o caso de sempre)
   await turnoComConsulta(u.id, '3001', ofereceuHa, oferta);
   // 3002: Porto 30288526 — consultou a agenda mas só perguntou da dor: NÃO ofereceu
   await turnoComConsulta(u.id, '3002', ofereceuHa, 'Que bom que você quer cuidar da sua coluna! 😊 Antes de marcar, me conta: onde é a dor e há quanto tempo você sente isso?');
@@ -110,21 +118,38 @@ test('agendamento perdido: só OFERTA de verdade e nunca depois de handoff por s
   // 3004: o aviso urgente do sinal de alerta saiu depois da oferta: NÃO avisa
   await turnoComConsulta(u.id, '3004', ofereceuHa, oferta);
   await passoDepois('3004', 'Sinal de alerta avisado no Telegram do João (lead 3004)');
-  // 3005: a equipe assumiu depois da oferta (Pausar IA marcado): NÃO avisa
+  // 3005: a equipe falou à mão depois da oferta (pausa-equipe marcou «Pausar IA»): NÃO avisa
   await turnoComConsulta(u.id, '3005', ofereceuHa, oferta);
-  await passoDepois('3005', 'IA pausada por humano — agente não respondeu');
-  // 3006: pausar_ia por outro motivo (sem sinal de alerta) NÃO esconde o alerta — a venda pode ter se perdido
+  await passoDepois('3005', '⏸ A equipe falou com o paciente (o celular da clínica (WhatsApp Business) em 27/11, 14:54) — "Pausar IA" marcado, a Sofia não responde por cima');
+  // 3010: alguém marcou «Pausar IA» na mão e a mensagem seguinte gravou «IA pausada por humano», sem pausar_ia da Sofia: NÃO avisa
+  await turnoComConsulta(u.id, '3010', ofereceuHa, oferta);
+  await passoDepois('3010', 'IA pausada por humano — agente não respondeu');
+  // 3006: a PRÓPRIA Sofia passou o cartão (os passos que a produção grava, lead 3971096 / 8227913) — a próxima mensagem do paciente grava
+  // «IA pausada por humano» mas quem pausou foi a Sofia: CONTINUA avisando, a venda pode ter ficado parada
   await turnoComConsulta(u.id, '3006', ofereceuHa, oferta);
-  await passoDepois('3006', 'Decisão: pausar IA no lead 3006 (agenda sem vaga)');
-  // 3007: a pausa/o sinal ANTES da oferta não contam (a oferta veio depois e foi perdida)
+  await passoDepois('3006', 'Decisão: pausar IA no lead 3006 (Paciente repetiu "?" sem escolher horário após 3 ofertas)', 10);
+  await passoDepois('3006', 'IA pausada no lead 3006', 10);
+  await passoDepois('3006', 'Handoff carimbado (data + assumido por humano + motivo "Pedido do lead") no lead 3006', 10);
+  await passoDepois('3006', '⏸ Resposta descartada antes de enviar — a Sofia passou o atendimento para a equipe e esta unidade pede que o paciente não seja avisado', 11);
+  await passoDepois('3006', 'IA pausada por humano — agente não respondeu', 20);
+  // 3011: a Sofia passou o cartão NO MESMO turno da oferta (o pausar_ia grava segundos antes da resposta): continua avisando
+  await rastro(u.id, '3011', new Date(ofereceuHa.getTime() - 10_000), 'Decisão: pausar IA no lead 3011 (agenda sem vaga)');
+  await turnoComConsulta(u.id, '3011', ofereceuHa, oferta);
+  await passoDepois('3011', 'IA pausada por humano — agente não respondeu');
+  // 3007: a pausa ANTES da oferta não conta (a oferta veio depois e foi perdida)
   await rastro(u.id, '3007', horasAtras(5), 'IA pausada por humano — agente não respondeu');
   await turnoComConsulta(u.id, '3007', ofereceuHa, oferta);
   // 3008: horário escrito em outras formas
   await turnoComConsulta(u.id, '3008', ofereceuHa, 'Consigo às 9hrs ou às 14hrs, qual prefere?');
+  // 3009: a Sofia CONSULTOU num turno (perguntou da dor) e OFERECEU no seguinte, sem consultar de novo (Salto 5428579, Bebedouro 7775157…): AVISA
+  await turnoComConsulta(u.id, '3009', minutosAtras(_internos.CARENCIA_MIN + 180), 'Antes de marcar, onde é a dor?');
+  await turnoSoRespondendo(u.id, '3009', ofereceuHa, 'Consigo segunda 30/11 às 09:00 ou 16:30. Qual prefere?');
+  // 3012: resposta com horário SEM nenhuma consulta de agenda antes ("Funcionamos das 08:00 às 18:00"): não é oferta
+  await turnoSoRespondendo(u.id, '3012', ofereceuHa, 'Funcionamos das 08:00 às 18:00.');
 
   // o banco é compartilhado entre os casos do arquivo: só os desta unidade
   const leads = (await _internos.candidatos()).filter((c) => c.unitId === u.id).map((c) => c.leadId).sort();
-  assert.deepEqual(leads, ['3001', '3006', '3007', '3008']);
+  assert.deepEqual(leads, ['3001', '3006', '3007', '3008', '3009', '3011']);
 });
 
 test('AGENDADO só com consulta viva: o passo «Consulta marcada:» de consulta que já passou não conta (SQL contra o Postgres de verdade)', { skip: PULAR }, async (ctx) => {
@@ -144,6 +169,14 @@ test('AGENDADO só com consulta viva: o passo «Consulta marcada:» de consulta 
   assert.equal(await marcouPelaSofiaNoRastro(u.id, 4003), true);
   assert.equal(await marcouPelaSofiaNoRastro(u.id, 4004), false);
   assert.equal(await marcouPelaSofiaNoRastro(u.id, 4999), false); // lead sem passo nenhum
+  // marcou para daqui a 3 dias e CANCELOU depois: a consulta não está viva
+  await rastro(u.id, '4005', horasAtras(5), `Consulta marcada: ${dia(3)} 09:00 (idSchedule 777)`, randomUUID(), { data: dia(3), hora: '09:00', idSchedule: 777 });
+  await rastro(u.id, '4005', horasAtras(1), 'cancelar_consulta 777: cancelada');
+  assert.equal(await marcouPelaSofiaNoRastro(u.id, 4005), false);
+  // cancelou OUTRA consulta (idSchedule diferente): a marcada continua viva
+  await rastro(u.id, '4006', horasAtras(5), `Consulta marcada: ${dia(3)} 09:00 (idSchedule 888)`, randomUUID(), { data: dia(3), hora: '09:00', idSchedule: 888 });
+  await rastro(u.id, '4006', horasAtras(1), 'cancelar_consulta 111: cancelada');
+  assert.equal(await marcouPelaSofiaNoRastro(u.id, 4006), true);
 });
 
 test('aviso à clínica: "houve aviso recente" e "pendentes" olham a janela pedida, não +3 h', { skip: PULAR }, async (ctx) => {

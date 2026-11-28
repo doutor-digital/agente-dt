@@ -16,8 +16,9 @@
  * consulta — nem o passo «Consulta marcada:» no rastro deste cartão (gravado só depois de a franquia aceitar), nem «◷ Data da Consulta»
  * com data de agora em diante no cartão — devolve RECUSADO à IA. Marcou depois? A próxima chamada passa.
  *
- * O QUE NÃO FAZ: só vale onde o ESCRITOR CONCORRENTE está de fato escrevendo — franquia ligada, `franquia-move` e `franquia-revisao` LIGADOS
- * (em "só no papel" ou desligados ninguém desmente o cartão, e recusar tiraria da Sofia um movimento legítimo). Não mexe em unidade sem
+ * O QUE NÃO FAZ: só vale onde o ESCRITOR CONCORRENTE está de fato escrevendo (`revisaoEscreveNoCartao`, a mesma condição do
+ * sincronizador: sync, move e revisão LIGADOS e nenhum em "só no papel" nem FRANQUIA_REVISAO_SECO) — onde ninguém desmente o cartão,
+ * recusar tiraria da Sofia um movimento legítimo. Vale para a REDE toda onde essa condição for verdadeira (inclusive Caxias). Não mexe em unidade sem
  * franquia (lá AGENDADO é a única prova que existe), nem em outra etapa. Falha ABERTA: se não
  * deu para ler o rastro ou o cartão, deixa mover como sempre foi — recusar por erro de leitura prenderia a Sofia em quem de fato marcou.
  */
@@ -26,8 +27,6 @@ import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import type { KommoLead } from '../services/kommo.service.js';
 import { aguardarMarcacaoDaIa } from './marcacao-da-ia-no-turno.js';
-import { automacaoLigada } from './automacoes-estado.js';
-import { estadoDoMove } from './franquia-move.js';
 
 /** Quanto tempo atrás o passo «Consulta marcada:» ainda vale como prova de que o cartão tem consulta (remarcação e ciclo longo cabem aqui). */
 const PROVA_DA_MARCACAO_DIAS = 45;
@@ -43,8 +42,8 @@ export function etapaAgendadoDaUnidade(unit: Pick<Unit, 'pipelineIntents'> | nul
 }
 
 export interface DepsAgendadoSoDepoisDeMarcar {
-  /** A franquia está MOVENDO cartão nesta unidade (move e revisão ligados, nenhum dos dois em seco)? Só aí AGENDADO sem consulta é desmentido. */
-  franquiaDesmenteOCartao: (slug: string) => boolean;
+  /** A revisão da franquia está ESCREVENDO no cartão desta unidade (a mesma condição do sincronizador)? Só aí AGENDADO sem consulta é desmentido. */
+  franquiaDesmenteOCartao: (slug: string) => Promise<boolean>;
   /**
    * A marcação deu certo NESTE turno? As tools rodam em paralelo (ToolNode): o modelo pode pedir `agendar_consulta` e `mover_etapa` na
    * mesma rodada, e o passo «Consulta marcada:» só nasce quando a franquia responde — por isso espera a marcação em curso (com teto).
@@ -62,7 +61,8 @@ export interface DepsAgendadoSoDepoisDeMarcar {
 
 /**
  * O passo «Consulta marcada:» só prova consulta VIVA se a data marcada não passou (uma consulta de 20 dias atrás, cancelada ou faltada,
- * não pode liberar o AGENDADO do paciente que voltou). A data vai no `payload.data` (AAAA-MM-DD, comparável como texto).
+ * não pode liberar o AGENDADO do paciente que voltou) e que não foi cancelada depois (`cancelar_consulta <idSchedule>: cancelada`).
+ * A data vai no `payload.data` (AAAA-MM-DD, comparável como texto).
  */
 export async function marcouPelaSofiaNoRastro(unitId: string, leadId: number, agora: Date = new Date()): Promise<boolean> {
   const desde = new Date(agora.getTime() - PROVA_DA_MARCACAO_DIAS * 86_400_000);
@@ -75,15 +75,23 @@ export async function marcouPelaSofiaNoRastro(unitId: string, leadId: number, ag
        and t.lead_id = ${String(leadId)}
        and s.title like 'Consulta marcada:%'
        and s.created_at > ${desde}
-       and (s.payload->>'data') >= ${ontem}`;
+       and (s.payload->>'data') >= ${ontem}
+       and not exists (
+             select 1
+               from execution_steps c
+               join execution_traces tc on tc.id = c.trace_id
+              where tc.unit_id = t.unit_id
+                and tc.lead_id = t.lead_id
+                and c.created_at > s.created_at
+                and c.title = 'cancelar_consulta ' || (s.payload->>'idSchedule') || ': cancelada')`;
   return Number(linhas[0]?.n ?? 0) > 0;
 }
 
 export const TEXTO_RECUSA_AGENDADO =
-  'RECUSADO: este cartão ainda não tem consulta marcada, então não vai para AGENDADO. Etapa AGENDADO é só para consulta que ' +
-  '`agendar_consulta` já confirmou — se o cartão for para lá sem consulta, o sincronizador da franquia o tira de lá em minutos ' +
-  'e você perde a conversa. Continue atendendo normalmente (ofereça horários, tire a dúvida do paciente); depois de marcar com ' +
-  'sucesso, chame `mover_etapa` de novo.';
+  'RECUSADO: a etapa AGENDADO só é gravada quando o sistema confirma uma consulta marcada, e agora não consegui confirmar. ' +
+  'Isto NÃO significa que o paciente não tenha consulta: se você acabou de marcar com `agendar_consulta`, a marcação continua valendo ' +
+  'e o sistema acerta a etapa sozinho em minutos. Não mude nada do que já disse ao paciente e NÃO ofereça horários de novo por causa ' +
+  'desta recusa — siga a conversa de onde ela estava.';
 
 /**
  * `null` = pode mover. Texto = RECUSADO (devolvido à IA). Nunca lança.
@@ -94,7 +102,7 @@ export async function recusaDeAgendadoSemConsulta(
 ): Promise<{ texto: string; motivo: string } | null> {
   const { unit, leadId, statusId } = args;
   if (!unit?.spineEnabled) return null;
-  if (!deps.franquiaDesmenteOCartao(unit.slug)) return null;
+  if (!(await deps.franquiaDesmenteOCartao(unit.slug))) return null;
   const agendado = etapaAgendadoDaUnidade(unit);
   if (!agendado || statusId !== agendado) return null;
   try {
@@ -113,8 +121,8 @@ export async function recusaDeAgendadoSemConsulta(
 /** As dependências de produção. `lerCartao` recebe o `kommo` do turno e `traceId` é o do turno (a marcação em curso é por turno). */
 export function depsDeProducao(kommo: { getLead(id: number): Promise<KommoLead> }, traceId: string): DepsAgendadoSoDepoisDeMarcar {
   return {
-    franquiaDesmenteOCartao: (slug) =>
-      automacaoLigada(slug, 'franquia-revisao', process.env.FRANQUIA_REVISAO_SLUGS) && estadoDoMove(slug) === 'ligado',
+    // import tardio: evita ciclo agent ↔ workers
+    franquiaDesmenteOCartao: async (slug) => (await import('./franquia-sync-worker.js')).revisaoEscreveNoCartao(slug),
     marcouNesteTurno: () => aguardarMarcacaoDaIa(traceId),
     marcouPelaSofia: (unitId, leadId) => marcouPelaSofiaNoRastro(unitId, leadId),
     lerCartao: (leadId) => kommo.getLead(leadId),
