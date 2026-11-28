@@ -9,6 +9,10 @@ import {
   fraseDeMidiaNaoLida,
   horariosNaMesa,
   INSTRUCAO_DE_PASSAR_PARA_EQUIPE,
+  audioDoTurnoFoiTranscrito,
+  contarFalhaDoLite,
+  esquecerFalhasDoLite,
+  idsDeAudioNaoLido,
   liteAudioSemLeitura,
   MARCA_ANEXO_NAO_LIDO_DO_TURNO,
   midiaNaoLidaDoTurno,
@@ -201,4 +205,37 @@ test('o texto FINAL é o testado: a frase fixa passa intacta pelo filtro de dimi
       assert.doesNotMatch(frase, /inh[oa]\b/i);
     }
   }
+});
+
+const agoraLite = Date.parse('2026-11-27T13:00:00Z');
+const voz = (id: string, minAtras: number): MensagemOficial =>
+  ({ id, em: new Date(agoraLite - minAtras * 60_000), autor: 'paciente', direcao: 'entrada', texto: '', anexo: { tipo: 'voice', link: null } }) as MensagemOficial;
+
+test('6: só o áudio DESTE turno transcrito zera a contagem; um áudio antigo transcrito não', () => {
+  const msgs = [voz('antigo', 4), voz('novo', 1)];
+  // o antigo foi transcrito, o do turno não: nada a zerar, e o do turno continua não lido
+  assert.equal(audioDoTurnoFoiTranscrito(msgs, new Set(['antigo']), agoraLite), false);
+  assert.deepEqual(idsDeAudioNaoLido(msgs, new Set(['antigo']), agoraLite), ['novo']);
+  // todos os do turno transcritos: zera
+  assert.equal(audioDoTurnoFoiTranscrito(msgs, new Set(['antigo', 'novo']), agoraLite), true);
+  assert.deepEqual(idsDeAudioNaoLido(msgs, new Set(['antigo', 'novo']), agoraLite), []);
+  // sem áudio nenhum no turno: não zera
+  assert.equal(audioDoTurnoFoiTranscrito([], new Set(['x']), agoraLite), false);
+  assert.equal(audioDoTurnoFoiTranscrito(null, new Set(), agoraLite), false);
+  // transcrição "sem fala" (vazia) conta como lida: o webhook põe o id em `transcritos` mesmo com texto vazio (conversa-oficial.ts)
+  assert.equal(audioDoTurnoFoiTranscrito([voz('mudo', 1)], new Set(['mudo']), agoraLite), true);
+});
+
+test('nit: cada áudio não lido conta UMA vez, pelo id (o mesmo áudio em 2 turnos não é a 2ª falha)', () => {
+  let n = 0;
+  const registrar = () => ++n;
+  esquecerFalhasDoLite('c1');
+  assert.equal(contarFalhaDoLite('c1', ['a1'], registrar), 1);
+  assert.equal(contarFalhaDoLite('c1', ['a1'], registrar), 1); // mesmo áudio de novo
+  assert.equal(contarFalhaDoLite('c1', ['a1'], registrar), 1);
+  assert.equal(contarFalhaDoLite('c1', ['a2'], registrar), 2); // outro áudio: 2ª falha seguida
+  assert.equal(contarFalhaDoLite('c1', ['a1', 'a2'], registrar), 2);
+  esquecerFalhasDoLite('c1');
+  n = 0;
+  assert.equal(contarFalhaDoLite('c1', ['a1'], registrar), 1); // depois de zerar, conta de novo
 });

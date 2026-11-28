@@ -67,7 +67,7 @@ import { listaDoKommo } from '../lib/kommo-webhook-lista.js';
 import { eventoDeConversao } from '../lib/conversao-por-etapa.js';
 import { blocoDaConversaOficial } from '../lib/conversa-oficial.js';
 import { temMidiaSemArquivo } from '../lib/conversa-oficial.js';
-import { liteAudioSemLeitura, midiaNaoLidaLigada } from '../agent/midia-nao-lida.js';
+import { audioDoTurnoFoiTranscrito, contarFalhaDoLite, esquecerFalhasDoLite, idsDeAudioNaoLido, liteAudioSemLeitura, midiaNaoLidaLigada } from '../agent/midia-nao-lida.js';
 import { avisarComprovanteComIaPausada, avisarComprovanteDoLiteComIaPausada, entregarAnexosDoTurno, lerAnexosDoTurno, type ComprovanteComIaPausada } from '../lib/anexos-do-turno.js';
 import type { MensagemOficial } from '../services/kommo-talks-normalizar.js';
 import { extrairBotoes } from '../lib/botoes.js';
@@ -2043,7 +2043,8 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         msgs: conversaLida.msgs,
       })
     ) {
-      const falhasSeguidas = registrarFalhaDeAudio(chaveDoAudio);
+      // cada áudio não lido conta UMA vez, pelo id (o mesmo áudio em 2 turnos seguidos não é a "2ª falha")
+      const falhasSeguidas = contarFalhaDoLite(chaveDoAudio, idsDeAudioNaoLido(conversaLida.msgs, conversaLida.transcritos ?? new Set<string>()), registrarFalhaDeAudio);
       const estrutural = conversaLida.falhaEstrutural === true;
       const paraEquipe = deveIrParaEquipe({ flagDaUnidade: unit.audioHandoffEnabled, estrutural, falhasSeguidas });
       const motivo = unit.audioHandoffEnabled ? 'a unidade não ouve áudio' : estrutural ? 'falha nossa (saldo/chave)' : `${falhasSeguidas}ª falha seguida (WhatsApp Lite)`;
@@ -2054,8 +2055,14 @@ async function processarTurno(args: ArgsDoTurno): Promise<typeof TURNO_PULADO | 
         title: paraEquipe ? `Áudio do Lite não ouvido → equipe (${motivo})` : 'Áudio do Lite não ouvido → pedir pra escrever',
         payload: { estrutural, falhasSeguidas, paraEquipe },
       });
-    } else if ((conversaLida.transcritos?.size ?? 0) > 0) {
-      limparFalhasDeAudio(chaveDoAudio); // um áudio do Lite transcrito zera a sequência, como no webhook
+    } else if (
+      // dentro da chave: com ela desligada nada muda na contagem do webhook. Zera só quando o áudio DESTE turno (e não um antigo) foi transcrito.
+      midiaNaoLidaLigada(unit.slug) &&
+      audios.length === 0 &&
+      audioDoTurnoFoiTranscrito(conversaLida.msgs, conversaLida.transcritos ?? new Set<string>())
+    ) {
+      limparFalhasDeAudio(chaveDoAudio);
+      esquecerFalhasDoLite(chaveDoAudio);
     }
     const entradaDoModelo = [blocoOficial, anexosDaRotaOficial.texto, mensagemParaIa, marcaDeAudioLite].filter(Boolean).join('\n\n');
 

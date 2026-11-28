@@ -252,11 +252,16 @@ export async function blocoDaConversaOficial(args: {
   if (!selecionados.length && !perdidos.length) return '';
 
   const itens: ItemOficial[] = [];
+  // ids que a transcrição RESPONDEU (mesmo vazia = "sem fala"): só quem falhou ou nem foi tentado conta como "não lido"
+  const transcritosOuSemFala = new Set<string>();
   for (const m of [...perdidos, ...selecionados]) {
     let transcricao: string | null = null;
     if (ehAudioPronto(m)) {
       transcricao = await (args.transcrever ?? ((link: string) => transcribeAudio(unit, link)))(m.anexo!.link!)
-        .then((t) => t.text || null)
+        .then((t) => {
+          transcritosOuSemFala.add(m.id);
+          return t.text || null;
+        })
         .catch((err) => {
           logger.warn({ err: String(err), leadId, unit: unit.slug }, 'conversa oficial: áudio antigo não transcrito');
           // saldo/chave recusada: vai continuar falhando; o webhook passa a conversa para a equipe (lib/falha-de-audio.ts)
@@ -267,7 +272,7 @@ export async function blocoDaConversaOficial(args: {
     itens.push({ ...m, transcricao });
   }
 
-  if (args.saida) args.saida.transcritos = new Set(itens.filter((m) => m.transcricao).map((m) => m.id));
+  if (args.saida) args.saida.transcritos = transcritosOuSemFala;
   const daEquipe = itens.filter((m) => m.autor === 'equipe').length;
   await recorder.step({
     kind: 'THINKING',

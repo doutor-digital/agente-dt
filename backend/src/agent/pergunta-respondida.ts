@@ -306,6 +306,9 @@ function respostaImediata(tema: Tema, fala: string, anterior: string | null): st
   if (!t || t.includes('?')) return null;
   const palavras = t.split(/\s+/).filter(Boolean);
   if (tema === 'cidade') {
+    // "Sou da Vale", "sou do TJMA", "somos de Minas", "Sou do Maranhão", "Sou do Interior": fala que abre com sou/somos/venho/moro… é a MESMA
+    // frase de qualquer outro ponto da conversa e passa pelas MESMAS regras (`respostaDeCidade`: artigo, sigla, estado, negação)
+    if (/^(?:sou|somos|venho|vim|viemos|moro|moramos|resido|estou|estamos)\b/i.test(semAcento(t))) return respostaDeCidade(t);
     // nome de cidade tem até 4 palavras; o resto (dor, nome, pedido) é outra coisa dita no lugar da resposta
     if (palavras.length > 4 || PALAVRAS_DE_OUTRO_ASSUNTO.test(t) || ONDE_MORA_SEM_CIDADE.test(t) || !pareceCidade(t) || pareceNome(t)) return null;
     if (/\b(?:sinto|tenho|dor|doi|meu|minha|nome|chamo|chamar|pode|quero|queria|preciso|estou|to|vou|acho|nao|ja|ola|oi)\b/.test(semAcento(t))) return null;

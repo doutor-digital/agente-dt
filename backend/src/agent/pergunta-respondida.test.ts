@@ -423,3 +423,15 @@ test('nit: "hoje" não é "há quanto tempo"; "não quero atrapalhar seu trabalh
   assert.deepEqual(temasRepetidosNaResposta('Essa dor atrapalha seu trabalho?', ja), ['impacto na rotina']);
   assert.deepEqual(temasRepetidosNaResposta('Como essa dor tem atrapalhado sua rotina?', ja).length, 1);
 });
+
+// ── 6ª rodada do sênior (#519) ────────────────────────────────────────────────────────────────────────
+
+test('6: logo depois de "Qual sua cidade?", fala que abre com sou/somos/venho passa pelas MESMAS regras de cidade', () => {
+  const pergunta = ia('Qual sua cidade?');
+  for (const fala of ['Sou da Vale', 'sou do TJMA', 'somos de Minas', 'Sou do Maranhão', 'somos do Pará', 'Sou da Polícia', 'Sou do Interior', 'Sou da IJ CODE', 'não moro aqui', 'moro em casa']) {
+    assert.ok(!temas([pergunta, p(fala)]).includes('cidade'), `não deveria contar: ${fala}`);
+  }
+  for (const fala of ['Sou de Marabá', 'moro em Parauapebas', 'somos de Canaã dos Carajás', 'Sou do Rio de Janeiro']) {
+    assert.ok(temas([pergunta, p(fala)]).includes('cidade'), `deveria contar: ${fala}`);
+  }
+});

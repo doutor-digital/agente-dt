@@ -46,6 +46,52 @@ const JANELA_DO_AUDIO_LITE_MS = 5 * 60_000;
  * mandou um 👍 seria pior que o silêncio. Só vale se a rota oficial JÁ lista o áudio do paciente depois da última fala da Sofia
  * (com ou sem link, mas sem transcrição). Quem chama põe `AUDIO_NAO_OUVIDO` na mensagem do modelo, como no áudio que falha no webhook.
  */
+/** Os áudios do paciente DESTE turno na rota oficial: recentes e depois da última fala da Sofia. */
+function audiosDoTurnoLite(msgs: MensagemOficial[], agora: number): MensagemOficial[] {
+  return desdeUltimaFalaDaSofia(msgs).filter(
+    (m) => m.autor === 'paciente' && m.direcao === 'entrada' && m.anexo?.tipo === 'voice' && agora - m.em.getTime() < JANELA_DO_AUDIO_LITE_MS,
+  );
+}
+
+/** Os ids dos áudios do turno que ninguém leu (sem transcrição deste turno). Vazio = nada a tratar. */
+export function idsDeAudioNaoLido(msgs: MensagemOficial[] | null, transcritos: ReadonlySet<string>, agora = Date.now()): string[] {
+  if (!msgs) return [];
+  return audiosDoTurnoLite(msgs, agora).filter((m) => !transcritos.has(m.id)).map((m) => m.id);
+}
+
+/**
+ * O áudio DESTE turno foi transcrito (há áudio recente e todos estão em `transcritos`)? É só isso que zera a contagem de falhas
+ * seguidas: um áudio antigo transcrito pela rota oficial não zera nada.
+ */
+export function audioDoTurnoFoiTranscrito(msgs: MensagemOficial[] | null, transcritos: ReadonlySet<string>, agora = Date.now()): boolean {
+  if (!msgs) return false;
+  const doTurno = audiosDoTurnoLite(msgs, agora);
+  return doTurno.length > 0 && doTurno.every((m) => transcritos.has(m.id));
+}
+
+const falhasDoLite = new Map<string, { ids: Set<string>; n: number }>();
+
+/**
+ * Conta cada áudio não lido UMA vez, pelo id: o mesmo áudio visto em dois turnos seguidos (a fila, a releitura) não é "2ª falha seguida".
+ * `registrar` é `registrarFalhaDeAudio` (a contagem que o webhook já usa); devolve quantas falhas seguidas já são.
+ */
+export function contarFalhaDoLite(chave: string, ids: readonly string[], registrar: (chave: string) => number): number {
+  const e = falhasDoLite.get(chave) ?? { ids: new Set<string>(), n: 0 };
+  for (const id of ids) {
+    if (e.ids.has(id)) continue;
+    e.ids.add(id);
+    e.n = registrar(chave);
+  }
+  if (e.ids.size > 50) e.ids = new Set([...e.ids].slice(-20));
+  falhasDoLite.set(chave, e);
+  return e.n;
+}
+
+/** Zera a contagem do Lite junto com a do webhook (`limparFalhasDeAudio`). */
+export function esquecerFalhasDoLite(chave: string): void {
+  falhasDoLite.delete(chave);
+}
+
 export function liteAudioSemLeitura(a: {
   humanMessage: string;
   /** Os ids dos áudios que ESTE turno transcreveu (`saida.transcritos` de `blocoDaConversaOficial`): o áudio antigo já transcrito não vale pelo novo. */
@@ -55,16 +101,8 @@ export function liteAudioSemLeitura(a: {
   agora?: number;
 }): boolean {
   if (!temMidiaSemArquivo(a.humanMessage) || a.leituraNoWebhook || !a.msgs) return false;
-  const agora = a.agora ?? Date.now();
   // algum áudio DESTE turno (recente, depois da última fala da Sofia) sem transcrição deste turno
-  return desdeUltimaFalaDaSofia(a.msgs).some(
-    (m) =>
-      m.autor === 'paciente' &&
-      m.direcao === 'entrada' &&
-      m.anexo?.tipo === 'voice' &&
-      agora - m.em.getTime() < JANELA_DO_AUDIO_LITE_MS &&
-      !a.transcritos.has(m.id),
-  );
+  return idsDeAudioNaoLido(a.msgs, a.transcritos, a.agora ?? Date.now()).length > 0;
 }
 
 /** A fala do paciente sem as marcas do sistema, os avisos do Lite e as instruções internas. O que sobra é o que ELE escreveu. */
