@@ -1160,6 +1160,8 @@ export interface SpineLeadLink {
   agendadoPara?: string | null;
   status: 'ok' | 'falhou' | 'ignorado';
   motivo: string | null;
+  /** De onde veio o vínculo "ok": criado por nós, ou o telefone já era lead/paciente na franquia. `null` se não é "ok". */
+  tipo?: 'criado' | 'lead-ja-existia' | 'paciente-ja-existia' | null;
   tentativas: number;
   createdAt: string;
   updatedAt: string;
@@ -1177,8 +1179,10 @@ export interface SpineConferencia {
 export interface SpineLeadLinksResponse {
   links: SpineLeadLink[];
   total: number;
+  /** Criados por nós hoje (o que já existia na franquia vai em `hojeJaExistiam`). */
   hoje: number;
-  contagem: { ok: number; falhou: number; ignorado: number };
+  hojeJaExistiam?: { lead: number; paciente: number };
+  contagem: { ok: number; falhou: number; ignorado: number; jaExistiam?: { lead: number; paciente: number } };
   conferencia: SpineConferencia;
 }
 
@@ -1216,6 +1220,8 @@ export interface SpineLeadPendente {
   spineIdSchedule?: number | null;
   agendadoPara?: string | null;
   situacao: 'pronto' | 'sem-nome' | 'falhou' | 'enviado';
+  /** Só quando o vínculo é "ok": criado por nós, ou o telefone já era lead/paciente na franquia. */
+  tipo?: 'criado' | 'lead-ja-existia' | 'paciente-ja-existia' | null;
   motivo: string | null;
   tentativas: number;
 }
@@ -1229,7 +1235,7 @@ export interface SpinePendentesResponse {
 export interface SpinePatientPreview {
   ok: boolean;
   motivo?: string;
-  etapa?: 'desligado' | 'sem-lead' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
+  etapa?: 'desligado' | 'sem-lead' | 'ja-existe' | 'ja-cadastrado' | 'nome-incompleto' | 'sem-contato' | 'pronto';
   payload?: {
     name: string;
     whatsapp: string | null;

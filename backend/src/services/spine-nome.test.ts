@@ -92,3 +92,21 @@ test('o motivo sai legível pra aparecer na tela de pendentes', () => {
   assert.match(String(avaliarNome('Quanto custa a consulta').motivo), /pergunta|mensagem/i);
   assert.match(String(avaliarNome('26/08/26').motivo), /número|data/i);
 });
+
+// Nome-lixo que ia para a franquia em 27/11/2026 (perfis reais de Rio Verde e afins)
+for (const titulo of [
+  'AMANHÃ FALAMOS', 'PACIENTE BRASILEIRO FALANDO', 'ALAINRICARDOCEDENO@GMAIL.', 'fulano@hotmail.com', 'alain gmail',
+  'Paciente', 'Pai', 'Mãe', 'Filha', 'Vendo Avon', 'Deus é fiel', 'Deus', 'Deus abençoe Maria', 'Filho', 'Neto', 'Tia Ana', 'Tio Paulo', 'Tia Cida', 'Cliente Maria',
+  'Compro ouro', 'Em oração', 'Fiel a Deus', 'Deus é fiel e justo', 'Revendedora Natura', 'Status disponível',
+]) {
+  test(`nome-lixo de perfil NÃO vira nome: "${titulo}"`, () => {
+    const r = avaliarNome(titulo);
+    assert.equal(r.ok, false, `"${titulo}" passou como nome de gente`);
+  });
+}
+
+for (const titulo of ['João de Deus', 'Maria de Jesus Silva', 'Carlos Souza Filho', 'Pedro Silva Neto', 'Ana Neto', 'Maria e José', 'Maria das Graças', 'Nora Lima', 'Joana Natureza', 'Neto Silva', 'Filho Souza', 'Liga Silva', 'Maria Fiel Souza', 'Ana Souza Filha', 'Maria das Dores Silva Filha']) {
+  test(`nome de gente com palavra "perigosa" segue valendo: "${titulo}"`, () => {
+    assert.equal(avaliarNome(titulo).ok, true);
+  });
+}

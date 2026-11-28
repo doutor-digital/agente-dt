@@ -8,6 +8,9 @@ import { SpineSyncService } from '../services/spine-sync.service.js';
 import { createKommoClient } from '../services/kommo.service.js';
 import { apagarDoCache } from '../lib/cache-agenda.js';
 import { conferirOrigemIaSofia } from '../lib/franquia-origem-ia.js';
+import { contarPorTipoDoVinculo, PREFIXO_LEAD_EXISTENTE, PREFIXO_PACIENTE_EXISTENTE, tipoDoVinculo } from '../services/paciente-existente.js';
+import { lerImpedimentoDoIndice } from '../lib/franquia-indice-telefones.js';
+import { estadoPrimeiroContato } from '../lib/cadastro-todo-lead.js';
 
 function agoraLocalIso(tz: string): string {
   return SpineService.instanteNoFuso(new Date(), tz || 'America/Sao_Paulo');
@@ -587,13 +590,16 @@ export async function pendentesHandler(req: Request, res: Response): Promise<voi
       nomeLimpo: semNome ? null : SpineSyncService.limparNome(titulo),
       criadoEm: l.created_at ? new Date(l.created_at * 1000).toISOString() : null,
       spineIdLead: v?.spineIdLead ?? null,
-      situacao: v?.spineIdLead
+      // "enviado" (a tela diz "já está lá") também para o que a franquia já tinha: o 1º contato achou o telefone e só gravou o motivo.
+      // Como "pronto", o botão Enviar criaria um lead duplicado por cima do cadastro da recepção.
+      situacao: v?.spineIdLead || (v?.status === 'ok' && tipoDoVinculo(v.motivo) !== 'criado')
         ? ('enviado' as const)
         : semNome
           ? ('sem-nome' as const)
           : v?.status === 'falhou'
             ? ('falhou' as const)
             : ('pronto' as const),
+      tipo: v?.status === 'ok' ? tipoDoVinculo(v.motivo) : null,
       motivo: v?.motivo ?? null,
       tentativas: v?.tentativas ?? 0,
     };
@@ -680,6 +686,18 @@ export async function prontidaoHandler(req: Request, res: Response): Promise<voi
     });
   }
 
+  // O índice de telefones (a busca de duplicado do cadastro no 1º contato): sem ele o lead não é criado, e nada falha — só não sai.
+  if (unit.spineToken && estadoPrimeiroContato(unit.slug) !== 'desligado') {
+    const impedimento = await lerImpedimentoDoIndice(unit);
+    pecas.push({
+      id: 'indice-telefones',
+      titulo: 'Índice de telefones da franquia (cadastro no 1º contato)',
+      ok: impedimento === null,
+      detalhe: impedimento === null ? 'Sem impedimento: a carga do índice roda e autoriza a busca de duplicado.' : `ATENÇÃO: ${impedimento}.`,
+      comoResolver: 'Ligue a agenda da franquia (spine_enabled) nesta unidade, ou peça ao João para subir os tetos da carga do índice — sem o índice nenhum lead é cadastrado.',
+    });
+  }
+
   const semNome = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'ignorado' } });
   const falhas = await prisma.spineLeadLink.count({ where: { unitId: unit.id, status: 'falhou' } });
   pecas.push({
@@ -707,11 +725,15 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   const inicioHoje = new Date();
   inicioHoje.setUTCHours(0, 0, 0, 0);
 
-  const [links, porStatus, hojeOk] = await Promise.all([
+  const [links, porStatus, hojeMotivos, jaExistiamLead, jaExistiamPaciente] = await Promise.all([
     prisma.spineLeadLink.findMany({ where: { unitId }, orderBy: { updatedAt: 'desc' }, take: 40 }),
     prisma.spineLeadLink.groupBy({ by: ['status'], where: { unitId }, _count: { _all: true } }),
-    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } } }),
+    prisma.spineLeadLink.findMany({ where: { unitId, status: 'ok', updatedAt: { gte: inicioHoje } }, select: { motivo: true } }),
+    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', motivo: { startsWith: PREFIXO_LEAD_EXISTENTE } } }),
+    prisma.spineLeadLink.count({ where: { unitId, status: 'ok', motivo: { startsWith: PREFIXO_PACIENTE_EXISTENTE } } }),
   ]);
+  // "ok" hoje separado em: criado por NÓS × o telefone já era lead lá × já era paciente lá. Só o primeiro foi ENVIADO à franquia.
+  const hojePorTipo = contarPorTipoDoVinculo(hojeMotivos.map((v) => v.motivo));
 
   const contagem = Object.fromEntries(porStatus.map((r) => [r.status, r._count._all]));
 
@@ -724,7 +746,9 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
     erro?: string;
   } = { checado: false };
 
-  const enviadosRecentes = links.filter((l) => l.status === 'ok' && l.spineIdLead);
+  // A conferência dos 7 dias procura NO CRM da franquia o que enviamos: o lead que já existia lá (achado pelo telefone) nunca foi enviado
+  // por nós e, se a janela não o alcança, aparecia como "faltando". Só entra o que nós criamos.
+  const enviadosRecentes = links.filter((l) => l.status === 'ok' && l.spineIdLead && tipoDoVinculo(l.motivo) === 'criado');
   if (unit.spineToken && enviadosRecentes.length > 0) {
     const tz = unit.spineTimezone || 'America/Sao_Paulo';
     const hoje = SpineService.instanteNoFuso(new Date(), tz).slice(0, 10);
@@ -750,11 +774,16 @@ export async function listLeadLinksHandler(req: Request, res: Response): Promise
   }
 
   res.json({
-    links,
+    // `tipo` só faz sentido para o que deu certo; o motivo de um "falhou"/"ignorado" é o erro, não de onde veio o cadastro
+    links: links.map((l) => ({ ...l, tipo: l.status === 'ok' ? tipoDoVinculo(l.motivo) : null })),
     total: links.length,
-    hoje: hojeOk,
+    // `hoje` = criados por nós hoje (como sempre foi o sentido); os que já existiam vão à parte
+    hoje: hojePorTipo.criado,
+    hojeJaExistiam: { lead: hojePorTipo['lead-ja-existia'], paciente: hojePorTipo['paciente-ja-existia'] },
     contagem: {
       ok: contagem.ok ?? 0,
+      // dos "ok", quantos NÃO foram enviados por nós: o telefone já era lead / paciente na franquia
+      jaExistiam: { lead: jaExistiamLead, paciente: jaExistiamPaciente },
       falhou: contagem.falhou ?? 0,
       ignorado: contagem.ignorado ?? 0,
     },

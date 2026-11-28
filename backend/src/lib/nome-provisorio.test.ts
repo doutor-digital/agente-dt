@@ -21,3 +21,8 @@ test('o nome provisório é reconhecido como provisório, e o filtro de nome-lix
   assert.equal(ehNomeProvisorio(null), false);
   assert.equal(avaliarNome('Paciente WhatsApp (final 7777)').ok, false);
 });
+
+test('o comentário e o código dizem a mesma coisa: telefone com menos de 8 dígitos não gera nome provisório (4 dígitos não bastam)', () => {
+  assert.equal(nomeProvisorioDoLead('1234567'), null);
+  assert.equal(nomeProvisorioDoLead('12345678'), 'Paciente WhatsApp (final 5678)');
+});

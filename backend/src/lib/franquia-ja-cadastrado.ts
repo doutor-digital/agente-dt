@@ -22,10 +22,17 @@
 import type { Unit } from '@prisma/client';
 import { logger } from './logger.js';
 import { agendarIndice, chaveDoTelefone, consultarIndice, type Entrada, type RespostaDoIndice } from './franquia-indice-telefones.js';
+import { chaveDaFranquia } from './franquia-espacamento.js';
 import { paginaDeTelefones, type SpineResult, type SpinePaginaTelefones } from '../services/spine.service.js';
 
 export type JaCadastrado =
-  | { tipo: 'achou'; origem: 'paciente' | 'lead'; id: number; por: 'indice' | 'recentes' }
+  | {
+      tipo: 'achou'; origem: 'paciente' | 'lead'; id: number; por: 'indice' | 'recentes';
+      /** Quando o cadastro nasceu na franquia (só o índice sabe): estreita a busca do nome do lead. */
+      criado?: Date;
+      /** O nome com que NÓS criamos este lead (só quando é o que acabamos de criar): dispensa ir buscá-lo na franquia. */
+      nome?: string;
+    }
   | { tipo: 'nao' }
   | { tipo: 'indeterminado'; motivo: string };
 
@@ -66,6 +73,17 @@ function juntar(destino: Recentes, itens: SpinePaginaTelefones['itens'], origem:
   }
 }
 
+/** Pela data de cadastro do primeiro e do último item da página: do mais antigo ao mais novo, o contrário, ou `null` (sem 2 datas diferentes, não confirma). */
+export function ordemDaPagina(itens: SpinePaginaTelefones['itens']): 'crescente' | 'decrescente' | null {
+  const datas = itens.map((i) => (i.created ? Date.parse(i.created) : NaN)).filter((d) => Number.isFinite(d));
+  if (datas.length < 2) return null;
+  const primeira = datas[0]!;
+  const ultima = datas[datas.length - 1]!;
+  if (primeira < ultima) return 'crescente';
+  if (primeira > ultima) return 'decrescente';
+  return null;
+}
+
 export async function lerRecentes(unit: Unit, agora: number, buscar: BuscarPagina = paginaDeTelefones): Promise<Recentes> {
   const out: Recentes = new Map();
   // leads: janela de datas curta (≤ 100 dias, é o limite da franquia)
@@ -78,14 +96,20 @@ export async function lerRecentes(unit: Unit, agora: number, buscar: BuscarPagin
   }
   for (let p = 2; p <= paginasDeLeads; p++) juntar(out, (await ler(buscar, unit, e, p)).itens, 'lead');
 
-  // pacientes: do mais antigo ao mais novo, então os recentes estão no fim. A página 1 diz quantas há.
+  // pacientes: a franquia devolve do mais antigo ao mais novo (os recentes no fim), mas isso é conferido, não suposto: pela data do
+  // primeiro e do último item da página 1. Ordem invertida = os recentes estão no começo; sem datas para confirmar, lê os dois pontos.
   const c1 = await ler(buscar, unit, { tipo: 'paciente' }, 1);
   const totalDePaginas = c1.totalPages ?? (c1.itens.length >= 100 ? null : 1);
   if (totalDePaginas === null) throw new Error('a franquia não disse quantas páginas de pacientes há');
   if (totalDePaginas === 1) juntar(out, c1.itens, 'paciente');
   else {
-    const ultimas = [totalDePaginas - 1, totalDePaginas].filter((n) => n >= 1);
-    for (const n of ultimas) juntar(out, n === 1 ? c1.itens : (await ler(buscar, unit, { tipo: 'paciente' }, n)).itens, 'paciente');
+    const ordem = ordemDaPagina(c1.itens);
+    const paginas = new Set<number>();
+    if (ordem !== 'crescente') [1, 2].forEach((n) => paginas.add(n)); // invertida ou não confirmada: o começo também
+    if (ordem !== 'decrescente') [totalDePaginas - 1, totalDePaginas].forEach((n) => paginas.add(n)); // a ordem de sempre (ou não confirmada): o fim
+    for (const n of [...paginas].filter((x) => x >= 1 && x <= totalDePaginas).sort((a, b) => a - b)) {
+      juntar(out, n === 1 ? c1.itens : (await ler(buscar, unit, { tipo: 'paciente' }, n)).itens, 'paciente');
+    }
   }
   return out;
 }
@@ -96,15 +120,22 @@ const guardados = new Map<string, { em: number; falhou: boolean; valor: Promise<
 
 /** Lead que NÓS acabamos de criar: o cache dos recentes (5 min) e o índice (até 20 h) ainda não o conhecem, e um 2º cartão do mesmo número chegaria antes. */
 export const VALIDADE_DOS_CRIADOS_MS = 36 * 3600_000;
-const criadosPorMim = new Map<string, { em: number; id: number }>();
-const chaveDoCriado = (unitId: string, chave: string) => `${unitId}|${chave}`;
+const criadosPorMim = new Map<string, { em: number; id: number; nome: string | null }>();
+const chaveDoCriado = (franquia: string, chave: string) => `${franquia}|${chave}`;
 
-/** Chamado logo depois de `createLead` dar certo. */
-export function lembrarLeadCriado(unitId: string, telefone: string | null | undefined, idLead: number | null | undefined, agora: number = Date.now()): void {
+/**
+ * A franquia de uma unidade, para a memória de criados e o cache dos recentes: a unidade e o `-resgate` dela usam o MESMO token (e a
+ * mesma base de leads), então o que uma criou a outra tem de achar. Sem token (só teste) cai no id da unidade.
+ */
+export type UnidadeDaFranquia = { id: string; spineBaseUrl?: string | null; spineToken?: string | null };
+export const franquiaDe = (unit: UnidadeDaFranquia): string => (unit.spineToken ? chaveDaFranquia(unit) : unit.id);
+
+/** Chamado logo depois de `createLead` dar certo. `nome` = o que mandamos, para saber depois se é a mesma pessoa. */
+export function lembrarLeadCriado(unit: UnidadeDaFranquia, telefone: string | null | undefined, idLead: number | null | undefined, nome: string | null = null, agora: number = Date.now()): void {
   const chave = chaveDoTelefone(telefone);
   if (!chave || !idLead) return;
   if (criadosPorMim.size > 20_000) criadosPorMim.clear();
-  criadosPorMim.set(chaveDoCriado(unitId, chave), { em: agora, id: idLead });
+  criadosPorMim.set(chaveDoCriado(franquiaDe(unit), chave), { em: agora, id: idLead, nome });
 }
 
 export const depsPadrao: DepsJaCadastrado = {
@@ -112,10 +143,11 @@ export const depsPadrao: DepsJaCadastrado = {
   agendarIndice: (unit) => agendarIndice(unit),
   recentes(unit) {
     const agora = Date.now();
-    const g = guardados.get(unit.id);
+    const franquia = franquiaDe(unit);
+    const g = guardados.get(franquia);
     if (g && agora - g.em < (g.falhou ? VALIDADE_DA_FALHA_MS : VALIDADE_DOS_RECENTES_MS)) return g.valor;
     const entrada = { em: agora, falhou: false, valor: lerRecentes(unit, agora) };
-    guardados.set(unit.id, entrada);
+    guardados.set(franquia, entrada);
     entrada.valor.catch(() => { entrada.falhou = true; entrada.em = Date.now(); });
     if (guardados.size > 200) guardados.clear();
     return entrada.valor;
@@ -142,8 +174,10 @@ export async function verificarJaCadastrado(
   const chave = chaveDoTelefone(telefone);
   if (!chave) return { tipo: 'indeterminado', motivo: 'o telefone não tem 8 dígitos — não dá para conferir se já está na franquia' };
 
-  const criado = criadosPorMim.get(chaveDoCriado(unit.id, chave));
-  if (criado && Date.now() - criado.em < VALIDADE_DOS_CRIADOS_MS) return { tipo: 'achou', origem: 'lead', id: criado.id, por: 'recentes' };
+  const criado = criadosPorMim.get(chaveDoCriado(franquiaDe(unit), chave));
+  if (criado && Date.now() - criado.em < VALIDADE_DOS_CRIADOS_MS) {
+    return { tipo: 'achou', origem: 'lead', id: criado.id, por: 'recentes', ...(criado.nome ? { nome: criado.nome } : {}) };
+  }
 
   let resposta: RespostaDoIndice;
   try {
@@ -153,7 +187,7 @@ export async function verificarJaCadastrado(
     return { tipo: 'indeterminado', motivo: 'não consegui ler o índice de telefones da franquia' };
   }
   const noIndice = melhorEntrada(resposta.entradas);
-  if (noIndice) return { tipo: 'achou', origem: noIndice.origem, id: noIndice.id as number, por: 'indice' };
+  if (noIndice) return { tipo: 'achou', origem: noIndice.origem, id: noIndice.id as number, por: 'indice', ...(noIndice.criado ? { criado: noIndice.criado } : {}) };
   // Telefone presente no índice mas sem id utilizável: existe, mas não dá para ligar a ninguém — também não cria.
   if (resposta.entradas.length > 0) return { tipo: 'indeterminado', motivo: 'o telefone está na franquia mas o cadastro veio sem id' };
 
