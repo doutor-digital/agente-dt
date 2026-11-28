@@ -126,7 +126,8 @@ test('LIGADA: «Preciso remarcar» NÃO recebe «vou pedir para a equipe» — r
     const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Preciso remarcar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
     assert.equal(r, 'remarcar_sofia');
     assert.equal(chamadas.respostas.length, 1, 'uma frase de espera: se a Sofia estiver calada o paciente não fica no vazio');
-    assert.match(chamadas.respostas[0], /ver os horários mais próximos/);
+    assert.match(chamadas.respostas[0], /Já te respondo por aqui/);
+    assert.doesNotMatch(chamadas.respostas[0], /horário|cancel|remarc/i, 'neutra: não promete nada');
     assert.doesNotMatch(chamadas.respostas[0], /pedir para a equipe/);
     assert.equal(chamadas.tarefas.length, 1);
     assert.match(chamadas.tarefas[0].text, /deve ter oferecido 2 horários/);
@@ -352,7 +353,7 @@ test('«não quero mais, pode cancelar» com a oferta ligada: sem frase de esper
     const { kommo, chamadas } = kommoFalso();
     const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'Não quero mais, pode cancelar', conv: conversa(), kommo, consultaDoLead: consultaDePe });
     assert.equal(r, 'remarcar');
-    assert.doesNotMatch(chamadas.respostas[0], /ver os horários/);
+    assert.doesNotMatch(chamadas.respostas[0], /Já te respondo/);
     assert.match(chamadas.respostas[0], /pedir para a equipe/);
     assert.equal(chamadas.tarefas.length, 1);
   } finally { restaurar(); }
@@ -397,4 +398,38 @@ test('semInteresse com negação de remarcar e «não vou mais»; imprevisto nã
     assert.equal(o.semInteresse(t), true, t);
   for (const t of ['Não quero faltar, mas tive um imprevisto', 'não quero perder a consulta mas não consigo ir', 'infelizmente não vou conseguir', 'Preciso remarcar', 'não posso, quero remarcar'])
     assert.equal(o.semInteresse(t), false, t);
+});
+
+// ── 5ª rodada ─────────────────────────────────────────────────────────────────────────────────────────
+
+test('sinais FORTES de desistência valem mesmo com «infelizmente» / «imprevisto» na frase', () => {
+  for (const t of ['Infelizmente desisti do tratamento, pode cancelar', 'infelizmente não quero mais', 'tive um imprevisto e não vou mais', 'Não quero perder mais tempo, pode cancelar', 'não tenho mais interesse', 'Já resolvi'])
+    assert.equal(o.semInteresse(t), true, t);
+});
+
+test('«não vou mais conseguir/poder/dar» é «não posso»: segue para a OFERTA', () => {
+  for (const t of ['Não vou mais conseguir ir amanhã', 'não vou mais poder ir', 'não vou mais dar conta de ir hoje', 'infelizmente não vou conseguir', 'Não quero faltar, mas tive um imprevisto'])
+    assert.equal(o.semInteresse(t), false, t);
+  assert.equal(o.semInteresse('não vou mais'), true);
+});
+
+test('a última fala nossa NÃO conta resposta que virou nota interna (lead_note)', async () => {
+  const conv = { id: 'c1', contactName: 'Maria', confirmacaoD1EnviadaEm: new Date(Date.now() - 1800_000), confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA } as never;
+  const original = { findMany: prisma.message.findMany };
+  const doPaciente = { content: 'não posso', createdAt: new Date(Date.now() - 600_000) };
+  (prisma.message as unknown as { findMany: unknown }).findMany = async (args: { where: { role: string } }) =>
+    args.where.role === 'assistant'
+      ? [
+          { createdAt: new Date(Date.now() - 590_000), meta: { via: 'lead_note' } }, // a Sofia «falou», mas virou nota: o paciente não leu
+          { createdAt: new Date(Date.now() - 595_000), meta: { origem: 'remarcar_oferta_espera' } },
+        ]
+      : [doPaciente];
+  try {
+    const { kommo, chamadas } = kommoFalso();
+    const r = await tratarRespostaD1({ unit: U('doutor-hernia-olimpia'), leadId: 1, texto: 'não posso', conv, kommo, traceId: 'novo', consultaDoLead: consultaDePe });
+    assert.equal(r, 'repetida', 'sem fala nossa que o paciente tenha lido: é reentrega do mesmo pedido');
+    assert.equal(chamadas.respostas.length, 0);
+  } finally {
+    (prisma.message as unknown as { findMany: unknown }).findMany = original.findMany;
+  }
 });

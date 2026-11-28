@@ -59,14 +59,20 @@ const QUER_OUTRO_HORARIO = /\b(remarc|reagend)\w*|\boutr[oa] (dia|horario|data)\
 /** «não quero (mais) remarcar» é o CONTRÁRIO de pedir outro horário. */
 const NEGA_REMARCAR = /\bnao (quero|vou|preciso|pretendo)( mais)?( (ter que|de))? (remarc|reagend)\w*/g;
 /** «não quero faltar, mas tive um imprevisto»: quer ir e não pode — é caso de oferta. */
-const QUER_IR_MAS_NAO_PODE = /\bimprevisto\b|\binfelizmente\b|\bnao quero (faltar|perder|atrasar|deixar de (ir|vir))/;
-const SEM_INTERESSE = [
-  /\bnao vou mais\b/,
-  /\bnao (quero|preciso|vou querer|tenho (mais )?interesse)\b/,
+const QUER_IR_MAS_NAO_PODE = /\bimprevisto\b|\binfelizmente\b|\bnao quero (faltar|perder a|atrasar|deixar de (ir|vir))/;
+/** Sinais FORTES de desistência: valem mesmo com «imprevisto»/«infelizmente» na frase. «não vou mais» sozinho; «não vou mais conseguir/poder/dar» é «não posso». */
+const DESISTENCIA_FORTE = [
   /\bdesist(i|o|ir|imos|iu)\b/,
+  /\bnao (quero|preciso) mais\b/,
+  /\bnao tenho (mais )?interesse\b/,
   /\bja (resolvi|fiz|operei|consegui atendimento)\b/,
-  /\b(vou|fui|resolvi) (fazer|tratar|marcar|ver) (em|com) (outr[oa]|outro lugar)\b/,
   /\bpode cancelar\b/,
+  /\bnao quero perder mais tempo\b/,
+  /\bnao vou mais\b(?! (conseguir|poder|dar|ter como))/,
+];
+const SEM_INTERESSE = [
+  /\bnao (quero|preciso|vou querer)\b/,
+  /\b(vou|fui|resolvi) (fazer|tratar|marcar|ver) (em|com) (outr[oa]|outro lugar)\b/,
 ];
 
 /**
@@ -75,7 +81,9 @@ const SEM_INTERESSE = [
  */
 export function semInteresse(texto: string): boolean {
   const s = normalizar(texto);
-  if (!s || QUER_IR_MAS_NAO_PODE.test(s)) return false;
+  if (!s) return false;
+  if (DESISTENCIA_FORTE.some((r) => r.test(s))) return true;
+  if (QUER_IR_MAS_NAO_PODE.test(s)) return false;
   // tira a negação de remarcar antes de procurar o pedido de outro horário: «não quero remarcar, pode cancelar» NÃO pede outro horário
   if (QUER_OUTRO_HORARIO.test(s.replace(NEGA_REMARCAR, ' '))) return false;
   return SEM_INTERESSE.some((r) => r.test(s));

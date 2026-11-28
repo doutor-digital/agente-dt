@@ -527,7 +527,11 @@ export async function tratarRespostaD1(args: {
     if (conv.confirmacaoD1Resposta === RESPOSTA_OFERTA_SOFIA) {
       ultimaFalaNossaEm = await prisma.message
         .findMany({ where: { conversationId: conv.id, role: 'assistant' }, orderBy: { createdAt: 'desc' }, take: 5, select: { createdAt: true, meta: true } })
-        .then((ms) => ms.find((m) => (m.meta as { origem?: unknown } | null)?.origem !== 'remarcar_oferta_espera')?.createdAt ?? null)
+        // não contam a frase de espera nem fala que virou nota interna (`lead_note`): o paciente não a recebeu
+        .then((ms) => ms.find((m) => {
+          const meta = (m.meta ?? {}) as { origem?: unknown; via?: unknown };
+          return meta.origem !== 'remarcar_oferta_espera' && meta.via !== 'lead_note';
+        })?.createdAt ?? null)
         .catch(() => new Date());
     }
     if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores, comConsigo: faltasLigadas(unit.slug), ultimaFalaNossaEm })) {
@@ -611,7 +615,8 @@ export async function tratarRespostaD1(args: {
       // A Sofia responde esta mesma mensagem com 2 horários de `consultar_horarios`; a consulta atual SEGUE de pé até ele escolher.
       // A frase curta abaixo sai SEMPRE, na frente: se a Sofia estiver calada nesta etapa, em pausa ou fora do horário, o paciente não fica no vazio
       // (antes ele recebia a resposta pronta). A tarefa (prazo de 1 h) é a rede de segurança da equipe.
-      const espera = `Sem problema${nome}! 🙏 Já vou ver os horários mais próximos para você. Se preferir, me diga qual dia e período ficam melhores.`;
+      // NEUTRA de propósito: se o reconhecimento de «não quero mais» errar, esta frase não promete horário nem cancelamento; quem responde é a Sofia
+      const espera = `Recebi${nome}! Já te respondo por aqui 🙏`;
       // a frase pode falhar (Kommo fora): a tarefa abaixo abre DE QUALQUER JEITO — é a única rede de segurança
       const falou = await kommo
         .sendChatReply({ leadId, text: espera, chatId: null, talkId: null, contactId: null })

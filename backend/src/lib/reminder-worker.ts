@@ -174,6 +174,8 @@ interface Envio {
   daUnidade?: ConfirmacaoDaUnidade | null;
   /** Hora local do envio, para o {saudacao} do texto da unidade. */
   horaLocal?: number;
+  /** Chamada logo ANTES de qualquer chamada de envio ao canal (chat, texto ou modelo): quem chama sabe se a exceção veio antes ou depois. */
+  aoEnviar?: () => void;
 }
 
 /** Manda a pergunta de confirmação pelo melhor canal disponível. Devolve por onde saiu. */
@@ -217,6 +219,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
 
   if (!aberta) {
     if (botTemplate) {
+      e.aoEnviar?.();
       const r = await kommo.triggerSalesbot(botTemplate, leadId);
       if (r.ok) {
         await marcar();
@@ -291,6 +294,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
           ? texto
           : texto.replace(/Responda \*1\* para confirmar ou \*2\* se precisar remarcar\. 😊/, 'Toca no botão aqui embaixo pra me avisar 😊');
     try {
+      e.aoEnviar?.();
       await enviarMensagemDeChat(unit, {
         chatId: ctx.chatId,
         recipientId: ctx.authorId,
@@ -311,6 +315,7 @@ async function pedirConfirmacao(e: Envio): Promise<'chat_botoes' | 'texto' | 'te
   if (!foiPeloChat) {
     // `sendChatReply` cai para NOTA no cartão quando o chat recusa — e nota o paciente não lê.
     // Tratar isso como enviado faria o dedupe calar a próxima tentativa até depois da consulta.
+    e.aoEnviar?.();
     const r = await kommo.sendChatReply({ leadId, text: texto, chatId: null, talkId: null, contactId: null });
     if (r.via === 'lead_note') {
       logger.warn({ unit: unit.slug, leadId, toque }, 'confirmação: virou nota interna, o paciente NÃO recebeu');
@@ -562,6 +567,8 @@ async function lembrarUnidade(unit: Unit): Promise<void> {
 /** Depois de uma tentativa que não chegou ao paciente, a manhã espera 1 h para tentar de novo naquele cartão. */
 const TENTATIVA_D0_MS = 60 * 60_000;
 /** O que já está resolvido HOJE (perguntada, confirmada, pediu para remarcar): `unidade:lead:horário` → dia. Poupa reler franquia e Kommo a cada 15 min. */
+/** Quantas vezes a manhã falhou ANTES de enviar, por cartão e consulta: a 1ª falha repete na varredura seguinte, a 2ª espera 1 h. */
+const falhasAntesDoEnvio = new Map<string, number>();
 const resolvidasDoDia = new Map<string, string>();
 const enviosDaHora = new Map<string, { hora: string; n: number }>();
 
@@ -700,6 +707,7 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
       // A marca de tentativa vai ANTES do envio: se algo lançar exceção depois de a mensagem sair, a varredura de 15 min não reenvia.
       await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa);
       let via: Awaited<ReturnType<typeof pedirConfirmacao>>;
+      let enviou = false;
       try {
         via = await pedirConfirmacao({
           unit,
@@ -711,12 +719,18 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
           titulo: lead.name ?? null,
           oficiais,
           horaLocal: hora,
+          aoEnviar: () => { enviou = true; },
         });
       } catch (err) {
-        // Exceção ANTES de a mensagem sair (a marca de «perguntei» só é gravada quando o canal aceita): a tentativa não conta, senão uma
-        // consulta das 10h perderia a janela por um soluço. Exceção DEPOIS do envio (a marca existe): a tentativa fica e nada é reenviado.
-        if (!(await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS))) {
-          await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa, new Date(0));
+        // Exceção ANTES de qualquer chamada de envio (`enviou` só vira true logo antes dela): a tentativa não conta uma vez, senão uma consulta das
+        // 10h perderia a janela por um soluço. Se a MESMA falha se repete, a marca fica e a tentativa seguinte é só 1 h depois, não a cada 15 min.
+        // Exceção a partir do envio: a marca fica e nada é reenviado.
+        if (!enviou) {
+          const chaveFalha = `${chaveTentativa}:${unit.id}:${link.kommoLeadId}`;
+          if (falhasAntesDoEnvio.size > 2000) falhasAntesDoEnvio.clear();
+          const falhas = (falhasAntesDoEnvio.get(chaveFalha) ?? 0) + 1;
+          falhasAntesDoEnvio.set(chaveFalha, falhas);
+          if (falhas === 1) await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa, new Date(0));
         }
         throw err;
       }
