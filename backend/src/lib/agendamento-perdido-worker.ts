@@ -126,7 +126,8 @@ export function cartaoTemConsulta(
  * A MESMA fonte vai para o SQL (`~*` com este texto) e para o teste (`RegExp`, flag `i`): só usa o que o POSIX ARE do Postgres e o JS
  * entendem igual — sem `\b` (no Postgres é backspace) nem `\m`/`\M` (só no Postgres).
  */
-export const HORARIO_NA_RESPOSTA_FONTE = '(^|[^0-9:])(([01]?[0-9]|2[0-3]):[0-5][0-9]|([01]?[0-9]|2[0-3]) ?h([^a-zà-ú]|$)|[0-9]{1,2} horas)';
+export const HORARIO_NA_RESPOSTA_FONTE =
+  '(^|[^0-9:])(([01]?[0-9]|2[0-3]):[0-5][0-9]|([01]?[0-9]|2[0-3]) ?h(rs?|s)?([^a-zà-ú]|$)|[0-9]{1,2} ?(horas?|hrs)|[0-9]{1,2} ?(da|de) ?(manh|tarde|noite)|às ?([01]?[0-9]|2[0-3])([^0-9/:a-zà-ú]|$))|meio[- ]?dia';
 
 export function respostaOfereceHorario(texto: string | null | undefined): boolean {
   return !!texto && new RegExp(HORARIO_NA_RESPOSTA_FONTE, 'i').test(texto);

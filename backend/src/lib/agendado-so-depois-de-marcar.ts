@@ -23,6 +23,7 @@ import type { Unit } from '@prisma/client';
 import { prisma } from './prisma.js';
 import { logger } from './logger.js';
 import type { KommoLead } from '../services/kommo.service.js';
+import { aguardarMarcacaoDaIa } from './marcacao-da-ia-no-turno.js';
 
 /** Quanto tempo atrás o passo «Consulta marcada:» ainda vale como prova de que o cartão tem consulta (remarcação e ciclo longo cabem aqui). */
 const PROVA_DA_MARCACAO_DIAS = 45;
@@ -38,6 +39,12 @@ export function etapaAgendadoDaUnidade(unit: Pick<Unit, 'pipelineIntents'> | nul
 }
 
 export interface DepsAgendadoSoDepoisDeMarcar {
+  /**
+   * A marcação deu certo NESTE turno? As tools rodam em paralelo (ToolNode): o modelo pode pedir `agendar_consulta` e `mover_etapa` na
+   * mesma rodada, e o passo «Consulta marcada:» só nasce quando a franquia responde — por isso espera a marcação em curso (com teto).
+   * Medido em 30 dias: 2 de 19 movimentos «sem consulta» eram marcações que terminaram DEPOIS do pedido de mover.
+   */
+  marcouNesteTurno: () => Promise<boolean>;
   /** A Sofia já marcou consulta neste cartão (passo «Consulta marcada:»)? Lança se não leu. */
   marcouPelaSofia: (unitId: string, leadId: number) => Promise<boolean>;
   /** O cartão como está agora. Lança se não leu. */
@@ -76,6 +83,7 @@ export async function recusaDeAgendadoSemConsulta(
   const agendado = etapaAgendadoDaUnidade(unit);
   if (!agendado || statusId !== agendado) return null;
   try {
+    if (await deps.marcouNesteTurno()) return null;
     if (await deps.marcouPelaSofia(unit.id, leadId)) return null;
     const cartao = await deps.lerCartao(leadId);
     const desde = new Date(deps.agora().getTime() - FOLGA_DA_DATA_MS);
@@ -87,9 +95,10 @@ export async function recusaDeAgendadoSemConsulta(
   }
 }
 
-/** As dependências de produção. `lerCartao` recebe o `kommo` do turno. */
-export function depsDeProducao(kommo: { getLead(id: number): Promise<KommoLead> }): DepsAgendadoSoDepoisDeMarcar {
+/** As dependências de produção. `lerCartao` recebe o `kommo` do turno e `traceId` é o do turno (a marcação em curso é por turno). */
+export function depsDeProducao(kommo: { getLead(id: number): Promise<KommoLead> }, traceId: string): DepsAgendadoSoDepoisDeMarcar {
   return {
+    marcouNesteTurno: () => aguardarMarcacaoDaIa(traceId),
     marcouPelaSofia: (unitId, leadId) => marcouPelaSofiaNoRastro(unitId, leadId),
     lerCartao: (leadId) => kommo.getLead(leadId),
     // import tardio: evita ciclo agent ↔ workers (o vigia importa o cliente do Kommo e a franquia)

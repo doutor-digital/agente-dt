@@ -169,14 +169,21 @@ test('ofertas reais, nos formatos que a Sofia usa, contam', () => {
   assert.equal(respostaOfereceHorario('Consigo às 9 horas ou às 15 horas'), true);
   assert.equal(respostaOfereceHorario('Seg 09H'), true);
   assert.equal(respostaOfereceHorario('Seg 9:00'), true);
+  // outras formas de escrever a hora (revisão: sumir com a oferta real é o erro oposto ao alarme falso)
+  assert.equal(respostaOfereceHorario('Tenho segunda às 9hrs ou 14hrs'), true);
+  assert.equal(respostaOfereceHorario('às 9hs ou às 15 hrs'), true);
+  assert.equal(respostaOfereceHorario('9 da manhã ou 3 da tarde'), true);
+  assert.equal(respostaOfereceHorario('Consigo ao meio-dia ou às 15'), true);
+  assert.equal(respostaOfereceHorario('Tenho às 8 ou às 10, qual prefere?'), true);
 });
 
 test('textos com número que não é horário não contam', () => {
   assert.equal(respostaOfereceHorario('A consulta está R$ 250,00 no dia, ou R$ 200,00 pagando antes.'), false);
   assert.equal(respostaOfereceHorario('Sente isso há 25 dias? Chegue 15 minutos antes.'), false);
   assert.equal(respostaOfereceHorario('Dói há 3 anos e piorou hoje'), false);
-  assert.equal(respostaOfereceHorario('Falo com você às 9 hoje, ok?'), false);
   assert.equal(respostaOfereceHorario('Atendemos de segunda a sexta, dia 30/11'), false);
+  assert.equal(respostaOfereceHorario('Fica para às 30/11 então'), false);
+  assert.equal(respostaOfereceHorario('Hoje estamos com a agenda cheia, mas sei que isso incomoda'), false);
   assert.equal(respostaOfereceHorario(''), false);
   assert.equal(respostaOfereceHorario(null), false);
   assert.equal(respostaOfereceHorario(undefined), false);

@@ -13,6 +13,7 @@ function deps(over: Partial<DepsAgendadoSoDepoisDeMarcar> = {}): DepsAgendadoSoD
   const leituras: string[] = [];
   return {
     leituras,
+    marcouNesteTurno: async () => { leituras.push('turno'); return false; },
     marcouPelaSofia: async () => { leituras.push('rastro'); return false; },
     lerCartao: async () => { leituras.push('cartao'); return { custom_fields_values: [] }; },
     cartaoTemConsulta: async () => false,
@@ -29,10 +30,17 @@ test('Salto 5478545: AGENDADO sem consulta marcada é recusado (antes seguia e o
   assert.match(r.texto, /agendar_consulta/);
 });
 
+test('agendar_consulta e mover_etapa na MESMA rodada (tools em paralelo): espera a marcação do turno e deixa passar', async () => {
+  // o passo «Consulta marcada:» e a data no cartão ainda não existem quando o mover_etapa chega; quem sabe é o estado do turno
+  const d = deps({ marcouNesteTurno: async () => true });
+  assert.equal(await recusaDeAgendadoSemConsulta({ unit: salto, leadId: 1, statusId: AGENDADO }, d), null);
+  assert.deepEqual(d.leituras, []);
+});
+
 test('depois de agendar_consulta dar certo (passo «Consulta marcada:» no rastro) o AGENDADO passa e nem lê o cartão', async () => {
   const d = deps({ marcouPelaSofia: async () => true });
   assert.equal(await recusaDeAgendadoSemConsulta({ unit: salto, leadId: 1, statusId: AGENDADO }, d), null);
-  assert.deepEqual(d.leituras, []);
+  assert.deepEqual(d.leituras, ['turno']);
 });
 
 test('consulta marcada por gente (data no cartão de agora em diante) também libera o AGENDADO', async () => {

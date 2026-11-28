@@ -536,7 +536,7 @@ export function buildTools({
 
       // AGENDADO só com consulta marcada: sem ela a franquia desmente o cartão em minutos (→ CONFERIR NA FRANQUIA) e a Sofia fica calada
       // no meio da negociação (Salto 27/11, lead 5478545). Ver `agendado-so-depois-de-marcar.ts`.
-      const semConsulta = await recusaDeAgendadoSemConsulta({ unit, leadId, statusId }, depsDeProducao(kommo));
+      const semConsulta = await recusaDeAgendadoSemConsulta({ unit, leadId, statusId }, depsDeProducao(kommo, recorder.traceId));
       if (semConsulta) {
         await recorder.step({
           kind: 'TOOL_RESULT',
