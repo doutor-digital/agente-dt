@@ -393,7 +393,7 @@ test('A.2) com sinal e a forma NÃO dita: marca a OFERTA (sinal_oferecido), nunc
   assert.equal(conversaGravou.length, 1);
   const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string }; where: { OR: unknown[] } };
   assert.equal(g.data.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
-  assert.ok(JSON.stringify(g.where.OR).includes('"not":"na_clinica"'), 'o filtro nunca atinge um na_clinica dito');
+  assert.equal(g.where.OR, undefined, 'forma não dita agora: a escolha guardada (até na_clinica) é de marcação anterior e é trocada pelo marcador');
 });
 
 test('A.2) um "na_clinica" VELHO na conversa (marcação anterior) NÃO bloqueia a oferta do sinal: oferece de novo e troca pelo marcador', async () => {
@@ -404,6 +404,8 @@ test('A.2) um "na_clinica" VELHO na conversa (marcação anterior) NÃO bloqueia
   assert.match(r, /ofereça UMA vez o sinal/);
   assert.doesNotMatch(r, /PAGAR TUDO NO DIA/);
   assert.equal((conversaGravou[0]!.data as { pagamentoEscolhido: string }).pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
+  // o dublê do updateMany ignora o where: conferimos o where em si — sem filtro que poupe o na_clinica velho (senão a gravação não casaria no Postgres)
+  assert.equal((conversaGravou[0] as unknown as { where: { OR?: unknown } }).where.OR, undefined);
 });
 
 test('A.2) carimbo da 1ª marcação: o na_clinica PADRÃO da chave (e o velho) NÃO derrubam o "Sim" da equipe; a forma DITA agora vale como sempre', () => {

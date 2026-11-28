@@ -2045,11 +2045,12 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
           })
           .catch(() => undefined);
       } else if (formaNaoDita && args.leadId) {
-        // Chave `pix-depois-de-marcar` com sinal: marca a OFERTA (prova de que ela saiu) e troca a escolha de uma marcação anterior (`sinal_pix`,
-        // `pix_antecipado`), que não vale para esta. "na_clinica" nunca chega aqui: acima ele já virou forma dita e não é apagado.
+        // Chave `pix-depois-de-marcar` com sinal: marca a OFERTA (prova de que ela saiu) e troca a escolha de uma marcação ANTERIOR (`sinal_pix`,
+        // `pix_antecipado` ou `na_clinica`), que não vale para esta. Aqui a forma NÃO foi dita agora, então qualquer escolha guardada é velha —
+        // inclusive um `na_clinica`: se ficasse, a troca do `gerar_sinal_pix` não casaria e a pessoa sumiria da lista «agendados sem Pix» (sênior, 28/11).
         await prisma.conversation
           .updateMany({
-            where: { unitId: fresca.id, leadId: String(args.leadId), OR: [{ pagamentoEscolhido: null }, { pagamentoEscolhido: { not: 'na_clinica' } }] },
+            where: { unitId: fresca.id, leadId: String(args.leadId) },
             data: { pagamentoEscolhido: OFERTA_DO_SINAL_FEITA },
           })
           .catch(() => undefined);
