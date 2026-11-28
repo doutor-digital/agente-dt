@@ -269,11 +269,11 @@ test('«2» solto depois de a Sofia oferecer horários é ESCOLHA: não vira «v
 test('REENTREGA do Kommo do mesmo «Preciso remarcar» com a conversa em oferta_sofia: não gera 2ª oferta; «1»/«2» e texto novo seguem para a Sofia', () => {
   const conv = { confirmacaoD1EnviadaEm: new Date(Date.now() - 600_000), confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA };
   const antes = [{ content: 'Preciso remarcar', createdAt: new Date(Date.now() - 120_000) }];
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: antes }), true);
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'preciso remarcar!', anteriores: antes }), true);
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: [] }), false, 'sem o pedido anterior não é repetição');
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: '2', anteriores: [{ content: '2', createdAt: new Date(Date.now() - 120_000) }] }), false, 'escolha de horário');
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'quinta às 14h', anteriores: antes }), false);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: antes, ultimaFalaNossaEm: null }), true);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'preciso remarcar!', anteriores: antes, ultimaFalaNossaEm: null }), true);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: [], ultimaFalaNossaEm: null }), false, 'sem o pedido anterior não é repetição');
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: '2', anteriores: [{ content: '2', createdAt: new Date(Date.now() - 120_000) }], ultimaFalaNossaEm: null }), false, 'escolha de horário');
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'quinta às 14h', anteriores: antes, ultimaFalaNossaEm: null }), false);
 });
 
 test('«consigo»: SEM chave segue indo para a Sofia (idêntico ao main); com as faltas ligadas confirma', async () => {
@@ -332,13 +332,13 @@ test('oferta_sofia: «não», «não dá», «não posso» no meio da negociaç�
   // o pedido que gerou a oferta foi «Preciso remarcar»; depois a Sofia ofereceu e ele respondeu outras coisas
   const historico = [m('Preciso remarcar', 20), m('não dá', 10)];
   for (const texto of ['não', 'não dá', 'não posso', 'não dá nesse dia']) {
-    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: historico }), false, texto);
+    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: historico, ultimaFalaNossaEm: null }), false, texto);
   }
   // «não» primeiro, Sofia oferece, ele diz outra coisa e depois «não» de novo: o último texto igual NÃO é a mensagem imediatamente anterior
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 20), m('quinta?', 10)] }), false);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 20), m('quinta?', 10)], ultimaFalaNossaEm: null }), false);
   // reentrega do mesmo pedido, logo em seguida: repetição
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: [m('Preciso remarcar', 2)] }), true);
-  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 2)] }), true, 'o próprio «não» que gerou a oferta, reentregue');
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'Preciso remarcar', anteriores: [m('Preciso remarcar', 2)], ultimaFalaNossaEm: null }), true);
+  assert.equal(ehRepeticaoDaRespostaD1({ conv, texto: 'não', anteriores: [m('não', 2)], ultimaFalaNossaEm: null }), true, 'o próprio «não» que gerou a oferta, reentregue');
 });
 
 test('semInteresse: «não quero mais, pode cancelar», «desisti», «já resolvi»; quem pede outro horário NÃO', () => {
@@ -377,4 +377,24 @@ test('a frase de espera que virou NOTA interna (lead_note) não é guardada como
     (prisma.message as unknown as { create: unknown }).create = original;
     restaurar();
   }
+});
+
+// ── 4ª rodada ─────────────────────────────────────────────────────────────────────────────────────────
+
+test('pedido ÚNICO → a Sofia oferece → o MESMO texto: é resposta dele à Sofia, vai para ela (não é repetição)', () => {
+  const conv = { confirmacaoD1EnviadaEm: new Date(Date.now() - 1800_000), confirmacaoD1Resposta: RESPOSTA_OFERTA_SOFIA };
+  const pedido = (texto: string) => [{ content: texto, createdAt: new Date(Date.now() - 600_000) }];
+  const sofiaFalouDepois = new Date(Date.now() - 590_000);
+  for (const texto of ['não posso', 'Não', 'não dá', 'Preciso remarcar']) {
+    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: pedido(texto), ultimaFalaNossaEm: sofiaFalouDepois }), false, `${texto}: depois da oferta`);
+    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: pedido(texto), ultimaFalaNossaEm: null }), true, `${texto}: reentrega antes de qualquer fala`);
+    assert.equal(ehRepeticaoDaRespostaD1({ conv, texto, anteriores: pedido(texto) }), false, `${texto}: sem saber, vai para a Sofia`);
+  }
+});
+
+test('semInteresse com negação de remarcar e «não vou mais»; imprevisto não é desistência', () => {
+  for (const t of ['Não quero remarcar, pode cancelar', 'Não quero mais remarcar', 'não quero remarcar não', 'pode desmarcar, não vou mais', 'Não vou mais'])
+    assert.equal(o.semInteresse(t), true, t);
+  for (const t of ['Não quero faltar, mas tive um imprevisto', 'não quero perder a consulta mas não consigo ir', 'infelizmente não vou conseguir', 'Preciso remarcar', 'não posso, quero remarcar'])
+    assert.equal(o.semInteresse(t), false, t);
 });

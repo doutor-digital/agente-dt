@@ -410,6 +410,12 @@ export function ehRepeticaoDaRespostaD1(args: {
   anteriores: Array<{ content: string; createdAt: Date }>;
   agora?: Date;
   comConsigo?: boolean;
+  /**
+   * Quando falamos (Sofia, recepção) pela última vez, SEM contar a frase de espera. `null` = nunca; `undefined` = não sei. Com a conversa em
+   * `oferta_sofia`, só é repetição o que chega SEM fala nossa depois da mensagem anterior do paciente: pedido → oferta → o mesmo texto é a
+   * resposta dele à Sofia e vai para ela.
+   */
+  ultimaFalaNossaEm?: Date | null;
 }): boolean {
   const { conv, texto, anteriores } = args;
   const agora = args.agora ?? new Date();
@@ -429,6 +435,8 @@ export function ehRepeticaoDaRespostaD1(args: {
       .filter((m) => m.createdAt.getTime() >= desdeOferta)
       .sort((x, y) => y.createdAt.getTime() - x.createdAt.getTime());
     const ultima = doPeriodo[0];
+    if (args.ultimaFalaNossaEm === undefined) return false;
+    if (args.ultimaFalaNossaEm && ultima && args.ultimaFalaNossaEm.getTime() > ultima.createdAt.getTime()) return false;
     const pedido = [...doPeriodo].reverse().find((m) => classificarRespostaD1(m.content, args.comConsigo) === 'remarcar');
     return (
       !!ultima &&
@@ -514,7 +522,15 @@ export async function tratarRespostaD1(args: {
       take: 20,
       select: { content: true, createdAt: true },
     });
-    if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores, comConsigo: faltasLigadas(unit.slug) })) {
+    // a última fala NOSSA que não seja a frase de espera (que sai junto do pedido e não conta como resposta da Sofia); erro de leitura = «falamos»
+    let ultimaFalaNossaEm: Date | null | undefined = undefined;
+    if (conv.confirmacaoD1Resposta === RESPOSTA_OFERTA_SOFIA) {
+      ultimaFalaNossaEm = await prisma.message
+        .findMany({ where: { conversationId: conv.id, role: 'assistant' }, orderBy: { createdAt: 'desc' }, take: 5, select: { createdAt: true, meta: true } })
+        .then((ms) => ms.find((m) => (m.meta as { origem?: unknown } | null)?.origem !== 'remarcar_oferta_espera')?.createdAt ?? null)
+        .catch(() => new Date());
+    }
+    if (ehRepeticaoDaRespostaD1({ conv, texto, anteriores, comConsigo: faltasLigadas(unit.slug), ultimaFalaNossaEm })) {
       logger.info({ unit: unit.slug, leadId, resposta: conv.confirmacaoD1Resposta }, 'confirmação D-1: repetição da resposta já tratada — sem IA');
       return 'repetida';
     }

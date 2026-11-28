@@ -698,18 +698,28 @@ async function lembrarManhaUnidade(unit: Unit): Promise<void> {
         continue;
       }
       // A marca de tentativa vai ANTES do envio: se algo lançar exceção depois de a mensagem sair, a varredura de 15 min não reenvia.
-      await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa).catch(() => undefined);
-      const via = await pedirConfirmacao({
-        unit,
-        kommo,
-        leadId: link.kommoLeadId,
-        consulta: consulta as ConsultaReconciliada & { quando: string },
-        toque: 'd0',
-        chave,
-        titulo: lead.name ?? null,
-        oficiais,
-        horaLocal: hora,
-      });
+      await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa);
+      let via: Awaited<ReturnType<typeof pedirConfirmacao>>;
+      try {
+        via = await pedirConfirmacao({
+          unit,
+          kommo,
+          leadId: link.kommoLeadId,
+          consulta: consulta as ConsultaReconciliada & { quando: string },
+          toque: 'd0',
+          chave,
+          titulo: lead.name ?? null,
+          oficiais,
+          horaLocal: hora,
+        });
+      } catch (err) {
+        // Exceção ANTES de a mensagem sair (a marca de «perguntei» só é gravada quando o canal aceita): a tentativa não conta, senão uma
+        // consulta das 10h perderia a janela por um soluço. Exceção DEPOIS do envio (a marca existe): a tentativa fica e nada é reenviado.
+        if (!(await avisoRecente(unit.id, link.kommoLeadId, chave, POR_CONSULTA_MS))) {
+          await marcarAviso(unit.id, link.kommoLeadId, chaveTentativa, new Date(0));
+        }
+        throw err;
+      }
       soma(via);
       // «nada» = nota interna, modelo que falhou ou janela fechada sem modelo: a marca de «perguntei» não foi gravada, mas a de tentativa sim —
       // no máximo 4 tentativas até a consulta, em vez de uma a cada 15 min.
