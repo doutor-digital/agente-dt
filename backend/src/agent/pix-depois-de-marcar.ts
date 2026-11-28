@@ -159,6 +159,26 @@ export function aceitouOPix(textoDoPaciente: string | null | undefined): boolean
   return t === 'quero o pix' || t === 'quero pix' || t === 'quero o sinal';
 }
 
+const soAlfanumerico = (t: string): string => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9@]/g, '');
+
+/**
+ * A resposta da Sofia ENTREGA a chave Pix da unidade? Compara sem pontuação nem espaço (CNPJ "12.345.678/0001-90", telefone, e-mail, chave aleatória). É o
+ * sinal confiável do aceite: o paciente pode digitar de 20 jeitos ("pode ser no pix", "manda a chave", "pix"), mas a chave só sai quando ele escolheu o Pix.
+ */
+export function respostaEntregaAChave(resposta: string | null | undefined, chavePix: string | null | undefined): boolean {
+  const k = soAlfanumerico(String(chavePix ?? ''));
+  if (k.length < 8) return false;
+  return soAlfanumerico(String(resposta ?? '')).includes(k);
+}
+
+/**
+ * Esta resposta final é o ACEITE do Pix (chave Pix fixa)? Chave ligada, unidade com chave fixa e preços, a resposta traz a chave da unidade e o turno NÃO
+ * marcou a consulta (a confirmação da marcação pode citar a chave sem ele ter escolhido). O marcador da oferta e a consulta de pé são conferidos na gravação.
+ */
+export function aceitePelaResposta(a: { chaveLigada: boolean; chaveFixaComPrecos: boolean; ferramentasDoTurno: readonly string[]; resposta: string; chavePix: string | null | undefined }): boolean {
+  return a.chaveLigada && a.chaveFixaComPrecos && !a.ferramentasDoTurno.includes('agendar_consulta') && respostaEntregaAChave(a.resposta, a.chavePix);
+}
+
 /**
  * Unidade com chave Pix FIXA (sem sinal gerado): "Quero o Pix" depois da oferta vira `pix_antecipado` (o marcador da oferta troca), para a régua do Pix
  * e a lista «agendados sem Pix» enxergarem quem escolheu pagar antes. Só com o marcador e a consulta ainda de pé. Nunca lança.
@@ -185,7 +205,9 @@ export async function gravarAceiteDoPix(
       data: { pagamentoEscolhido: 'pix_antecipado' },
     });
     if (r.count === 0) return false;
-    if (opcoes.carimbar) {
+    if (!opcoes.carimbar) {
+      logger.warn({ unitId: unit.id, leadId }, 'pix-depois-de-marcar: aceite do Pix gravado na conversa, mas sem cliente do Kommo — o cartão NÃO foi carimbado (Sim + valor antecipado)');
+    } else {
       const [data, hora] = quando.split('T');
       await opcoes.carimbar({ data, hora }).catch((err) => logger.warn({ err: String(err), unitId: unit.id, leadId }, 'pix-depois-de-marcar: o carimbo do aceite falhou'));
     }

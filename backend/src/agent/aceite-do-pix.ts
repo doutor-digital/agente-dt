@@ -24,6 +24,8 @@ export async function carimbarAceiteDoPix(a: {
   leadId: number;
   data: string;
   hora: string;
+  /** A consulta é a avaliação (categoria 1, o padrão)? Quem chama com a categoria do agendamento passa aqui; sem ela, vale a avaliação. */
+  ehAvaliacao?: boolean;
 }): Promise<DesfechoDoCarimbo> {
   const { unit, kommo, leadId } = a;
   const nota = async (motivo: string) => {
@@ -54,7 +56,10 @@ export async function carimbarAceiteDoPix(a: {
     // retorno pós-tratamento não é pré-pago: nada a carimbar
     if (pagamento.valor !== 'Sim') return 'nao-se-aplica';
     // o valor ANTES da forma, como no agendamento: o modelo "consulta prepagamento" do Kommo lê este campo assim que a forma vira Sim
-    await valorDaConsultaAoAgendar({ unit, kommo: kommo as unknown as KommoClient, leadId, leadAtual, data: a.data, hora: a.hora, pagamento: 'Sim', ehRetorno, ehAvaliacao: true });
+    // falha do valor NÃO impede o "Sim" (a varredura da franquia refaz o valor, como no agendamento) — só fica no log
+    await valorDaConsultaAoAgendar({ unit, kommo: kommo as unknown as KommoClient, leadId, leadAtual, data: a.data, hora: a.hora, pagamento: 'Sim', ehRetorno, ehAvaliacao: a.ehAvaliacao ?? true }).catch((err) =>
+      logger.warn({ err: String(err), leadId, unit: unit.slug }, 'aceite-do-pix: não gravei o valor antecipado — a varredura da franquia tenta de novo'),
+    );
     if (String(valorAtual ?? '').trim().toLowerCase() === 'sim') return 'ja-estava';
     if (idPagamento === null) {
       await nota('o campo "¤ Pagamento antecipado" não existe nesta conta');

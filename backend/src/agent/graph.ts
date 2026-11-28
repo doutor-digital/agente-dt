@@ -134,7 +134,7 @@ import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-sai
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
 import { carimbarAceiteDoPix } from './aceite-do-pix.js';
-import { aceitouOPix, gravarAceiteDoPix, gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal } from './pix-depois-de-marcar.js';
+import { aceitouOPix, gravarAceiteDoPix, gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal, aceitePelaResposta } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -729,18 +729,22 @@ export async function buildAgentGraph(
     const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
     confirmacao.adiou = confirmacaoAdiadaEstado(unit.slug) === 'desligado' ? null : adiouConfirmacao(falaDoPacienteNoTurno(falas));
+    // Unidade com chave Pix FIXA (sem sinal, com chave cadastrada e os dois preços): é onde o aceite do Pix grava `pix_antecipado` e carimba o cartão.
+    const aceiteDeChaveFixa = !sinalDaUnidade(unit) && !!unit.pixKey?.trim() && !!precosDaConsulta(unit);
+    const registrarAceiteDoPix = () => {
+      if (!state.leadId) return;
+      const leadNum = Number(state.leadId);
+      void gravarAceiteDoPix(unit, state.leadId, {
+        carimbar: kommoClient ? (q) => carimbarAceiteDoPix({ unit, kommo: kommoClient as never, leadId: leadNum, data: q.data, hora: q.hora }) : undefined,
+      });
+    };
     // Chave `pix-depois-de-marcar`: a resposta à oferta do antecipado/sinal ("Pago no dia", "Quero o Pix") vira escolha gravada — ANTES de chamar o modelo, para
     // não se perder se ele estiver fora. Só vale com o marcador da oferta na conversa e a consulta ainda de pé (lib em pix-depois-de-marcar.ts).
     if (state.leadId && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })) {
       const falaDele = falaDoPacienteNoTurno(falas);
       if (recusouOSinal(falaDele)) void gravarRecusaDoSinal(unit, state.leadId);
       // com sinal, "Quero o Pix" é o link (gerar_sinal_pix troca o marcador); com chave Pix fixa, o aceite grava `pix_antecipado`
-      else if (!sinalDaUnidade(unit) && unit.pixKey?.trim() && precosDaConsulta(unit) && aceitouOPix(falaDele)) {
-        const leadNum = Number(state.leadId);
-        void gravarAceiteDoPix(unit, state.leadId, {
-          carimbar: kommoClient ? (q) => carimbarAceiteDoPix({ unit, kommo: kommoClient as never, leadId: leadNum, data: q.data, hora: q.hora }) : undefined,
-        });
-      }
+      else if (aceiteDeChaveFixa && aceitouOPix(falaDele)) registrarAceiteDoPix();
     }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
@@ -1763,6 +1767,22 @@ export async function buildAgentGraph(
         });
         textoFinal = semEmpurrao;
         response.content = semEmpurrao;
+      }
+
+      // Chave `pix-depois-de-marcar` (chave Pix fixa): o aceite pelo que a Sofia ENVIA — a resposta final traz a chave Pix da unidade. Vale para o botão e
+      // para quem DIGITA ("pode ser no pix", "manda a chave", "pix"…; os botões estão mortos na rede). Não vale no turno que acabou de marcar (a confirmação
+      // pode citar a chave sem ele ter escolhido) nem sem o marcador da oferta (gravarAceiteDoPix confere). O link/código do sinal já é tratado por gerar_sinal_pix.
+      if (
+        state.leadId &&
+        aceitePelaResposta({
+          chaveLigada: pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment }),
+          chaveFixaComPrecos: aceiteDeChaveFixa,
+          ferramentasDoTurno: ferramentasDoTurno(nonSystemMessages),
+          resposta: textoFinal,
+          chavePix: unit.pixKey,
+        })
+      ) {
+        registrarAceiteDoPix();
       }
 
       // Diminutivo sai aqui, no ÚNICO ponto onde a resposta ao paciente é finalizada — antes de

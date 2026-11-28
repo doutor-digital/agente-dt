@@ -8,7 +8,7 @@ import { instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
 import { porQueNaoReservar } from './agenda-tools.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
 import { composeSystemPrompt } from './prompt-composer.js';
-import { aceitouOPix, formaParaOCarimbo, gravarAceiteDoPix, gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
+import { aceitePelaResposta, aceitouOPix, respostaEntregaAChave, formaParaOCarimbo, gravarAceiteDoPix, gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
 import { decidirPagamentoAntecipado } from './carimbos-do-agendamento.js';
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -623,4 +623,46 @@ test('Pago no dia e depois "Quero o Pix" (chave fixa): o aceite troca o na_clini
   assert.deepEqual(ult.map((x) => x.data.pagamentoEscolhido), ['na_clinica', 'pix_antecipado']);
   agendadoPara = null;
   assert.equal(await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), false, 'sem consulta de pé: nada');
+});
+
+// ── 7ª rodada: o aceite DIGITADO é gravado pelo que a Sofia ENVIA (os botões estão mortos na rede) ───────────────────────────────
+
+const ACEITES_DIGITADOS = ['Quero o Pix', 'quero o pix!', 'pode ser no pix', 'vou pagar no pix', 'pix', 'Pix', 'manda a chave', 'me manda a chave pix', 'quero pagar antes', 'prefiro o pix', 'pago no pix', 'quero o pix sim', 'pode mandar o pix', 'sim, quero o pix', 'vou de pix', 'quero pagar 250 no pix'];
+
+test('ACEITE DIGITADO (16 formas): quem decide é a chave que a Sofia entrega; qualquer forma que a faça mandar a chave grava o aceite, e o botão continua reconhecido', async () => {
+  for (const t of ACEITES_DIGITADOS) {
+    // a Sofia responde à fala (qualquer que seja) mandando a chave e o valor
+    const resposta = `Combinado! Pagando antes pelo Pix são R$ 250. A chave é ${CHAVE_FIXA} (Clinica Araguaina LTDA). Pode pagar até a véspera.`;
+    assert.equal(respostaEntregaAChave(resposta, CHAVE_FIXA), true, t);
+  }
+  // o botão continua reconhecido (caminho antigo)
+  assert.equal(aceitouOPix('Quero o Pix'), true);
+  // a gravação em si: com o marcador (ou "Pago no dia" antes) e a consulta de pé
+  agendadoPara = `${DIA}T09:00`;
+  assert.equal(await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), true);
+  assert.equal((conversaGravou[conversaGravou.length - 1]!.data as { pagamentoEscolhido: string }).pagamentoEscolhido, 'pix_antecipado');
+});
+
+test('a chave é reconhecida como a Sofia a copia (com ou sem pontuação, espaço, caixa) e uma resposta SEM a chave não conta', () => {
+  assert.equal(respostaEntregaAChave('chave: 12345678000190', CHAVE_FIXA), true);
+  assert.equal(respostaEntregaAChave('chave 12 345 678 0001 90', CHAVE_FIXA), true);
+  assert.equal(respostaEntregaAChave('Pix: Financeiro@Clinica.com.br', 'financeiro@clinica.com.br'), true);
+  for (const r of ['Combinado, fica pago no dia, na clínica.', 'A consulta é R$ 350 no dia, ou R$ 250 pagando antes pelo Pix. [[botoes: Quero o Pix | Pago no dia]]', '', 'o CNPJ da clínica termina em 90']) assert.equal(respostaEntregaAChave(r, CHAVE_FIXA), false, r);
+  // chave curta demais / vazia nunca casa (evita falso positivo)
+  assert.equal(respostaEntregaAChave('12345', '12345'), false);
+  assert.equal(respostaEntregaAChave('qualquer coisa', null), false);
+});
+
+test('o aceite sem cliente do Kommo grava a conversa e AVISA no log que o cartão não foi carimbado', async () => {
+  agendadoPara = `${DIA}T09:00`;
+  assert.equal(await gravarAceiteDoPix({ id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ }, 1), true);
+});
+
+test('aceitePelaResposta: só com a chave ligada, chave fixa + preços, a chave na resposta e SEM ter marcado neste turno', () => {
+  const base = { chaveLigada: true, chaveFixaComPrecos: true, ferramentasDoTurno: ['buscar_paciente'], resposta: `A chave é ${CHAVE_FIXA}`, chavePix: CHAVE_FIXA };
+  assert.equal(aceitePelaResposta(base), true);
+  assert.equal(aceitePelaResposta({ ...base, chaveLigada: false }), false, 'chave desligada: nada');
+  assert.equal(aceitePelaResposta({ ...base, chaveFixaComPrecos: false }), false, 'com sinal ou sem chave/preços: não é este caminho');
+  assert.equal(aceitePelaResposta({ ...base, ferramentasDoTurno: ['consultar_horarios', 'agendar_consulta'] }), false, 'a confirmação da marcação pode citar a chave sem ele ter escolhido');
+  assert.equal(aceitePelaResposta({ ...base, resposta: 'Combinado, pago no dia, na clínica.' }), false, 'resposta sem a chave');
 });
