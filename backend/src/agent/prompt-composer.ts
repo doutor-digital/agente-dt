@@ -809,16 +809,31 @@ export function fraseDePrecoComSinal(s: SinalDaUnidade): string {
 }
 
 /** Chave `pix-depois-de-marcar` ligada numa unidade SEM sinal e com antecipado normal: marca sem perguntar e vale pagar na clínica. */
-function semSinalMarcaSemPerguntar(unit: Unit): boolean {
+/**
+ * Como a confirmação trata o pagamento quando a chave está ligada (decisão do João de 27/11: tira só a pergunta de ANTES; o desconto continua):
+ *  - 'sinal': unidade com sinal por Pix — a oferta do sinal vem DEPOIS de marcar (a ferramenta manda);
+ *  - 'chave': chave Pix fixa + os dois preços — a oferta do ANTECIPADO vem depois de marcar; o prompt segue a forma DITA (Pix = chave e valor; dia = valor do dia);
+ *  - 'sem-oferta': sem chave Pix ou sem preços — só marca e vale pagar na clínica;
+ *  - null: a chave não vale aqui (desligada, Timbó, Boa Vista).
+ */
+function modoDaOfertaDepoisDeMarcar(unit: Unit): 'sinal' | 'chave' | 'sem-oferta' | null {
   const semAntecipado = unidadeSemAntecipado(unit);
-  return !sinalDaUnidade(unit) && pixDepoisDeMarcar(unit, { semAntecipado, taxaObrigatoria: !!unit.spineBookingRequiresPayment });
+  if (!pixDepoisDeMarcar(unit, { semAntecipado, taxaObrigatoria: !!unit.spineBookingRequiresPayment })) return null;
+  if (sinalDaUnidade(unit)) return 'sinal';
+  return unit.pixKey?.trim() && precosDaConsulta(unit) ? 'chave' : 'sem-oferta';
 }
 
 function linhaValorConsulta(unit: Unit): string {
-  // Chave `pix-depois-de-marcar` SEM sinal: a forma não é perguntada e vale pagar na clínica — a linha do valor é a do dia.
-  if (semSinalMarcaSemPerguntar(unit)) {
+  // Chave `pix-depois-de-marcar`: sem oferta possível, a linha é a do dia; com sinal, os dois preços (a escolha vem depois); com chave Pix fixa, a
+  // linha de sempre ("R$ antecipado ou R$ no dia") — o desconto NÃO some.
+  const modo = modoDaOfertaDepoisDeMarcar(unit);
+  if (modo === 'sem-oferta') {
     const pDia = precosDaConsulta(unit);
     if (pDia) return `✨ Valor: R$ ${fmtBRL(pDia.noDia)} no dia, na clínica`;
+  }
+  if (modo === 'sinal') {
+    const sinalP = sinalDaUnidade(unit);
+    if (sinalP) return `✨ Valor: ${fraseDePrecoComSinal(sinalP)}`;
   }
   if (unidadeSemAntecipado(unit)) {
     // O valor vem das fontes da unidade (nada chumbado); a forma de pagamento mora nesta linha — não há parágrafo à parte.
@@ -942,13 +957,17 @@ function renderAgenda(unit: Unit): string {
   // Unidade sem pagamento antecipado (Timbó): só se paga no dia — nunca chave, nunca "garantir a vaga".
   const semAntecipado = unidadeSemAntecipado(unit);
   const sinalDaConfirmacao = sinalDaUnidade(unit);
-  // Chave `pix-depois-de-marcar` SEM sinal (chave Pix fixa): a ferramenta grava "na clínica" e manda NÃO enviar chave — o modelo de
-  // confirmação segue a mesma regra, senão diria "a vaga é garantida com o PIX: <chave>" a quem nem foi perguntado.
-  const marcaSemPerguntar = semSinalMarcaSemPerguntar(unit);
-  const linhaPix = semAntecipado || marcaSemPerguntar
+  // Chave `pix-depois-de-marcar`: a forma NÃO foi perguntada antes de marcar. O modelo de confirmação segue a forma DITA: escolheu o Pix → chave e valor
+  // antecipado (ou o link do sinal); escolheu o dia ou não respondeu → valor no dia. Nunca "a vaga é garantida com o PIX" a quem nem escolheu.
+  const modo = modoDaOfertaDepoisDeMarcar(unit);
+  const linhaPix = semAntecipado || modo === 'sem-oferta'
     ? PAGAMENTO_NO_DIA
     : unit.spineBookingRequiresPayment
       ? 'Pagamento antecipado recebido — o horário está garantido. No dia, fica só o restante do valor.'
+      : modo === 'chave' && pix
+        ? `{SÓ se ele escolheu o Pix antecipado: "Pagando antes pelo Pix, a chave é: ${pix}${favorecido ? ` (${favorecido})` : ''}. Pode pagar até a véspera." Se escolheu pagar no dia ou ainda não respondeu: omita este parágrafo (a oferta única do antecipado vem da resposta da ferramenta agendar_consulta)}`
+        : modo === 'sinal' && sinalDaConfirmacao
+          ? `{SÓ se ele ACEITOU o sinal: "Para garantir pelo valor com sinal, o sinal de R$ ${fmtBRL(sinalDaConfirmacao.sinal)} é pago por este Pix: <o link que gerar_sinal_pix devolveu, copiado exatamente>". Sem o link, diga que a equipe envia o Pix em instantes. Se escolheu pagar tudo no dia ou ainda não respondeu: omita este parágrafo (a oferta do sinal vem da resposta da ferramenta agendar_consulta)}`
       : sinalDaConfirmacao
         ? `{SÓ se ele escolheu o sinal: "Para garantir a vaga, o sinal de R$ ${fmtBRL(sinalDaConfirmacao.sinal)} é pago por este Pix: <o link que gerar_sinal_pix devolveu, copiado exatamente>". Sem o link, diga que a equipe envia o Pix em instantes. Quem escolheu pagar tudo no dia: omita este parágrafo}`
         : pix
@@ -956,10 +975,12 @@ function renderAgenda(unit: Unit): string {
           : 'A equipe envia a chave do PIX para garantir a vaga.';
   const regraDoValor = semAntecipado
     ? `- ${REGRA_SEM_ANTECIPADO}\n  NUNCA escreva "à vista". Não arredonde.`
-    : marcaSemPerguntar
+    : modo === 'sem-oferta'
       ? `- A forma de pagamento NÃO foi perguntada: vale pagar na clínica, no dia. NÃO escreva "a vaga é garantida com o PIX", NÃO envie chave Pix e NÃO fale de valor antecipado nesta mensagem.
-  Se ELE perguntar se dá para pagar antes, aí sim diga o valor antecipado das fontes e que a equipe envia a chave. NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`
-      : sinalDaConfirmacao
+  Se ELE perguntar se dá para pagar antes: diga que vai verificar com a equipe e chame resumir_lead_para_sdr (a promessa fica registrada); NUNCA prometa a chave sem registrar. NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`
+      : modo === 'chave'
+        ? `- A forma de pagamento NÃO foi perguntada antes de marcar. O valor menor é o ANTECIPADO (pago antes, pelo Pix, com a chave); o maior é o valor no dia. A oferta do antecipado sai UMA vez, DEPOIS de marcar, como a ferramenta agendar_consulta mandar; escolheu o dia: valor no dia, sem chave.\n  NUNCA escreva "à vista" nem "a vaga é garantida com o PIX". Não arredonde nem ofereça desconto além desse.`
+        : sinalDaConfirmacao
       ? `- Os valores desta unidade: ${fraseDePrecoComSinal(sinalDaConfirmacao)}. NUNCA escreva "à vista". Não arredonde nem ofereça desconto.
   O sinal é SEMPRE o link que a ferramenta gerar_sinal_pix devolveu: NUNCA envie chave Pix nem escreva que a equipe envia a chave.`
       : `- O valor menor é o ANTECIPADO (pago antes da consulta); o maior é o valor no dia.\n  NUNCA escreva "à vista". Não arredonde nem ofereça desconto.`;

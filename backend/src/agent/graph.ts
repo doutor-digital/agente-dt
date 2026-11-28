@@ -123,7 +123,7 @@ import { dadosDaTaxa, insistenciaJaTratada, pacienteJaMandouComprovante, promptD
 import { aplicarTaxaDeReservaNaSaida, decidirATaxa } from './taxa-de-reserva-saida.js';
 import { pagouOAntecipado } from '../lib/follow-up-worker.js';
 import { unidadeSemAntecipado } from './pagamento-da-unidade.js';
-import { gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal } from './pix-depois-de-marcar.js';
+import { aceitouOPix, gravarAceiteDoPix, gravarRecusaDoSinal, pixDepoisDeMarcar, recusouOSinal } from './pix-depois-de-marcar.js';
 import { enviarTelegramSofia } from '../lib/telegram.js';
 import {
   withTimeout,
@@ -717,6 +717,14 @@ export async function buildAgentGraph(
     const falas = falasDoHistorico(nonSystemMessages, leadIdDaConversa ? respostasSeguradas(unit.id, leadIdDaConversa) : []);
     const repeticao = analisarRepeticao(falas);
     confirmacao.adiou = confirmacaoAdiadaEstado(unit.slug) === 'desligado' ? null : adiouConfirmacao(falaDoPacienteNoTurno(falas));
+    // Chave `pix-depois-de-marcar`: a resposta à oferta do antecipado/sinal ("Pago no dia", "Quero o Pix") vira escolha gravada — ANTES de chamar o modelo, para
+    // não se perder se ele estiver fora. Só vale com o marcador da oferta na conversa e a consulta ainda de pé (lib em pix-depois-de-marcar.ts).
+    if (state.leadId && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment })) {
+      const falaDele = falaDoPacienteNoTurno(falas);
+      if (recusouOSinal(falaDele)) void gravarRecusaDoSinal(unit, state.leadId);
+      // com sinal, "Quero o Pix" é o link (gerar_sinal_pix troca o marcador); com chave Pix fixa, o aceite grava `pix_antecipado`
+      else if (!sinalDaUnidade(unit) && aceitouOPix(falaDele)) void gravarAceiteDoPix(unit, state.leadId);
+    }
     const humanCount = nonSystemMessages.filter((m) => m.getType() === 'human').length;
     const aiCount = nonSystemMessages.filter((m) => m.getType() === 'ai').length;
     const isFirstTurn = humanCount === 1 && aiCount === 0;
@@ -1204,10 +1212,6 @@ export async function buildAgentGraph(
       // chamada montada pelo código: refaz com a instrução. Com o plano B respondendo, só os cortes, sem modelo.
       const agoraDaUnidade = agoraLocalISO(fusoDaUnidade(unit));
       const encerrou = pacienteEncerrou(falas);
-      // Chave `pix-depois-de-marcar` COM sinal: "Pago no dia" respondendo à oferta (marcador gravado ao marcar) vira `na_clinica`, com a consulta ainda de pé.
-      if (state.leadId && sinalDaUnidade(unit) && pixDepoisDeMarcar(unit, { semAntecipado: unidadeSemAntecipado(unit), taxaObrigatoria: !!unit.spineBookingRequiresPayment }) && recusouOSinal(falaDoPacienteNoTurno(falas))) {
-        void gravarRecusaDoSinal(unit, state.leadId);
-      }
       if (tools.some((t) => t.name === 'consultar_horarios') && !encerrou) {
         const consultas = consultasDaAgenda(nonSystemMessages);
         const travaHorario = travaDoHorario({

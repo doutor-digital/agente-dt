@@ -20,7 +20,7 @@ import { conferirConsultaDePe, type PossivelDuplicado } from '../lib/consulta-em
 import { abrirTarefaParaEquipe } from './confirmacao-so-com-crm.js';
 import { fim8 } from '../lib/paciente-existente.js';
 import { fmtBRL, precosDaConsulta, sinalDaUnidade, type SinalDaUnidade } from './prompt-composer.js';
-import { FECHO_RECUSA_SEM_PAGAMENTO, formaParaOCarimbo, OFERTA_DO_SINAL_FEITA, orientacaoPixDepoisComSinal, orientacaoPixDepoisSemSinal, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
+import { FECHO_RECUSA_SEM_PAGAMENTO, formaParaOCarimbo, OFERTA_DO_SINAL_FEITA, orientacaoPixDepoisComChave, orientacaoPixDepoisComSinal, orientacaoPixDepoisSemSinal, pixDepoisDeMarcar } from './pix-depois-de-marcar.js';
 import { buildGerarSinalPix, registrarLeadDoSinal } from './sinal-pix-tool.js';
 import { acompanharRemarcacao } from '../lib/sinal-pix.js';
 import { avisarJoao } from '../lib/alerta-whatsapp.js';
@@ -1349,7 +1349,13 @@ export function orientacaoDePagamento(
     );
   }
   // Chave `pix-depois-de-marcar`, forma não perguntada: com sinal, oferta única do sinal; sem sinal, só marca e vale pagar na clínica.
-  if (pixDepois && !forma) return sinal ? orientacaoPixDepoisComSinal(sinal) : orientacaoPixDepoisSemSinal();
+  if (pixDepois && !forma) {
+    if (sinal) return orientacaoPixDepoisComSinal(sinal);
+    // sem sinal: com chave Pix fixa e os dois preços, a oferta do antecipado vem depois de marcar; sem isso, só marca e vale na clínica
+    const precos = unit ? precosDaConsulta(unit) : null;
+    const chave = unit?.pixKey?.trim();
+    return precos && chave ? orientacaoPixDepoisComChave(precos, chave, unit?.pixHolder?.trim()) : orientacaoPixDepoisSemSinal();
+  }
   // Sofia 2.0: nesta unidade NUNCA a chave fixa nem "a equipe envia a chave": o Pix do sinal é o link de gerar_sinal_pix.
   if (sinal) {
     if (forma === 'sinal_pix') {
@@ -1546,7 +1552,10 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
       // oferta do sinal. A forma que conta é a DITA agora (capturada abaixo) ou, sem ela, o padrão da chave.
       const formaDitaAgora = args.formaPagamento;
       const formaNaoDita = pixDepois && !args.remarcando && !args.formaPagamento;
-      if (formaNaoDita && !sinal) args = { ...args, formaPagamento: 'na_clinica' };
+      // Sem sinal: COM chave Pix fixa e os dois preços, a oferta do antecipado vem depois de marcar (e o marcador da oferta é gravado, como no sinal);
+      // SEM chave ou sem preços não há o que oferecer: vale na clínica, e isso fica gravado (senão a régua cobraria Pix de quem nunca escolheu).
+      const ofertaDoAntecipado = !sinal && !!unit.pixKey?.trim() && !!precosDaConsulta(unit);
+      if (formaNaoDita && !sinal && !ofertaDoAntecipado) args = { ...args, formaPagamento: 'na_clinica' };
 
       const pendencia = porQueNaoReservar({ ...args, semAntecipado, taxaObrigatoria, sinal, pixDepois });
       if (pendencia) {
@@ -2073,7 +2082,8 @@ export function buildAgendarConsulta({ unit, recorder, kommo, telefoneDaConversa
               dia: dataPorExtenso(args.data),
               hora: args.hora,
               especialista,
-              formaPagamento: args.formaPagamento,
+              // Chave `pix-depois-de-marcar`: o aviso diz o que ELE escolheu, não o padrão da ferramenta ("na clínica" que ninguém escolheu).
+              formaPagamento: pixDepois ? formaDitaAgora : args.formaPagamento,
               remarcando: args.remarcando,
             }),
             chaveDoAviso(fresca.slug, args.leadId, args.data, args.hora),

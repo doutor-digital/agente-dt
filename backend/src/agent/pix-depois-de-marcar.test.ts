@@ -8,7 +8,7 @@ import { instrucaoReservaSemMarcar } from './reserva-sem-marcar.js';
 import { porQueNaoReservar } from './agenda-tools.js';
 import { degrauDoPixNaoSeAplica } from '../lib/follow-up-worker.js';
 import { composeSystemPrompt } from './prompt-composer.js';
-import { formaParaOCarimbo, gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
+import { aceitouOPix, formaParaOCarimbo, gravarAceiteDoPix, gravarRecusaDoSinal, OFERTA_DO_SINAL_FEITA, recusouOSinal } from './pix-depois-de-marcar.js';
 import { decidirPagamentoAntecipado } from './carimbos-do-agendamento.js';
 import { test, beforeEach, after } from 'node:test';
 import assert from 'node:assert/strict';
@@ -269,8 +269,24 @@ test('LIGADA: quem já pediu o Pix por conta própria segue o caminho do sinal (
   assert.equal(conversaGravou[0]!.data.pagamentoEscolhido, 'sinal_pix');
 });
 
-test('LIGADA sem sinal na unidade (chave Pix fixa): marca, vale pagar na clínica e isso fica GRAVADO (a régua não cobra Pix de quem nunca escolheu)', async () => {
+test('LIGADA, chave Pix FIXA (sem sinal): marca e, DEPOIS, oferece o antecipado UMA vez (R$ 250 pelo Pix ou R$ 350 no dia) — o desconto não some; o marcador fica gravado e NÃO "na_clinica" (a régua segue vendo)', async () => {
   const u = unidade({ sinalPixCentavos: null });
+  unidades.set(u.id, u);
+  ligar(u.slug);
+  const hora = await primeiroHorario(u);
+  const r = await agendar(u).func({ idClient: 9, data: DIA, hora, diaConfirmado: true, leadId: 1 });
+  assert.match(r, /^Consulta marcada para /);
+  assert.match(r, /ofereça UMA vez o valor antecipado/);
+  assert.match(r, /R\$ 350 pagando no dia, ou R\$ 250 pagando antes pelo Pix — o preço é o de sempre/);
+  assert.match(r, /\[\[botoes: Quero o Pix \| Pago no dia\]\]/);
+  assert.ok(r.includes(CHAVE_FIXA), 'a chave só é mandada se ele escolher; a ferramenta a traz para copiar');
+  assert.match(r, /Se disser "pago no dia" ou não responder, vale PAGAR NA CLÍNICA/);
+  assert.match(r, /NUNCA cobre o Pix mais de uma vez/);
+  assert.deepEqual(conversaGravou.map((g) => (g.data as { pagamentoEscolhido: string }).pagamentoEscolhido), [OFERTA_DO_SINAL_FEITA]);
+});
+
+test('LIGADA, chave Pix fixa mas SEM chave cadastrada: não há o que oferecer — marca, vale na clínica (gravado) e a promessa do antecipado vira resumir_lead_para_sdr, nunca só dita', async () => {
+  const u = unidade({ sinalPixCentavos: null, pixKey: null });
   unidades.set(u.id, u);
   ligar(u.slug);
   const hora = await primeiroHorario(u);
@@ -278,7 +294,8 @@ test('LIGADA sem sinal na unidade (chave Pix fixa): marca, vale pagar na clínic
   assert.match(r, /^Consulta marcada para /);
   assert.match(r, /vale PAGAR NA CLÍNICA/);
   assert.match(r, /NÃO ofereça Pix nem valor antecipado, NÃO envie chave Pix/);
-  assert.ok(!r.includes(CHAVE_FIXA));
+  assert.match(r, /chame resumir_lead_para_sdr/);
+  assert.doesNotMatch(r, /a equipe envia a chave/i);
   assert.equal(conversaGravou[0]!.data.pagamentoEscolhido, 'na_clinica');
 });
 
@@ -367,18 +384,34 @@ test('a régua do Pix (follow-up): com sinal, quem não escolheu NADA não é co
 
 // ── devolução do sênior (27/11) ────────────────────────────────────────────────────────────────────────────────────────────────
 
-test('3) unidade com chave Pix fixa + chave ligada: o modelo de confirmação NÃO diz "a vaga é garantida com o PIX: <chave>" e segue "na clínica"', () => {
+test('3) chave Pix FIXA + chave ligada: o modelo de confirmação segue a forma DITA — o desconto NÃO some e a chave só vai a quem escolheu o Pix', () => {
   const u = unidade({ sinalPixCentavos: null, clinicAddress: 'Rua A, 1' });
   const antes = composeSystemPrompt({ unit: u });
   assert.match(antes, /A vaga é garantida com o pagamento antecipado no PIX: 12\.345\.678\/0001-90/);
   ligar(u.slug);
   const depois = composeSystemPrompt({ unit: u });
   assert.doesNotMatch(depois, /A vaga é garantida com o pagamento antecipado no PIX/);
-  assert.ok(!depois.includes('PIX: 12.345.678/0001-90'));
-  assert.match(depois, /vale pagar na clínica, no dia\. NÃO escreva "a vaga é garantida com o PIX"/);
-  assert.match(depois, /✨ Valor: R\$ 350 no dia, na clínica/);
-  assert.match(depois, /O pagamento é feito no dia, na clínica/);
-  // Boa Vista e Timbó: o modelo de sempre
+  assert.match(depois, /✨ Valor: R\$ 250 antecipado \(pago antes da consulta\) ou R\$ 350 no dia/, 'a linha de sempre: o desconto continua');
+  assert.doesNotMatch(depois, /R\$ 350 no dia, na clínica/);
+  assert.match(depois, /\{SÓ se ele escolheu o Pix antecipado: "Pagando antes pelo Pix, a chave é: 12\.345\.678\/0001-90/);
+  assert.match(depois, /Se escolheu pagar no dia ou ainda não respondeu: omita este parágrafo/);
+  assert.match(depois, /A oferta do antecipado sai UMA vez, DEPOIS de marcar/);
+  assert.doesNotMatch(depois, /NÃO envie chave Pix e NÃO fale de valor antecipado/);
+  // sem chave Pix cadastrada: não há o que oferecer — valor do dia, e a promessa fica registrada
+  const sem = unidade({ slug: 'doutor-hernia-x', sinalPixCentavos: null, pixKey: null, clinicAddress: 'Rua A, 1' });
+  ligar(sem.slug);
+  const t = composeSystemPrompt({ unit: sem });
+  assert.match(t, /✨ Valor: R\$ 350 no dia, na clínica/);
+  assert.match(t, /chame resumir_lead_para_sdr \(a promessa fica registrada\)/);
+  assert.doesNotMatch(t, /a equipe envia a chave/);
+  // com sinal: a confirmação mostra os dois preços e o link só a quem ACEITOU
+  const comSinal = unidade({ clinicAddress: 'Rua A, 1' });
+  ligar(comSinal.slug);
+  const ts = composeSystemPrompt({ unit: comSinal });
+  assert.match(ts, /✨ Valor: R\$ 350 no dia, ou R\$ 250 garantindo com sinal de R\$ 50/);
+  assert.match(ts, /\{SÓ se ele ACEITOU o sinal:/);
+  assert.doesNotMatch(ts, /\{SÓ se ele escolheu o sinal:/, 'a escolha ainda não houve');
+  // Boa Vista: o modelo de sempre
   const bv = unidade({ slug: 'doutor-hernia-boa-vista', sinalPixCentavos: null, spineBookingRequiresPayment: true, clinicAddress: 'Rua A, 1' });
   ligar(bv.slug);
   assert.match(composeSystemPrompt({ unit: bv }), /Pagamento antecipado recebido — o horário está garantido/);
@@ -481,6 +514,24 @@ test('A.2) ao gerar o link, o marcador da oferta vira sinal_pix (o "Pago no dia"
   conversaGravou.length = 0;
   await gerarSinal(atual).func({ leadId: 1 });
   const g = conversaGravou[0] as unknown as { data: { pagamentoEscolhido: string }; where: { pagamentoEscolhido: string } };
-  assert.equal(g.where.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA);
+  assert.deepEqual((g.where as unknown as { OR: unknown[] }).OR, [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }], '"Pago no dia" e depois "quero o Pix": o na_clinica da recusa também vira sinal_pix');
   assert.equal(g.data.pagamentoEscolhido, 'sinal_pix');
+});
+
+test('chave Pix fixa: "Quero o Pix" (o botão, frase inteira) depois da oferta grava pix_antecipado — só com o marcador e a consulta de pé', async () => {
+  for (const t of ['Quero o Pix', 'quero o pix.', 'Quero Pix']) assert.equal(aceitouOPix(t), true, t);
+  for (const t of ['quero o pix da sessão?', 'pode ser o pix', 'pix', 'te mando o pix?', '', undefined]) assert.equal(aceitouOPix(t as string), false, String(t));
+  const u = { id: 'u-arag', businessHoursTimezone: TZ, spineTimezone: TZ };
+  agendadoPara = null;
+  assert.equal(await gravarAceiteDoPix(u, 1), false, 'sem consulta marcada');
+  agendadoPara = `${DIA}T09:00`;
+  assert.equal(await gravarAceiteDoPix(u, 1), true);
+  const g = conversaGravou[conversaGravou.length - 1] as unknown as { data: { pagamentoEscolhido: string }; where: { pagamentoEscolhido: string } };
+  assert.equal(g.data.pagamentoEscolhido, 'pix_antecipado');
+  assert.equal(g.where.pagamentoEscolhido, OFERTA_DO_SINAL_FEITA, 'só quem recebeu a oferta de fato');
+});
+
+test('o aviso de agendamento diz o que ELE escolheu, não o padrão da ferramenta', () => {
+  // `formaPagamento` do aviso é a forma DITA agora (formaDitaAgora) com a chave ligada; sem escolha, null → o aviso não afirma "na clínica"
+  assert.equal(formaParaOCarimbo({ pixDepois: true, formaDitaAgora: undefined, formaFinal: 'na_clinica', escolhaSalva: null }).formaPagamento, undefined);
 });

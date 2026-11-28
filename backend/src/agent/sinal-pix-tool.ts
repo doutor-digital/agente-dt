@@ -185,10 +185,10 @@ export function buildGerarSinalPix({ unit, recorder, kommo, conversaGarantida, a
 
       // o código exato vai numa mensagem à parte, depois da resposta (controller → lib/pix-do-sinal-envio.ts)
       if (r.tipo === 'link' && r.copiaECola) guardarPixDoTurno(recorder.traceId, r.url);
-      // Chave `pix-depois-de-marcar`: ele aceitou a oferta — o marcador `sinal_oferecido` vira `sinal_pix` (o "Pago no dia" depois disso não vale mais).
-      if (r.tipo === 'link' && pixDepoisDeMarcar(fresca, { semAntecipado: unidadeSemAntecipado(fresca), taxaObrigatoria: !!fresca.spineBookingRequiresPayment })) {
+      // Chave `pix-depois-de-marcar`: ele aceitou a oferta — o marcador `sinal_oferecido` — ou um `na_clinica` de uma recusa anterior ("Pago no dia" e depois "quero o Pix") — vira `sinal_pix`; o link existe, a pessoa continua na lista «agendados sem Pix».
+      if ((r.tipo === 'link' || r.tipo === 'ja-pago') && pixDepoisDeMarcar(fresca, { semAntecipado: unidadeSemAntecipado(fresca), taxaObrigatoria: !!fresca.spineBookingRequiresPayment })) {
         try {
-          await prisma.conversation.updateMany({ where: { unitId: fresca.id, leadId: String(leadId), pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, data: { pagamentoEscolhido: 'sinal_pix' } });
+          await prisma.conversation.updateMany({ where: { unitId: fresca.id, leadId: String(leadId), OR: [{ pagamentoEscolhido: OFERTA_DO_SINAL_FEITA }, { pagamentoEscolhido: 'na_clinica' }] }, data: { pagamentoEscolhido: 'sinal_pix' } });
         } catch (err) {
           logger.warn({ err: String(err), leadId }, 'sinal-pix: não troquei o marcador da oferta por sinal_pix');
         }

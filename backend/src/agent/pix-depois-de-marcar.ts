@@ -53,12 +53,34 @@ export function orientacaoPixDepoisComSinal(sinal: SinalDaUnidade): string {
   );
 }
 
-/** Resultado do `agendar_consulta` quando a forma NÃO foi perguntada e a unidade NÃO tem sinal: marcou, vale pagar na clínica. */
+/**
+ * Resultado do `agendar_consulta` quando a forma NÃO foi perguntada e a unidade NÃO tem sinal, mas TEM chave Pix fixa e os dois preços: a oferta do
+ * valor ANTECIPADO depois de marcar (decisão do João de 27/11: tira só a pergunta de ANTES; o desconto do Pix antecipado continua e o preço não muda).
+ */
+export function orientacaoPixDepoisComChave(precos: { antecipado: number; noDia: number }, chave: string, titular?: string | null): string {
+  return (
+    ' A forma de pagamento NÃO foi perguntada e NÃO é para perguntar antes: a consulta já está marcada. ' +
+    'Na MESMA mensagem da confirmação, ofereça UMA vez o valor antecipado, sem pressão e sem dizer que ele garante a vaga (a vaga já está marcada): ' +
+    `a consulta é R$ ${fmt(precos.noDia)} pagando no dia, ou R$ ${fmt(precos.antecipado)} pagando antes pelo Pix — o preço é o de sempre, nada muda. ` +
+    'Termine com a linha [[botoes: Quero o Pix | Pago no dia]]. ' +
+    `Se ele escolher o Pix (agora ou em outra mensagem), envie a chave Pix COPIADA caractere por caractere: ${chave}${titular ? ` (no nome de ${titular})` : ''}, ` +
+    `e o valor R$ ${fmt(precos.antecipado)}, e diga que pode pagar até a véspera — depois disso vale o valor na clínica; NÃO peça comprovante agora. ` +
+    'NÃO ofereça de novo e NUNCA cobre o Pix mais de uma vez. ' +
+    'Se disser "pago no dia" ou não responder, vale PAGAR NA CLÍNICA: NÃO mencione Pix daqui em diante, a menos que ELE pergunte. ' +
+    'PROIBIDO escrever colchete, chave ou lacuna do tipo "[chave]", "R$ [valor]", "XXX": use só os dados escritos acima.'
+  );
+}
+
+/**
+ * Resultado do `agendar_consulta` quando a forma NÃO foi perguntada e NÃO há o que oferecer (sem sinal e sem chave Pix ou sem os dois preços):
+ * marcou, vale pagar na clínica. Se ELE perguntar do antecipado, a promessa fica REGISTRADA (resumir_lead_para_sdr), nunca só dita.
+ */
 export function orientacaoPixDepoisSemSinal(): string {
   return (
     ' A forma de pagamento NÃO foi perguntada e NÃO é para perguntar: vale PAGAR NA CLÍNICA, no dia. ' +
-    'NÃO ofereça Pix nem valor antecipado, NÃO envie chave Pix e NÃO peça comprovante, a menos que ELE pergunte se dá para pagar antes. ' +
-    'Diga o valor na clínica só se ele perguntar.'
+    'NÃO ofereça Pix nem valor antecipado, NÃO envie chave Pix e NÃO peça comprovante. ' +
+    'Se ELE perguntar se dá para pagar antes: diga que vai verificar com a equipe, chame resumir_lead_para_sdr dizendo que ele quer pagar antes pelo Pix ' +
+    '(para a promessa ficar registrada) e NUNCA invente chave nem valor. Diga o valor na clínica só se ele perguntar.'
   );
 }
 
@@ -125,4 +147,34 @@ export function formaParaOCarimbo(a: {
 }): { formaPagamento: string | undefined; escolhaSalva: string | null } {
   if (!a.pixDepois || a.formaDitaAgora) return { formaPagamento: a.formaFinal, escolhaSalva: a.escolhaSalva };
   return { formaPagamento: undefined, escolhaSalva: a.formaFinal === 'na_clinica' ? 'na_clinica' : a.escolhaSalva };
+}
+
+/** O botão da oferta aceito ("Quero o Pix"): frase inteira, sem acento nem pontuação. Só vale com o marcador da oferta na conversa. */
+export function aceitouOPix(textoDoPaciente: string | null | undefined): boolean {
+  const t = String(textoDoPaciente ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
+  return t === 'quero o pix' || t === 'quero pix' || t === 'quero o sinal';
+}
+
+/**
+ * Unidade com chave Pix FIXA (sem sinal gerado): "Quero o Pix" depois da oferta vira `pix_antecipado` (o marcador da oferta troca), para a régua do Pix
+ * e a lista «agendados sem Pix» enxergarem quem escolheu pagar antes. Só com o marcador e a consulta ainda de pé. Nunca lança.
+ */
+export async function gravarAceiteDoPix(
+  unit: Pick<Unit, 'id' | 'businessHoursTimezone' | 'spineTimezone'>,
+  leadId: string | number | null | undefined,
+): Promise<boolean> {
+  if (!leadId || !Number.isInteger(Number(leadId))) return false;
+  try {
+    const vinculo = await prisma.spineLeadLink.findUnique({ where: { unitId_kommoLeadId: { unitId: unit.id, kommoLeadId: Number(leadId) } }, select: { agendadoPara: true } });
+    const quando = (vinculo?.agendadoPara ?? '').slice(0, 16);
+    if (!quando || quando < agoraLocalISO(fusoDaUnidade(unit))) return false;
+    const r = await prisma.conversation.updateMany({
+      where: { unitId: unit.id, leadId: String(leadId), pagamentoEscolhido: OFERTA_DO_SINAL_FEITA },
+      data: { pagamentoEscolhido: 'pix_antecipado' },
+    });
+    return r.count > 0;
+  } catch (err) {
+    logger.warn({ err: String(err), unitId: unit.id, leadId }, 'pix-depois-de-marcar: não gravei o aceite do Pix');
+    return false;
+  }
 }
